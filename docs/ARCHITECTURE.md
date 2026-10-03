@@ -172,6 +172,34 @@ State that must survive between frames (focus, scroll offsets, text cursors,
 open menus, animations) lives in a per-window `UiState` keyed by widget ids.
 Frames are drawn only when input arrives or an animation asks for one.
 
+## 3D graphics (`lib/v3d`)
+
+There is no GPU: `v3d` renders on the CPU, usually under QEMU's TCG
+emulator, where integer instructions are cheap and floating point is very
+expensive. Floating point is therefore used once per draw call (matrices
+and light parameters, in Rust); everything per vertex and per pixel is
+fixed-point integer code in a freestanding C++20 core (`lib/v3d/cpp`).
+`vbuild` compiles it with MSVC, Rust calls it through a small C ABI
+(`src/ffi.rs`), and the core never allocates: Rust owns all memory.
+
+* **Geometry.** Objects outside the view frustum are skipped. Vertices are
+  transformed and lit (Gouraud: sun, hemisphere ambient, point lights, fog)
+  in batches; triangles are back-face culled, clipped against the near
+  plane and a guard band, set up, and binned into 64x32-pixel screen tiles.
+* **Rasterisation.** A thread pool sized to the CPU count fills the tiles in
+  parallel, each worker owning whole tiles: depth testing, perspective-
+  correct mip-mapped textures, opaque, alpha, additive and multiplicative
+  blending, then billboards and particles.
+* **Output.** The image is rendered at an internal resolution and scaled to
+  the window with a bilinear (or fast 2x) upscale. The game harness
+  (`v3d::app`) adjusts the internal resolution to hold the frame rate,
+  draws the 2D HUD with `vgfx`, shows statistics on F3 and lets the
+  computer play on F8 (for demos and the GUI tests).
+
+The window system cooperates: a game's window is opaque, so the compositor
+copies its rows and skips everything underneath, and the scheduler starts
+the pool's workers on different CPUs at once.
+
 ## Audio
 
 * `virtio-snd` drives the sound card. It connects to the audio service's
@@ -216,6 +244,9 @@ Frames are drawn only when input arrives or an animation asks for one.
 | `lib/ipc`, `lib/proto` | message encoding and the service protocols |
 | `lib/gfx`, `lib/ui`, `lib/text` | 2D drawing, the GUI toolkit, the text editing model |
 | `lib/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
+| `lib/v3d` | the software 3D renderer (Rust with a C++ core) and the game harness |
+| `lib/audio` | audio formats, resampling, mixing, FFT and the synthesiser |
+| `lib/virtio` | virtio device access shared by the drivers |
 | `services/`, `drivers/`, `apps/`, `games/` | system services, drivers, applications and games |
 | `tests/` | in-system tests and GUI automation scripts |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |
