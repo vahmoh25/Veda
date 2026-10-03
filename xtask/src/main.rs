@@ -53,6 +53,7 @@ RUN OPTIONS:
     --memory MiB        Guest RAM in MiB (default 1024)
     --headless          No display window (serial console only)
     --no-audio          Do not attach a sound device
+    --sound CARD        QEMU's sound card: virtio (default) or ac97 (VirtualBox: always ac97)
     --serial FILE       Write the serial console to FILE instead of the terminal
     --gdb               Wait for a debugger on localhost:1234
     --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
@@ -135,6 +136,13 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--memory" => o.vm.memory_mib = value(arg)?.parse().map_err(|_| "--memory expects MiB")?,
             "--headless" => o.vm.display = false,
             "--no-audio" => o.vm.audio = false,
+            "--sound" => {
+                let card = value(arg)?;
+                if !matches!(card.as_str(), "virtio" | "ac97") {
+                    return Err(format!("--sound: unknown card '{card}' (virtio or ac97)"));
+                }
+                o.vm.sound = card;
+            }
             "--serial" => o.vm.serial_file = Some(PathBuf::from(value(arg)?)),
             "--gdb" => o.vm.gdb = true,
             "--qemu-arg" => o.vm.extra.push(value(arg)?),
@@ -438,6 +446,9 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
             return Err(format!("this script needs QEMU ({why})"));
         }
         _ => {}
+    }
+    if let Some(card) = automate::sound_card(script) {
+        vm.sound = card;
     }
     if let Some(model) = automate::nic_model(script) {
         vm.nic_model = Some(model);

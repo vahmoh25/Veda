@@ -7,7 +7,7 @@
 
 use alloc::vec::Vec;
 use vipc::{enumeration, message, protocol};
-use vrt::object::{Interrupt, Resource, Vmo};
+use vrt::object::{Interrupt, IoPorts, Resource, Vmo};
 
 message! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,13 +65,16 @@ protocol! {
         3 => fn config_write(offset: u16, width: u8, value: u32) -> Result<(), PciError>;
         /// Maps a memory BAR (uncached physical VMO).
         4 => fn map_bar(index: u8) -> Result<Vmo, PciError>;
-        /// Enables memory decoding and, optionally, bus mastering (DMA).
+        /// Enables memory and I/O decoding and, optionally, bus mastering
+        /// (DMA).
         5 => fn enable(bus_master: bool) -> Result<(), PciError>;
         /// Allocates an MSI/MSI-X interrupt; program the returned address and
         /// data into the device.
         6 => fn alloc_msi() -> Result<(Interrupt, MsiAddress), PciError>;
         /// A resource that allows allocating DMA (physically contiguous) memory.
         7 => fn dma_resource() -> Result<Resource, PciError>;
+        /// The ports of an I/O BAR (older devices such as AC'97 sound).
+        8 => fn map_io_bar(index: u8) -> Result<IoPorts, PciError>;
     }
 }
 

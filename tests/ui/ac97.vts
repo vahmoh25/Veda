@@ -1,0 +1,20 @@
+# The AC'97 sound card (the one VirtualBox has), in QEMU: the driver sets
+# the codec up and attaches to the audio service; the Music player's track
+# plays through it (its position moves on as the card plays) and reaches
+# the recording of the sound output.
+sound ac97
+boot-cmdline "run=music"
+fail-on "PANIC"
+wait-serial "AC'97 at ports" 60
+wait-serial "ac97: attached to the audio service" 60
+wait-serial "music: library: 7 track(s)" 90
+wait-serial "music: covers: 7 ready" 60
+wait 1
+click 0.5641 0.79
+wait-serial "music: playing Neon Horizon" 30
+wait 6
+key spc
+wait-serial "music: paused at 0:0" 10
+reject-serial "music: paused at 0:00"
+reject-serial "ac97: underrun 10"
+expect-audio

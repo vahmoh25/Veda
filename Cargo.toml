@@ -52,6 +52,7 @@ members = [
     "apps/racer",
     "apps/starfall",
     "drivers/virtio-snd",
+    "drivers/ac97",
     "services/audio",
     "tools/assetgen",
     "tools/musicgen",

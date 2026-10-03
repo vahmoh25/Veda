@@ -156,7 +156,7 @@ impl audiodev::Server for DriverSession<'_> {
     fn attach(&mut self, format: DeviceFormat) -> Result<DeviceLink, AudioError> {
         let link = self.mixer.attach(&format)?;
         println!(
-            "audio: output device \"{}\" attached ({} Hz, {} ch, {} frames per period)",
+            "output device \"{}\" attached ({} Hz, {} ch, {} frames per period)",
             format.name, format.rate, format.channels, format.period_frames
         );
         self.attached = true;
@@ -166,7 +166,7 @@ impl audiodev::Server for DriverSession<'_> {
     fn attach_input(&mut self, format: DeviceFormat) -> Result<InputLink, AudioError> {
         let link = self.capture.attach(&format)?;
         println!(
-            "audio: input device \"{}\" attached ({} Hz, {} ch, {} frames per period)",
+            "input device \"{}\" attached ({} Hz, {} ch, {} frames per period)",
             format.name, format.rate, format.channels, format.period_frames
         );
         self.input_attached = true;

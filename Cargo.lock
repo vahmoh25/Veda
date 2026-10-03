@@ -13,6 +13,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ac97"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vvirtio",
+]
+
+[[package]]
 name = "aead"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

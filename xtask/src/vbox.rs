@@ -162,7 +162,17 @@ impl VBox {
             "--vram",
             "64",
             "--audio-enabled",
-            "off",
+            if cfg.audio { "on" } else { "off" },
+            // AC'97 (drivers/ac97) for the loudspeakers and the microphone.
+            "--audio-controller",
+            "ac97",
+            "--audio-driver",
+            // Scripts record QEMU's output; under VirtualBox they stay silent.
+            if cfg.audio_wav.is_some() { "null" } else { "default" },
+            "--audio-in",
+            "on",
+            "--audio-out",
+            "on",
             "--usb-xhci",
             "on",
             "--mouse",

@@ -46,6 +46,8 @@ const DRIVERS: &[DriverMatch] = &[
     DriverMatch { vendor: 0x1AF4, devices: &[0x1052], driver: "virtio-input" },
     // virtio 1.0 sound
     DriverMatch { vendor: 0x1AF4, devices: &[0x1059], driver: "virtio-snd" },
+    // Intel 82801AA AC'97 audio (QEMU's AC97, VirtualBox's ICH AC97).
+    DriverMatch { vendor: 0x8086, devices: &[0x2415], driver: "ac97" },
     // virtio block (transitional and modern)
     DriverMatch { vendor: 0x1AF4, devices: &[0x1001, 0x1042], driver: "virtio-blk" },
     // virtio network card (transitional and modern)
@@ -104,6 +106,7 @@ struct Bound {
 
 struct Manager {
     config: ConfigSpace,
+    io: Resource,
     mmio: Resource,
     dma: Resource,
 }
@@ -144,9 +147,17 @@ impl pcidev::Server for DeviceSession<'_> {
             .map_err(|_| PciError::Denied)
     }
 
+    fn map_io_bar(&mut self, index: u8) -> Result<IoPorts, PciError> {
+        let bar = self.dev.info.bars.iter().find(|b| b.index == index && b.io).ok_or(PciError::NoSuchBar)?;
+        let (base, count) = (u16::try_from(bar.address), u16::try_from(bar.size));
+        let (Ok(base), Ok(count)) = (base, count) else { return Err(PciError::NoSuchBar) };
+        IoPorts::create(&self.mgr.io, base, count).map_err(|_| PciError::Denied)
+    }
+
     fn enable(&mut self, bus_master: bool) -> Result<(), PciError> {
         let cmd = self.mgr.config.read(self.dev.address, 0x04, 2);
-        let new = cmd | 0b10 | if bus_master { 0b100 } else { 0 };
+        // I/O and memory decoding, and bus mastering if asked for.
+        let new = cmd | 0b11 | if bus_master { 0b100 } else { 0 };
         self.mgr.config.write(self.dev.address, 0x04, 2, new);
         Ok(())
     }
@@ -218,7 +229,7 @@ fn main() -> i32 {
         println!("no system image to load drivers from");
         return 1;
     };
-    let mgr = Manager { config: ConfigSpace::new(ports), mmio, dma };
+    let mgr = Manager { config: ConfigSpace::new(ports), io, mmio, dma };
 
     let mut bound: BTreeMap<u64, Bound> = BTreeMap::new();
     let mut next = 1u64;

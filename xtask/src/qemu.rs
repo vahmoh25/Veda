@@ -134,6 +134,9 @@ pub struct VmConfig {
     /// Show a window (`false` = headless).
     pub display: bool,
     pub audio: bool,
+    /// The sound card: `virtio` (QEMU's default here) or `ac97` (the card
+    /// VirtualBox always has).
+    pub sound: String,
     /// Record guest audio to this WAV file instead of playing it.
     pub audio_wav: Option<PathBuf>,
     /// Serial output destination: `None` = this terminal.
@@ -173,6 +176,7 @@ impl Default for VmConfig {
             memory_mib: 1024,
             display: true,
             audio: true,
+            sound: "virtio".into(),
             audio_wav: None,
             serial_file: None,
             qmp_port: None,
@@ -263,7 +267,10 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         // the host's microphone. Recorded runs (WAV) have none, so a test
         // microphone can take its place.
         let streams = if cfg.audio_wav.is_some() { 1 } else { 2 };
-        cmd.args(["-device", &format!("virtio-sound-pci,audiodev=audio0,streams={streams}")]);
+        match cfg.sound.as_str() {
+            "ac97" => cmd.args(["-device", "AC97,audiodev=audio0"]),
+            _ => cmd.args(["-device", &format!("virtio-sound-pci,audiodev=audio0,streams={streams}")]),
+        };
     }
     if cfg.net.wired() {
         let model = cfg.nic_model.as_deref().unwrap_or("virtio-net-pci");

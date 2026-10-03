@@ -381,6 +381,11 @@ pub fn needs_virtualbox(script: &str) -> bool {
     script.lines().map(words).any(|w| w.len() >= 2 && w[0] == "requires" && w[1] == "virtualbox")
 }
 
+/// The sound card a script asks for with `sound` (`virtio` or `ac97`).
+pub fn sound_card(script: &str) -> Option<String> {
+    script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "sound")).find_map(|w| w.get(1).cloned())
+}
+
 /// The wired card model a script asks for with `nic`.
 pub fn nic_model(script: &str) -> Option<String> {
     script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "nic")).find_map(|w| w.get(1).cloned())
@@ -471,7 +476,7 @@ pub fn run_script(
                     s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "requires" => {}
+                "boot-cmdline" | "net" | "nic" | "sound" | "requires" => {}
                 "air" => {
                     let line = w.get(1).ok_or("missing command")?;
                     s.sim().and_then(|sim| sim.command(line)).map_err(ctx)?;
@@ -549,6 +554,24 @@ pub fn run_script(
                     let needle = w.get(1).ok_or("missing text")?;
                     if !s.recent().contains(needle.as_str()) {
                         return Err(ctx(format!("serial log does not contain \"{needle}\"")));
+                    }
+                }
+                // The guest's sound output (QEMU records it to a WAV file in
+                // scripts) holds more than silence.
+                "expect-audio" => {
+                    let wav =
+                        std::fs::read(util::out_dir().join("audio.wav")).map_err(|e| ctx(format!("audio.wav: {e}")))?;
+                    let peak = wav
+                        .get(44..)
+                        .unwrap_or(&[])
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|b| i16::from_le_bytes(*b).unsigned_abs())
+                        .max()
+                        .unwrap_or(0);
+                    if peak < 1000 {
+                        return Err(ctx(format!("the sound output is silent (peak {peak})")));
                     }
                 }
                 "reject-serial" => {
