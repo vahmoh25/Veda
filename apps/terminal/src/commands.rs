@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use vproto::fs::DirEntry;
 
 use crate::screen::{Style, color};
-use crate::shell::{Io, Shell, launch_error};
+use crate::shell::{INTERRUPTED, Io, Shell, launch_error};
 use vfiles::HOME;
 use vfiles::format::{format_time, human_size};
 use vfiles::kind::{EDITOR, FILES, FileKind, default_app, file_kind};
@@ -388,6 +388,14 @@ pub static BUILTINS: &[Builtin] = &[
         run: cmd_clear,
     },
     Builtin {
+        name: "sleep",
+        aliases: &[],
+        group: Group::Shell,
+        usage: "sleep SECONDS",
+        help: "Wait a while (Ctrl+C stops it)",
+        run: cmd_sleep,
+    },
+    Builtin {
         name: "history",
         aliases: &[],
         group: Group::Shell,
@@ -586,6 +594,9 @@ fn inputs(sh: &Shell, io: &mut Io, cmd: &str, files: &[String]) -> Option<Vec<(S
     }
     let mut out = Vec::new();
     for f in files {
+        if sh.interrupted() {
+            break;
+        }
         if let Some(t) = read_text(sh, io, cmd, f) {
             out.push((f.clone(), t));
         }
@@ -829,6 +840,9 @@ fn cmd_cat(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     }
     let mut status = 0;
     for arg in &args[1..] {
+        if sh.interrupted() {
+            break;
+        }
         let Some(mut text) = read_text(sh, io, &args[0], arg) else {
             status = 1;
             continue;
@@ -898,6 +912,9 @@ fn cmd_wc(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
 /// Collects the files below `dir` (for `grep -r`).
 fn walk_files(sh: &Shell, dir: &str, out: &mut Vec<String>) {
     for e in sh.fs.read_dir(dir).unwrap_or_default() {
+        if sh.interrupted() {
+            return;
+        }
         let p = join(dir, &e.name);
         if e.is_dir {
             walk_files(sh, &p, out);
@@ -938,6 +955,9 @@ fn cmd_grep(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let needle = if ci { pattern.to_ascii_lowercase() } else { pattern.clone() };
     let mut any = false;
     for (name, text) in &sources {
+        if sh.interrupted() {
+            break;
+        }
         let mut n = 0;
         for (ln, line) in text.lines().enumerate() {
             let hay = if ci { line.to_ascii_lowercase() } else { line.to_string() };
@@ -1031,6 +1051,9 @@ fn find_rec(
     found: &mut usize,
 ) {
     for e in sh.fs.read_dir(dir).unwrap_or_default() {
+        if sh.interrupted() {
+            return;
+        }
         let path = join(dir, &e.name);
         let display = join(shown, &e.name);
         let name_ok = match name {
@@ -1072,6 +1095,9 @@ fn tree_rec(sh: &Shell, io: &mut Io, dir: &str, prefix: &str, all: bool, depth: 
     let entries: Vec<DirEntry> =
         sh.fs.read_dir(dir).unwrap_or_default().into_iter().filter(|e| all || !e.name.starts_with('.')).collect();
     for (i, e) in entries.iter().enumerate() {
+        if sh.interrupted() {
+            return;
+        }
         let last = i + 1 == entries.len();
         io.styled(prefix, Style::DIM);
         io.styled(if last { "└── " } else { "├── " }, Style::DIM);
@@ -1909,7 +1935,23 @@ fn cmd_echo(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
 }
 
 fn cmd_clear(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
-    io.screen.clear();
+    io.out.clear();
+    0
+}
+
+fn cmd_sleep(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
+    let Some(secs) = args.get(1).and_then(|a| a.parse::<f64>().ok()).filter(|s| *s >= 0.0 && *s <= 3600.0) else {
+        return io.error("sleep", "usage: sleep SECONDS (up to 3600)");
+    };
+    let end = vrt::time::now_ns() + (secs * 1e9) as u64;
+    // In short steps, so that Ctrl+C stops it at once.
+    while vrt::time::now_ns() < end {
+        if sh.interrupted() {
+            return INTERRUPTED;
+        }
+        let left = end.saturating_sub(vrt::time::now_ns());
+        vrt::time::sleep(vrt::time::Duration::from_nanos(left.min(50_000_000)));
+    }
     0
 }
 

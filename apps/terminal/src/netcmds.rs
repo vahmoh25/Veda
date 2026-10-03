@@ -1,6 +1,7 @@
 //! Network commands: `wifi`, `ifconfig`, `ping`, `nslookup`, `netstat`,
 //! `route` and `curl`. They talk to the network and Wi-Fi services through
-//! `vnet`; every wait is bounded, as commands run on the terminal's thread.
+//! `vnet`; every wait is bounded, and the long ones (pinging, scanning,
+//! joining a network) stop between steps after Ctrl+C.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -10,7 +11,7 @@ use vnet::wifi::{self, ConnState, WlanEvent};
 use vnet::{Duration, IpAddr, NetError};
 
 use crate::screen::{Style, color};
-use crate::shell::{Io, Shell};
+use crate::shell::{INTERRUPTED, Io, Shell};
 
 fn net_err(io: &mut Io, cmd: &str, e: NetError) -> i32 {
     let status = io.error(cmd, &format!("{e}"));
@@ -102,11 +103,14 @@ fn print_networks(io: &mut Io, nets: &[wifi::NetworkInfo]) {
 }
 
 /// Starts a scan and waits (briefly) for it to finish.
-fn scan_and_wait(io: &mut Io) -> Result<(), i32> {
+fn scan_and_wait(sh: &Shell, io: &mut Io) -> Result<(), i32> {
     let watcher = wifi::Watcher::new().map_err(|e| wifi_err(io, e))?;
     wifi::scan().map_err(|e| wifi_err(io, e))?;
     let end = vrt::time::now_ns() + 8_000_000_000;
     while vrt::time::now_ns() < end {
+        if sh.interrupted() {
+            return Err(INTERRUPTED);
+        }
         match watcher.next(Duration::from_millis(500)) {
             Ok(Some(WlanEvent::ScanDone {})) => return Ok(()),
             Ok(_) => {}
@@ -125,7 +129,7 @@ usage: wifi [status]                 show the connection
        wifi on | off                 switch the radio
        wifi aps | log                access points / diagnostics";
 
-pub fn cmd_wifi(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
+pub fn cmd_wifi(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let sub = args.get(1).map(String::as_str).unwrap_or("status");
     match sub {
         "status" => match wifi::status() {
@@ -136,7 +140,7 @@ pub fn cmd_wifi(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             Err(e) => wifi_err(io, e),
         },
         "scan" => {
-            if let Err(code) = scan_and_wait(io) {
+            if let Err(code) = scan_and_wait(sh, io) {
                 return code;
             }
             match wifi::networks() {
@@ -167,6 +171,9 @@ pub fn cmd_wifi(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             // Wait for the outcome.
             let end = vrt::time::now_ns() + 30_000_000_000;
             loop {
+                if sh.interrupted() {
+                    return INTERRUPTED;
+                }
                 if let Some(w) = &watcher
                     && let Ok(Some(WlanEvent::ConnectFailed { reason, .. })) = w.next(Duration::from_millis(200))
                 {
@@ -351,7 +358,7 @@ pub fn cmd_ifconfig(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     }
 }
 
-pub fn cmd_ping(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
+pub fn cmd_ping(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     let mut count = 4u16;
     let mut host = None;
     let mut it = args.iter().skip(1);
@@ -376,7 +383,13 @@ pub fn cmd_ping(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     };
     io.println(&format!("PING {host} ({target}): 56 data bytes"));
     let mut rtts = Vec::new();
+    let mut sent = 0u16;
     for seq in 1..=count {
+        // Stopped with Ctrl+C: the summary covers what was sent.
+        if sh.interrupted() {
+            break;
+        }
+        sent += 1;
         match p.ping(target, seq, 56, 0) {
             Ok(r) => {
                 rtts.push(r.rtt_us);
@@ -392,8 +405,12 @@ pub fn cmd_ping(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             Err(e) => io.styled(&format!("seq={seq}: {e}\n"), Style::fg(color::YELLOW)),
         }
     }
-    let lost = count as usize - rtts.len();
-    io.println(&format!("--- {host}: {count} sent, {} received, {}% loss", rtts.len(), lost * 100 / count as usize));
+    let lost = sent as usize - rtts.len();
+    io.println(&format!(
+        "--- {host}: {sent} sent, {} received, {}% loss",
+        rtts.len(),
+        lost * 100 / (sent as usize).max(1)
+    ));
     if let (Some(min), Some(max)) = (rtts.iter().min(), rtts.iter().max()) {
         let avg = rtts.iter().map(|&x| x as u64).sum::<u64>() / rtts.len() as u64;
         io.println(&format!(

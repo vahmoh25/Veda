@@ -7,18 +7,24 @@
 //! installed applications, which are started through the launcher.
 //!
 //! Commands write their standard output through [`Io`]: either straight to
-//! the terminal (with colours) or into a capture buffer for a pipe or a
-//! redirection. Error messages always go to the terminal.
+//! the terminal (with colours, through the [`Output`] queue, as commands run
+//! on a thread of their own) or into a capture buffer for a pipe or a
+//! redirection. Error messages always go to the terminal. Ctrl+C sets the
+//! shell's interrupt flag: the rest of the command line is skipped, and
+//! commands that take long check it as they go.
 
 use alloc::borrow::ToOwned;
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use vproto::init::{AppInfo, LaunchError, launcher};
 
 use crate::commands;
-use crate::screen::{Cell, Screen, Style, cells, color};
+use crate::job::Output;
+use crate::screen::{Cell, Style, cells, color};
 use vfiles::path::{display_path, file_name, glob_match, has_wildcards, is_read_only, normalize, resolve};
 use vfiles::{Fs, HOME};
 
@@ -29,11 +35,13 @@ const NO_SPACE_HINT: &str = "The disk is full: delete files you no longer need (
 const HISTORY_FILE: &str = "/home/user/.vsh_history";
 /// Commands kept in the history.
 const MAX_HISTORY: usize = 500;
+/// The exit status of a command stopped with Ctrl+C (as in Unix shells).
+pub const INTERRUPTED: i32 = 130;
 
 /// Where a command's standard output goes.
 pub struct Io<'a> {
     /// The terminal (also receives error messages).
-    pub screen: &'a mut Screen,
+    pub out: &'a Output,
     /// `Some` when the output is captured for a pipe or redirection.
     pub capture: Option<String>,
     /// Standard input from a pipe or `<` redirection.
@@ -50,7 +58,7 @@ impl Io<'_> {
     pub fn styled(&mut self, s: &str, style: Style) {
         match &mut self.capture {
             Some(buf) => buf.push_str(s),
-            None => self.screen.write_styled(s, style),
+            None => self.out.styled(s, style),
         }
     }
 
@@ -69,20 +77,20 @@ impl Io<'_> {
     pub fn raw(&mut self, s: &str) {
         match &mut self.capture {
             Some(buf) => buf.push_str(s),
-            None => self.screen.write(s),
+            None => self.out.raw(s),
         }
     }
 
     /// Prints `cmd: message` in red on the terminal; returns exit status 1.
     pub fn error(&mut self, cmd: &str, msg: &str) -> i32 {
-        self.screen.finish_line();
-        self.screen.write_styled(&format!("{cmd}: {msg}\n"), Style::ERROR);
+        self.out.finish_line();
+        self.out.styled(&format!("{cmd}: {msg}\n"), Style::ERROR);
         1
     }
 
     /// Prints a hint in grey on the terminal.
     pub fn hint(&mut self, msg: &str) {
-        self.screen.write_styled(&format!("{msg}\n"), Style::DIM);
+        self.out.styled(&format!("{msg}\n"), Style::DIM);
     }
 
     /// Prints `cmd: what: error` for a failed file operation (with a hint
@@ -156,6 +164,8 @@ pub struct Shell {
     pub exit_requested: bool,
     /// Terminal width in columns (for formatting tables).
     pub cols: usize,
+    /// Set (by Ctrl+C) to stop the command that is running.
+    pub interrupt: Arc<AtomicBool>,
 }
 
 impl Shell {
@@ -182,7 +192,13 @@ impl Shell {
             apps: None,
             exit_requested: false,
             cols: 80,
+            interrupt: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// The command that is running should stop (Ctrl+C was pressed).
+    pub fn interrupted(&self) -> bool {
+        self.interrupt.load(Ordering::Relaxed)
     }
 
     /// The prompt: `user@vindows:~/Documents$ `.
@@ -342,12 +358,13 @@ impl Shell {
 
     // ---- execution ---------------------------------------------------------
 
-    /// Runs a command line, writing output to `screen`.
-    pub fn execute(&mut self, line: &str, screen: &mut Screen) {
+    /// Runs a command line, writing output to `out`. After Ctrl+C the rest
+    /// of the line is skipped.
+    pub fn execute(&mut self, line: &str, out: &Output) {
         let toks = match self.tokenize(line) {
             Ok(t) => t,
             Err(e) => {
-                screen.write_styled(&format!("vsh: {e}\n"), Style::ERROR);
+                out.styled(&format!("vsh: {e}\n"), Style::ERROR);
                 self.status = 2;
                 return;
             }
@@ -355,37 +372,46 @@ impl Shell {
         let list = match parse(toks) {
             Ok(l) => l,
             Err(e) => {
-                screen.write_styled(&format!("vsh: {e}\n"), Style::ERROR);
+                out.styled(&format!("vsh: {e}\n"), Style::ERROR);
                 self.status = 2;
                 return;
             }
         };
         for (conn, pipeline) in list {
+            if self.interrupted() {
+                break;
+            }
             match conn {
                 Connector::And if self.status != 0 => continue,
                 Connector::Or if self.status == 0 => continue,
                 _ => {}
             }
-            self.status = self.run_pipeline(pipeline, screen);
-            screen.finish_line();
+            self.status = self.run_pipeline(pipeline, out);
+            out.finish_line();
             if self.exit_requested {
                 break;
             }
         }
+        if self.interrupted() {
+            self.status = INTERRUPTED;
+        }
     }
 
-    fn run_pipeline(&mut self, cmds: Vec<Command>, screen: &mut Screen) -> i32 {
+    fn run_pipeline(&mut self, cmds: Vec<Command>, out: &Output) -> i32 {
         let n = cmds.len();
         let mut piped: Option<String> = None;
         let mut status = 0;
         for (i, cmd) in cmds.into_iter().enumerate() {
+            if self.interrupted() {
+                return INTERRUPTED;
+            }
             let mut stdin = piped.take();
             if let Some(path) = &cmd.stdin {
                 let abs = self.resolve(path);
                 match self.fs.read(&abs) {
                     Ok(data) => stdin = Some(String::from_utf8_lossy(&data).into_owned()),
                     Err(e) => {
-                        screen.write_styled(&format!("vsh: {path}: {e}\n"), Style::ERROR);
+                        out.styled(&format!("vsh: {path}: {e}\n"), Style::ERROR);
                         return 1;
                     }
                 }
@@ -393,24 +419,24 @@ impl Shell {
             let last = i + 1 == n;
             let capture = !last || cmd.stdout.is_some();
             let args = self.expand(&cmd.words);
-            let mut io = Io { screen: &mut *screen, capture: if capture { Some(String::new()) } else { None }, stdin };
+            let mut io = Io { out, capture: if capture { Some(String::new()) } else { None }, stdin };
             status = if args.is_empty() { 0 } else { self.run_command(&args, &mut io) };
-            let out = io.capture.take();
+            let captured = io.capture.take();
             if let Some((path, append)) = &cmd.stdout {
                 let abs = self.resolve(path);
-                let data = out.unwrap_or_default();
+                let data = captured.unwrap_or_default();
                 let r =
                     if *append { self.fs.append(&abs, data.as_bytes()) } else { self.fs.write(&abs, data.as_bytes()) };
                 if let Err(e) = r {
-                    screen.finish_line();
-                    screen.write_styled(&format!("vsh: {path}: {e}\n"), Style::ERROR);
+                    out.finish_line();
+                    out.styled(&format!("vsh: {path}: {e}\n"), Style::ERROR);
                     if e.is_no_space() {
-                        screen.write_styled(&format!("{NO_SPACE_HINT}\n"), Style::DIM);
+                        out.styled(&format!("{NO_SPACE_HINT}\n"), Style::DIM);
                     }
                     status = 1;
                 }
             } else if !last {
-                piped = out;
+                piped = captured;
             }
             if self.exit_requested {
                 break;

@@ -4,9 +4,10 @@
 //! with a live prompt line at the bottom. It supports line editing, command
 //! history, Tab completion, mouse selection with clipboard copy and paste,
 //! scrolling with the wheel, keyboard or scrollbar, a blinking cursor and
-//! zooming. Commands run inside this process (see `shell.rs` and
-//! `commands.rs`); programs and applications are started through the
-//! launcher.
+//! zooming. Commands are interpreted inside this process (see `shell.rs` and
+//! `commands.rs`), each on a thread of its own (`job.rs`): the window stays
+//! responsive while one runs, keys typed meanwhile wait for it, and Ctrl+C
+//! stops it. Programs and applications are started through the launcher.
 //!
 //! Usage: `terminal [DIR]` starts in DIR; `terminal -c COMMAND` runs a
 //! command first.
@@ -17,20 +18,27 @@
 extern crate alloc;
 
 mod commands;
+mod job;
 mod netcmds;
 mod screen;
 mod shell;
 
+use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
+use vabi::{RawHandle, signals};
 use vfiles::HOME;
 use vfiles::path::display_path;
 use vproto::display::modifiers;
 use vproto::input::keys;
+use vui::ui::KeyPress;
 use vui::{App, Color, Cursor, Font, MenuItem, Rect, Ui, WindowSpec};
 
+use job::{Job, Output};
 use screen::{Cell, Pos, Screen, Style, color};
 use shell::Shell;
 
@@ -66,6 +74,12 @@ const PAD_Y: i32 = 10;
 const SCROLLBAR_W: i32 = 10;
 const BLINK_NS: u64 = 530_000_000;
 const DEFAULT_FONT_SIZE: f32 = 14.0;
+/// Rows that Page Up and Page Down scroll.
+const PAGE: usize = 10;
+/// How long the window waits for a command it has just started before it
+/// draws again: most commands are done by then, and the window looks as if
+/// it had run them itself.
+const QUICK_NS: u64 = 50_000_000;
 
 /// An incremental search backwards through the history (Ctrl+R).
 struct HistorySearch {
@@ -77,6 +91,14 @@ struct HistorySearch {
 /// The prefix shown while searching the history.
 const SEARCH_PREFIX: &str = "(reverse-i-search)`";
 const SEARCH_FAILED_PREFIX: &str = "(failed reverse-i-search)`";
+
+/// Something typed while a command ran, handled once it is done.
+enum Pending {
+    Key(KeyPress),
+    /// Pasted text (or what is left of it after a line that started a
+    /// command).
+    Paste(String),
+}
 
 /// One visible row of text: a slice `start..end` of logical line `line`.
 #[derive(Debug, Clone, Copy)]
@@ -100,7 +122,19 @@ struct Layout {
 
 struct Terminal {
     screen: Screen,
-    shell: Shell,
+    /// The shell, while no command runs (a running command has it).
+    shell: Option<Shell>,
+    /// The command that is running.
+    job: Option<Job>,
+    /// Output of commands on its way to the screen.
+    output: Arc<Output>,
+    /// The shell's interrupt flag (Ctrl+C), also while a command has the
+    /// shell.
+    interrupt: Arc<AtomicBool>,
+    /// Keys and pastes waiting for the running command to finish.
+    pending: VecDeque<Pending>,
+    /// The working directory as of the last command (also while one runs).
+    cwd: String,
     /// The command being typed and the cursor (byte offset) in it.
     input: String,
     cursor: usize,
@@ -208,7 +242,8 @@ fn colors(s: Style) -> (Color, Option<Color>) {
 }
 
 impl Terminal {
-    fn new(cwd: &str) -> Terminal {
+    fn new(cwd: &str) -> Option<Terminal> {
+        let output = Output::new()?;
         let mut screen = Screen::new();
         let version = vrt::object::system_info()
             .map(|i| {
@@ -226,9 +261,14 @@ impl Terminal {
         screen.write_styled(" to see the installed applications.\n\n", Style::DIM);
         let mut shell = Shell::new(cwd);
         shell.load_history();
-        Terminal {
+        Some(Terminal {
             screen,
-            shell,
+            interrupt: shell.interrupt.clone(),
+            cwd: shell.cwd.clone(),
+            shell: Some(shell),
+            job: None,
+            output,
+            pending: VecDeque::new(),
             input: String::new(),
             cursor: 0,
             history_pos: None,
@@ -243,7 +283,17 @@ impl Terminal {
             tabs: 0,
             title: String::new(),
             hsearch: None,
-        }
+        })
+    }
+
+    /// The command history (empty while a command runs).
+    fn history(&self) -> &[String] {
+        self.shell.as_ref().map_or(&[][..], |s| s.history.as_slice())
+    }
+
+    /// The `exit` command ran (or Ctrl+D was pressed).
+    fn exit_requested(&self) -> bool {
+        self.shell.as_ref().is_some_and(|s| s.exit_requested)
     }
 
     /// The prompt plus the input as cells (or the history search line).
@@ -254,12 +304,15 @@ impl Terminal {
             cells.extend(screen::cells(&s.query, Style::fg(color::BRIGHT_YELLOW).bold()));
             cells.extend(screen::cells("': ", Style::DIM));
             let prompt_len = cells.len();
-            if let Some(i) = s.found {
-                cells.extend(screen::cells(&self.shell.history[i], Style::PLAIN));
+            if let Some(line) = s.found.and_then(|i| self.history().get(i)) {
+                cells.extend(screen::cells(line, Style::PLAIN));
             }
             return (cells, prompt_len);
         }
-        let mut cells = self.shell.prompt();
+        // While a command runs, the line below its output stays empty; the
+        // prompt comes back when it is done.
+        let Some(shell) = &self.shell else { return (Vec::new(), 0) };
+        let mut cells = shell.prompt();
         let prompt_len = cells.len();
         cells.extend(screen::cells(&self.input, Style::PLAIN));
         (cells, prompt_len)
@@ -273,6 +326,7 @@ impl Terminal {
                 let prefix = if failed { SEARCH_FAILED_PREFIX } else { SEARCH_PREFIX };
                 prefix.chars().count() + s.query.chars().count()
             }
+            None if self.shell.is_none() => 0,
             None => prompt_len + self.input[..self.cursor].chars().count(),
         }
     }
@@ -283,13 +337,14 @@ impl Terminal {
             return None;
         }
         let lower = query.to_lowercase();
-        (0..before.min(self.shell.history.len())).rev().find(|&i| self.shell.history[i].to_lowercase().contains(&lower))
+        let history = self.history();
+        (0..before.min(history.len())).rev().find(|&i| history[i].to_lowercase().contains(&lower))
     }
 
     /// Ends the history search, putting the match in the input line.
     fn accept_search(&mut self) {
-        if let Some(i) = self.hsearch.take().and_then(|s| s.found) {
-            self.input = self.shell.history[i].clone();
+        if let Some(line) = self.hsearch.take().and_then(|s| s.found).and_then(|i| self.history().get(i).cloned()) {
+            self.input = line;
             self.cursor = self.input.len();
         }
     }
@@ -297,7 +352,7 @@ impl Terminal {
     /// Handles a key during a history search; returns `true` if consumed.
     fn search_key(&mut self, code: u16, ctrl: bool, ch: Option<char>) -> bool {
         let Some(mut s) = self.hsearch.take() else { return false };
-        let n = self.shell.history.len();
+        let n = self.history().len();
         if let Some(c) = ch {
             s.query.push(c);
             s.found = self.search_history(&s.query, s.found.map_or(n, |f| f + 1));
@@ -386,60 +441,165 @@ impl Terminal {
         i
     }
 
-    /// Runs the typed line.
+    /// Runs the typed line: echoes it and starts it (see
+    /// [`Terminal::start`]).
     fn submit(&mut self) {
+        // Keys wait while a command runs, so the shell is here.
+        let Some(shell) = &mut self.shell else { return };
         let line = core::mem::take(&mut self.input);
         self.cursor = 0;
-        let mut echoed = self.shell.prompt();
+        let mut echoed = shell.prompt();
         echoed.extend(screen::cells(&line, Style::PLAIN));
+        shell.remember(&line);
         self.screen.push_cells(echoed);
-        self.shell.remember(&line);
         self.history_pos = None;
         self.saved_input.clear();
-        if !line.trim().is_empty() {
-            self.shell.execute(&line, &mut self.screen);
-        }
-        self.screen.finish_line();
         self.selection = None;
         self.scroll = 0;
+        if !line.trim().is_empty() {
+            self.start(&line);
+        }
     }
 
-    /// Pastes text: complete lines are run, the rest is inserted.
-    fn paste(&mut self, text: &str) {
-        let text = text.replace("\r\n", "\n").replace('\t', "    ");
-        let mut parts = text.split('\n').peekable();
-        while let Some(part) = parts.next() {
-            self.insert(part);
-            if parts.peek().is_some() {
-                self.submit();
-                if self.shell.exit_requested {
-                    return;
+    /// Starts `line` on a thread of its own and waits a moment for it.
+    fn start(&mut self, line: &str) {
+        self.interrupt.store(false, Ordering::Relaxed);
+        match Job::start(&mut self.shell, line.into(), &self.output) {
+            Some(job) => {
+                self.job = Some(job);
+                self.wait_for_job(QUICK_NS);
+            }
+            None => {
+                // No thread for it: it runs here, the window waiting.
+                if let Some(shell) = &mut self.shell {
+                    shell.execute(line, &self.output);
+                    self.cwd = shell.cwd.clone();
                 }
+                self.output.drain_into(&mut self.screen);
+                self.screen.finish_line();
             }
         }
     }
 
+    /// Moves the running command's output to the screen and, once it has
+    /// finished, takes the shell back. Returns whether a command finished.
+    fn collect(&mut self) -> bool {
+        self.output.drain_into(&mut self.screen);
+        if !self.job.as_ref().is_some_and(Job::finished) {
+            return false;
+        }
+        let Some(job) = self.job.take() else { return false };
+        let shell = match job.finish() {
+            Some(shell) => shell,
+            // The command's thread went away with the shell: a new one.
+            None => {
+                let mut shell = Shell::new(&self.cwd);
+                shell.load_history();
+                shell.interrupt = self.interrupt.clone();
+                shell
+            }
+        };
+        self.output.drain_into(&mut self.screen);
+        self.cwd = shell.cwd.clone();
+        self.shell = Some(shell);
+        self.screen.finish_line();
+        true
+    }
+
+    /// Waits up to `timeout` ns for the running command, moving its output
+    /// to the screen. Returns whether none runs any more.
+    fn wait_for_job(&mut self, timeout: u64) -> bool {
+        let deadline = vrt::time::now_ns().saturating_add(timeout);
+        loop {
+            self.collect();
+            if self.job.is_none() {
+                return true;
+            }
+            if vrt::time::now_ns() >= deadline {
+                return false;
+            }
+            self.output.wait(deadline);
+        }
+    }
+
+    /// Stops the running command (Ctrl+C): it stops at its next step, ^C
+    /// shows at once, and what was typed meanwhile is dropped, as in other
+    /// terminals. Returns whether a command was running.
+    fn interrupt(&mut self) -> bool {
+        if self.job.is_none() {
+            return false;
+        }
+        self.interrupt.store(true, Ordering::Relaxed);
+        self.output.drain_into(&mut self.screen);
+        self.screen.push_cells(screen::cells("^C", Style::DIM));
+        self.pending.clear();
+        self.scroll = 0;
+        true
+    }
+
+    /// Clears the screen (Ctrl+L).
+    fn clear_screen(&mut self) {
+        self.screen.clear();
+        self.selection = None;
+        self.scroll = 0;
+    }
+
+    /// Handles what was typed while a command ran, until a line starts
+    /// another command.
+    fn replay(&mut self, ui: &mut Ui) {
+        while self.job.is_none() && !self.exit_requested() {
+            match self.pending.pop_front() {
+                Some(Pending::Key(k)) => self.handle_key(ui, k),
+                Some(Pending::Paste(text)) => self.paste(&text),
+                None => break,
+            }
+        }
+    }
+
+    /// Pastes text: complete lines are run, the rest is inserted. Lines
+    /// after one that started a command wait for it.
+    fn paste(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\n").replace('\t', "    ");
+        let mut rest = text.as_str();
+        while let Some((line, more)) = rest.split_once('\n') {
+            self.insert(line);
+            self.submit();
+            if self.exit_requested() {
+                return;
+            }
+            rest = more;
+            if self.job.is_some() {
+                if !rest.is_empty() {
+                    self.pending.push_front(Pending::Paste(rest.into()));
+                }
+                return;
+            }
+        }
+        self.insert(rest);
+    }
+
     fn history_up(&mut self) {
-        if self.shell.history.is_empty() {
+        let len = self.history().len();
+        if len == 0 {
             return;
         }
         let pos = match self.history_pos {
             None => {
                 self.saved_input = self.input.clone();
-                self.shell.history.len() - 1
+                len - 1
             }
             Some(p) => p.saturating_sub(1),
         };
         self.history_pos = Some(pos);
-        self.input = self.shell.history[pos].clone();
+        self.input = self.history()[pos].clone();
         self.cursor = self.input.len();
     }
 
     fn history_down(&mut self) {
         let Some(p) = self.history_pos else { return };
-        if p + 1 < self.shell.history.len() {
+        if p + 1 < self.history().len() {
             self.history_pos = Some(p + 1);
-            self.input = self.shell.history[p + 1].clone();
+            self.input = self.history()[p + 1].clone();
         } else {
             self.history_pos = None;
             self.input = core::mem::take(&mut self.saved_input);
@@ -448,7 +608,9 @@ impl Terminal {
     }
 
     fn complete(&mut self) {
-        let c = self.shell.complete(&self.input, self.cursor);
+        let Some(shell) = &mut self.shell else { return };
+        let c = shell.complete(&self.input, self.cursor);
+        let cols = shell.cols;
         if let Some(rep) = c.replacement {
             self.input.replace_range(c.start..self.cursor, &rep);
             self.cursor = c.start + rep.len();
@@ -467,7 +629,7 @@ impl Terminal {
         let (live, _) = self.live_cells();
         self.screen.push_cells(live);
         let colw = c.candidates.iter().map(|s| s.chars().count()).max().unwrap_or(1) + 2;
-        let per_row = (self.shell.cols.max(colw) / colw).max(1);
+        let per_row = (cols.max(colw) / colw).max(1);
         let rows = c.candidates.len().div_ceil(per_row);
         for r in 0..rows {
             for k in 0..per_row {
@@ -505,150 +667,197 @@ impl Terminal {
         self.font_size = if delta == 0.0 { DEFAULT_FONT_SIZE } else { (self.font_size + delta).clamp(9.0, 28.0) };
     }
 
-    /// Handles the keyboard: typed characters, editing keys and shortcuts,
-    /// in the order they were pressed.
+    /// Handles the keyboard in the order the keys were pressed. While a
+    /// command runs, the keys that can wait for it (typing, editing, Enter)
+    /// do.
     fn handle_keys(&mut self, ui: &mut Ui) {
+        for k in ui.input.keys.clone() {
+            if self.job.is_some() || !self.pending.is_empty() {
+                if !self.key_while_running(ui, &k) {
+                    self.pending.push_back(Pending::Key(k));
+                }
+                continue;
+            }
+            self.handle_key(ui, k);
+            if self.exit_requested() {
+                return;
+            }
+        }
+    }
+
+    /// The keys that act while a command runs: Ctrl+C stops it (or copies
+    /// the selection), and copying, selecting everything, scrolling,
+    /// clearing the screen and zooming work as always. Returns whether `k`
+    /// was one of them.
+    fn key_while_running(&mut self, ui: &mut Ui, k: &KeyPress) -> bool {
+        let ctrl = k.modifiers & modifiers::CTRL != 0;
+        let shift = k.modifiers & modifiers::SHIFT != 0;
+        match k.code {
+            keys::C if ctrl && shift => {
+                self.copy_selection(ui);
+            }
+            keys::C if ctrl => {
+                if !self.copy_selection(ui) && !self.interrupt() {
+                    return false;
+                }
+                self.selection = None;
+            }
+            keys::A if ctrl && shift => self.select_all(),
+            keys::L if ctrl => self.clear_screen(),
+            keys::UP if ctrl || shift => self.scroll = self.scroll.saturating_add(1),
+            keys::DOWN if ctrl || shift => self.scroll = self.scroll.saturating_sub(1),
+            keys::PAGEUP => self.scroll = self.scroll.saturating_add(PAGE),
+            keys::PAGEDOWN => self.scroll = self.scroll.saturating_sub(PAGE),
+            keys::HOME if ctrl => self.scroll = usize::MAX,
+            keys::END if ctrl => self.scroll = 0,
+            keys::EQUAL | keys::KPPLUS if ctrl => self.zoom(1.0),
+            keys::MINUS | keys::KPMINUS if ctrl => self.zoom(-1.0),
+            keys::KEY_0 if ctrl => self.zoom(0.0),
+            keys::ESC if self.selection.is_some() => self.selection = None,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Handles one key: typed characters, editing keys and shortcuts.
+    fn handle_key(&mut self, ui: &mut Ui, k: KeyPress) {
         let now = ui.now();
-        let keys_now = ui.input.keys.clone();
-        for k in keys_now {
-            let ctrl = k.modifiers & modifiers::CTRL != 0;
-            let shift = k.modifiers & modifiers::SHIFT != 0;
-            if k.code != keys::TAB {
-                self.tabs = 0;
-            }
-            // The character the key typed (none with Ctrl, Alt or Super).
-            let ch = k.ch.filter(|c| *c != '\t');
-            if self.hsearch.is_some() && self.search_key(k.code, ctrl, ch) {
+        let ctrl = k.modifiers & modifiers::CTRL != 0;
+        let shift = k.modifiers & modifiers::SHIFT != 0;
+        if k.code != keys::TAB {
+            self.tabs = 0;
+        }
+        // The character the key typed (none with Ctrl, Alt or Super).
+        let ch = k.ch.filter(|c| *c != '\t');
+        if self.hsearch.is_some() && self.search_key(k.code, ctrl, ch) {
+            self.reset_view(now);
+            return;
+        }
+        if k.code == keys::TAB && !ctrl {
+            self.complete();
+            self.selection = None;
+            self.reset_view(now);
+            return;
+        }
+        if let Some(c) = ch {
+            let mut buf = [0u8; 4];
+            self.insert(c.encode_utf8(&mut buf));
+            self.selection = None;
+            self.reset_view(now);
+            return;
+        }
+        match k.code {
+            keys::ENTER | keys::KPENTER => {
+                self.submit();
                 self.reset_view(now);
-                continue;
             }
-            if k.code == keys::TAB && !ctrl {
-                self.complete();
-                self.selection = None;
-                self.reset_view(now);
-                continue;
-            }
-            if let Some(c) = ch {
-                let mut buf = [0u8; 4];
-                self.insert(c.encode_utf8(&mut buf));
-                self.selection = None;
-                self.reset_view(now);
-                continue;
-            }
-            let page = 10;
-            match k.code {
-                keys::ENTER | keys::KPENTER => {
-                    self.submit();
-                    self.reset_view(now);
-                }
-                keys::BACKSPACE => {
-                    if self.cursor > 0 {
-                        let p = if ctrl { self.word_left(self.cursor) } else { self.prev_char(self.cursor) };
-                        self.input.replace_range(p..self.cursor, "");
-                        self.cursor = p;
-                    }
-                    self.reset_view(now);
-                }
-                keys::DELETE => {
-                    if self.cursor < self.input.len() {
-                        let n = if ctrl { self.word_right(self.cursor) } else { self.next_char(self.cursor) };
-                        self.input.replace_range(self.cursor..n, "");
-                    }
-                    self.reset_view(now);
-                }
-                keys::LEFT => {
-                    self.cursor = if ctrl { self.word_left(self.cursor) } else { self.prev_char(self.cursor) };
-                    self.reset_view(now);
-                }
-                keys::RIGHT => {
-                    self.cursor = if ctrl { self.word_right(self.cursor) } else { self.next_char(self.cursor) };
-                    self.reset_view(now);
-                }
-                keys::HOME if ctrl => self.scroll = usize::MAX,
-                keys::END if ctrl => self.scroll = 0,
-                keys::HOME => {
-                    self.cursor = 0;
-                    self.reset_view(now);
-                }
-                keys::END => {
-                    self.cursor = self.input.len();
-                    self.reset_view(now);
-                }
-                keys::UP if ctrl || shift => self.scroll = self.scroll.saturating_add(1),
-                keys::DOWN if ctrl || shift => self.scroll = self.scroll.saturating_sub(1),
-                keys::UP => {
-                    self.history_up();
-                    self.reset_view(now);
-                }
-                keys::DOWN => {
-                    self.history_down();
-                    self.reset_view(now);
-                }
-                keys::PAGEUP => self.scroll = self.scroll.saturating_add(page),
-                keys::PAGEDOWN => self.scroll = self.scroll.saturating_sub(page),
-                keys::ESC => {
-                    if self.selection.is_some() {
-                        self.selection = None;
-                    } else {
-                        self.input.clear();
-                        self.cursor = 0;
-                        self.history_pos = None;
-                    }
-                }
-                keys::INSERT if shift => {
-                    let clip = ui.clipboard();
-                    self.paste(&clip);
-                    self.reset_view(now);
-                }
-                keys::C if ctrl && shift => {
-                    self.copy_selection(ui);
-                }
-                keys::C if ctrl => {
-                    if !self.copy_selection(ui) {
-                        // Cancel the line, like ^C in a Unix shell.
-                        let (mut live, _) = self.live_cells();
-                        live.extend(screen::cells("^C", Style::DIM));
-                        self.screen.push_cells(live);
-                        self.input.clear();
-                        self.cursor = 0;
-                        self.history_pos = None;
-                        self.reset_view(now);
-                    }
-                    self.selection = None;
-                }
-                keys::V if ctrl => {
-                    let clip = ui.clipboard();
-                    self.paste(&clip);
-                    self.reset_view(now);
-                }
-                keys::R if ctrl => {
-                    self.hsearch = Some(HistorySearch { query: String::new(), found: None });
-                    self.reset_view(now);
-                }
-                keys::A if ctrl && shift => self.select_all(),
-                keys::A if ctrl => self.cursor = 0,
-                keys::E if ctrl => self.cursor = self.input.len(),
-                keys::U if ctrl => {
-                    self.input.replace_range(..self.cursor, "");
-                    self.cursor = 0;
-                }
-                keys::K if ctrl => self.input.truncate(self.cursor),
-                keys::W if ctrl => {
-                    let p = self.word_left(self.cursor);
+            keys::BACKSPACE => {
+                if self.cursor > 0 {
+                    let p = if ctrl { self.word_left(self.cursor) } else { self.prev_char(self.cursor) };
                     self.input.replace_range(p..self.cursor, "");
                     self.cursor = p;
                 }
-                keys::L if ctrl => {
-                    self.screen.clear();
-                    self.selection = None;
-                    self.scroll = 0;
-                }
-                keys::D if ctrl && self.input.is_empty() => self.shell.exit_requested = true,
-                keys::EQUAL | keys::KPPLUS if ctrl => self.zoom(1.0),
-                keys::MINUS | keys::KPMINUS if ctrl => self.zoom(-1.0),
-                keys::KEY_0 if ctrl => self.zoom(0.0),
-                _ => {}
+                self.reset_view(now);
             }
+            keys::DELETE => {
+                if self.cursor < self.input.len() {
+                    let n = if ctrl { self.word_right(self.cursor) } else { self.next_char(self.cursor) };
+                    self.input.replace_range(self.cursor..n, "");
+                }
+                self.reset_view(now);
+            }
+            keys::LEFT => {
+                self.cursor = if ctrl { self.word_left(self.cursor) } else { self.prev_char(self.cursor) };
+                self.reset_view(now);
+            }
+            keys::RIGHT => {
+                self.cursor = if ctrl { self.word_right(self.cursor) } else { self.next_char(self.cursor) };
+                self.reset_view(now);
+            }
+            keys::HOME if ctrl => self.scroll = usize::MAX,
+            keys::END if ctrl => self.scroll = 0,
+            keys::HOME => {
+                self.cursor = 0;
+                self.reset_view(now);
+            }
+            keys::END => {
+                self.cursor = self.input.len();
+                self.reset_view(now);
+            }
+            keys::UP if ctrl || shift => self.scroll = self.scroll.saturating_add(1),
+            keys::DOWN if ctrl || shift => self.scroll = self.scroll.saturating_sub(1),
+            keys::UP => {
+                self.history_up();
+                self.reset_view(now);
+            }
+            keys::DOWN => {
+                self.history_down();
+                self.reset_view(now);
+            }
+            keys::PAGEUP => self.scroll = self.scroll.saturating_add(PAGE),
+            keys::PAGEDOWN => self.scroll = self.scroll.saturating_sub(PAGE),
+            keys::ESC => {
+                if self.selection.is_some() {
+                    self.selection = None;
+                } else {
+                    self.input.clear();
+                    self.cursor = 0;
+                    self.history_pos = None;
+                }
+            }
+            keys::INSERT if shift => {
+                let clip = ui.clipboard();
+                self.paste(&clip);
+                self.reset_view(now);
+            }
+            keys::C if ctrl && shift => {
+                self.copy_selection(ui);
+            }
+            keys::C if ctrl => {
+                if !self.copy_selection(ui) {
+                    // Cancel the line, like ^C in a Unix shell.
+                    let (mut live, _) = self.live_cells();
+                    live.extend(screen::cells("^C", Style::DIM));
+                    self.screen.push_cells(live);
+                    self.input.clear();
+                    self.cursor = 0;
+                    self.history_pos = None;
+                    self.reset_view(now);
+                }
+                self.selection = None;
+            }
+            keys::V if ctrl => {
+                let clip = ui.clipboard();
+                self.paste(&clip);
+                self.reset_view(now);
+            }
+            keys::R if ctrl => {
+                self.hsearch = Some(HistorySearch { query: String::new(), found: None });
+                self.reset_view(now);
+            }
+            keys::A if ctrl && shift => self.select_all(),
+            keys::A if ctrl => self.cursor = 0,
+            keys::E if ctrl => self.cursor = self.input.len(),
+            keys::U if ctrl => {
+                self.input.replace_range(..self.cursor, "");
+                self.cursor = 0;
+            }
+            keys::K if ctrl => self.input.truncate(self.cursor),
+            keys::W if ctrl => {
+                let p = self.word_left(self.cursor);
+                self.input.replace_range(p..self.cursor, "");
+                self.cursor = p;
+            }
+            keys::L if ctrl => self.clear_screen(),
+            keys::D if ctrl && self.input.is_empty() => {
+                if let Some(shell) = &mut self.shell {
+                    shell.exit_requested = true;
+                }
+            }
+            keys::EQUAL | keys::KPPLUS if ctrl => self.zoom(1.0),
+            keys::MINUS | keys::KPMINUS if ctrl => self.zoom(-1.0),
+            keys::KEY_0 if ctrl => self.zoom(0.0),
+            _ => {}
         }
     }
 
@@ -993,15 +1202,15 @@ impl Terminal {
             }
             Some(1) => {
                 let clip = ui.clipboard();
-                self.paste(&clip);
+                if self.job.is_some() {
+                    self.pending.push_back(Pending::Paste(clip));
+                } else {
+                    self.paste(&clip);
+                }
                 self.scroll = 0;
             }
             Some(2) => self.select_all(),
-            Some(4) => {
-                self.screen.clear();
-                self.selection = None;
-                self.scroll = 0;
-            }
+            Some(4) => self.clear_screen(),
             Some(6) => self.zoom(1.0),
             Some(7) => self.zoom(-1.0),
             Some(8) => self.zoom(0.0),
@@ -1011,25 +1220,48 @@ impl Terminal {
 }
 
 impl App for Terminal {
+    fn wait_handles(&self) -> Vec<(RawHandle, u32)> {
+        alloc::vec![(self.output.handle(), signals::SIGNALED)]
+    }
+
+    fn handle_signaled(&mut self, _index: usize, _observed: u32) {
+        // Output arrived or the command finished; a frame follows.
+        self.collect();
+    }
+
     fn update(&mut self, ui: &mut Ui) {
+        // The running command's output, and the shell back once it is done;
+        // then what was typed meanwhile.
+        self.collect();
+        if self.job.is_none() {
+            self.replay(ui);
+        }
+        if self.exit_requested() {
+            ui.close_window();
+            return;
+        }
         // The mouse first (it may select text), then the keyboard (which may
         // copy it), so that both arriving in one frame act in order. While
         // the context menu is open, vui gives it the keyboard: no keys here.
         let (live, prompt_len) = self.live_cells();
         let cursor_col = self.cursor_col(prompt_len);
         let mut layout = self.layout(ui, live.len(), cursor_col);
-        self.shell.cols = layout.cols;
+        if let Some(shell) = &mut self.shell {
+            shell.cols = layout.cols;
+        }
         self.handle_mouse(ui, &mut layout, &live, prompt_len);
         if !ui.input.keys.is_empty() {
             self.handle_keys(ui);
-            if self.shell.exit_requested {
+            if self.exit_requested() {
                 ui.close_window();
                 return;
             }
             let (live, prompt_len) = self.live_cells();
             let cursor_col = self.cursor_col(prompt_len);
             layout = self.layout(ui, live.len(), cursor_col);
-            self.shell.cols = layout.cols;
+            if let Some(shell) = &mut self.shell {
+                shell.cols = layout.cols;
+            }
             self.finish_frame(ui, &layout, &live, cursor_col);
             return;
         }
@@ -1049,7 +1281,8 @@ impl Terminal {
         self.draw(ui, layout, live, cursor_col);
         self.context_menu(ui);
         // Keep the window title in sync with the working directory.
-        let title = format!("Terminal — {}", display_path(&self.shell.cwd));
+        let cwd = self.shell.as_ref().map_or(self.cwd.as_str(), |s| s.cwd.as_str());
+        let title = format!("Terminal — {}", display_path(cwd));
         if title != self.title {
             let _ = ui.ctx.display.set_title(ui.ctx.window_id, title.clone());
             self.title = title;
@@ -1070,7 +1303,10 @@ fn main() -> i32 {
         cwd = args[i].clone();
         i += 1;
     }
-    let mut term = Terminal::new(&cwd);
+    let Some(mut term) = Terminal::new(&cwd) else {
+        vrt::println!("cannot create events");
+        return 1;
+    };
     if let Some(cmd) = command {
         term.input = cmd;
         term.submit();
