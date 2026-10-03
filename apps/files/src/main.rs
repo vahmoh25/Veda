@@ -6,6 +6,7 @@
 //! with the default app, new folder or document, rename (inline), delete
 //! (with confirmation), cut/copy/paste, properties. Everything works from
 //! the keyboard as well as the mouse; `/system` is shown read-only.
+//! [`agent`] lets the voice agent do the same.
 //!
 //! Usage: `files [PATH]` opens a folder, or the folder containing a file
 //! with that file selected.
@@ -15,6 +16,7 @@
 
 extern crate alloc;
 
+mod agent;
 mod icons;
 mod view;
 
@@ -301,6 +303,20 @@ impl Files {
         self.selected.retain(|n| names.contains(n.as_str()));
         self.rebuild_view_keeping(cursor);
         self.space = self.fs.space(&self.cwd).ok();
+    }
+
+    /// Re-reads the current folder; changed or new files get new
+    /// thumbnails.
+    fn refresh(&mut self) {
+        let before = self.entries.clone();
+        self.reload();
+        if before != self.entries
+            && let Some(t) = &mut self.thumbs
+        {
+            for e in self.entries.iter().filter(|e| !before.contains(e)) {
+                t.invalidate(&join(&self.cwd, &e.name));
+            }
+        }
     }
 
     /// Applies the filter and the sort order.
@@ -604,15 +620,26 @@ impl Files {
             return;
         }
         let name = self.fs.unique_name(&self.cwd, "New folder");
-        match self.fs.mkdir(&self.path_of(&name)) {
+        if self.make_folder(&name) {
+            self.start_rename();
+        }
+    }
+
+    /// Creates the folder `name` in the current folder and selects it;
+    /// returns `false` (with the error reported) if it could not be made.
+    fn make_folder(&mut self, name: &str) -> bool {
+        match self.fs.mkdir(&self.path_of(name)) {
             Ok(()) => {
-                vrt::println!("created folder {}", self.path_of(&name));
+                vrt::println!("created folder {}", self.path_of(name));
                 self.search.clear();
                 self.reload();
-                self.select_name(&name);
-                self.start_rename();
+                self.select_name(name);
+                true
             }
-            Err(e) => self.report("Can't create folder", vec![(name, e)]),
+            Err(e) => {
+                self.report("Can't create folder", vec![(name.to_string(), e)]);
+                false
+            }
         }
     }
 
@@ -726,9 +753,19 @@ impl Files {
         if !self.ensure_writable("Can't paste") {
             return;
         }
+        let (_, failed) = self.paste_paths(&paths, cut);
+        if cut && failed == 0 {
+            self.clipboard = None;
+        }
+    }
+
+    /// Copies, or moves (`cut`), `paths` into the current folder under free
+    /// names, selects what arrived and reports what could not be pasted.
+    /// Returns the names the items have here, and how many failed.
+    fn paste_paths(&mut self, paths: &[String], cut: bool) -> (Vec<String>, usize) {
         let mut errors = Vec::new();
         let mut pasted = Vec::new();
-        for src in &paths {
+        for src in paths {
             let name = file_name(src).to_string();
             if cut && parent(src) == self.cwd {
                 pasted.push(name);
@@ -746,9 +783,6 @@ impl Files {
                 Err(e) => errors.push((name, e)),
             }
         }
-        if cut && errors.is_empty() {
-            self.clipboard = None;
-        }
         let verb = if cut { "moved" } else { "pasted" };
         vrt::println!("{verb} {} into {}", items(pasted.len()), self.cwd);
         self.search.clear();
@@ -759,7 +793,9 @@ impl Files {
             self.anchor = self.cursor;
             self.reveal_cursor = true;
         }
+        let failed = errors.len();
         self.report("Some items could not be pasted", errors);
+        (pasted, failed)
     }
 
     /// Moves (or copies) dragged items into folder `target`.
@@ -1019,16 +1055,7 @@ impl App for Files {
         let focused = ui.input.focused;
         if (focused && !self.was_focused) || now.saturating_sub(self.last_refresh) > 3_000_000_000 {
             if self.rename.is_none() && self.dialog.is_none() {
-                let before = self.entries.clone();
-                self.reload();
-                // Changed or new files may need a new thumbnail.
-                if before != self.entries
-                    && let Some(t) = &mut self.thumbs
-                {
-                    for e in self.entries.iter().filter(|e| !before.contains(e)) {
-                        t.invalidate(&join(&self.cwd, &e.name));
-                    }
-                }
+                self.refresh();
             }
             self.last_refresh = now;
         }
@@ -1070,6 +1097,18 @@ impl App for Files {
             Some(t) => vec![(t.event_handle(), vabi::signals::SIGNALED)],
             None => Vec::new(),
         }
+    }
+
+    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+        Some(agent::info())
+    }
+
+    fn agent_state(&self) -> vui::agent::Value {
+        agent::state(self)
+    }
+
+    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+        Files::agent_invoke(self, action, args)
     }
 }
 

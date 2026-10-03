@@ -1,0 +1,119 @@
+# The Files agent interface, with a simulated Voice Agent service: the agent
+# shows folders, makes one, changes the view, selects, filters and opens
+# items, as the user would with the mouse. Copying, renaming, moving and
+# deleting wait for the user's OK and then act on the items they name by
+# path, whatever folder is shown by then.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+# Files starts for the agent and describes itself.
+agent-call app_actions '{"app":"files"}' 60
+agent-result rename
+wait-serial "files offers" 10
+agent-call use_app '{"app":"files","action":"open_folder","arguments":{"path":"~/Pictures"}}' 30
+agent-result '"showing":"~/Pictures","items":8'
+agent-call use_app '{"app":"files","action":"new_folder","arguments":{"name":"Trips"}}' 30
+agent-result '"created":"~/Pictures/Trips"'
+wait-serial "files: created folder /home/user/Pictures/Trips" 10
+agent-call read_app '{"app":"files"}' 30
+agent-result '"folder":"~/Pictures"'
+agent-result '"selected":["Trips"]'
+# Icons, largest first, and two pictures selected (one by its name without
+# the extension).
+agent-call use_app '{"app":"files","action":"view","arguments":{"layout":"icons","sort_by":"size"}}' 30
+agent-result '"layout":"icons","sort_by":"size","order":"descending"'
+agent-call use_app '{"app":"files","action":"select","arguments":{"names":"Glass Orb.png\nlighthouse"}}' 30
+agent-result '"selected":["Glass Orb.png","Lighthouse.jpg"]'
+wait 5
+shot target/vindows/agent-app-files-1-icons.png
+# The search box filters the folder.
+agent-call use_app '{"app":"files","action":"search","arguments":{"text":"sun"}}' 30
+agent-result '"matches":1,"names":["Retro Sunset.bmp"]'
+agent-call read_app '{"app":"files"}' 30
+agent-result '"search":"sun"'
+agent-call use_app '{"app":"files","action":"search","arguments":{"text":""}}' 30
+agent-result '"matches":9'
+# Properties of a folder count everything in it.
+agent-call use_app '{"app":"files","action":"properties","arguments":{"item":"~/Documents"}}' 30
+agent-result '"kind":"Folder"'
+agent-result '"contains":"2 files, 0 folders"'
+# Copying needs the user's OK. Allowed, the copies arrive in Trips, which
+# Files shows with them selected.
+agent-call use_app '{"app":"files","action":"copy","arguments":{"paths":"~/Pictures/Glass Orb.png\n~/Pictures/Lighthouse.jpg","to":"~/Pictures/Trips"}}' 30
+agent-result waiting_for_approval
+wait-serial "approval 1 requested" 10
+click 0.825 0.97
+wait 2
+shot target/vindows/agent-app-files-2-approval.png
+agent-mark
+click 0.9375 0.8275
+wait-serial "approval 1 allowed" 10
+agent-expect "it was done" 20
+agent-expect "~/Pictures/Trips/Lighthouse.jpg" 5
+wait-serial "files: pasted 2 items into /home/user/Pictures/Trips" 10
+agent-call read_app '{"app":"files"}' 30
+agent-result '"folder":"~/Pictures/Trips"'
+agent-result '"selected":["Glass Orb.png","Lighthouse.jpg"]'
+# Renaming, with the user's OK.
+agent-call use_app '{"app":"files","action":"rename","arguments":{"path":"~/Pictures/Trips/Lighthouse.jpg","new_name":"Beacon.jpg"}}' 30
+agent-result waiting_for_approval
+wait-serial "approval 2 requested" 10
+wait 1
+agent-mark
+click 0.9375 0.8275
+wait-serial "approval 2 allowed" 10
+agent-expect "it was done" 20
+wait-serial "files: renamed /home/user/Pictures/Trips/Lighthouse.jpg to Beacon.jpg" 10
+# Moving into another folder, with the user's OK: Files shows it there.
+agent-call use_app '{"app":"files","action":"move","arguments":{"paths":"~/Pictures/Trips/Beacon.jpg","to":"~/Documents"}}' 30
+agent-result waiting_for_approval
+wait-serial "approval 3 requested" 10
+wait 1
+agent-mark
+click 0.9375 0.8275
+wait-serial "approval 3 allowed" 10
+agent-expect "it was done" 20
+wait-serial "files: moved 1 item into /home/user/Documents" 10
+agent-call files '{"operation":"info","path":"~/Documents/Beacon.jpg"}' 30
+agent-result '"kind":"JPEG image"'
+# Deleting waits for the user's OK, which applies to the folder it names
+# although another folder is shown by then.
+agent-call use_app '{"app":"files","action":"delete","arguments":{"paths":"~/Pictures/Trips"}}' 30
+agent-result waiting_for_approval
+wait-serial "approval 4 requested" 10
+agent-call use_app '{"app":"files","action":"go","arguments":{"to":"up"}}' 30
+agent-result '"showing":"~"'
+wait 1
+agent-mark
+click 0.9375 0.8275
+wait-serial "approval 4 allowed" 10
+agent-expect "it was done" 20
+agent-expect "~/Pictures/Trips" 5
+wait-serial "files: deleted 1 item from /home/user/Pictures" 10
+agent-call files '{"operation":"info","path":"~/Pictures/Trips"}' 30
+agent-result "no such file"
+agent-call read_app '{"app":"files"}' 30
+agent-result '"folder":"~/Pictures"'
+# An approved action needs full paths: a bare name could mean any folder.
+agent-call use_app '{"app":"files","action":"rename","arguments":{"path":"Glass Orb.png","new_name":"Orb.png"}}' 30
+wait-serial "approval 5 requested" 10
+wait 1
+agent-mark
+click 0.9375 0.8275
+wait-serial "approval 5 allowed" 10
+agent-expect "give the full path" 20
+# The tray's circle closes the agent's window again.
+click 0.825 0.97
+wait 2
+shot target/vindows/agent-app-files-3-after.png
+# Back to Documents, and a document opens in the Text Editor.
+agent-call use_app '{"app":"files","action":"go","arguments":{"to":"back"}}' 30
+agent-result '"showing":"~"'
+agent-call use_app '{"app":"files","action":"open_folder","arguments":{"path":"~/Documents/Notes.md"}}' 30
+agent-result '"showing":"~/Documents","items":3,"selected":["Notes.md"]'
+agent-call use_app '{"app":"files","action":"open","arguments":{"item":"notes.md"}}' 30
+agent-result '"opened":"~/Documents/Notes.md","with":"editor"'
+wait-serial "files: opened /home/user/Documents/Notes.md with editor" 20
+wait-serial "started editor" 30
