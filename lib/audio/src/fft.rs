@@ -2,10 +2,17 @@
 //!
 //! * [`Fft`]: an in-place radix-2 complex FFT with precomputed twiddles.
 //! * [`RealFft`]: the spectrum of `n` real samples computed with one
-//!   complex FFT of size `n / 2` (twice as fast as the naive approach).
+//!   complex FFT of size `n / 2` (twice as fast as the naive approach), and
+//!   the exact inverse.
 //! * [`Analyzer`]: turns a block of samples into log-spaced frequency band
 //!   levels (0..=1) for a spectrum visualiser — Hann window, real FFT,
 //!   magnitudes in decibels.
+//!
+//! The transforms run inside Vindows for the echo canceller and the music
+//! visualiser, usually under CPU emulation. Real and imaginary parts are
+//! kept in separate arrays and every stage's twiddles are contiguous, so the
+//! butterfly loops are plain element-wise arithmetic without shuffles (which
+//! the compiler vectorises and the emulator handles well).
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -16,10 +23,12 @@ use vmath::FloatExt;
 #[derive(Debug, Clone)]
 pub struct Fft {
     n: usize,
-    /// `e^(-2 pi i k / n)` for `k < n / 2`.
-    twiddles: Vec<(f32, f32)>,
-    /// Bit-reversal permutation.
-    rev: Vec<u32>,
+    /// Twiddles by stage: the stage that combines halves of `h` points uses
+    /// `e^(-pi i k / h)` for `k < h`, stored at `h + k` (index 0 is unused).
+    tw_re: Vec<f32>,
+    tw_im: Vec<f32>,
+    /// The bit-reversal permutation as swaps `(i, j)` with `i < j`.
+    swaps: Vec<(u32, u32)>,
 }
 
 impl Fft {
@@ -27,14 +36,23 @@ impl Fft {
     pub fn new(n: usize) -> Fft {
         let n = n.max(2).next_power_of_two();
         let bits = n.trailing_zeros();
-        let twiddles = (0..n / 2)
-            .map(|k| {
-                let a = -core::f64::consts::TAU * k as f64 / n as f64;
-                (FloatExt::cos(a) as f32, FloatExt::sin(a) as f32)
+        let (mut tw_re, mut tw_im) = (vec![0.0; n], vec![0.0; n]);
+        let mut h = 1;
+        while h < n {
+            for k in 0..h {
+                let a = -core::f64::consts::PI * k as f64 / h as f64;
+                tw_re[h + k] = FloatExt::cos(a) as f32;
+                tw_im[h + k] = FloatExt::sin(a) as f32;
+            }
+            h *= 2;
+        }
+        let swaps = (0..n as u32)
+            .filter_map(|i| {
+                let j = i.reverse_bits() >> (32 - bits);
+                (j > i).then_some((i, j))
             })
             .collect();
-        let rev = (0..n as u32).map(|i| i.reverse_bits() >> (32 - bits)).collect();
-        Fft { n, twiddles, rev }
+        Fft { n, tw_re, tw_im, swaps }
     }
 
     pub fn len(&self) -> usize {
@@ -49,33 +67,60 @@ impl Fft {
     pub fn transform(&self, re: &mut [f32], im: &mut [f32]) {
         let n = self.n;
         assert!(re.len() >= n && im.len() >= n);
-        for i in 0..n {
-            let j = self.rev[i] as usize;
-            if j > i {
-                re.swap(i, j);
-                im.swap(i, j);
+        let (re, im) = (&mut re[..n], &mut im[..n]);
+        for &(i, j) in &self.swaps {
+            re.swap(i as usize, j as usize);
+            im.swap(i as usize, j as usize);
+        }
+        // Pairs: the twiddle is 1.
+        for (r, i) in re.chunks_exact_mut(2).zip(im.chunks_exact_mut(2)) {
+            let (ar, ai, br, bi) = (r[0], i[0], r[1], i[1]);
+            r[0] = ar + br;
+            i[0] = ai + bi;
+            r[1] = ar - br;
+            i[1] = ai - bi;
+        }
+        // Quads: the twiddles are 1 and -i.
+        if n >= 4 {
+            for (r, i) in re.chunks_exact_mut(4).zip(im.chunks_exact_mut(4)) {
+                let (ar, ai, br, bi) = (r[0], i[0], r[2], i[2]);
+                r[0] = ar + br;
+                i[0] = ai + bi;
+                r[2] = ar - br;
+                i[2] = ai - bi;
+                // (br + i bi) * -i = bi - i br
+                let (ar, ai, br, bi) = (r[1], i[1], r[3], i[3]);
+                r[1] = ar + bi;
+                i[1] = ai - br;
+                r[3] = ar - bi;
+                i[3] = ai + br;
             }
         }
-        let mut size = 2;
-        while size <= n {
-            let half = size / 2;
-            let step = n / size;
-            let mut start = 0;
-            while start < n {
-                for k in 0..half {
-                    let (wr, wi) = self.twiddles[k * step];
-                    let (a, b) = (start + k, start + k + half);
-                    let tr = re[b] * wr - im[b] * wi;
-                    let ti = re[b] * wi + im[b] * wr;
-                    re[b] = re[a] - tr;
-                    im[b] = im[a] - ti;
-                    re[a] += tr;
-                    im[a] += ti;
-                }
-                start += size;
+        let mut h = 4;
+        while h < n {
+            let (wr, wi) = (&self.tw_re[h..2 * h], &self.tw_im[h..2 * h]);
+            for (r, i) in re.chunks_exact_mut(2 * h).zip(im.chunks_exact_mut(2 * h)) {
+                let (r0, r1) = r.split_at_mut(h);
+                let (i0, i1) = i.split_at_mut(h);
+                butterflies(r0, i0, r1, i1, wr, wi);
             }
-            size *= 2;
+            h *= 2;
         }
+    }
+}
+
+/// Radix-2 butterflies `a, b <- a + w b, a - w b` over whole slices.
+#[inline(always)]
+fn butterflies(r0: &mut [f32], i0: &mut [f32], r1: &mut [f32], i1: &mut [f32], wr: &[f32], wi: &[f32]) {
+    let n = r0.len();
+    let (i0, r1, i1, wr, wi) = (&mut i0[..n], &mut r1[..n], &mut i1[..n], &wr[..n], &wi[..n]);
+    for k in 0..n {
+        let tr = r1[k] * wr[k] - i1[k] * wi[k];
+        let ti = r1[k] * wi[k] + i1[k] * wr[k];
+        r1[k] = r0[k] - tr;
+        i1[k] = i0[k] - ti;
+        r0[k] += tr;
+        i0[k] += ti;
     }
 }
 
@@ -85,7 +130,8 @@ pub struct RealFft {
     n: usize,
     half: Fft,
     /// `e^(-2 pi i k / n)` for `k <= n / 2`.
-    post: Vec<(f32, f32)>,
+    post_re: Vec<f32>,
+    post_im: Vec<f32>,
     zr: Vec<f32>,
     zi: Vec<f32>,
 }
@@ -94,13 +140,10 @@ impl RealFft {
     /// A real FFT of `n` samples (rounded up to a power of two, at least 4).
     pub fn new(n: usize) -> RealFft {
         let n = n.max(4).next_power_of_two();
-        let post = (0..=n / 2)
-            .map(|k| {
-                let a = -core::f64::consts::TAU * k as f64 / n as f64;
-                (FloatExt::cos(a) as f32, FloatExt::sin(a) as f32)
-            })
-            .collect();
-        RealFft { n, half: Fft::new(n / 2), post, zr: vec![0.0; n / 2], zi: vec![0.0; n / 2] }
+        let angle = |k: usize| -core::f64::consts::TAU * k as f64 / n as f64;
+        let post_re = (0..=n / 2).map(|k| FloatExt::cos(angle(k)) as f32).collect();
+        let post_im = (0..=n / 2).map(|k| FloatExt::sin(angle(k)) as f32).collect();
+        RealFft { n, half: Fft::new(n / 2), post_re, post_im, zr: vec![0.0; n / 2], zi: vec![0.0; n / 2] }
     }
 
     pub fn len(&self) -> usize {
@@ -113,24 +156,62 @@ impl RealFft {
 
     /// Computes bins `0..=n/2` of the spectrum of `input` (length `n`)
     /// into `re` and `im` (length `n / 2 + 1`).
+    ///
+    /// The transform is unnormalised: `X[k] = sum x[t] e^(-2 pi i k t / n)`.
+    /// The imaginary parts of bins 0 and `n / 2` are exactly zero.
     pub fn forward(&mut self, input: &[f32], re: &mut [f32], im: &mut [f32]) {
         let (n, h) = (self.n, self.n / 2);
         assert!(input.len() >= n && re.len() > h && im.len() > h);
-        for k in 0..h {
-            self.zr[k] = input[2 * k];
-            self.zi[k] = input[2 * k + 1];
+        for ((zr, zi), pair) in self.zr.iter_mut().zip(self.zi.iter_mut()).zip(input[..n].chunks_exact(2)) {
+            *zr = pair[0];
+            *zi = pair[1];
         }
         self.half.transform(&mut self.zr, &mut self.zi);
-        for k in 0..=h {
-            let (ar, ai) = (self.zr[k % h], self.zi[k % h]);
-            let (br, bi) = (self.zr[(h - k) % h], -self.zi[(h - k) % h]);
+        let (z0r, z0i) = (self.zr[0], self.zi[0]);
+        re[0] = z0r + z0i;
+        im[0] = 0.0;
+        re[h] = z0r - z0i;
+        im[h] = 0.0;
+        for k in 1..h {
+            let (ar, ai) = (self.zr[k], self.zi[k]);
+            let (br, bi) = (self.zr[h - k], -self.zi[h - k]);
             // even = (Z[k] + conj Z[h-k]) / 2, odd = (Z[k] - conj Z[h-k]) / 2i
             let (er, ei) = ((ar + br) * 0.5, (ai + bi) * 0.5);
             let (dr, di) = ((ar - br) * 0.5, (ai - bi) * 0.5);
             let (or, oi) = (di, -dr);
-            let (wr, wi) = self.post[k];
+            let (wr, wi) = (self.post_re[k], self.post_im[k]);
             re[k] = er + or * wr - oi * wi;
             im[k] = ei + or * wi + oi * wr;
+        }
+    }
+
+    /// The exact inverse of [`forward`](RealFft::forward): reconstructs the
+    /// `n` real samples whose spectrum bins `0..=n/2` are `re + i im` into
+    /// `out` (including the `1 / n` scaling). The imaginary parts of bins 0
+    /// and `n / 2` are ignored.
+    pub fn inverse(&mut self, re: &[f32], im: &[f32], out: &mut [f32]) {
+        let (n, h) = (self.n, self.n / 2);
+        assert!(out.len() >= n && re.len() > h && im.len() > h);
+        // Rebuild Z = DFT(even) + i DFT(odd), conjugated so that the forward
+        // complex transform computes the inverse.
+        self.zr[0] = (re[0] + re[h]) * 0.5;
+        self.zi[0] = (re[h] - re[0]) * 0.5;
+        for k in 1..h {
+            let (ar, ai) = (re[k], im[k]);
+            let (br, bi) = (re[h - k], -im[h - k]);
+            // even = (X[k] + conj X[h-k]) / 2, odd = (X[k] - conj X[h-k]) conj(w^k) / 2
+            let (er, ei) = ((ar + br) * 0.5, (ai + bi) * 0.5);
+            let (dr, di) = ((ar - br) * 0.5, (ai - bi) * 0.5);
+            let (wr, wi) = (self.post_re[k], self.post_im[k]);
+            let (or, oi) = (dr * wr + di * wi, di * wr - dr * wi);
+            self.zr[k] = er - oi;
+            self.zi[k] = -(ei + or);
+        }
+        self.half.transform(&mut self.zr, &mut self.zi);
+        let s = 1.0 / h as f32;
+        for ((pair, &zr), &zi) in out[..n].chunks_exact_mut(2).zip(&self.zr).zip(&self.zi) {
+            pair[0] = zr * s;
+            pair[1] = -zi * s;
         }
     }
 }
@@ -279,6 +360,31 @@ mod tests {
                     assert!((rr[k] as f64 - want[k].0).abs() < 1e-3 * n as f64, "real n={n} k={k}");
                     assert!((ri[k] as f64 - want[k].1).abs() < 1e-3 * n as f64, "real n={n} k={k}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn real_inverse_restores_the_signal() {
+        let mut rng = vmath::Rng::new(7);
+        for n in [4usize, 8, 32, 256, 1024] {
+            let x: Vec<f32> = (0..n).map(|_| rng.range_f32(-1.0, 1.0)).collect();
+            let mut rf = RealFft::new(n);
+            let (mut re, mut im) = (vec![0.0; n / 2 + 1], vec![0.0; n / 2 + 1]);
+            rf.forward(&x, &mut re, &mut im);
+            let mut back = vec![0.0; n];
+            rf.inverse(&re, &im, &mut back);
+            for (a, b) in x.iter().zip(&back) {
+                assert!((a - b).abs() < 1e-5, "n={n}: {a} vs {b}");
+            }
+            // A single bin (and its implied mirror image) gives a unit cosine.
+            re.fill(0.0);
+            im.fill(0.0);
+            re[1] = n as f32 / 2.0;
+            rf.inverse(&re, &im, &mut back);
+            for (t, v) in back.iter().enumerate() {
+                let want = (core::f64::consts::TAU * t as f64 / n as f64).cos() as f32;
+                assert!((v - want).abs() < 1e-5, "n={n} t={t}: {v} vs {want}");
             }
         }
     }
