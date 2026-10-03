@@ -1,0 +1,31 @@
+[package]
+name = "vtls"
+description = "TLS for Vindows applications: HTTPS and secure WebSockets with rustls and a pure-Rust cryptography provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+vnet = { workspace = true }
+rustls = { workspace = true }
+webpki-roots = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+aes-gcm = { workspace = true }
+chacha20poly1305 = { workspace = true }
+x25519-dalek = { workspace = true }
+ed25519-dalek = { workspace = true }
+p256 = { workspace = true, features = ["ecdsa", "ecdh"] }
+p384 = { workspace = true }
+crypto-bigint = { workspace = true }
+subtle = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+# The tests run a rustls server against the client; its buffered
+# `ServerConnection` needs `std`.
+rustls = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

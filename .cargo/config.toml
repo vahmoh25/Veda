@@ -1,3 +1,11 @@
 [alias]
 # `cargo xtask <command>` drives every development workflow (build, run, test).
 xtask = "run --quiet --package xtask --"
+
+# The AVX2 code of poly1305 and curve25519-dalek (used by vtls) crashes LLVM
+# when compiled for the soft-float UEFI target. Nothing that runs on that
+# target uses them, but the no_std check of the libraries
+# (`cargo build -p <crate> --target x86_64-unknown-uefi`) compiles them: select
+# their portable implementations there. User space is unaffected.
+[target.x86_64-unknown-uefi]
+rustflags = ["--cfg", "poly1305_backend=\"soft\"", "--cfg", "curve25519_dalek_backend=\"serial\""]

@@ -1,0 +1,2 @@
+# Test vectors are raw bytes (DER, signatures): never convert line endings.
+* binary

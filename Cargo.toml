@@ -27,6 +27,7 @@ members = [
     "lib/entropy",
     "lib/netstack",
     "lib/net",
+    "lib/tls",
     "lib/wlan",
     "lib/radiolink",
     "lib/json",
@@ -106,6 +107,7 @@ vaudio = { path = "lib/audio" }
 ventropy = { path = "lib/entropy" }
 vnetstack = { path = "lib/netstack" }
 vnet = { path = "lib/net" }
+vtls = { path = "lib/tls" }
 vwlan = { path = "lib/wlan" }
 vradiolink = { path = "lib/radiolink" }
 vjson = { path = "lib/json" }
@@ -124,6 +126,16 @@ aes-kw = { version = "0.3", default-features = false }
 p256 = { version = "0.14", default-features = false, features = ["arithmetic", "hash2curve"] }
 subtle = { version = "2.6", default-features = false }
 zeroize = { version = "1.9", default-features = false }
+# TLS (HTTPS, secure WebSockets): rustls, with a CryptoProvider built on the
+# RustCrypto crates (lib/tls). Same RustCrypto generation as above.
+rustls = { version = "0.23.45", default-features = false, features = ["tls12", "custom-provider"] }
+webpki-roots = { version = "1.0.9", default-features = false }
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["zeroize"] }
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "3", default-features = false }
+p384 = { version = "0.14", default-features = false, features = ["ecdsa", "ecdh"] }
+crypto-bigint = { version = "0.7.5", default-features = false, features = ["alloc"] }
 # HTTP/1.x message parsing (no_std).
 httparse = { version = "1.10", default-features = false }
 # The TCP/IP stack (vendored with a security patch, see third_party/).
