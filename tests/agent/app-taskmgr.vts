@@ -1,0 +1,70 @@
+# Task Manager's agent interface, with a simulated Voice Agent service: the
+# agent lists the processes, sorts and filters the table, reads the load and
+# shows the performance graphs, as the user would in the window. Ending an
+# application (About, which the agent starts itself) waits for the user's
+# OK; a system process is refused even when allowed.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+# Task Manager starts for the agent and describes itself.
+agent-call app_actions '{"app":"taskmgr"}' 60
+agent-result end_process
+wait-serial "taskmgr offers" 10
+# An application to end.
+agent-call open_app '{"app":"about"}' 60
+agent-result opened
+wait-serial "started about" 30
+wait 2
+agent-call use_app '{"app":"taskmgr","action":"list_processes","arguments":{"kind":"apps","sort_by":"name"}}' 30
+agent-result '"name":"about","title":"About Vindows"'
+agent-result '"kind":"app"'
+agent-call use_app '{"app":"taskmgr","action":"list_processes","arguments":{"kind":"system","limit":5}}' 30
+agent-result '"kind":"system"'
+# The table, sorted by memory, in front.
+agent-call use_app '{"app":"taskmgr","action":"show_processes","arguments":{"sort_by":"memory","search":""}}' 30
+agent-result '"page":"processes","sorted_by":"memory","descending":true'
+agent-call window '{"operation":"focus","window":"taskmgr"}' 30
+wait 3
+shot target/vindows/agent-app-taskmgr-1-memory.png
+agent-call use_app '{"app":"taskmgr","action":"show_processes","arguments":{"search":"about"}}' 30
+agent-result '"search":"about","shown":1'
+agent-call read_app '{"app":"taskmgr"}' 30
+agent-result '"page":"processes","sorted_by":"memory","descending":true,"search":"about"'
+agent-result '"busiest":['
+# The load, and the performance page.
+agent-call use_app '{"app":"taskmgr","action":"read_performance"}' 30
+agent-result '"cores":'
+agent-result '"largest":['
+agent-call use_app '{"app":"taskmgr","action":"show_performance","arguments":{"graph":"memory"}}' 30
+agent-result '"page":"performance","graph":"memory"'
+wait 3
+shot target/vindows/agent-app-taskmgr-2-performance.png
+agent-call read_app '{"app":"taskmgr"}' 30
+agent-result '"page":"performance","graph":"memory"'
+# Ending About needs the user's consent; allowed, it ends.
+agent-call use_app '{"app":"taskmgr","action":"end_process","arguments":{"name":"about vindows"}}' 30
+agent-result waiting_for_approval
+wait-serial "approval 1 requested: Ends a running application at once (name: about vindows)" 10
+click 0.825 0.97
+wait 2
+shot target/vindows/agent-app-taskmgr-3-approval.png
+agent-mark
+click 0.9375 0.8275
+wait-serial "approval 1 allowed" 10
+agent-expect "it was done" 20
+agent-expect "About Vindows" 5
+wait-serial "about exited with code -1002" 30
+agent-call use_app '{"app":"taskmgr","action":"list_processes","arguments":{"name":"about"}}' 30
+agent-result '"processes":[],"total":0'
+# A system process is not the agent's to end, even when allowed.
+agent-call use_app '{"app":"taskmgr","action":"end_process","arguments":{"name":"vfs"}}' 30
+agent-result waiting_for_approval
+wait-serial "approval 2 requested" 10
+wait 1
+agent-mark
+click 0.9375 0.8275
+wait-serial "approval 2 allowed" 10
+agent-expect "system process" 20
+reject-serial "vfs exited"

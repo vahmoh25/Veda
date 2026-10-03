@@ -7,13 +7,15 @@
 //!   across all CPUs) and memory use, with summary tiles.
 //!
 //! The kernel is sampled once a second; CPU percentages are computed from
-//! the differences between consecutive samples.
+//! the differences between consecutive samples. [`agent`] lets the voice
+//! agent read the processes and the load, and end applications.
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+mod agent;
 mod perf;
 mod procs;
 
@@ -355,6 +357,18 @@ fn push(h: &mut VecDeque<f32>, v: f32) {
 }
 
 impl App for TaskManager {
+    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+        Some(agent::info())
+    }
+
+    fn agent_state(&self) -> vui::agent::Value {
+        agent::state(self)
+    }
+
+    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+        TaskManager::agent_invoke(self, action, args)
+    }
+
     fn update(&mut self, ui: &mut Ui) {
         let now = ui.now();
         if self.next_sample == 0 {
