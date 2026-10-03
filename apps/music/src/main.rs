@@ -12,6 +12,7 @@
 //!   second `music FILE` hands the file to the running player ([`remote`]).
 //! * User actions are logged concisely (`playing <title>`, `paused at m:ss`,
 //!   `seek to m:ss`, `volume N%`, ...) for the GUI tests.
+//! * [`agent`] lets the voice agent play, find and control music.
 //!
 //! Keyboard: Space play/pause, Left/Right seek 5 s, Up/Down volume, N next,
 //! P previous, S shuffle, R repeat, M mute.
@@ -21,6 +22,7 @@
 
 extern crate alloc;
 
+mod agent;
 mod art;
 mod engine;
 mod library;
@@ -63,6 +65,16 @@ enum Repeat {
     Off,
     All,
     One,
+}
+
+impl Repeat {
+    fn name(self) -> &'static str {
+        match self {
+            Repeat::Off => "off",
+            Repeat::All => "all",
+            Repeat::One => "one",
+        }
+    }
 }
 
 /// Covers rendered by the art thread.
@@ -467,17 +479,16 @@ impl Player {
     }
 
     fn cycle_repeat(&mut self) {
-        self.repeat = match self.repeat {
+        self.set_repeat(match self.repeat {
             Repeat::Off => Repeat::All,
             Repeat::All => Repeat::One,
             Repeat::One => Repeat::Off,
-        };
-        let name = match self.repeat {
-            Repeat::Off => "off",
-            Repeat::All => "all",
-            Repeat::One => "one",
-        };
-        vrt::println!("repeat {}", name);
+        });
+    }
+
+    fn set_repeat(&mut self, repeat: Repeat) {
+        self.repeat = repeat;
+        vrt::println!("repeat {}", repeat.name());
     }
 
     /// Reacts to engine status changes (a track ended, errors).
@@ -905,6 +916,18 @@ impl Player {
 }
 
 impl App for Player {
+    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+        Some(agent::info())
+    }
+
+    fn agent_state(&self) -> vui::agent::Value {
+        agent::state(self)
+    }
+
+    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+        Player::agent_invoke(self, action, args)
+    }
+
     fn wait_handles(&self) -> Vec<(RawHandle, u32)> {
         let mut v = vec![(self.shared.notify.raw(), signals::SIGNALED)];
         if let Some(r) = &self.remote {

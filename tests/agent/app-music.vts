@@ -1,0 +1,74 @@
+# Music's agent interface, with a simulated Voice Agent service: the agent
+# finds songs in the library, plays one by name (as speech recognition may
+# hear it), pauses, seeks, resumes and skips, sets the player's volume,
+# shuffle and repeat, reads what is playing, plays an album and stops, as
+# the user would with the buttons and keys. The player logs what it does
+# ("music: playing <title>", "music: seek to m:ss", ...).
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+# Music starts for the agent and describes itself.
+agent-call app_actions '{"app":"music"}' 60
+agent-result list_songs
+wait-serial "music offers" 10
+wait-serial "music: library: 7 track(s)" 60
+# The library: the album that comes with Vindows.
+agent-call use_app '{"app":"music","action":"list_songs","arguments":{"query":"ambient"}}' 30
+agent-result '"title":"Aurora Drift"'
+agent-result '"total":2'
+# A song by name, heard a little wrong.
+agent-call use_app '{"app":"music","action":"play","arguments":{"query":"rainy windows"}}' 30
+agent-result '"title":"Rainy Window"'
+agent-result '"playback":"playing"'
+wait-serial "music: playing Rainy Window" 30
+wait 3
+agent-call use_app '{"app":"music","action":"pause"}' 30
+agent-result '"playback":"paused"'
+wait-serial "music: paused at 0:0" 10
+agent-call use_app '{"app":"music","action":"seek","arguments":{"seconds":65}}' 30
+agent-result '"position":"1:05"'
+wait-serial "music: seek to 1:05" 10
+agent-call use_app '{"app":"music","action":"play"}' 30
+agent-result '"playback":"playing"'
+wait-serial "music: resumed at 1:0" 10
+agent-call use_app '{"app":"music","action":"seek","arguments":{"seconds":-30,"relative":true}}' 30
+agent-result '"position":"0:3'
+wait-serial "music: seek to 0:3" 10
+agent-call use_app '{"app":"music","action":"seek","arguments":{"seconds":600}}' 30
+agent-result "is only 1:48 long"
+agent-call use_app '{"app":"music","action":"next"}' 30
+agent-result '"title":"Aurora Drift"'
+wait-serial "music: playing Aurora Drift" 30
+# The player's own volume, shuffle and repeat.
+agent-call use_app '{"app":"music","action":"set_volume","arguments":{"level":40}}' 30
+agent-result '"volume":40,"muted":false'
+wait-serial "music: volume 40%" 10
+agent-call use_app '{"app":"music","action":"shuffle","arguments":{"on":true}}' 30
+agent-result '"shuffle":true'
+wait-serial "music: shuffle on" 10
+agent-call use_app '{"app":"music","action":"repeat","arguments":{"mode":"one"}}' 30
+agent-result '"repeat":"one"'
+wait-serial "music: repeat one" 10
+# What the player shows.
+agent-call read_app '{"app":"music"}' 30
+agent-result '"playback":"playing","now_playing":{"title":"Aurora Drift"'
+agent-result '"shuffle":true,"repeat":"one","volume":40,"muted":false'
+agent-result '"up_next":[{"title":"Aurora Drift"'
+agent-result '"library":{"songs":7,"albums":1,"artists":1'
+wait 3
+shot target/vindows/agent-app-music.png
+# An album starts from its first song; a song that is not there is refused.
+agent-call use_app '{"app":"music","action":"play","arguments":{"query":"first light","kind":"album"}}' 30
+agent-result '"from":{"album":"First Light"}'
+wait-serial "music: playing Neon Horizon" 30
+agent-call use_app '{"app":"music","action":"play","arguments":{"query":"bohemian rhapsody"}}' 30
+agent-result "nothing in the library matches"
+agent-call use_app '{"app":"music","action":"stop"}' 30
+agent-result '"playback":"paused","position":"0:00"'
+wait-serial "music: seek to 0:00" 10
+agent-call use_app '{"app":"music","action":"rewind"}' 30
+agent-result "Music has no action called rewind"
+reject-serial "music: playback error"
+reject-serial "music: cannot"
