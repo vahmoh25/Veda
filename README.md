@@ -189,7 +189,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `kernel/` | `vkernel`, the microkernel |
 | `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit), `v3d` (3D engine), `audio`, `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `netd` (network), `wlan` (Wi-Fi) |
-| `drivers/` | `ps2`, `virtio-input`, `virtio-blk`, `virtio-snd`, `virtio-net`, `vwifi` (the virtual Wi-Fi radio) |
+| `drivers/` | `ps2`, `virtio-input`, `virtio-blk`, `virtio-snd`, `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
 | `apps/` | the desktop `shell` and the applications, including `racer` (*Velocity*) and `starfall` |
 | `tests/` | `systest` and `nettest` (in-system tests) and GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |

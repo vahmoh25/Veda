@@ -1,0 +1,12 @@
+# The Intel PRO/1000 driver with QEMU's 82540EM (VirtualBox's default card
+# too, which has no MSI: the driver polls). The card attaches to the
+# network service, gets an address by DHCP, and nettest checks DNS, TCP,
+# HTTP and ping through it.
+net ethernet
+nic e1000
+boot-cmdline "run=nettest"
+fail-on "nettest: FAIL"
+wait-serial "e1000: card at" 120
+wait-serial "e1000: attached as eth0" 60
+wait-serial "nettest: PASS" 300
+reject-serial "panicked"

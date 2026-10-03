@@ -157,6 +157,9 @@ impl Default for VmConfig {
     }
 }
 
+/// QEMU id of the wired network card (for QMP `set_link`).
+pub const WIRED_NIC_ID: &str = "nic0";
+
 /// Size of a new home disk.
 const HOME_DISK_BYTES: u64 = 64 << 20;
 
@@ -220,7 +223,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     }
     if cfg.net.wired() {
         cmd.args(["-netdev", "user,id=net0"]);
-        cmd.args(["-device", &format!("{},netdev=net0,mac=52:54:00:12:34:56", cfg.nic_model)]);
+        cmd.args(["-device", &format!("{},id={WIRED_NIC_ID},netdev=net0,mac=52:54:00:12:34:56", cfg.nic_model)]);
     } else {
         // Without this QEMU adds a default card.
         cmd.args(["-nic", "none"]);

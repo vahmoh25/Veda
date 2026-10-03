@@ -53,6 +53,9 @@ const DRIVERS: &[DriverMatch] = &[
     // virtio console (transitional and modern): under QEMU, the virtual
     // Wi-Fi radio is a named port of it
     DriverMatch { vendor: 0x1AF4, devices: &[0x1003, 0x1043], driver: "vwifi" },
+    // Intel PRO/1000: 82540EM (QEMU e1000, VirtualBox), 82545EM (VMware),
+    // 82574L (QEMU e1000e)
+    DriverMatch { vendor: 0x8086, devices: &[0x100E, 0x100F, 0x10D3], driver: "e1000" },
 ];
 
 fn class_name(info: &DeviceInfo) -> &'static str {

@@ -21,9 +21,11 @@
 //! fail-on "PANIC"                  # abort later waits as soon as the text appears
 //! reset                            # reboot (disks are kept); later waits see only new output
 //! checkpoint                       # later waits and expects see only output from now on
+//! link wired off                   # unplug (off) or plug in (on) the wired card's cable
 //! boot-cmdline "run=about"        # extra kernel command line, applied before boot
 //! double-click 0.05 0.44           # two quick clicks
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
+//! nic e1000                        # QEMU model of the wired card for this run, applied before boot
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
 //! air-expect "list" "1 joined"     # fail unless the simulator's answer contains the text
 //! air-wait "list" "1 joined" 60    # wait until it does (timeout in s)
@@ -201,6 +203,11 @@ pub fn net_mode(script: &str) -> Result<Option<NetMode>> {
     Ok(mode)
 }
 
+/// The wired card model a script asks for with `nic`.
+pub fn nic_model(script: &str) -> Option<String> {
+    script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "nic")).find_map(|w| w.get(1).cloned())
+}
+
 impl Session {
     fn sim(&self) -> Result<&AirSim> {
         self.sim.as_ref().ok_or_else(|| "this run has no Wi-Fi simulator (add `net wifi`)".to_string())
@@ -276,7 +283,7 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
                     s.qmp.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" => {}
+                "boot-cmdline" | "net" | "nic" => {}
                 "air" => {
                     let line = w.get(1).ok_or("missing command")?;
                     s.sim().and_then(|sim| sim.command(line)).map_err(ctx)?;
@@ -311,6 +318,18 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
                 }
                 "reset" => s.reset().map_err(ctx)?,
                 "checkpoint" => s.checkpoint(),
+                "link" => {
+                    let up = match w.get(2).map(String::as_str) {
+                        Some("on" | "up") => true,
+                        Some("off" | "down") => false,
+                        _ => return Err(ctx("usage: link wired on|off".into())),
+                    };
+                    let name = match w.get(1).map(String::as_str) {
+                        Some("wired") => qemu::WIRED_NIC_ID,
+                        _ => return Err(ctx("usage: link wired on|off".into())),
+                    };
+                    s.qmp.execute("set_link", &format!("{{\"name\":\"{name}\",\"up\":{up}}}")).map_err(ctx)?;
+                }
                 "mouse-down" => {
                     s.qmp.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
                     std::thread::sleep(Duration::from_millis(80));

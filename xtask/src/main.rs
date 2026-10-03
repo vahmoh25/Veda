@@ -314,6 +314,9 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     if let Some(net) = automate::net_mode(script)? {
         vm.net = net;
     }
+    if let Some(model) = automate::nic_model(script) {
+        vm.nic_model = model;
+    }
     // Every scripted run starts with a new, empty home directory.
     let home = util::out_dir().join("test-home.img");
     qemu::prepare_home_disk(&home, true)?;

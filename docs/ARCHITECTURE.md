@@ -117,8 +117,8 @@ eager FPU/SSE/AVX state switching with XSAVE.
 Networking is three layers of processes (details in
 [NETWORKING.md](NETWORKING.md)):
 
-* **Drivers** only move frames: `virtio-net` offers Ethernet frames to the
-  network service, `vwifi` (the virtual radio under QEMU, a virtio-serial
+* **Drivers** only move frames: `virtio-net` and `e1000` (Intel PRO/1000)
+  offer Ethernet frames to the network service, `vwifi` (the virtual radio under QEMU, a virtio-serial
   port connected to the `airsim` simulator on the host) offers raw 802.11
   frames to the Wi-Fi service. Frames travel through shared-memory rings
   (`vproto::netring`) with wake-up events; neither side trusts the other's

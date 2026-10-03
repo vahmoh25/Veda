@@ -1,0 +1,12 @@
+# The Intel PRO/1000 driver with QEMU's 82574L ("e1000e"), with MSI
+# interrupts. The card attaches to the network service, gets an address by
+# DHCP, and nettest checks DNS, TCP, HTTP and ping through it.
+net ethernet
+nic e1000e
+boot-cmdline "run=nettest"
+fail-on "nettest: FAIL"
+wait-serial "e1000: card at" 120
+expect-serial ", MSI"
+wait-serial "e1000: attached as eth0" 60
+wait-serial "nettest: PASS" 300
+reject-serial "panicked"

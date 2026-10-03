@@ -1,0 +1,37 @@
+# A wired card and Wi-Fi together. The wired connection is preferred; when
+# its cable is unplugged, traffic moves to Wi-Fi, and back when it is
+# plugged in again. When Wi-Fi goes away, the wired connection carries on
+# undisturbed. nettest reports the interface of the default route and
+# whether the gateway and DNS answer.
+net both
+boot-cmdline "run=nettest:route-watch"
+fail-on "nettest: FAIL"
+wait-serial "connected to Vindows Home" 300
+wait-serial "watch: route=eth0 ping=ok dns=ok" 120
+
+# 1. Unplug the cable: Wi-Fi takes over.
+checkpoint
+link wired off
+wait-serial "eth0: link down" 30
+wait-serial "watch: route=wlan0 ping=ok dns=ok" 60
+
+# 2. Plug it back in: the wired connection is preferred again.
+checkpoint
+link wired on
+wait-serial "watch: route=eth0 ping=ok dns=ok" 90
+
+# 3. Wi-Fi disappears: the wired connection carries on without a hiccup.
+checkpoint
+air "ap home off"
+air "ap home2 off"
+wait-serial "lost the connection to Vindows Home" 60
+wait 10
+reject-serial "watch: route="
+
+# 4. Both are gone; then Wi-Fi alone comes back.
+checkpoint
+link wired off
+wait-serial "watch: route=none" 60
+air "ap home on"
+wait-serial "watch: route=wlan0 ping=ok dns=ok" 120
+reject-serial "panicked"

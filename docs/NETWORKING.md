@@ -27,9 +27,9 @@ talk over kernel channels; the kernel knows nothing about networks.
 ```
 
 * **Drivers** move frames and nothing else. A network card driver
-  (`virtio-net`) offers Ethernet frames to `netd`; a radio driver (`vwifi`)
-  offers raw 802.11 frames to `wlan` ("soft MAC"). Neither sees keys,
-  passwords or addresses.
+  (`virtio-net`, `e1000`) offers Ethernet frames to `netd`; a radio driver
+  (`vwifi`) offers raw 802.11 frames to `wlan` ("soft MAC"). Neither sees
+  keys, passwords or addresses.
 * **`wlan`** is the Wi-Fi service. Everything above the radio happens here:
   scanning, authentication, association, the key handshakes, encryption,
   saved networks and the decisions of when and where to connect. Each
@@ -58,6 +58,7 @@ out, and a system call only when the other side is asleep.
 | `services/wlan` | the Wi-Fi service (`wlan` and `wlanphy` protocols) |
 | `lib/wlan` | `vwlan`: IEEE 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, saved-network format, connection policy |
 | `drivers/virtio-net` | virtio network card driver |
+| `drivers/e1000` | Intel PRO/1000 driver: 82540EM (QEMU `e1000`, VirtualBox), 82545EM (VMware), 82574L (QEMU `e1000e`) |
 | `drivers/vwifi` | the virtual Wi-Fi radio (virtio-console port) |
 | `lib/radiolink` | `vradiolink`: the message format between `vwifi` and `airsim` |
 | `lib/net` | `vnet`: the application API, including `vnet::wifi` |
@@ -254,13 +255,19 @@ IEEE 802.11-2020 Annex J.10 SAE vectors.
   rekeying, password changes, lossy links, DHCP and DNS conditions,
   malformed frames), and the profile and policy modules.
 * **In-system**: `nettest` (`run=nettest`, `run=nettest:wifi`): DNS, UDP,
-  TCP, HTTP and ping over Ethernet or Wi-Fi.
+  TCP, HTTP and ping over Ethernet or Wi-Fi. These checks, and the scripts
+  below, reach real Internet hosts through QEMU's NAT, so the host must be
+  online.
 * **GUI and recovery** (`cargo xtask test --ui`): `tests/ui/wifi-connect.vts`
   joins networks through the flyout (a wrong password first), Settings and
   the Terminal; `tests/ui/wifi-recovery.vts` breaks the network through
   airsim — access point gone, disconnection, wired side down, DNS failure,
   out of range, the radio vanishing, rekeying and loss, the Wi-Fi service
-  killed — and checks that Vindows recovers by itself each time.
+  killed — and checks that Vindows recovers by itself each time;
+  `tests/ui/network-failover.vts` unplugs and replugs the wired card's
+  cable (QMP `set_link`) with Wi-Fi connected and checks that traffic moves
+  between the interfaces; `tests/ui/e1000.vts` and `e1000e.vts` run the
+  Intel PRO/1000 driver on QEMU's two models of that card.
 
 ## Limitations and next steps
 

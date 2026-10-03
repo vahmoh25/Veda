@@ -306,6 +306,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "e1000"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vvirtio",
+]
+
+[[package]]
 name = "editor"
 version = "0.1.0"
 dependencies = [

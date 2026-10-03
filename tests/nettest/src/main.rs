@@ -4,9 +4,9 @@
 //!   checks Internet access end to end — DNS, TCP and HTTP to public
 //!   servers, UDP (a DNS query sent by hand) and ping. Needs a real
 //!   Internet connection on the host.
-//! * `nettest local HOST PORT`: hermetic checks against the test servers
-//!   that `cargo xtask` runs on the host (an HTTP server and a TCP echo
-//!   server reachable at the gateway address).
+//! * `nettest local HOST PORT`: fetches `http://HOST:PORT/hello` and expects
+//!   "hello from the host", for a test server on the host machine (QEMU's
+//!   NAT makes the host reachable at the gateway address, 10.0.2.2).
 //! * `nettest wifi [SSID [PASSWORD]]`: joins a Wi-Fi network through the
 //!   Wi-Fi service (by default the simulated "Vindows Home" network of
 //!   `cargo xtask run --net wifi`), then runs the online checks over it.
@@ -15,6 +15,11 @@
 //!   state and access point, whether the gateway answers pings, whether DNS
 //!   answers — as `watch: wifi=... ping=... dns=...` lines, forever. Tests
 //!   break the simulated network meanwhile and wait for the recovery.
+//!
+//! * `nettest route-watch [SSID [PASSWORD]]`: like `wifi-watch`, but reports
+//!   the interface of the default route instead of the Wi-Fi state
+//!   (`watch: route=... ping=... dns=...`), for machines with both a wired
+//!   card and Wi-Fi.
 //!
 //! In SSID arguments `+` stands for a space (the kernel command line
 //! splits arguments at spaces).
@@ -231,8 +236,9 @@ fn dns_probe(server: IpAddr, id: u16) -> String {
     String::from("fail")
 }
 
-/// `nettest wifi-watch`: joins the network, then reports changes forever.
-fn watch(ssid: &str, password: &str) -> i32 {
+/// `nettest wifi-watch` / `route-watch`: joins the network, then reports
+/// changes forever.
+fn watch(ssid: &str, password: &str, by_route: bool) -> i32 {
     for (name, check) in
         [("wifi adapter", &check_wifi_adapter as &dyn Fn() -> Check), ("wifi scan", &|| check_wifi_scan(ssid))]
     {
@@ -262,8 +268,13 @@ fn watch(ssid: &str, password: &str) -> i32 {
             Err(_) => String::from("unavailable"),
         };
         let st = vnet::status().ok();
-        let online =
-            st.as_ref().is_some_and(|s| s.connectivity == Connectivity::Routable && s.default_interface == "wlan0");
+        let online = st
+            .as_ref()
+            .is_some_and(|s| s.connectivity == Connectivity::Routable && (by_route || s.default_interface == "wlan0"));
+        let route = match &st {
+            Some(s) if s.connectivity == Connectivity::Routable => s.default_interface.clone(),
+            _ => String::from("none"),
+        };
         let (ping, dns) = match (online, st) {
             (true, Some(s)) => {
                 seq = seq.wrapping_add(1);
@@ -285,7 +296,11 @@ fn watch(ssid: &str, password: &str) -> i32 {
             }
             _ => ("none", String::from("none")),
         };
-        let line = format!("watch: wifi={wifi_part} ping={ping} dns={dns}");
+        let line = if by_route {
+            format!("watch: route={route} ping={ping} dns={dns}")
+        } else {
+            format!("watch: wifi={wifi_part} ping={ping} dns={dns}")
+        };
         if line != last {
             println!("{}", line);
             last = line;
@@ -352,7 +367,12 @@ fn main() -> i32 {
         "wifi-watch" => {
             let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Vindows Home"));
             let password = args.get(3).cloned().unwrap_or_else(|| String::from("vindows-wifi"));
-            watch(&ssid, &password)
+            watch(&ssid, &password, false)
+        }
+        "route-watch" => {
+            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Vindows Home"));
+            let password = args.get(3).cloned().unwrap_or_else(|| String::from("vindows-wifi"));
+            watch(&ssid, &password, true)
         }
         "wifi" => {
             let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Vindows Home"));

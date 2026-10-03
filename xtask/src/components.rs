@@ -35,6 +35,7 @@ pub const PROGRAMS: &[Program] = &[
     Program { package: "virtio-blk", binary: "virtio-blk" },
     Program { package: "virtio-net", binary: "virtio-net" },
     Program { package: "vwifi", binary: "vwifi" },
+    Program { package: "e1000", binary: "e1000" },
     Program { package: "netd", binary: "netd" },
     Program { package: "wlan", binary: "wlan" },
     Program { package: "ps2", binary: "ps2" },
