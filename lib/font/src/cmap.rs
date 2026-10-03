@@ -266,5 +266,29 @@ mod tests {
         assert_eq!(c.lookup(0x7F), None);
         // Truncated subtables are rejected, not read out of bounds.
         assert!(Cmap::subtable(&sub[..30]).is_none());
+        // Format 13 maps whole ranges to one glyph.
+        sub[1] = 13;
+        let c = Cmap::subtable(&sub).unwrap();
+        assert_eq!(c.lookup('~' as u32), Some(1));
+        assert_eq!(c.lookup(0x1F64F), Some(500));
+    }
+
+    #[test]
+    fn format6_and_0() {
+        let mut sub = Vec::new();
+        for v in [6u16, 0, 0, 0x30, 3, 7, 0, 9] {
+            be16(&mut sub, v);
+        }
+        let c = Cmap::subtable(&sub).unwrap();
+        assert_eq!(c.lookup('0' as u32), Some(7));
+        assert_eq!(c.lookup('1' as u32), None);
+        assert_eq!(c.lookup('2' as u32), Some(9));
+        assert_eq!(c.lookup('3' as u32), None);
+        assert_eq!(c.lookup('/' as u32), None);
+        let mut f0 = alloc::vec![0u8; 6 + 256];
+        f0[6 + b'A' as usize] = 42;
+        let c = Cmap::subtable(&f0).unwrap();
+        assert_eq!(c.lookup('A' as u32), Some(42));
+        assert_eq!(c.lookup(0x141), None);
     }
 }

@@ -465,3 +465,60 @@ mod tests {
         assert_eq!(c.get(0x0001_0002), Some(0));
     }
 }
+
+#[cfg(test)]
+mod font_tests {
+    use super::*;
+    use crate::parse::u16_at;
+    use crate::tests::ALL;
+
+    /// Reports (lookup type, subtable format) of every kern PairPos subtable of the bundled fonts.
+    #[test]
+    fn bundled_gpos_structure() {
+        for (name, data) in ALL {
+            let f = crate::Font::from_bytes(data).unwrap();
+            let gpos = f.table(*b"GPOS").unwrap();
+            let lookup_list = u16_at(gpos, 8).unwrap() as usize;
+            let n = u16_at(gpos, lookup_list).unwrap();
+            let mut ext = 0;
+            for i in 0..n as usize {
+                let lo = lookup_list + u16_at(gpos, lookup_list + 2 + i * 2).unwrap() as usize;
+                if u16_at(gpos, lo).unwrap() == 9 {
+                    ext += 1;
+                }
+            }
+            let (mut f1, mut f2) = (0, 0);
+            if let Kerning::Gpos { subtables, lookup_ends, .. } = Kerning::new(gpos, &[]) {
+                for &st in &subtables {
+                    match u16_at(gpos, st as usize) {
+                        Some(1) => f1 += 1,
+                        _ => f2 += 1,
+                    }
+                }
+                // Lookup types of the kern feature's lookups.
+                let mut lookups = Vec::new();
+                for fi in preferred_features(gpos, u16_at(gpos, 4).unwrap() as usize).unwrap() {
+                    let _ = kern_feature_lookups(gpos, u16_at(gpos, 6).unwrap() as usize, fi, &mut lookups);
+                }
+                let types: Vec<u16> = lookups
+                    .iter()
+                    .map(|&li| {
+                        let lo = lookup_list + u16_at(gpos, lookup_list + 2 + li as usize * 2).unwrap() as usize;
+                        u16_at(gpos, lo).unwrap()
+                    })
+                    .collect();
+                std::println!(
+                    "{name}: {} kern lookups (types {types:?}), {} subtables (fmt1 {f1}, fmt2 {f2}), {ext} extension lookups",
+                    lookup_ends.len(),
+                    subtables.len()
+                );
+                assert!(f1 > 0 && f2 > 0, "{name}: both PairPos formats are used");
+                if name.starts_with("Lato") {
+                    assert_eq!(types, [9], "Lato wraps its kern lookup in an extension lookup");
+                }
+            } else {
+                std::println!("{name}: no kern lookups ({ext} extension lookups)");
+            }
+        }
+    }
+}

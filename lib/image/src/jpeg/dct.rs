@@ -99,7 +99,7 @@ pub(crate) fn idct(coef: &[i32; 64], out: &mut [u8], stride: usize) {
     }
 
     // Pass 2: rows, removing the PASS1_BITS scaling and the factor 8.
-    for (w, o) in ws.chunks_exact(8).zip(out.chunks_mut(stride)) {
+    for (w, o) in ws.as_chunks::<8>().0.iter().zip(out.chunks_mut(stride)) {
         let o = &mut o[..8];
         if w[1] == 0 && w[2] == 0 && w[3] == 0 && w[4] == 0 && w[5] == 0 && w[6] == 0 && w[7] == 0 {
             o.fill(clamp_sample(descale(w[0], PASS1_BITS + 3)));
@@ -151,7 +151,7 @@ pub(crate) fn idct(coef: &[i32; 64], out: &mut [u8], stride: usize) {
 /// is scaled up by 8 (quantize by dividing by `8 * q`).
 pub(crate) fn fdct(data: &mut [i32; 64]) {
     // Pass 1: rows, results scaled up by sqrt(8) * 2^PASS1_BITS.
-    for row in data.chunks_exact_mut(8) {
+    for row in data.as_chunks_mut::<8>().0 {
         let tmp0 = row[0] + row[7];
         let tmp7 = row[0] - row[7];
         let tmp1 = row[1] + row[6];

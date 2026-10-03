@@ -104,9 +104,9 @@ impl Canvas {
                     continue;
                 }
                 let i = ((py as u32 * self.width + px as u32) * 3) as usize;
-                for c in 0..3 {
+                for (c, &s) in color.iter().enumerate() {
                     let d = self.rgb[i + c] as u32;
-                    self.rgb[i + c] = ((color[c] as u32 * a + d * (255 - a) + 127) / 255) as u8;
+                    self.rgb[i + c] = ((s as u32 * a + d * (255 - a) + 127) / 255) as u8;
                 }
             }
         }
@@ -146,14 +146,7 @@ pub(crate) fn draw_line(
     baseline: i32,
     color: [u8; 3],
 ) -> f32 {
-    let glyphs = style.layout_line(text, Point::new(x, baseline as f32));
-    for g in &glyphs {
-        let (px, bin) = subpixel_position(g.x);
-        let font = style.collection().font(g.font as usize).unwrap();
-        let bmp = cache.get(font, g.glyph, style.size_px(), bin);
-        cv.draw(bmp, px + bmp.left, baseline - bmp.top, color);
-    }
-    x + style.measure(text)
+    cache.render_line(style, text, Point::new(x, baseline as f32), |gx, gy, bmp| cv.draw(bmp, gx, gy, color))
 }
 
 /// Renders the sample page for collection font `primary` and returns (canvas, y ranges of the
@@ -172,7 +165,8 @@ fn render_page(
     let mut height = 16.0;
     for &s in &sizes {
         let st = fonts.scaled(primary, s);
-        let lines = st.wrap_lines(SAMPLE, width as f32 - 20.0).len() + 1;
+        let lines =
+            st.wrap_lines(SAMPLE, width as f32 - 20.0).len() + st.wrap_lines(UI_SAMPLE, width as f32 - 20.0).len();
         height += vraster::math::ceil(st.line_height()) * lines as f32 + 10.0;
     }
     let mut cv = Canvas::new(width, height as u32 + 10, bg);
@@ -182,14 +176,14 @@ fn render_page(
         let st = fonts.scaled(primary, s);
         let lh = vraster::math::ceil(st.line_height());
         let top = y as u32;
-        for range in st.wrap_lines(SAMPLE, width as f32 - 20.0) {
-            let baseline = vraster::math::round(y + st.ascent()) as i32;
-            draw_line(&mut cv, &mut cache, &st, &SAMPLE[range], 10.0, baseline, fg);
-            y += lh;
+        for text in [SAMPLE, UI_SAMPLE] {
+            for range in st.wrap_lines(text, width as f32 - 20.0) {
+                let baseline = vraster::math::round(y + st.ascent()) as i32;
+                draw_line(&mut cv, &mut cache, &st, &text[range], 10.0, baseline, fg);
+                y += lh;
+            }
         }
-        let baseline = vraster::math::round(y + st.ascent()) as i32;
-        draw_line(&mut cv, &mut cache, &st, UI_SAMPLE, 10.0, baseline, fg);
-        y += lh + 10.0;
+        y += 10.0;
         blocks.push((top, y as u32));
     }
     (cv, blocks)
@@ -258,6 +252,83 @@ fn render_detail_png() {
                 draw_line(&mut cv, &mut cache, &st, "Quick fox 0123", 3.0, b2, *fg);
             }
             cv.zoomed(0, 0, 150, 84, 5).save(&format!("detail_{name}_{vname}.png"));
+        }
+    }
+}
+
+/// Kerning on/off, accented (composite) glyphs, fallback glyphs, code and large curves.
+#[test]
+#[ignore]
+fn render_showcase_png() {
+    let mut fonts = FontCollection::new();
+    let inter = fonts.add(Font::from_bytes(crate::tests::INTER).unwrap());
+    let lato = fonts.add(Font::from_bytes(crate::tests::LATO).unwrap());
+    let jbm = fonts.add(Font::from_bytes(crate::tests::JBM).unwrap());
+    let mut cv = Canvas::new(1000, 640, [255, 255, 255]);
+    let mut cache = GlyphCache::new(8 << 20);
+    let ink = [0x22, 0x22, 0x22];
+    let blue = [0x20, 0x50, 0xB0];
+    let mut y = 6.0f32;
+    let mut line = |cv: &mut Canvas, st: ScaledFont<'_, '_>, text: &str, color: [u8; 3], y: &mut f32| {
+        let b = vraster::math::round(*y + st.ascent()) as i32;
+        draw_line(cv, &mut cache, &st, text, 10.0, b, color);
+        *y += vraster::math::ceil(st.line_height());
+    };
+    let kern = "AVATAR Toyota Te Ta We Yo LT P. F. Vindows";
+    for f in [inter, lato] {
+        line(&mut cv, fonts.scaled(f, 26.0), kern, ink, &mut y);
+        line(&mut cv, fonts.scaled(f, 26.0).with_kerning(false), kern, blue, &mut y);
+    }
+    let accents = "Ångström façade naïve über São Paulo Łódź Œuvre Ærø «1–2» “quote” ‘a’ … ©®™ ½ ¿¡";
+    line(&mut cv, fonts.scaled(inter, 18.0), accents, ink, &mut y);
+    line(&mut cv, fonts.scaled(lato, 18.0), accents, ink, &mut y);
+    line(
+        &mut cv,
+        fonts.scaled(inter, 18.0),
+        "Fallback: ┌──┐ │ok│ └──┘ ▲ ◆ ★ ⌘ ⏎ ← → ↑ ↓ ∑ √ ∞ ≠ ≥ λ π Ω Ж ж",
+        ink,
+        &mut y,
+    );
+    line(&mut cv, fonts.scaled(jbm, 16.0), "fn main() { let x = 0x1F; // -> != >= || && |> === }", ink, &mut y);
+    line(
+        &mut cv,
+        fonts.scaled(inter, 13.0),
+        "Small UI: Save  Cancel  Apply  OK  Open recent…  Preferences  100%  12:45",
+        ink,
+        &mut y,
+    );
+    line(
+        &mut cv,
+        fonts.scaled(inter, 11.0),
+        "Tiny 11px: The quick brown fox jumps over the lazy dog — 0123456789",
+        ink,
+        &mut y,
+    );
+    line(&mut cv, fonts.scaled(inter, 110.0), "Rag&@€g", ink, &mut y);
+    cv.save("showcase.png");
+    cv.zoomed(0, 0, 500, 200, 2).save("showcase_kerning_zoom.png");
+}
+
+/// 8x crops of a few words at 12 px to inspect individual pixels.
+#[test]
+#[ignore]
+fn render_pixels_png() {
+    for (fi, short) in [(0usize, "inter"), (2, "lato"), (4, "jbm")] {
+        let fonts = collection_with_primary(fi);
+        let snap = RasterOptions { vertical_snap_size: 24.0, ..RasterOptions::default() };
+        let snap_lin = RasterOptions { vertical_snap_size: 24.0, ..RasterOptions::LINEAR };
+        for (vname, opts) in [
+            ("linear", RasterOptions::LINEAR),
+            ("default", RasterOptions::default()),
+            ("snap", snap),
+            ("snaplin", snap_lin),
+        ] {
+            let mut cv = Canvas::new(64, 34, [255, 255, 255]);
+            let mut cache = GlyphCache::with_options(1 << 20, opts);
+            let st = fonts.scaled(0, 12.0);
+            draw_line(&mut cv, &mut cache, &st, "minus", 2.0, 12, [0x22, 0x22, 0x22]);
+            draw_line(&mut cv, &mut cache, &st, "Edge 4", 2.0, 28, [0x22, 0x22, 0x22]);
+            cv.zoomed(0, 0, 64, 34, 8).save(&format!("pixels_{short}_{vname}.png"));
         }
     }
 }

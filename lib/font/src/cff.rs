@@ -358,16 +358,8 @@ impl<'a> Cff<'a> {
             None => self.privates.first(),
         }
         .ok_or(FontError::MalformedGlyph)?;
-        let mut ip = Interp {
-            stack: [0.0; MAX_STACK],
-            sp: 0,
-            x: 0.0,
-            y: 0.0,
-            nhints: 0,
-            seen_width: false,
-            open: false,
-            sink,
-        };
+        let mut ip =
+            Interp { stack: [0.0; MAX_STACK], sp: 0, x: 0.0, y: 0.0, nhints: 0, seen_width: false, open: false, sink };
         let r = ip.run(cs, &self.gsubrs, self.gbias, private);
         if ip.open {
             ip.sink.close();
@@ -521,7 +513,11 @@ impl<S: OutlineSink + ?Sized> Interp<'_, S> {
                         return Err(bad);
                     }
                     let d = self.stack[i];
-                    if b0 == 22 { self.move_rel(d, 0.0) } else { self.move_rel(0.0, d) }
+                    if b0 == 22 {
+                        self.move_rel(d, 0.0)
+                    } else {
+                        self.move_rel(0.0, d)
+                    }
                     self.sp = 0;
                 }
                 // rlineto
@@ -538,7 +534,11 @@ impl<S: OutlineSink + ?Sized> Interp<'_, S> {
                     let mut horizontal = b0 == 6;
                     for i in 0..self.sp {
                         let d = self.stack[i];
-                        if horizontal { self.line_rel(d, 0.0) } else { self.line_rel(0.0, d) }
+                        if horizontal {
+                            self.line_rel(d, 0.0)
+                        } else {
+                            self.line_rel(0.0, d)
+                        }
                         horizontal = !horizontal;
                     }
                     self.sp = 0;
@@ -771,8 +771,16 @@ mod tests {
 
     fn run(cs: &[u8], gsubrs: &Index<'_>, pv: &Private<'_>) -> (Result<(), FontError>, Rec) {
         let mut rec = Rec::default();
-        let mut ip =
-            Interp { stack: [0.0; MAX_STACK], sp: 0, x: 0.0, y: 0.0, nhints: 0, seen_width: false, open: false, sink: &mut rec };
+        let mut ip = Interp {
+            stack: [0.0; MAX_STACK],
+            sp: 0,
+            x: 0.0,
+            y: 0.0,
+            nhints: 0,
+            seen_width: false,
+            open: false,
+            sink: &mut rec,
+        };
         let r = ip.run(cs, gsubrs, bias(gsubrs.len()), pv);
         if ip.open {
             ip.sink.close();
@@ -879,6 +887,124 @@ mod tests {
         let cs: Vec<u8> = (0..60).flat_map(|_| num(1)).collect();
         assert_eq!(run(&cs, &gsubrs, &pv).0, Err(FontError::MalformedGlyph));
         assert_eq!(run(&[28, 1], &gsubrs, &pv).0, Err(FontError::MalformedGlyph));
+    }
+
+    #[test]
+    fn fd_select_formats() {
+        let f0 = [0u8, 0, 1, 1, 2];
+        let s = FdSelect::Format0(&f0);
+        assert_eq!((s.fd(0), s.fd(2), s.fd(3), s.fd(4)), (Some(0), Some(1), Some(2), None));
+        // Format 3: [0, 10) -> 0, [10, 50) -> 3, [50, 60) -> 1, sentinel 60.
+        let f3 = [3u8, 0, 3, 0, 0, 0, 0, 10, 3, 0, 50, 1, 0, 60];
+        let s = FdSelect::Format3(&f3, 3);
+        for (g, fd) in
+            [(0, Some(0)), (9, Some(0)), (10, Some(3)), (49, Some(3)), (50, Some(1)), (59, Some(1)), (60, None)]
+        {
+            assert_eq!(s.fd(g), fd, "glyph {g}");
+        }
+        assert_eq!(FdSelect::Format3(&f3[..9], 3).fd(55), None);
+    }
+
+    /// A DICT integer operand with a fixed 5-byte encoding.
+    fn int5(v: usize) -> Vec<u8> {
+        let v = v as u32;
+        vec![29, (v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8, v as u8]
+    }
+
+    /// Builds a CID-keyed CFF with two font dicts whose local subroutine 0 draws different lines.
+    fn cid_cff() -> Vec<u8> {
+        let charstrings = {
+            let mut g = num(0);
+            g.extend(num(0));
+            g.push(21);
+            g.extend(num(-107));
+            g.extend([10, 14]);
+            build_index(&[vec![14], g.clone(), g])
+        };
+        let fd_select = vec![3u8, 0, 2, 0, 0, 0, 0, 2, 1, 0, 3];
+        let subrs = |dx: i32, dy: i32| {
+            let mut s = num(dx);
+            s.extend(num(dy));
+            s.extend([5, 11]);
+            build_index(&[s])
+        };
+        let private = || {
+            let mut p = int5(6);
+            p.push(19);
+            p
+        };
+        // Fixed-size Top DICT: ROS, CharStrings, FDArray, FDSelect.
+        let top = |cs: usize, fa: usize, fs: usize| {
+            let mut t = num(391);
+            t.extend(num(392));
+            t.extend(num(0));
+            t.extend([12, 30]);
+            t.extend(int5(cs));
+            t.push(17);
+            t.extend(int5(fa));
+            t.extend([12, 36]);
+            t.extend(int5(fs));
+            t.extend([12, 37]);
+            t
+        };
+        let header = [1u8, 0, 4, 4];
+        let names = build_index(&[b"T".to_vec()]);
+        let top_len = build_index(&[top(0, 0, 0)]).len();
+        let cs_off = header.len() + names.len() + top_len + 2 + 2;
+        let fs_off = cs_off + charstrings.len();
+        let fa_off = fs_off + fd_select.len();
+        let p_len = private().len();
+        let s0 = subrs(10, 0);
+        let fd_dict = |size: usize, off: usize| {
+            let mut d = int5(size);
+            d.extend(int5(off));
+            d.push(18);
+            d
+        };
+        let fa_len = build_index(&[fd_dict(0, 0), fd_dict(0, 0)]).len();
+        let p0 = fa_off + fa_len;
+        let p1 = p0 + p_len + s0.len();
+        let fd_array = build_index(&[fd_dict(p_len, p0), fd_dict(p_len, p1)]);
+        let mut out = header.to_vec();
+        out.extend(names);
+        out.extend(build_index(&[top(cs_off, fa_off, fs_off)]));
+        out.extend([0, 0, 0, 0]); // empty String and Global Subr INDEXes
+        assert_eq!(out.len(), cs_off);
+        out.extend(charstrings);
+        out.extend(fd_select);
+        out.extend(fd_array);
+        assert_eq!(out.len(), p0);
+        out.extend(private());
+        out.extend(s0);
+        assert_eq!(out.len(), p1);
+        out.extend(private());
+        out.extend(subrs(0, 20));
+        out
+    }
+
+    #[test]
+    fn cid_keyed_font_uses_per_fd_subroutines() {
+        let data = cid_cff();
+        let cff = Cff::parse(&data).unwrap();
+        assert_eq!(cff.num_glyphs(), 3);
+        let mut rec = Rec::default();
+        cff.outline(1, &mut rec).unwrap();
+        assert_eq!(rec.0, [('M', 0.0, 0.0), ('L', 10.0, 0.0), ('Z', 0.0, 0.0)]);
+        let mut rec = Rec::default();
+        cff.outline(2, &mut rec).unwrap();
+        assert_eq!(rec.0, [('M', 0.0, 0.0), ('L', 0.0, 20.0), ('Z', 0.0, 0.0)]);
+        let mut rec = Rec::default();
+        cff.outline(0, &mut rec).unwrap();
+        assert!(rec.0.is_empty());
+        assert_eq!(cff.outline(3, &mut rec), Err(FontError::InvalidGlyph));
+        // Truncations of the table never panic.
+        for n in 0..data.len() {
+            if let Ok(c) = Cff::parse(&data[..n]) {
+                for g in 0..3 {
+                    let _ = c.outline(g, &mut Rec::default());
+                }
+            }
+        }
     }
 
     #[test]

@@ -164,7 +164,10 @@ fn pass_size((x0, y0, dx, dy): (usize, usize, usize, usize), w: usize, h: usize)
     (pw, ph)
 }
 
-/// One chunk: type, body, and whether its CRC matched (only computed when requested).
+/// Chunk type reported for an ancillary chunk whose CRC did not match (it is then ignored).
+const DROPPED: [u8; 4] = *b"dRoP";
+
+/// One chunk: type and body.
 struct Chunk<'a> {
     kind: [u8; 4],
     body: &'a [u8],
@@ -189,10 +192,14 @@ impl<'a> Chunks<'a> {
         let kind: [u8; 4] = crate::util::bytes(self.data, self.pos + 4)?;
         let body = self.data.get(self.pos + 8..self.pos + 8 + len).ok_or(ImageError::Truncated)?;
         let crc = be32(self.data, self.pos + 8 + len)?;
-        if self.verify && crc32_update(crc32(&kind), body) != crc {
-            return Err(ImageError::ChecksumMismatch("PNG chunk CRC"));
-        }
         self.pos += 12 + len;
+        if self.verify && crc32_update(crc32(&kind), body) != crc {
+            if kind[0] & 0x20 == 0 {
+                return Err(ImageError::ChecksumMismatch("PNG chunk CRC"));
+            }
+            // Like libpng: a damaged ancillary chunk is dropped, not fatal.
+            return Ok(Some(Chunk { kind: DROPPED, body: &[] }));
+        }
         Ok(Some(Chunk { kind, body }))
     }
 }
@@ -279,7 +286,11 @@ pub fn decode(data: &[u8]) -> Result<Image, ImageError> {
 
 /// Decodes a PNG image.
 pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageError> {
+    #[cfg(test)]
+    let t0 = std::time::Instant::now();
     let p = parse(data, options.verify_checksums, false)?;
+    #[cfg(test)]
+    let t1 = std::time::Instant::now();
     let h = p.header;
     options.check_dimensions(h.width, h.height)?;
     let raw_size = h.raw_size().ok_or(ImageError::TooLarge { width: h.width, height: h.height })?;
@@ -299,6 +310,8 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageE
         }
         inflate::zlib_decompress_exact(&joined, raw_size, options.verify_checksums)?
     };
+    #[cfg(test)]
+    let t2 = std::time::Instant::now();
 
     let conv = Converter::new(&h, p.palette, p.trns);
     let mut img = Image::try_new(h.width, h.height)?;
@@ -307,6 +320,8 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageE
     } else {
         decode_rows(&h, raw, &conv, &mut img)?;
     }
+    #[cfg(test)]
+    std::eprintln!("PNGPHASES parse+crc {:.1} ms, inflate {:.1} ms, unfilter+convert {:.1} ms", (t1 - t0).as_secs_f64() * 1e3, (t2 - t1).as_secs_f64() * 1e3, t2.elapsed().as_secs_f64() * 1e3);
     Ok(img)
 }
 
@@ -391,7 +406,7 @@ fn unfilter(filter: u8, cur: &mut [u8], prev: &[u8], bpp: usize) -> Result<(), I
 
 fn unfilter_sub<const N: usize>(cur: &mut [u8]) {
     let mut a = [0u8; N];
-    for px in cur.chunks_exact_mut(N) {
+    for px in cur.as_chunks_mut::<N>().0 {
         for i in 0..N {
             px[i] = px[i].wrapping_add(a[i]);
             a[i] = px[i];
@@ -401,7 +416,7 @@ fn unfilter_sub<const N: usize>(cur: &mut [u8]) {
 
 fn unfilter_avg<const N: usize>(cur: &mut [u8], prev: &[u8]) {
     let mut a = [0u8; N];
-    for (px, up) in cur.chunks_exact_mut(N).zip(prev.chunks_exact(N)) {
+    for (px, up) in cur.as_chunks_mut::<N>().0.iter_mut().zip(prev.as_chunks::<N>().0) {
         for i in 0..N {
             let v = px[i].wrapping_add(((a[i] as u16 + up[i] as u16) >> 1) as u8);
             px[i] = v;
@@ -413,7 +428,7 @@ fn unfilter_avg<const N: usize>(cur: &mut [u8], prev: &[u8]) {
 fn unfilter_paeth<const N: usize>(cur: &mut [u8], prev: &[u8]) {
     let mut a = [0u8; N];
     let mut c = [0u8; N];
-    for (px, up) in cur.chunks_exact_mut(N).zip(prev.chunks_exact(N)) {
+    for (px, up) in cur.as_chunks_mut::<N>().0.iter_mut().zip(prev.as_chunks::<N>().0) {
         for i in 0..N {
             let b = up[i];
             let v = px[i].wrapping_add(paeth(a[i], b, c[i]));
@@ -443,8 +458,14 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
 /// Rounds a 16-bit sample to 8 bits.
 #[inline(always)]
 fn scale16(hi: u8, lo: u8) -> u32 {
-    let v = (hi as u32) << 8 | lo as u32;
+    let v = ((hi as u32) << 8) | lo as u32;
     (v * 255 + 32895) >> 16
+}
+
+/// Packs 8-bit channels into a `0xAARRGGBB` pixel.
+#[inline(always)]
+fn argb(a: u32, r: u32, g: u32, b: u32) -> u32 {
+    (a << 24) | (r << 16) | (g << 8) | b
 }
 
 /// Converts unfiltered rows to `0xAARRGGBB` pixels.
@@ -459,15 +480,16 @@ struct Converter {
 
 impl Converter {
     fn new(h: &Header, palette: &[u8], trns: Option<&[u8]>) -> Converter {
-        let mut c = Converter { color: h.color, depth: h.depth, lut: [0xFF00_0000; 256], trns_gray: None, trns_rgb: None };
+        let mut c =
+            Converter { color: h.color, depth: h.depth, lut: [0xFF00_0000; 256], trns_gray: None, trns_rgb: None };
         match h.color {
             ColorType::Indexed => {
-                for (i, rgb) in palette.chunks_exact(3).enumerate() {
-                    c.lut[i] = 0xFF00_0000 | (rgb[0] as u32) << 16 | (rgb[1] as u32) << 8 | rgb[2] as u32;
+                for (entry, &[r, g, b]) in c.lut.iter_mut().zip(palette.as_chunks::<3>().0) {
+                    *entry = argb(255, r as u32, g as u32, b as u32);
                 }
                 if let Some(t) = trns {
                     for (entry, &a) in c.lut.iter_mut().zip(t) {
-                        *entry = (*entry & 0x00FF_FFFF) | (a as u32) << 24;
+                        *entry = (*entry & 0x00FF_FFFF) | ((a as u32) << 24);
                     }
                 }
             }
@@ -477,18 +499,17 @@ impl Converter {
                     let max = (1u32 << h.depth) - 1;
                     for v in 0..=max {
                         let g = v * 255 / max;
-                        let a = if c.trns_gray == Some(v as u16) { 0 } else { 0xFF00_0000 };
-                        c.lut[v as usize] = a | g * 0x0001_0101;
+                        let a = if c.trns_gray == Some(v as u16) { 0 } else { 255 };
+                        c.lut[v as usize] = argb(a, g, g, g);
                     }
                 }
             }
             ColorType::Rgb => {
-                if let Some(t) = trns {
-                    if let (Ok(r), Ok(g), Ok(b)) =
+                if let Some(t) = trns
+                    && let (Ok(r), Ok(g), Ok(b)) =
                         (crate::util::be16(t, 0), crate::util::be16(t, 2), crate::util::be16(t, 4))
-                    {
-                        c.trns_rgb = Some([r, g, b]);
-                    }
+                {
+                    c.trns_rgb = Some([r, g, b]);
                 }
             }
             ColorType::GrayAlpha | ColorType::Rgba => {}
@@ -516,55 +537,53 @@ impl Converter {
                 }
             }
             (ColorType::Gray, _) => {
-                for (d, s) in dst.iter_mut().zip(src.chunks_exact(2)) {
-                    let raw = u16::from_be_bytes([s[0], s[1]]);
-                    let a = if self.trns_gray == Some(raw) { 0 } else { 0xFF00_0000 };
-                    *d = a | scale16(s[0], s[1]) * 0x0001_0101;
+                for (d, &[hi, lo]) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
+                    let a = if self.trns_gray == Some(u16::from_be_bytes([hi, lo])) { 0 } else { 255 };
+                    let g = scale16(hi, lo);
+                    *d = argb(a, g, g, g);
                 }
             }
             (ColorType::GrayAlpha, 8) => {
-                for (d, s) in dst.iter_mut().zip(src.chunks_exact(2)) {
-                    *d = (s[1] as u32) << 24 | s[0] as u32 * 0x0001_0101;
+                for (d, &[g, a]) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
+                    let g = g as u32;
+                    *d = argb(a as u32, g, g, g);
                 }
             }
             (ColorType::GrayAlpha, _) => {
-                for (d, s) in dst.iter_mut().zip(src.chunks_exact(4)) {
-                    *d = scale16(s[2], s[3]) << 24 | scale16(s[0], s[1]) * 0x0001_0101;
+                for (d, &[g0, g1, a0, a1]) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
+                    let g = scale16(g0, g1);
+                    *d = argb(scale16(a0, a1), g, g, g);
                 }
             }
             (ColorType::Rgb, 8) => match self.trns_rgb {
                 None => {
-                    for (d, s) in dst.iter_mut().zip(src.chunks_exact(3)) {
-                        *d = 0xFF00_0000 | (s[0] as u32) << 16 | (s[1] as u32) << 8 | s[2] as u32;
+                    for (d, &[r, g, b]) in dst.iter_mut().zip(src.as_chunks::<3>().0) {
+                        *d = argb(255, r as u32, g as u32, b as u32);
                     }
                 }
-                Some(t) => {
-                    for (d, s) in dst.iter_mut().zip(src.chunks_exact(3)) {
-                        let key = [s[0] as u16, s[1] as u16, s[2] as u16];
-                        let a = if key == t { 0 } else { 0xFF00_0000 };
-                        *d = a | (s[0] as u32) << 16 | (s[1] as u32) << 8 | s[2] as u32;
+                Some(key) => {
+                    for (d, &[r, g, b]) in dst.iter_mut().zip(src.as_chunks::<3>().0) {
+                        let a = if [r as u16, g as u16, b as u16] == key { 0 } else { 255 };
+                        *d = argb(a, r as u32, g as u32, b as u32);
                     }
                 }
             },
             (ColorType::Rgb, _) => {
-                for (d, s) in dst.iter_mut().zip(src.chunks_exact(6)) {
+                for (d, &[r0, r1, g0, g1, b0, b1]) in dst.iter_mut().zip(src.as_chunks::<6>().0) {
                     let key =
-                        [u16::from_be_bytes([s[0], s[1]]), u16::from_be_bytes([s[2], s[3]]), u16::from_be_bytes([s[4], s[5]])];
-                    let a = if Some(key) == self.trns_rgb { 0 } else { 0xFF00_0000 };
-                    *d = a | scale16(s[0], s[1]) << 16 | scale16(s[2], s[3]) << 8 | scale16(s[4], s[5]);
+                        [u16::from_be_bytes([r0, r1]), u16::from_be_bytes([g0, g1]), u16::from_be_bytes([b0, b1])];
+                    let a = if Some(key) == self.trns_rgb { 0 } else { 255 };
+                    *d = argb(a, scale16(r0, r1), scale16(g0, g1), scale16(b0, b1));
                 }
             }
             (ColorType::Rgba, 8) => {
-                for (d, s) in dst.iter_mut().zip(src.chunks_exact(4)) {
-                    *d = u32::from_le_bytes([s[2], s[1], s[0], s[3]]);
+                for (d, &[r, g, b, a]) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
+                    *d = u32::from_le_bytes([b, g, r, a]);
                 }
             }
             (ColorType::Rgba, _) => {
-                for (d, s) in dst.iter_mut().zip(src.chunks_exact(8)) {
-                    *d = scale16(s[6], s[7]) << 24
-                        | scale16(s[0], s[1]) << 16
-                        | scale16(s[2], s[3]) << 8
-                        | scale16(s[4], s[5]);
+                for (d, &[r0, r1, g0, g1, b0, b1, a0, a1]) in dst.iter_mut().zip(src.as_chunks::<8>().0) {
+                    *d = argb(scale16(a0, a1), scale16(r0, r1), scale16(g0, g1), scale16(b0, b1));
                 }
             }
             (ColorType::Indexed, _) => {}
@@ -599,33 +618,7 @@ pub fn encode(image: &Image, level: u8) -> Result<Vec<u8>, ImageError> {
         return Err(ImageError::InvalidArgument("image is too large for PNG"));
     }
     let opaque = !image.has_alpha();
-    let bpp = if opaque { 3 } else { 4 };
-    let stride = w * bpp;
-    let mut raw = Vec::new();
-    raw.try_reserve_exact(h * (stride + 1))?;
-    let mut prev = vec![0u8; stride];
-    let mut cur = vec![0u8; stride];
-    let mut cand: [Vec<u8>; 4] = core::array::from_fn(|_| vec![0u8; stride]);
-    for row in image.pixels.chunks_exact(w) {
-        if opaque {
-            for (d, &p) in cur.chunks_exact_mut(3).zip(row) {
-                d.copy_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8]);
-            }
-        } else {
-            for (d, &p) in cur.chunks_exact_mut(4).zip(row) {
-                d.copy_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]);
-            }
-        }
-        if level == 0 {
-            raw.push(0);
-            raw.extend_from_slice(&cur);
-        } else {
-            let filter = choose_filter(&cur, &prev, bpp, &mut cand);
-            raw.push(filter as u8);
-            raw.extend_from_slice(if filter == 0 { &cur } else { &cand[filter - 1] });
-        }
-        core::mem::swap(&mut prev, &mut cur);
-    }
+    let raw = filtered_scanlines(image, opaque, level != 0)?;
     let z = crate::deflate::zlib_compress(&raw, level);
     drop(raw);
 
@@ -642,6 +635,42 @@ pub fn encode(image: &Image, level: u8) -> Result<Vec<u8>, ImageError> {
     }
     write_chunk(&mut out, b"IEND", &[]);
     Ok(out)
+}
+
+/// Packs `image` as 8-bit RGB (`opaque`) or RGBA rows, each preceded by its filter type: the
+/// data that is zlib-compressed into `IDAT`. With `adaptive`, every row gets the filter with the
+/// smallest sum of absolute differences; otherwise no filtering.
+pub(crate) fn filtered_scanlines(image: &Image, opaque: bool, adaptive: bool) -> Result<Vec<u8>, ImageError> {
+    let w = image.width as usize;
+    let h = image.height as usize;
+    let bpp = if opaque { 3 } else { 4 };
+    let stride = w * bpp;
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(h * (stride + 1))?;
+    let mut prev = vec![0u8; stride];
+    let mut cur = vec![0u8; stride];
+    let mut cand: [Vec<u8>; 4] = core::array::from_fn(|_| vec![0u8; stride]);
+    for row in image.pixels.chunks_exact(w) {
+        if opaque {
+            for (d, &p) in cur.as_chunks_mut::<3>().0.iter_mut().zip(row) {
+                d.copy_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8]);
+            }
+        } else {
+            for (d, &p) in cur.as_chunks_mut::<4>().0.iter_mut().zip(row) {
+                d.copy_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]);
+            }
+        }
+        if !adaptive {
+            raw.push(0);
+            raw.extend_from_slice(&cur);
+        } else {
+            let filter = choose_filter(&cur, &prev, bpp, &mut cand);
+            raw.push(filter as u8);
+            raw.extend_from_slice(if filter == 0 { &cur } else { &cand[filter - 1] });
+        }
+        core::mem::swap(&mut prev, &mut cur);
+    }
+    Ok(raw)
 }
 
 /// Computes the Sub, Up, Average and Paeth filtered versions of `cur` into `cand` and returns the
@@ -799,7 +828,7 @@ pub(crate) mod tests {
         /// The pixels a correct decoder must produce.
         pub(crate) fn expected(&self) -> Vec<u32> {
             let ch = self.channels();
-            let max = ((1u32 << self.depth) - 1) as u32;
+            let max = (1u32 << self.depth) - 1;
             let to8 = |v: u16| -> u32 {
                 if self.depth == 16 { (v as u32 * 255 + 32895) >> 16 } else { v as u32 * 255 / max }
             };
@@ -812,9 +841,9 @@ pub(crate) mod tests {
                     match self.color {
                         0 => {
                             let a = if trns16(0) == Some(s[0]) { 0 } else { 255 };
-                            a << 24 | to8(s[0]) * 0x10101
+                            (a << 24) | (to8(s[0]) * 0x10101)
                         }
-                        4 => to8(s[1]) << 24 | to8(s[0]) * 0x10101,
+                        4 => (to8(s[1]) << 24) | (to8(s[0]) * 0x10101),
                         2 => {
                             let t = [trns16(0), trns16(1), trns16(2)];
                             let a = if t == [Some(s[0]), Some(s[1]), Some(s[2])] { 0 } else { 255 };
@@ -860,7 +889,8 @@ pub(crate) mod tests {
                         let samples: Vec<u16> = (0..w * h * ch)
                             .map(|i| if i % 7 == 0 { (max - 1) as u16 } else { (rng(&mut seed) % max) as u16 })
                             .collect();
-                        let palette: Vec<u8> = if color == 3 { (0..13 * 3).map(|i| (i * 19) as u8).collect() } else { Vec::new() };
+                        let palette: Vec<u8> =
+                            if color == 3 { (0..13 * 3).map(|i| (i * 19) as u8).collect() } else { Vec::new() };
                         // tRNS: palette alpha for some entries, or a key color equal to the first sample.
                         let trns: Option<Vec<u8>> = match color {
                             3 => Some((0..7).map(|i| (i * 40) as u8).collect()),
@@ -883,7 +913,11 @@ pub(crate) mod tests {
                         let file = t.build();
                         let img = decode(&file).unwrap_or_else(|e| panic!("color {color} depth {depth} {w}x{h}: {e}"));
                         assert_eq!((img.width as usize, img.height as usize), (w, h));
-                        assert_eq!(img.pixels, t.expected(), "color {color} depth {depth} interlaced {interlaced} {w}x{h}");
+                        assert_eq!(
+                            img.pixels,
+                            t.expected(),
+                            "color {color} depth {depth} interlaced {interlaced} {w}x{h}"
+                        );
                         let info = read_info(&file).unwrap();
                         assert_eq!(info.interlaced, interlaced);
                         assert_eq!(info.bit_depth, depth);

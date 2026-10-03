@@ -1,4 +1,4 @@
-﻿//! The scheduler.
+//! The scheduler.
 //!
 //! * 32 priority levels with round-robin within a level; a global run queue
 //!   shared by all CPUs (the BKL makes a global queue cheap and fair).

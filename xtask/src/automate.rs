@@ -1,4 +1,4 @@
-﻿//! Scripted, headless runs of Vindows in QEMU.
+//! Scripted, headless runs of Vindows in QEMU.
 //!
 //! Automation scripts drive the virtual machine through QMP and inspect its
 //! serial console. They power `cargo xtask shot` and the integration tests.

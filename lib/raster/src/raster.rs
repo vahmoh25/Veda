@@ -716,7 +716,14 @@ fn cell_alpha(acc: i32, area: i32, rule: FillRule) -> u8 {
     alpha((v.unsigned_abs() + (1 << SHIFT)) >> (SHIFT + 1), rule)
 }
 
-fn sweep_row<F: FnMut(Span<'_>)>(y: u32, cells: &[Cell], batch: &mut Vec<u8>, width: i32, rule: FillRule, sink: &mut F) {
+fn sweep_row<F: FnMut(Span<'_>)>(
+    y: u32,
+    cells: &[Cell],
+    batch: &mut Vec<u8>,
+    width: i32,
+    rule: FillRule,
+    sink: &mut F,
+) {
     batch.clear();
     let mut out = Batcher { y, buf: batch, start: 0, sink };
     let mut acc: i32 = 0;
@@ -974,7 +981,10 @@ mod tests {
                     let (rx, ry) = (x + 100 - ox, y + 100 - oy);
                     let expect = reference.get(rx as u32, ry as u32);
                     let got = m.get(x as u32, y as u32);
-                    assert!((expect as i32 - got as i32).abs() <= 1, "offset ({ox},{oy}) pixel ({x},{y}): {got} vs {expect}");
+                    assert!(
+                        (expect as i32 - got as i32).abs() <= 1,
+                        "offset ({ox},{oy}) pixel ({x},{y}): {got} vs {expect}"
+                    );
                 }
             }
         }
@@ -1060,6 +1070,53 @@ mod tests {
         open.line_to(8.0, 8.0);
         let m = r.render_mask(&open, &Transform::IDENTITY, FillRule::NonZero, 8, 8);
         assert!(rel_err(total(&m), 32.0) < 0.01);
+    }
+
+    #[test]
+    fn performance_smoke() {
+        // Large shapes must stay cheap: cost is proportional to the perimeter, interiors are
+        // reported as solid spans. Prints timings (run with --nocapture).
+        let mut r = Rasterizer::new();
+        let mut spans = 0usize;
+        let mut solid_px = 0u64;
+        let mut p = Path::new();
+        p.rounded_rect(10.5, 10.5, 1800.0, 1000.0, [24.0; 4]);
+        p.circle(900.0, 540.0, 400.0);
+        let t0 = std::time::Instant::now();
+        for _ in 0..10 {
+            r.fill(&p, &Transform::IDENTITY, FillRule::EvenOdd, (1920, 1080), |s| {
+                spans += 1;
+                if let Coverage::Solid(_) = s.coverage {
+                    solid_px += s.len as u64;
+                }
+            });
+        }
+        std::println!("10 x full-screen rrect+circle: {:?} ({spans} spans, {solid_px} solid px)", t0.elapsed());
+        // A polyline chart with many segments, stroked.
+        let mut chart = Path::new();
+        chart.move_to(0.0, 500.0);
+        for i in 1..2000 {
+            let x = i as f32 * 0.9;
+            let y = 500.0 + 200.0 * math::sin(i as f32 * 0.05) + 50.0 * math::sin(i as f32 * 0.7);
+            chart.line_to(x, y);
+        }
+        let t1 = std::time::Instant::now();
+        let mut n = 0usize;
+        let style = StrokeStyle::new(2.0).with_join(crate::LineJoin::Round);
+        r.stroke(&chart, &style, &Transform::IDENTITY, (1920, 1080), |_| n += 1);
+        std::println!("stroke 2000-segment chart: {:?} ({n} spans)", t1.elapsed());
+        let t2 = std::time::Instant::now();
+        let outline = crate::stroke(&chart, &style, 0.2);
+        let t3 = std::time::Instant::now();
+        r.fill(&outline, &Transform::IDENTITY, FillRule::NonZero, (1920, 1080), |_| {});
+        std::println!(
+            "  stroker {:?} ({} verbs), fill {:?} ({} cells)",
+            t3 - t2,
+            outline.verbs().len(),
+            t3.elapsed(),
+            r.cells.capacity()
+        );
+        assert!(solid_px > 10 * 1_000_000);
     }
 
     #[test]

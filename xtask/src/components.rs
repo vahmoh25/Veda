@@ -1,4 +1,4 @@
-﻿//! Cross-building the individual Vindows components with cargo.
+//! Cross-building the individual Vindows components with cargo.
 //!
 //! * The UEFI loader and the kernel are built for `x86_64-unknown-uefi`
 //!   (freestanding, soft-float, PE/COFF output).
@@ -29,6 +29,11 @@ pub const PROGRAMS: &[Program] = &[
     Program { package: "init", binary: "init" },
     Program { package: "vfs", binary: "vfs" },
     Program { package: "systest", binary: "systest" },
+    Program { package: "devmgr", binary: "devmgr" },
+    Program { package: "virtio-input", binary: "virtio-input" },
+    Program { package: "ps2", binary: "ps2" },
+    Program { package: "compositor", binary: "compositor" },
+    Program { package: "about", binary: "about" },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -257,15 +257,8 @@ impl Stroker {
         }
         let limit = if style.miter_limit >= 1.0 { style.miter_limit } else { 1.0 };
         let tol = if tolerance > 0.0 && tolerance.is_finite() { tolerance } else { flatten::DEFAULT_TOLERANCE };
-        let mut ctx = Ctx {
-            hw,
-            join: style.join,
-            cap: style.cap,
-            miter_min: 2.0 / (limit * limit),
-            tol,
-            out,
-            first: true,
-        };
+        let mut ctx =
+            Ctx { hw, join: style.join, cap: style.cap, miter_min: 2.0 / (limit * limit), tol, out, first: true };
         self.pts.clear();
         let mut had_segment = false;
         let mut last = Point::ZERO;
@@ -388,10 +381,10 @@ fn push_point(pts: &mut Vec<Point>, p: Point) {
     if !p.is_finite() {
         return;
     }
-    if let Some(&last) = pts.last() {
-        if (p - last).length_squared() <= MERGE_EPS2 {
-            return;
-        }
+    if let Some(&last) = pts.last()
+        && (p - last).length_squared() <= MERGE_EPS2
+    {
+        return;
     }
     pts.push(p);
 }

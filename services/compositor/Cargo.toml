@@ -1,0 +1,26 @@
+[package]
+name = "compositor"
+description = "The Vindows window system: compositor, window manager and input router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "compositor"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vmath = { workspace = true }
+vraster = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

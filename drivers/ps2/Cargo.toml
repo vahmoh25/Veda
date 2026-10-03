@@ -1,0 +1,23 @@
+[package]
+name = "ps2"
+description = "Driver for the i8042 PS/2 keyboard and mouse controller"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ps2"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

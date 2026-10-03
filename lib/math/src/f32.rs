@@ -421,13 +421,18 @@ pub fn hypot(x: f32, y: f32) -> f32 {
 // Trigonometric functions
 // ---------------------------------------------------------------------------
 
+/// `m · 2^-e` (exact): musl's hexadecimal float constants `0x<m>.0p-<e>`.
+const fn hexf(m: i64, e: u32) -> f64 {
+    m as f64 / (1u128 << e) as f64
+}
+
 /// sin(x) for |x| <= π/4; |sin(x)/x - s(x)| < 2^-37.5.
 #[inline(always)]
 const fn sindf(x: f64) -> f64 {
-    const S1: f64 = -0.166_666_666_416_265_235_595;
-    const S2: f64 = 0.008_333_329_385_889_463_175_6;
-    const S3: f64 = -0.000_198_393_348_360_966_317_347;
-    const S4: f64 = 0.000_002_718_311_493_989_821_906_4;
+    const S1: f64 = hexf(-0x15_5555_54cb_ac77, 55); // -0.166666666416265235595
+    const S2: f64 = hexf(0x11_1110_896e_fbb2, 59); // 0.0083333293858894631756
+    const S3: f64 = hexf(-0x1a_00f9_e2ca_e774, 65); // -0.000198393348360966317347
+    const S4: f64 = hexf(0x16_cd87_8c3b_46a7, 71); // 0.0000027183114939898219064
     let z = x * x;
     let w = z * z;
     let r = S3 + z * S4;
@@ -438,10 +443,10 @@ const fn sindf(x: f64) -> f64 {
 /// cos(x) for |x| <= π/4; |cos(x) - c(x)| < 2^-34.1.
 #[inline(always)]
 const fn cosdf(x: f64) -> f64 {
-    const C0: f64 = -0.499_999_997_251_031_003_120;
-    const C1: f64 = 0.041_666_623_323_739_063_189_4;
-    const C2: f64 = -0.001_388_676_377_460_992_946_92;
-    const C3: f64 = 0.000_024_390_448_796_277_409_065_4;
+    const C0: f64 = hexf(-0x1f_ffff_fd0c_5e81, 54); // -0.499999997251031003120
+    const C1: f64 = hexf(0x15_5553_e105_3a42, 57); // 0.0416666233237390631894
+    const C2: f64 = hexf(-0x16_c087_e80f_1e27, 62); // -0.00138867637746099294692
+    const C3: f64 = hexf(0x19_9342_e0ee_5069, 68); // 0.0000243904487962774090654
     let z = x * x;
     let w = z * z;
     let r = C2 + z * C3;
@@ -451,12 +456,12 @@ const fn cosdf(x: f64) -> f64 {
 /// tan(x) (or -1/tan(x) when `odd`) for |x| <= π/4; |tan(x)/x - t(x)| < 2^-25.5.
 #[inline(always)]
 const fn tandf(x: f64, odd: bool) -> f64 {
-    const T0: f64 = 0.333_331_395_030_791_399_758;
-    const T1: f64 = 0.133_392_002_712_976_742_718;
-    const T2: f64 = 0.053_381_237_844_567_039_352_3;
-    const T3: f64 = 0.024_528_318_116_654_727_887_3;
-    const T4: f64 = 0.002_974_357_433_599_673_049_27;
-    const T5: f64 = 0.009_465_647_849_436_731_667_28;
+    const T0: f64 = hexf(0x15_554d_3418_c99f, 54); // 0.333331395030791399758
+    const T1: f64 = hexf(0x11_12fd_3899_9f72, 55); // 0.133392002712976742718
+    const T2: f64 = hexf(0x1b_54c9_1d86_5afe, 57); // 0.0533812378445670393523
+    const T3: f64 = hexf(0x19_1df3_908c_33ce, 58); // 0.0245283181166547278873
+    const T4: f64 = hexf(0x18_5dad_fcec_f44e, 61); // 0.00297435743359967304927
+    const T5: f64 = hexf(0x13_62b9_bf97_1bcd, 59); // 0.00946564784943673166728
     let z = x * x;
     let r = T4 + z * T5;
     let t = T2 + z * T3;
@@ -520,7 +525,7 @@ pub const fn sin(x: f32) -> f32 {
         return sindf(if sign { xd + S4PIO2 } else { xd - S4PIO2 }) as f32;
     }
     if ix >= 0x7f80_0000 {
-        return x - x; // NaN for ±∞ and NaN
+        return f32::NAN; // sin(±∞) and sin(NaN)
     }
     let (n, y) = rem_pio2f(x);
     (match n {
@@ -558,7 +563,7 @@ pub const fn cos(x: f32) -> f32 {
         return (if sign { sindf(-xd - S3PIO2) } else { sindf(xd - S3PIO2) }) as f32;
     }
     if ix >= 0x7f80_0000 {
-        return x - x;
+        return f32::NAN;
     }
     let (n, y) = rem_pio2f(x);
     (match n {
@@ -583,28 +588,20 @@ pub const fn sin_cos(x: f32) -> (f32, f32) {
         (sindf(xd), cosdf(xd))
     } else if ix <= 0x407b_53d1 {
         if ix <= 0x4016_cbe3 {
-            if sign {
-                (-cosdf(xd + S1PIO2), sindf(xd + S1PIO2))
-            } else {
-                (cosdf(xd - S1PIO2), sindf(S1PIO2 - xd))
-            }
+            if sign { (-cosdf(xd + S1PIO2), sindf(xd + S1PIO2)) } else { (cosdf(xd - S1PIO2), sindf(S1PIO2 - xd)) }
         } else {
             let y = if sign { xd + S2PIO2 } else { xd - S2PIO2 };
             (sindf(-y), -cosdf(y))
         }
     } else if ix <= 0x40e2_31d5 {
         if ix <= 0x40af_eddf {
-            if sign {
-                (cosdf(xd + S3PIO2), sindf(-xd - S3PIO2))
-            } else {
-                (-cosdf(xd - S3PIO2), sindf(xd - S3PIO2))
-            }
+            if sign { (cosdf(xd + S3PIO2), sindf(-xd - S3PIO2)) } else { (-cosdf(xd - S3PIO2), sindf(xd - S3PIO2)) }
         } else {
             let y = if sign { xd + S4PIO2 } else { xd - S4PIO2 };
             (sindf(y), cosdf(y))
         }
     } else if ix >= 0x7f80_0000 {
-        let nan = x - x;
+        let nan = f32::NAN;
         return (nan, nan);
     } else {
         let (n, y) = rem_pio2f(x);
@@ -643,7 +640,7 @@ pub const fn tan(x: f32) -> f32 {
         return tandf(if sign { xd + S4PIO2 } else { xd - S4PIO2 }, false) as f32;
     }
     if ix >= 0x7f80_0000 {
-        return x - x;
+        return f32::NAN;
     }
     let (n, y) = rem_pio2f(x);
     tandf(y, n & 1 != 0) as f32
@@ -1030,12 +1027,18 @@ pub const fn ln_1p(x: f32) -> f32 {
 // Powers
 // ---------------------------------------------------------------------------
 
-/// `x` raised to an integer power by repeated squaring (the same algorithm and
-/// rounding as `std`'s `powi`).
+/// `x` raised to an integer power, (nearly always) correctly rounded.
+///
+/// Uses repeated squaring in `f64` for |n| <= 64 (a few multiplications) and
+/// `2^(n·log2|x|)` beyond. (`std` leaves the rounding of `powi` unspecified.)
 #[inline]
 pub const fn powi(x: f32, n: i32) -> f32 {
-    let mut a = x;
     let mut b = n.unsigned_abs();
+    if b > 64 && x.is_finite() && x != 0.0 {
+        let r = pow_pos(abs(x), n as f64);
+        return (if x < 0.0 && b & 1 == 1 { -r } else { r }) as f32;
+    }
+    let mut a = x as f64;
     let mut r = 1.0;
     loop {
         if b & 1 != 0 {
@@ -1047,7 +1050,31 @@ pub const fn powi(x: f32, n: i32) -> f32 {
         }
         a *= a;
     }
-    if n < 0 { 1.0 / r } else { r }
+    (if n < 0 { 1.0 / r } else { r }) as f32
+}
+
+/// `2^(y·log2(ax))` in double precision for positive, finite, nonzero `ax`
+/// (results beyond the `f32` range saturate to 0 or ∞).
+#[inline(always)]
+const fn pow_pos(ax: f32, y: f64) -> f64 {
+    pow_f64(ax as f64, y)
+}
+
+/// `u^y` for a positive, finite, normal double `u`, accurate to about 2^-30
+/// relative (enough to round correctly to `f32` almost always). Results
+/// beyond the `f32` range saturate to 0 or ∞.
+#[inline(always)]
+pub(crate) const fn pow_f64(u: f64, y: f64) -> f64 {
+    let (k, l) = log_parts(u);
+    let t = y * (k + l * LOG2_E);
+    if t >= 128.0 {
+        return f64::INFINITY;
+    }
+    if t < -160.0 {
+        return 0.0;
+    }
+    let kf = t + m64::TOINT - m64::TOINT;
+    exp_core((t - kf) * LN_2, kf as i32)
 }
 
 /// Classifies `y` (finite, nonzero): 0 = not an integer, 1 = odd integer, 2 = even integer.
@@ -1096,23 +1123,9 @@ pub const fn powf(x: f32, y: f32) -> f32 {
         let z = if (ax == 0) == y_neg { f32::INFINITY } else { 0.0 };
         return if x_neg && yint == 1 { -z } else { z };
     }
-    let mut sign = 1.0;
-    if x_neg {
-        if yint == 0 {
-            return f32::NAN; // negative base, non-integral exponent
-        }
-        if yint == 1 {
-            sign = -1.0;
-        }
+    if x_neg && yint == 0 {
+        return f32::NAN; // negative base, non-integral exponent
     }
-    let (k, l) = log_parts(f32::from_bits(ax) as f64);
-    let t = y as f64 * (k + l * LOG2_E);
-    if t >= 128.0 {
-        return (sign * f64::INFINITY) as f32;
-    }
-    if t < -160.0 {
-        return (sign * 0.0) as f32;
-    }
-    let kf = t + m64::TOINT - m64::TOINT;
-    (sign * exp_core((t - kf) * LN_2, kf as i32)) as f32
+    let r = pow_pos(f32::from_bits(ax), y as f64);
+    (if x_neg && yint == 1 { -r } else { r }) as f32
 }

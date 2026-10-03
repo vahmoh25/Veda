@@ -86,10 +86,9 @@ impl Canvas {
             return;
         }
         let i = ((y * self.width + x) * 3) as usize;
-        for c in 0..3 {
+        for (c, &s) in color.iter().enumerate() {
             let d = self.rgb[i + c] as u32;
-            let s = color[c] as u32;
-            self.rgb[i + c] = ((s * a as u32 + d * (255 - a as u32) + 127) / 255) as u8;
+            self.rgb[i + c] = ((s as u32 * a as u32 + d * (255 - a as u32) + 127) / 255) as u8;
         }
     }
 
@@ -179,11 +178,14 @@ fn render_shapes_png() {
     {
         let mut z = Path::new();
         let off = i as f32 * 25.0;
-        let pts: Vec<Point> = zig.iter().map(|p| Point::new(p.x - 20.0 + off * 0.3, p.y + off * 0.0 + i as f32 * 4.0)).collect();
+        let pts: Vec<Point> =
+            zig.iter().map(|p| Point::new(p.x - 20.0 + off * 0.3, p.y + off * 0.0 + i as f32 * 4.0)).collect();
         z.polyline(&pts);
         let style = StrokeStyle::new(12.0 - i as f32 * 4.0).with_join(*join).with_cap(*cap);
         let colors = [[60, 60, 60], [220, 60, 60], [60, 160, 220]];
-        r.stroke(&z, &style, &Transform::translate(0.0, i as f32 * 0.0), (cv.width, cv.height), |s| cv.span(&s, colors[i]));
+        r.stroke(&z, &style, &Transform::translate(0.0, i as f32 * 0.0), (cv.width, cv.height), |s| {
+            cv.span(&s, colors[i])
+        });
     }
     // Thin hairlines at various angles.
     for i in 0..24 {

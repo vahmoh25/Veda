@@ -80,7 +80,7 @@ pub fn sqrt(x: f32) -> f32 {
 /// Newton-Raphson iteration otherwise (soft-float targets such as UEFI).
 #[inline]
 pub fn sqrt64(x: f64) -> f64 {
-    if !(x > 0.0) {
+    if x.is_nan() || x <= 0.0 {
         return 0.0;
     }
     sqrt64_positive(x)
@@ -157,7 +157,7 @@ pub fn sin_cos64(x: f64) -> (f64, f64) {
         return (f64::NAN, f64::NAN);
     }
     const FRAC_2_PI: f64 = core::f64::consts::FRAC_2_PI;
-    const PI_2_HI: f64 = 1.570_796_326_794_896_6;
+    const PI_2_HI: f64 = core::f64::consts::FRAC_PI_2;
     const PI_2_LO: f64 = 6.123_233_995_736_766e-17;
     let q = x * FRAC_2_PI;
     let qi = if q >= 0.0 { (q + 0.5) as i64 } else { (q - 0.5) as i64 };
@@ -262,7 +262,7 @@ pub fn powf(x: f32, y: f32) -> f32 {
     if x == 0.0 {
         return if y > 0.0 { 0.0 } else { f32::INFINITY };
     }
-    if !(x > 0.0) {
+    if x.is_nan() || x <= 0.0 {
         return f32::NAN;
     }
     exp64(y as f64 * ln64(x as f64)) as f32

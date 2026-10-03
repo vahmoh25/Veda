@@ -566,7 +566,10 @@ impl<'a> Encoder<'a> {
                 let ls = LEN_SYM[len] as usize;
                 let code_len = lit_lens[257 + ls] as u32;
                 let extra = LEN_EXTRA[ls] as u32;
-                w.put(lit_codes[257 + ls] as u32 | (((len - LEN_BASE[ls] as usize) as u32) << code_len), code_len + extra);
+                w.put(
+                    lit_codes[257 + ls] as u32 | (((len - LEN_BASE[ls] as usize) as u32) << code_len),
+                    code_len + extra,
+                );
                 let ds = dist_sym(dist);
                 let code_len = dist_lens[ds] as u32;
                 let extra = DIST_EXTRA[ds] as u32;
@@ -692,8 +695,8 @@ mod tests {
 
     #[test]
     fn length_and_distance_symbols() {
-        for len in 3..=258usize {
-            let s = LEN_SYM[len] as usize;
+        for (len, &s) in LEN_SYM.iter().enumerate().skip(3) {
+            let s = s as usize;
             assert!(LEN_BASE[s] as usize <= len);
             assert!(len - (LEN_BASE[s] as usize) < 1 << LEN_EXTRA[s]);
         }

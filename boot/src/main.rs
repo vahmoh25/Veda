@@ -1,4 +1,4 @@
-﻿//! `vboot` â€” the Vindows UEFI boot loader.
+//! `vboot` — the Vindows UEFI boot loader.
 //!
 //! Responsibilities, in order:
 //!

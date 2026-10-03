@@ -1,4 +1,4 @@
-﻿//! Symbols that compiled Rust and C++ code expect from a C runtime.
+//! Symbols that compiled Rust and C++ code expect from a C runtime.
 //!
 //! Vindows programs link no CRT, so the runtime provides the memory
 //! primitives LLVM/MSVC emit calls to, MSVC's stack probe and floating-point

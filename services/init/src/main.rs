@@ -1,4 +1,4 @@
-﻿//! `init` â€” the first user-space process.
+//! `init` — the first user-space process.
 //!
 //! * Starts the system services and the desktop shell from the initrd, giving
 //!   each only the capabilities it needs (narrow hardware resources).

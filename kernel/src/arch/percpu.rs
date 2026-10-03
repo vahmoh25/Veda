@@ -1,4 +1,4 @@
-﻿//! Per-CPU data, reached through the `GS` segment base while in the kernel.
+//! Per-CPU data, reached through the `GS` segment base while in the kernel.
 //!
 //! The first fields have fixed offsets because the assembly entry code uses
 //! them (`gs:[OFFSET]`).

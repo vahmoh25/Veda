@@ -1,4 +1,4 @@
-﻿//! The virtual file system protocol.
+//! The virtual file system protocol.
 //!
 //! Paths are absolute, `/`-separated UTF-8. The standard namespace:
 //!

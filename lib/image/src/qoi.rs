@@ -7,10 +7,10 @@
 
 use alloc::vec::Vec;
 
+use crate::DecodeOptions;
 use crate::error::ImageError;
 use crate::image::Image;
 use crate::util::{be32, try_vec};
-use crate::DecodeOptions;
 
 const MAGIC: &[u8; 4] = b"qoif";
 const HEADER_LEN: usize = 14;
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_input() {
-        let img = Image::from_fn(8, 8, |x, y| 0xFF00_0000 | x * 30 << 8 | y * 30);
+        let img = Image::from_fn(8, 8, |x, y| 0xFF00_0000 | (x * 30) << 8 | (y * 30));
         let file = encode(&img).unwrap();
         assert_eq!(decode(&file[..20]), Err(ImageError::Truncated));
         let mut bad = file.clone();

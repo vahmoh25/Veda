@@ -13,7 +13,6 @@ use vraster::{Coverage, FillRule, Path, Point, Rasterizer, Transform, math};
 
 use crate::GlyphId;
 use crate::font::{Font, OutlineScratch};
-use crate::outline::PathSink;
 
 /// Largest supported glyph size in pixels per em.
 pub const MAX_GLYPH_SIZE: f32 = 2048.0;
@@ -78,23 +77,34 @@ pub struct RasterOptions {
     pub gamma: f32,
     /// Curve flattening tolerance in pixels.
     pub tolerance: f32,
+    /// Vertical zone snapping at sizes up to this many pixels per em (0 disables): the outline is
+    /// remapped vertically (piecewise linearly between baseline, x-height and cap height) so that
+    /// the tops of lowercase letters and capitals land on pixel boundaries. Each zone moves by
+    /// less than a pixel; horizontal metrics are unchanged.
+    pub vertical_snap_size: f32,
 }
 
 impl RasterOptions {
-    /// Plain linear coverage: no darkening, no gamma.
-    pub const LINEAR: RasterOptions =
-        RasterOptions { darkening: 0.0, darkening_full_size: 0.0, darkening_zero_size: 0.0, gamma: 1.0, tolerance: 0.05 };
+    /// Plain linear coverage: no darkening, no gamma, no snapping.
+    pub const LINEAR: RasterOptions = RasterOptions {
+        darkening: 0.0,
+        darkening_full_size: 0.0,
+        darkening_zero_size: 0.0,
+        gamma: 1.0,
+        tolerance: 0.05,
+        vertical_snap_size: 0.0,
+    };
 
     /// The stem darkening amount (pixels) at a given size.
     pub fn darkening_at(&self, size_px: f32) -> f32 {
-        if !(self.darkening > 0.0) || !(size_px < self.darkening_zero_size) {
+        if self.darkening.is_nan() || self.darkening <= 0.0 || size_px.is_nan() || size_px >= self.darkening_zero_size {
             return 0.0;
         }
         if size_px <= self.darkening_full_size {
             return self.darkening;
         }
         let range = self.darkening_zero_size - self.darkening_full_size;
-        if !(range > 0.0) {
+        if range.is_nan() || range <= 0.0 {
             return 0.0;
         }
         self.darkening * (self.darkening_zero_size - size_px) / range
@@ -105,7 +115,113 @@ impl Default for RasterOptions {
     /// Mild stem darkening for small sizes (0.3 px up to 12 px, fading out at 28 px), linear
     /// coverage.
     fn default() -> Self {
-        RasterOptions { darkening: 0.3, darkening_full_size: 12.0, darkening_zero_size: 28.0, gamma: 1.0, tolerance: 0.05 }
+        RasterOptions {
+            darkening: 0.3,
+            darkening_full_size: 12.0,
+            darkening_zero_size: 28.0,
+            gamma: 1.0,
+            tolerance: 0.05,
+            vertical_snap_size: 24.0,
+        }
+    }
+}
+
+/// Vertical zones for snapping: maps font-unit y (up) to pixels (up).
+#[derive(Clone, Copy)]
+struct Zones {
+    scale: f32,
+    xh: f32,
+    cap: f32,
+    xt: f32,
+    ct: f32,
+    k_low: f32,
+    k_mid: f32,
+}
+
+impl Zones {
+    /// Zones for `font` at `scale` px per unit, with `dark` px of darkening (edges grow by
+    /// `dark / 2` and glyphs are lifted by `dark / 2`, so a darkened top edge sits at
+    /// `mapped + dark`).
+    fn new(font: &Font<'_>, scale: f32, dark: f32) -> Option<Zones> {
+        let m = font.metrics();
+        let (xh, cap) = (m.x_height as f32, m.cap_height as f32);
+        if !(xh > 0.0 && cap > xh) {
+            return None;
+        }
+        let (xp, cp) = (xh * scale, cap * scale);
+        if xp < 3.0 {
+            return None;
+        }
+        // Round the x-height up from a fraction of 0.35 (slightly larger lowercase reads better),
+        // the cap height to nearest.
+        let xt = math::floor(xp + dark + 0.65) - dark;
+        let ct = math::round(cp + dark) - dark;
+        if !(xt > 0.0 && ct > xt) {
+            return None;
+        }
+        Some(Zones { scale, xh, cap, xt, ct, k_low: xt / xh, k_mid: (ct - xt) / (cap - xh) })
+    }
+
+    #[inline]
+    fn map(&self, y: f32) -> f32 {
+        if y <= 0.0 {
+            y * self.scale
+        } else if y <= self.xh {
+            y * self.k_low
+        } else if y <= self.cap {
+            self.xt + (y - self.xh) * self.k_mid
+        } else {
+            self.ct + (y - self.cap) * self.scale
+        }
+    }
+}
+
+/// Builds the pixel-space glyph path: x scaled and offset, y flipped, lifted and zone-mapped.
+struct GlyphSink<'p> {
+    path: &'p mut Path,
+    scale: f32,
+    dx: f32,
+    lift: f32,
+    zones: Option<Zones>,
+}
+
+impl GlyphSink<'_> {
+    #[inline]
+    fn map(&self, x: f32, y: f32) -> (f32, f32) {
+        let y = match &self.zones {
+            Some(z) => z.map(y),
+            None => y * self.scale,
+        };
+        (x * self.scale + self.dx, -y - self.lift)
+    }
+}
+
+impl crate::outline::OutlineSink for GlyphSink<'_> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        let (x, y) = self.map(x, y);
+        self.path.move_to(x, y);
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        let (x, y) = self.map(x, y);
+        self.path.line_to(x, y);
+    }
+
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        let (x1, y1) = self.map(x1, y1);
+        let (x, y) = self.map(x, y);
+        self.path.quad_to(x1, y1, x, y);
+    }
+
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        let (x1, y1) = self.map(x1, y1);
+        let (x2, y2) = self.map(x2, y2);
+        let (x, y) = self.map(x, y);
+        self.path.cubic_to(x1, y1, x2, y2, x, y);
+    }
+
+    fn close(&mut self) {
+        self.path.close();
     }
 }
 
@@ -190,19 +306,21 @@ impl GlyphRasterizer {
         out.left = 0;
         out.top = 0;
         out.data.clear();
-        if !(size_px > 0.0) {
+        if size_px.is_nan() || size_px <= 0.0 {
             return;
         }
         let size = size_px.min(MAX_GLYPH_SIZE);
         let scale = size * font.inv_upem();
         let dx = if subpixel_x.is_finite() { subpixel_x.clamp(-4.0, 4.0) } else { 0.0 };
+        let dark = self.options.darkening_at(size);
+        let zones = if size <= self.options.vertical_snap_size { Zones::new(font, scale, dark) } else { None };
         self.path.clear();
-        let mut sink = PathSink::new(&mut self.path, scale, Point::new(dx, 0.0));
+        // Lifting by half the darkening keeps flat bottoms exactly on the baseline.
+        let mut sink = GlyphSink { path: &mut self.path, scale, dx, lift: dark * 0.5, zones };
         if font.outline_with(glyph, &mut sink, &mut self.scratch).is_err() {
             self.path.clear();
             return;
         }
-        let dark = self.options.darkening_at(size);
         if dark > 0.0 {
             self.path.embolden_with(dark, dark, &mut self.emb);
         }

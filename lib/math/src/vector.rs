@@ -731,11 +731,7 @@ impl Vec3 {
     /// Some vector orthogonal to `self` (not normalized; `self` must be non-zero).
     #[inline]
     pub fn any_orthogonal_vector(self) -> Self {
-        if m::abs(self.x) > m::abs(self.y) {
-            Self::new(-self.z, 0.0, self.x)
-        } else {
-            Self::new(0.0, self.z, -self.y)
-        }
+        if m::abs(self.x) > m::abs(self.y) { Self::new(-self.z, 0.0, self.x) } else { Self::new(0.0, self.z, -self.y) }
     }
 
     /// Some unit vector orthogonal to the unit vector `self`.

@@ -531,7 +531,13 @@ impl<'a> Font<'a> {
 
     /// Appends the outline of `glyph` scaled to `size_px` with its origin at `origin` (pixels,
     /// y down) to `path`.
-    pub fn append_glyph_path(&self, glyph: GlyphId, size_px: f32, origin: Point, path: &mut Path) -> Result<(), FontError> {
+    pub fn append_glyph_path(
+        &self,
+        glyph: GlyphId,
+        size_px: f32,
+        origin: Point,
+        path: &mut Path,
+    ) -> Result<(), FontError> {
         let scale = size_px * self.inv_upem;
         let mut sink = PathSink::new(path, scale, origin);
         self.outline(glyph, &mut sink)

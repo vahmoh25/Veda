@@ -1,4 +1,4 @@
-﻿//! `cargo xtask` â€” the Vindows developer tool.
+//! `cargo xtask` — the Vindows developer tool.
 //!
 //! Run `cargo xtask help` for the list of commands.
 
@@ -108,6 +108,22 @@ fn build(o: &Options) -> Result<PathBuf> {
         initrd.add(&format!("bin/{}.exe", program.binary), util::read(path)?);
     }
     initrd.add("etc/version", format!("Vindows {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
+    // Everything under assets/ is installed at the same relative path
+    // (assets/fonts/X -> /system/fonts/X); README files are documentation.
+    let assets = util::workspace_root().join("assets");
+    let mut stack = vec![assets.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().is_some_and(|n| n != "README.md") {
+                let rel = path.strip_prefix(&assets).unwrap().to_string_lossy().replace('\\', "/");
+                initrd.add(&rel, util::read(&path)?);
+            }
+        }
+    }
     let initrd = initrd.build();
 
     let boot_cfg = format!(

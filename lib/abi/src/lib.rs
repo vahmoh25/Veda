@@ -1,4 +1,4 @@
-﻿//! The Vindows kernel ABI.
+//! The Vindows kernel ABI.
 //!
 //! This crate is the single source of truth for the interface between the
 //! microkernel and user space: system call numbers and calling convention,
@@ -20,7 +20,7 @@
 //! Kernel objects (processes, threads, channels, events, memory objects,
 //! interrupts, I/O port ranges and resources) are only reachable through
 //! *handles*: per-process 32-bit names that carry a set of [`Rights`].
-//! Handles are capabilities â€” the only way to gain access to an object is to
+//! Handles are capabilities — the only way to gain access to an object is to
 //! be given a handle to it (through a channel message or at process start).
 
 #![no_std]

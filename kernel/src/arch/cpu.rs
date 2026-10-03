@@ -1,4 +1,4 @@
-﻿//! CPU identification, model-specific registers, control registers and
+//! CPU identification, model-specific registers, control registers and
 //! per-CPU feature initialisation.
 
 use core::arch::asm;

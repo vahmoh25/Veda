@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "vraster"
 description = "Anti-aliased vector path rasterizer shared by the font engine and 2D graphics"
 version.workspace = true

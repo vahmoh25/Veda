@@ -1,4 +1,4 @@
-﻿//! Assembly entry and exit paths.
+//! Assembly entry and exit paths.
 //!
 //! * `vk_isr_stubs`: 256 interrupt stubs, 16 bytes apart, that normalise the
 //!   stack (push a dummy error code when the CPU does not) and jump to

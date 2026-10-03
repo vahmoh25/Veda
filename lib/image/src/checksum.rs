@@ -38,10 +38,10 @@ const fn make_tables() -> [[u32; 256]; 8] {
 pub fn crc32_update(crc: u32, data: &[u8]) -> u32 {
     let t = &TABLES;
     let mut c = !crc;
-    let mut chunks = data.chunks_exact(8);
-    for ch in &mut chunks {
-        let lo = u32::from_le_bytes([ch[0], ch[1], ch[2], ch[3]]) ^ c;
-        let hi = u32::from_le_bytes([ch[4], ch[5], ch[6], ch[7]]);
+    let (chunks, rest) = data.as_chunks::<8>();
+    for &[b0, b1, b2, b3, b4, b5, b6, b7] in chunks {
+        let lo = u32::from_le_bytes([b0, b1, b2, b3]) ^ c;
+        let hi = u32::from_le_bytes([b4, b5, b6, b7]);
         c = t[7][(lo & 0xFF) as usize]
             ^ t[6][((lo >> 8) & 0xFF) as usize]
             ^ t[5][((lo >> 16) & 0xFF) as usize]
@@ -51,7 +51,7 @@ pub fn crc32_update(crc: u32, data: &[u8]) -> u32 {
             ^ t[1][((hi >> 16) & 0xFF) as usize]
             ^ t[0][(hi >> 24) as usize];
     }
-    for &b in chunks.remainder() {
+    for &b in rest {
         c = t[0][((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8);
     }
     !c
@@ -72,18 +72,18 @@ pub fn adler32_update(adler: u32, data: &[u8]) -> u32 {
     let mut a = adler & 0xFFFF;
     let mut b = adler >> 16;
     for block in data.chunks(ADLER_NMAX) {
-        let mut quads = block.chunks_exact(4);
-        for q in &mut quads {
-            a += q[0] as u32;
+        let (quads, rest) = block.as_chunks::<4>();
+        for &[q0, q1, q2, q3] in quads {
+            a += q0 as u32;
             b += a;
-            a += q[1] as u32;
+            a += q1 as u32;
             b += a;
-            a += q[2] as u32;
+            a += q2 as u32;
             b += a;
-            a += q[3] as u32;
+            a += q3 as u32;
             b += a;
         }
-        for &x in quads.remainder() {
+        for &x in rest {
             a += x as u32;
             b += a;
         }

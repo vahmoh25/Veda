@@ -53,17 +53,17 @@ impl<'a> BitReader<'a> {
     }
 
     fn refill(&mut self) {
-        if !self.marker_hit {
-            if let Some(chunk) = self.data.get(self.pos..self.pos + 8) {
-                let v = u64::from_be_bytes(chunk.try_into().unwrap_or([0xFF; 8]));
-                if !has_ff(v) {
-                    let k = (64 - self.count) / 8;
-                    let shift = 64 - 8 * k;
-                    self.bits |= (v >> shift) << (shift - self.count);
-                    self.pos += k as usize;
-                    self.count += 8 * k;
-                    return;
-                }
+        if !self.marker_hit
+            && let Some(chunk) = self.data.get(self.pos..self.pos + 8)
+        {
+            let v = u64::from_be_bytes(chunk.try_into().unwrap_or([0xFF; 8]));
+            if !has_ff(v) {
+                let k = (64 - self.count) / 8;
+                let shift = 64 - 8 * k;
+                self.bits |= (v >> shift) << (shift - self.count);
+                self.pos += k as usize;
+                self.count += 8 * k;
+                return;
             }
         }
         while self.count <= 56 {
@@ -332,16 +332,29 @@ impl<'a> Decoder<'a> {
 
     /// Decodes the whole image (without applying the EXIF orientation).
     pub(crate) fn decode(&mut self) -> Result<Image, ImageError> {
+        #[cfg(test)]
+        let t0 = std::time::Instant::now();
         self.run(false)?;
+        #[cfg(test)]
+        let t1 = std::time::Instant::now();
         if self.scans == 0 {
-            return Err(if self.frame.is_some() { ImageError::Truncated } else { ImageError::Invalid("JPEG has no image") });
+            return Err(if self.frame.is_some() {
+                ImageError::Truncated
+            } else {
+                ImageError::Invalid("JPEG has no image")
+            });
         }
         let model = self.frame.as_ref().map(|f| self.color_model(f)).unwrap_or(ColorModel::Gray);
         let frame = self.frame.as_mut().ok_or(ImageError::Invalid("JPEG has no frame header"))?;
         if frame.progressive {
             finish_progressive(frame)?;
         }
-        render(frame, model)
+        #[cfg(test)]
+        let t2 = std::time::Instant::now();
+        let r = render(frame, model);
+        #[cfg(test)]
+        std::eprintln!("PHASES entropy+idct {:.1} ms, finish {:.1} ms, render {:.1} ms", (t1 - t0).as_secs_f64() * 1e3, (t2 - t1).as_secs_f64() * 1e3, t2.elapsed().as_secs_f64() * 1e3);
+        r
     }
 
     pub(crate) fn orientation(&self) -> Orientation {
@@ -527,7 +540,8 @@ impl<'a> Decoder<'a> {
             }
             let counts: [u8; 16] = core::array::from_fn(|i| s[1 + i]);
             let total: usize = counts.iter().map(|&c| c as usize).sum();
-            let symbols = s.get(17..17 + total).ok_or(ImageError::Invalid("JPEG Huffman table segment is too short"))?;
+            let symbols =
+                s.get(17..17 + total).ok_or(ImageError::Invalid("JPEG Huffman table segment is too short"))?;
             let mut table = Box::new(DecodeTable::new(&counts, symbols)?);
             if class == 1 {
                 table.build_fast_ac();
@@ -736,10 +750,10 @@ fn sequential_scan(
     };
     let mut q = [[0i32; 64]; 4];
     let mut tabs: Vec<(&DecodeTable, &DecodeTable)> = Vec::with_capacity(scan.n);
-    for i in 0..scan.n {
+    for (i, qi) in q.iter_mut().enumerate().take(scan.n) {
         let c = &mut frame.comps[scan.comp[i]];
         c.pred = 0;
-        q[i] = c.qt.unwrap_or([1; 64]).map(|v| v as i32);
+        *qi = c.qt.unwrap_or([1; 64]).map(|v| v as i32);
         tabs.push((tables.dc(scan.dc[i])?, tables.ac(scan.ac[i])?));
     }
     let mut block = [0i32; 64];
@@ -792,10 +806,10 @@ fn progressive_scan(
 ) -> Result<(), ImageError> {
     let dc_first = scan.ss == 0 && scan.ah == 0;
     let mut dcs: [Option<&DecodeTable>; 4] = [None; 4];
-    for i in 0..scan.n {
+    for (i, dc) in dcs.iter_mut().enumerate().take(scan.n) {
         frame.comps[scan.comp[i]].pred = 0;
         if dc_first {
-            dcs[i] = Some(tables.dc(scan.dc[i])?);
+            *dc = Some(tables.dc(scan.dc[i])?);
         }
     }
     let ac = if scan.ss > 0 { Some(tables.ac(scan.ac[0])?) } else { None };

@@ -1,4 +1,4 @@
-﻿//! Link the kernel as a fixed-address, higher-half PE image.
+//! Link the kernel as a fixed-address, higher-half PE image.
 
 fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();

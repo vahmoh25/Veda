@@ -21,7 +21,7 @@ pub const MAX_SEGMENTS: u32 = 1024;
 fn segments_for(m: f32, tolerance: f32) -> u32 {
     let tol = if tolerance > 1e-4 { tolerance } else { 1e-4 };
     let v = m / tol;
-    if !(v > 1.0) {
+    if v.is_nan() || v <= 1.0 {
         return 1;
     }
     let n = math::ceil(math::sqrt(v));
@@ -126,7 +126,8 @@ mod tests {
         for w in poly.windows(2) {
             let (a, b) = (w[0], w[1]);
             let ab = b - a;
-            let t = if ab.length_squared() > 0.0 { ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+            let t =
+                if ab.length_squared() > 0.0 { ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
             best = best.min((a + ab * t - p).length());
         }
         best
@@ -134,7 +135,8 @@ mod tests {
 
     #[test]
     fn cubic_within_tolerance() {
-        let (p0, p1, p2, p3) = (Point::new(0.0, 0.0), Point::new(30.0, 100.0), Point::new(170.0, -60.0), Point::new(200.0, 40.0));
+        let (p0, p1, p2, p3) =
+            (Point::new(0.0, 0.0), Point::new(30.0, 100.0), Point::new(170.0, -60.0), Point::new(200.0, 40.0));
         for &tol in &[0.05f32, 0.2, 1.0] {
             let mut poly = Vec::from([p0]);
             flatten_cubic(p0, p1, p2, p3, tol, &mut |p| poly.push(p));

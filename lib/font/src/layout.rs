@@ -59,16 +59,16 @@ impl<'a> FontCollection<'a> {
     /// to `.notdef` (glyph 0) of the primary font. Returns `(font index, glyph)`.
     pub fn resolve(&self, primary: usize, c: char) -> (usize, GlyphId) {
         let primary = if primary < self.fonts.len() { primary } else { 0 };
-        if let Some(f) = self.fonts.get(primary) {
-            if let Some(g) = f.glyph_index(c) {
-                return (primary, g);
-            }
+        if let Some(f) = self.fonts.get(primary)
+            && let Some(g) = f.glyph_index(c)
+        {
+            return (primary, g);
         }
         for (i, f) in self.fonts.iter().enumerate() {
-            if i != primary {
-                if let Some(g) = f.glyph_index(c) {
-                    return (i, g);
-                }
+            if i != primary
+                && let Some(g) = f.glyph_index(c)
+            {
+                return (i, g);
             }
         }
         (primary, GlyphId::NOTDEF)
@@ -116,6 +116,7 @@ pub struct ScaledFont<'c, 'a> {
     coll: &'c FontCollection<'a>,
     primary: usize,
     size: f32,
+    kerning: bool,
 }
 
 /// Characters drawn with zero width and no glyph.
@@ -124,7 +125,6 @@ fn is_invisible(c: char) -> bool {
         '\0'..='\u{1F}' | '\u{7F}'..='\u{9F}' | '\u{AD}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}'
         | '\u{2060}'..='\u{2064}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}')
         && c != '\t'
-        && c != '\u{202F}'
 }
 
 /// Whitespace at which lines may be broken (no-break spaces excluded).
@@ -138,12 +138,22 @@ impl<'c, 'a> ScaledFont<'c, 'a> {
     pub fn new(collection: &'c FontCollection<'a>, primary: usize, size_px: f32) -> Self {
         let primary = if primary < collection.len() { primary } else { 0 };
         let size = if size_px > 0.0 && size_px.is_finite() { size_px.min(4096.0) } else { 0.0 };
-        ScaledFont { coll: collection, primary, size }
+        ScaledFont { coll: collection, primary, size, kerning: true }
     }
 
     /// The same style at another size.
     pub fn with_size(&self, size_px: f32) -> Self {
-        ScaledFont::new(self.coll, self.primary, size_px)
+        ScaledFont { kerning: self.kerning, ..ScaledFont::new(self.coll, self.primary, size_px) }
+    }
+
+    /// The same style with pair kerning enabled or disabled (enabled by default).
+    pub fn with_kerning(&self, enabled: bool) -> Self {
+        ScaledFont { kerning: enabled, ..*self }
+    }
+
+    /// Returns `true` if pair kerning is applied.
+    pub fn kerning_enabled(&self) -> bool {
+        self.kerning
     }
 
     /// The font collection.
@@ -260,10 +270,11 @@ impl<'c, 'a> ScaledFont<'c, 'a> {
         };
         let scale = self.size * font.inv_upem();
         let mut x = x;
-        if let Some((pf, pg)) = *prev {
-            if pf == fi {
-                x += font.kerning(pg, g) as f32 * scale;
-            }
+        if let Some((pf, pg)) = *prev
+            && pf == fi
+            && self.kerning
+        {
+            x += font.kerning(pg, g) as f32 * scale;
         }
         *prev = Some((fi, g));
         let glyph = if c.is_whitespace() { None } else { Some((fi, g)) };

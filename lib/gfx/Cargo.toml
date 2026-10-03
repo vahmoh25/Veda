@@ -1,0 +1,14 @@
+[package]
+name = "vgfx"
+description = "Vindows 2D graphics: blending, shapes, shadows, images and text on pixel surfaces"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vmath = { workspace = true }
+vraster = { workspace = true }
+vfont = { workspace = true }
+
+[lints]
+workspace = true

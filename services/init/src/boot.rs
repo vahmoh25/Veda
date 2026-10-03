@@ -1,4 +1,4 @@
-﻿//! The system start-up sequence: which services run, with which
+//! The system start-up sequence: which services run, with which
 //! capabilities.
 
 use alloc::vec;
@@ -103,6 +103,15 @@ pub fn cmdline(init: &Init) -> alloc::string::String {
 /// Starts optional programs requested on the kernel command line.
 pub fn start_requested(init: &mut Init) {
     let cmdline = cmdline(init);
+    for arg in cmdline.split_whitespace() {
+        if let Some(name) = arg.strip_prefix("run=") {
+            let path = alloc::format!("bin/{name}.exe");
+            match init.spawn(name, &path, &[], Vec::new(), false) {
+                Ok(_) => println!("init: started {}", name),
+                Err(e) => println!("init: cannot start {}: {:?}", name, e),
+            }
+        }
+    }
     if cmdline.split_whitespace().any(|a| a == "systest") {
         match init.spawn("systest", "bin/systest.exe", &[], Vec::new(), false) {
             Ok(_) => println!("init: started systest"),

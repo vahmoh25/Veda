@@ -1,4 +1,4 @@
-﻿//! Kernel synchronisation.
+//! Kernel synchronisation.
 //!
 //! # Concurrency model
 //!

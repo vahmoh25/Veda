@@ -3,8 +3,43 @@
 version = 4
 
 [[package]]
+name = "about"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vrt",
+ "vui",
+]
+
+[[package]]
 name = "bootinfo"
 version = "0.1.0"
+
+[[package]]
+name = "compositor"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vipc",
+ "vmath",
+ "vproto",
+ "vraster",
+ "vrt",
+]
+
+[[package]]
+name = "devmgr"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+]
 
 [[package]]
 name = "init"
@@ -21,6 +56,17 @@ dependencies = [
 [[package]]
 name = "initrd"
 version = "0.1.0"
+
+[[package]]
+name = "ps2"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+]
 
 [[package]]
 name = "systest"
@@ -69,6 +115,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vgfx"
+version = "0.1.0"
+dependencies = [
+ "vfont",
+ "vmath",
+ "vraster",
+]
+
+[[package]]
 name = "vheap"
 version = "0.1.0"
 
@@ -82,6 +137,18 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vrt",
+]
+
+[[package]]
+name = "virtio-input"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vvirtio",
 ]
 
 [[package]]
@@ -122,6 +189,28 @@ dependencies = [
  "vabi",
  "vheap",
  "vpe",
+]
+
+[[package]]
+name = "vui"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vgfx",
+ "vipc",
+ "vmath",
+ "vproto",
+ "vraster",
+ "vrt",
+]
+
+[[package]]
+name = "vvirtio"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vproto",
+ "vrt",
 ]
 
 [[package]]

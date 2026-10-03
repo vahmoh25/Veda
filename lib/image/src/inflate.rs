@@ -50,7 +50,8 @@ const F_INVALID: u32 = 1 << 11;
 pub(crate) const LEN_BASE: [u16; 29] =
     [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
 /// Extra bits for length symbols 257..=285.
-pub(crate) const LEN_EXTRA: [u8; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+pub(crate) const LEN_EXTRA: [u8; 29] =
+    [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
 /// Base distances for distance symbols 0..=29.
 pub(crate) const DIST_BASE: [u16; 30] = [
     1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
@@ -566,7 +567,7 @@ fn zlib_header(data: &[u8]) -> Result<(), ImageError> {
     if cmf >> 4 > 7 {
         return Err(ImageError::Invalid("zlib window size is too large"));
     }
-    if ((cmf as u16) << 8 | flg as u16) % 31 != 0 {
+    if !((cmf as u16) << 8 | flg as u16).is_multiple_of(31) {
         return Err(ImageError::Invalid("zlib header check failed"));
     }
     if flg & 0x20 != 0 {
@@ -609,7 +610,11 @@ pub fn zlib_decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, ImageError>
 
 /// Decompresses a zlib stream whose decoded size is known exactly (PNG image data). Fails with
 /// [`ImageError::Truncated`] if the stream produces less; extra data is ignored (like libpng).
-pub(crate) fn zlib_decompress_exact(data: &[u8], expected: usize, verify_checksum: bool) -> Result<Vec<u8>, ImageError> {
+pub(crate) fn zlib_decompress_exact(
+    data: &[u8],
+    expected: usize,
+    verify_checksum: bool,
+) -> Result<Vec<u8>, ImageError> {
     zlib_header(data)?;
     let body = &data[2..];
     let mut out = Vec::new();
@@ -652,7 +657,8 @@ mod tests {
         let two = [0x00, 0x01, 0x00, 0xFE, 0xFF, b'x', 0x01, 0x02, 0x00, 0xFD, 0xFF, b'y', b'z'];
         assert_eq!(inflate(&two, 10).unwrap(), b"xyz");
         // zlib.compress(b"a" * 1000, 9): long overlapping match with distance 1.
-        let run = [0x78, 0xda, 0x4b, 0x4c, 0x1c, 0x05, 0xa3, 0x60, 0x14, 0x0c, 0x77, 0x00, 0x00, 0xf9, 0xd8, 0x7a, 0xf8];
+        let run =
+            [0x78, 0xda, 0x4b, 0x4c, 0x1c, 0x05, 0xa3, 0x60, 0x14, 0x0c, 0x77, 0x00, 0x00, 0xf9, 0xd8, 0x7a, 0xf8];
         assert_eq!(zlib_decompress(&run, 2000).unwrap(), vec![b'a'; 1000]);
         // Raw deflate of b"abc" * 7 (distance-3 overlapping match).
         assert_eq!(inflate(&[0x4b, 0x4c, 0x4a, 0x4e, 0xc4, 0x40, 0x00], 100).unwrap(), b"abc".repeat(7));
@@ -662,7 +668,7 @@ mod tests {
     fn errors() {
         assert_eq!(inflate(&[0x07], 10), Err(ImageError::Invalid("reserved DEFLATE block type")));
         assert_eq!(inflate(&[0x01, 0x03, 0x00, 0xFC, 0xFF, b'a'], 10), Err(ImageError::Truncated));
-        assert_eq!(inflate(&[0x01, 0x03, 0x00, 0xFC, 0xFE, b'a', b'b', b'c'], 10).is_err(), true);
+        assert!(inflate(&[0x01, 0x03, 0x00, 0xFC, 0xFE, b'a', b'b', b'c'], 10).is_err());
         assert_eq!(inflate(&[0x01, 0x03, 0x00, 0xFC, 0xFF, b'a', b'b', b'c'], 2), Err(ImageError::OutputLimit));
         // Truncated in the middle of a Huffman block.
         let hello = [0x78, 0x9c, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x07, 0x00, 0x06, 0x2c, 0x02, 0x15];

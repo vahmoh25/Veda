@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "vmath"
 description = "Vindows math: a no_std libm replacement, linear algebra, noise and random numbers"
 version.workspace = true

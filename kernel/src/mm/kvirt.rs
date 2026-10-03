@@ -1,4 +1,4 @@
-﻿//! Kernel virtual address regions outside the direct map:
+//! Kernel virtual address regions outside the direct map:
 //!
 //! * MMIO windows (uncached or write-combining device registers), and
 //! * kernel stacks, each preceded by an unmapped guard page so that a stack

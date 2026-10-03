@@ -20,10 +20,10 @@
 
 use alloc::vec::Vec;
 
+use crate::DecodeOptions;
 use crate::error::ImageError;
 use crate::image::Image;
 use crate::util::{le16, le32, try_vec};
-use crate::DecodeOptions;
 
 const BI_RGB: u32 = 0;
 const BI_RLE8: u32 = 1;
@@ -201,10 +201,14 @@ impl Header {
         lut
     }
 
-    /// Whether 32-bit pixels carry an alpha channel worth looking at.
-    fn alpha_source(&self) -> bool {
-        self.bpp == 32 && (self.compression == BI_RGB || self.masks[3] != 0)
-            || self.bpp == 16 && self.masks[3] != 0
+    /// 32-bit `BI_RGB` pixels: the fourth byte is officially unused but often holds alpha.
+    fn implicit_alpha(&self) -> bool {
+        self.bpp == 32 && self.compression == BI_RGB
+    }
+
+    /// Where alpha comes from: an explicit mask, the implicit fourth byte, or nowhere.
+    fn alpha_mask(&self) -> u32 {
+        if self.implicit_alpha() { 0xFF00_0000 } else { self.masks[3] }
     }
 }
 
@@ -234,11 +238,7 @@ impl Channel {
     #[inline(always)]
     fn get(&self, v: u32) -> u32 {
         let x = (v & self.mask) >> self.shift;
-        if self.bits >= 8 {
-            (x >> (self.bits - 8)) & 0xFF
-        } else {
-            self.lut[(x & 0xFF) as usize] as u32
-        }
+        if self.bits >= 8 { (x >> (self.bits - 8)) & 0xFF } else { self.lut[(x & 0xFF) as usize] as u32 }
     }
 }
 
@@ -246,22 +246,29 @@ impl Channel {
 pub fn read_info(data: &[u8]) -> Result<BmpInfo, ImageError> {
     let h = parse_header(data)?;
     let mut has_alpha = false;
-    if h.alpha_source() && h.compression != BI_JPEG && h.compression != BI_PNG {
-        if let Ok(pixels) = h.pixel_data(data) {
-            let alpha = Channel::new(if h.compression == BI_RGB { 0xFF00_0000 } else { h.masks[3] });
-            let (mut any_nonzero, mut any_partial) = (false, false);
-            let bytes = h.bpp as usize / 8;
-            for i in 0..h.height as usize {
-                let row = &pixels[i * h.stride()..];
-                for px in row.chunks_exact(bytes).take(h.width as usize) {
-                    let v = if bytes == 4 { u32::from_le_bytes([px[0], px[1], px[2], px[3]]) } else { px[0] as u32 | (px[1] as u32) << 8 };
-                    let a = alpha.get(v);
-                    any_nonzero |= a != 0;
-                    any_partial |= a != 255;
-                }
+    if h.alpha_mask() != 0
+        && matches!(h.bpp, 16 | 32)
+        && matches!(h.compression, BI_RGB | BI_BITFIELDS | BI_ALPHABITFIELDS)
+        && let Ok(pixels) = h.pixel_data(data)
+    {
+        let alpha = Channel::new(h.alpha_mask());
+        let (mut any_nonzero, mut any_partial) = (false, false);
+        let bytes = h.bpp as usize / 8;
+        for i in 0..h.height as usize {
+            let row = &pixels[i * h.stride()..];
+            for px in row.chunks_exact(bytes).take(h.width as usize) {
+                let v = if bytes == 4 {
+                    u32::from_le_bytes([px[0], px[1], px[2], px[3]])
+                } else {
+                    px[0] as u32 | (px[1] as u32) << 8
+                };
+                let a = alpha.get(v);
+                any_nonzero |= a != 0;
+                any_partial |= a != 255;
             }
-            has_alpha = any_nonzero && any_partial;
         }
+        // An all-zero implicit alpha byte is padding (the image decodes as opaque).
+        has_alpha = any_partial && (any_nonzero || !h.implicit_alpha());
     }
     Ok(BmpInfo {
         width: h.width,
@@ -337,8 +344,8 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageE
             for i in 0..ht {
                 let row = &pixels[i * stride..];
                 let dst = &mut out[h.image_row(i) * w..][..w];
-                for (d, s) in dst.iter_mut().zip(row.chunks_exact(3)) {
-                    *d = 0xFF00_0000 | (s[2] as u32) << 16 | (s[1] as u32) << 8 | s[0] as u32;
+                for (d, &[b, g, r]) in dst.iter_mut().zip(row.as_chunks::<3>().0) {
+                    *d = u32::from_le_bytes([b, g, r, 0xFF]);
                 }
             }
         }
@@ -347,8 +354,8 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageE
             for i in 0..ht {
                 let row = &pixels[i * stride..];
                 let dst = &mut out[h.image_row(i) * w..][..w];
-                for (d, s) in dst.iter_mut().zip(row.chunks_exact(4)) {
-                    *d = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+                for (d, s) in dst.iter_mut().zip(row.as_chunks::<4>().0) {
+                    *d = u32::from_le_bytes(*s);
                 }
             }
         }
@@ -371,8 +378,8 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageE
             }
         }
     }
-    if h.alpha_source() && out.iter().all(|&p| p >> 24 == 0) {
-        // An all-zero alpha channel is padding, not transparency.
+    if h.implicit_alpha() && out.iter().all(|&p| p >> 24 == 0) {
+        // An all-zero fourth byte is padding, not transparency.
         for p in &mut out {
             *p |= 0xFF00_0000;
         }
@@ -492,6 +499,7 @@ pub(crate) mod tests {
     use alloc::vec;
 
     /// Builds a BMP with a `BITMAPINFOHEADER` (or core header) around raw pixel rows.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build(
         hsize: u32,
         width: i32,
@@ -564,7 +572,7 @@ pub(crate) mod tests {
         // 1-bit, 3x2, bottom-up: stored rows are bottom first.
         let bits = build(40, 3, 2, 1, 0, &pal[..2], &[], &[0b1010_0000, 0, 0, 0, 0b0100_0000, 0, 0, 0]);
         let img = decode(&bits).unwrap();
-        assert_eq!(img.pixels, vec![0xFF00FF00, 0xFFFF0000, 0xFF00FF00, 0xFFFF0000, 0xFF00FF00, 0xFFFF0000]);
+        assert_eq!(img.pixels, vec![0xFFFF0000, 0xFF00FF00, 0xFFFF0000, 0xFF00FF00, 0xFFFF0000, 0xFF00FF00]);
         // 4-bit top-down, core header with 3-byte palette entries.
         let nib = build(12, 3, 1, 4, 0, &pal, &[], &[0x01, 0x30, 0, 0]);
         assert_eq!(decode(&nib).unwrap().pixels, vec![0xFFFF0000, 0xFF00FF00, 0xFF1E140A]);
@@ -590,15 +598,16 @@ pub(crate) mod tests {
     #[test]
     fn rle() {
         let pal = [[0, 0, 0, 0], [255, 255, 255, 0], [0, 0, 255, 0], [0, 255, 0, 0]];
-        // RLE8 4x3: row0 = run of 3 x index1 + abs [2]; EOL; row1 = delta (1,0) then index 3; EOL; row2 abs 4.
-        let data = [3, 1, 0, 3, 2, 2, 2, 0, 0, 0, 0, 2, 1, 0, 1, 3, 0, 0, 0, 4, 1, 2, 3, 1, 0, 1];
+        // RLE8 4x3. Stored row 0: run of 3 x index 1, run of 1 x index 2, end of line. Stored
+        // row 1: delta (1, 0), one index 3, end of line. Stored row 2: absolute run [1, 2, 3, 1],
+        // end of bitmap.
+        let data = [3, 1, 1, 2, 0, 0, 0, 2, 1, 0, 1, 3, 0, 0, 0, 4, 1, 2, 3, 1, 0, 1];
         let file = build(40, 4, 3, 8, 1, &pal, &[], &data);
         let img = decode(&file).unwrap();
-        let (w, b, r, g) = (0xFFFFFFFF, 0xFF000000, 0xFFFF0000, 0xFF00FF00);
+        let (w, r, g) = (0xFFFF_FFFFu32, 0xFFFF_0000u32, 0xFF00_FF00u32);
         assert_eq!(&img.pixels[8..12], &[w, w, w, r]); // bottom row = first stored row
         assert_eq!(&img.pixels[4..8], &[0, g, 0, 0]);
         assert_eq!(&img.pixels[0..4], &[w, r, g, w]);
-        let _ = b;
         // RLE4: 5 pixels alternating 1,2 then end of bitmap.
         let file = build(40, 5, 1, 4, 2, &pal, &[], &[5, 0x12, 0, 1]);
         assert_eq!(decode(&file).unwrap().pixels, vec![w, r, w, r, w]);

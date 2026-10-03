@@ -85,7 +85,7 @@ impl Image {
         }
         let mut pixels = Vec::new();
         pixels.try_reserve_exact(rgba.len() / 4)?;
-        pixels.extend(rgba.chunks_exact(4).map(|p| u32::from_be_bytes([p[3], p[0], p[1], p[2]])));
+        pixels.extend(rgba.as_chunks::<4>().0.iter().map(|p| u32::from_be_bytes([p[3], p[0], p[1], p[2]])));
         Ok(Image { width, height, pixels })
     }
 
@@ -118,11 +118,12 @@ impl Image {
     /// outside the image.
     #[inline]
     pub fn set(&mut self, x: u32, y: u32, color: u32) -> bool {
-        if x < self.width && y < self.height {
-            if let Some(p) = self.pixels.get_mut(y as usize * self.width as usize + x as usize) {
-                *p = color;
-                return true;
-            }
+        if x < self.width
+            && y < self.height
+            && let Some(p) = self.pixels.get_mut(y as usize * self.width as usize + x as usize)
+        {
+            *p = color;
+            return true;
         }
         false
     }
@@ -203,7 +204,10 @@ impl Orientation {
 
     /// Returns `true` if applying the orientation swaps width and height.
     pub fn swaps_dimensions(self) -> bool {
-        matches!(self, Orientation::Transpose | Orientation::Rotate90 | Orientation::Transverse | Orientation::Rotate270)
+        matches!(
+            self,
+            Orientation::Transpose | Orientation::Rotate90 | Orientation::Transverse | Orientation::Rotate270
+        )
     }
 }
 

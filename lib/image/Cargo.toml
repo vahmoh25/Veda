@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "vimage"
 description = "Image codecs (PNG, JPEG, BMP, QOI) and resampling"
 version.workspace = true

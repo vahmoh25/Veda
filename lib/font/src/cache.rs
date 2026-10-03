@@ -7,10 +7,12 @@
 
 use alloc::vec::Vec;
 
+use vraster::{Point, math};
+
 use crate::GlyphId;
 use crate::font::Font;
+use crate::layout::{PositionedGlyph, ScaledFont};
 use crate::raster::{GlyphBitmap, GlyphRasterizer, MAX_GLYPH_SIZE, RasterOptions};
-use vraster::math;
 
 /// Number of horizontal subpixel positions per pixel.
 pub const SUBPIXEL_BINS: u8 = 4;
@@ -106,6 +108,7 @@ pub struct GlyphCache {
     hand: usize,
     raster: GlyphRasterizer,
     stats: CacheStats,
+    layout: Vec<PositionedGlyph>,
 }
 
 impl GlyphCache {
@@ -127,6 +130,7 @@ impl GlyphCache {
             hand: 0,
             raster: GlyphRasterizer::with_options(options),
             stats: CacheStats::default(),
+            layout: Vec::new(),
         }
     }
 
@@ -196,6 +200,32 @@ impl GlyphCache {
         let bitmap = self.raster.rasterize(font, glyph, size, offset);
         let slot = self.insert(key, bitmap);
         &self.entries[slot].bitmap
+    }
+
+    /// Lays out `text` with `style` starting at `origin` (pen position on the baseline; the
+    /// baseline is rounded to whole pixels) and calls `draw(x, y, bitmap)` for every visible glyph,
+    /// with `(x, y)` the bitmap's top-left pixel. Returns the pen x position after the text.
+    pub fn render_line(
+        &mut self,
+        style: &ScaledFont<'_, '_>,
+        text: &str,
+        origin: Point,
+        mut draw: impl FnMut(i32, i32, &GlyphBitmap),
+    ) -> f32 {
+        let mut glyphs = core::mem::take(&mut self.layout);
+        glyphs.clear();
+        let end = style.layout_line_into(text, origin, &mut glyphs);
+        let baseline = if origin.y.is_finite() { math::round(origin.y) as i32 } else { 0 };
+        for g in &glyphs {
+            let Some(font) = style.collection().font(g.font as usize) else { continue };
+            let (px, bin) = subpixel_position(g.x);
+            let bitmap = self.get(font, g.glyph, style.size_px(), bin);
+            if !bitmap.is_empty() {
+                draw(px + bitmap.left, baseline - bitmap.top, bitmap);
+            }
+        }
+        self.layout = glyphs;
+        end
     }
 
     /// Returns a cached bitmap without rasterizing.

@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "vrt"
 description = "The Vindows user-space runtime: process entry, system calls, heap, threads, synchronisation and I/O"
 version.workspace = true

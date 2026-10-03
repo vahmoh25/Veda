@@ -21,6 +21,9 @@
 //! fonts.add(Font::from_bytes(LATO)?); // fallback
 //! let style = fonts.scaled(ui, 14.0);
 //! let mut cache = GlyphCache::new(4 << 20);
+//! // Either let the cache drive layout and rasterization...
+//! cache.render_line(&style, "Hello", Point::new(10.0, baseline), |x, y, bitmap| blend(bitmap, x, y));
+//! // ...or position glyphs yourself.
 //! for g in style.layout_line("Hello", Point::new(10.0, baseline)) {
 //!     let (px, bin) = subpixel_position(g.x);
 //!     let font = fonts.font(g.font as usize).unwrap();

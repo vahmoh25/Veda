@@ -147,8 +147,12 @@ pub struct DecodeOptions {
 
 impl DecodeOptions {
     /// The defaults: [`MAX_DIMENSION`], [`MAX_PIXELS`], checksums verified, orientation applied.
-    pub const DEFAULT: DecodeOptions =
-        DecodeOptions { max_dimension: MAX_DIMENSION, max_pixels: MAX_PIXELS, verify_checksums: true, apply_orientation: true };
+    pub const DEFAULT: DecodeOptions = DecodeOptions {
+        max_dimension: MAX_DIMENSION,
+        max_pixels: MAX_PIXELS,
+        verify_checksums: true,
+        apply_orientation: true,
+    };
 
     /// Checks `width x height` against the limits.
     pub fn check_dimensions(&self, width: u32, height: u32) -> Result<(), ImageError> {

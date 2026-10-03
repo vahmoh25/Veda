@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "vfont"
 description = "TrueType/OpenType (glyf and CFF) font parsing, rasterization, caching and text layout"
 version.workspace = true

@@ -1,4 +1,4 @@
-﻿//! A TLSF (two-level segregated fit) allocator.
+//! A TLSF (two-level segregated fit) allocator.
 //!
 //! TLSF gives O(1) allocation and deallocation with low fragmentation:
 //! free blocks are kept in 2D-indexed segregated lists (first level = power

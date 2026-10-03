@@ -1,4 +1,4 @@
-﻿//! Threads.
+//! Threads.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;

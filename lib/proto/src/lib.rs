@@ -1,4 +1,4 @@
-﻿//! Protocols of the Vindows system services.
+//! Protocols of the Vindows system services.
 //!
 //! Each submodule declares one service protocol with `vipc::protocol!`,
 //! together with its wire types. Clients connect to a service by name through
@@ -11,6 +11,8 @@ extern crate alloc;
 pub mod display;
 pub mod fs;
 pub mod init;
+pub mod input;
+pub mod pci;
 
 pub use init::{launcher, registry};
 pub use fs::vfs;

@@ -1,0 +1,23 @@
+[package]
+name = "devmgr"
+description = "Device manager: enumerates PCI devices and starts their drivers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "devmgr"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

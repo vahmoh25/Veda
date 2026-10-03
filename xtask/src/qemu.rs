@@ -1,4 +1,4 @@
-﻿//! Locating QEMU and the OVMF firmware, and assembling the command line.
+//! Locating QEMU and the OVMF firmware, and assembling the command line.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

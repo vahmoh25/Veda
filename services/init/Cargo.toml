@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "init"
 description = "The first user-space process: starts and supervises system services"
 version.workspace = true

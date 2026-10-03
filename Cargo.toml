@@ -1,4 +1,4 @@
-﻿[workspace]
+[workspace]
 resolver = "3"
 members = [
     "xtask",
@@ -17,8 +17,16 @@ members = [
     "lib/rt",
     "lib/ipc",
     "lib/proto",
+    "lib/virtio",
+    "lib/gfx",
+    "lib/ui",
     "services/init",
     "services/vfs",
+    "services/devmgr",
+    "services/compositor",
+    "apps/about",
+    "drivers/virtio-input",
+    "drivers/ps2",
     "tests/systest",
 ]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
@@ -47,6 +55,9 @@ vbuild = { path = "lib/build" }
 vrt = { path = "lib/rt" }
 vipc = { path = "lib/ipc" }
 vproto = { path = "lib/proto" }
+vvirtio = { path = "lib/virtio" }
+vgfx = { path = "lib/gfx" }
+vui = { path = "lib/ui" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

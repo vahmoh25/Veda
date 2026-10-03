@@ -49,9 +49,3 @@ pub(crate) fn le16(data: &[u8], off: usize) -> Result<u16, ImageError> {
 pub(crate) fn le32(data: &[u8], off: usize) -> Result<u32, ImageError> {
     Ok(u32::from_le_bytes(bytes(data, off)?))
 }
-
-/// Packs 8-bit channels into a `0xAARRGGBB` pixel.
-#[inline(always)]
-pub(crate) fn argb(a: u32, r: u32, g: u32, b: u32) -> u32 {
-    (a << 24) | (r << 16) | (g << 8) | b
-}

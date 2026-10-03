@@ -1,4 +1,4 @@
-﻿//! Protocols implemented by `init`: the service registry and the launcher.
+//! Protocols implemented by `init`: the service registry and the launcher.
 
 use alloc::string::String;
 use alloc::vec::Vec;

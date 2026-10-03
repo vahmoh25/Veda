@@ -20,7 +20,7 @@ pub(crate) fn h2v1(inp: &[u8], out: &mut [u8]) {
     }
     out[0] = inp[0];
     out[1] = ((inp[0] as u32 * 3 + inp[1] as u32 + 2) >> 2) as u8;
-    for (o, w) in out[2..].chunks_exact_mut(2).zip(inp.windows(3)) {
+    for (o, w) in out[2..].as_chunks_mut::<2>().0.iter_mut().zip(inp.windows(3)) {
         let v = w[1] as u32 * 3;
         o[0] = ((v + w[0] as u32 + 1) >> 2) as u8;
         o[1] = ((v + w[2] as u32 + 2) >> 2) as u8;
@@ -53,7 +53,7 @@ pub(crate) fn h2v2(near: &[u8], far: &[u8], out: &mut [u8], colsum: &mut Vec<u16
     }
     out[0] = ((cs[0] as u32 * 4 + 8) >> 4) as u8;
     out[1] = ((cs[0] as u32 * 3 + cs[1] as u32 + 7) >> 4) as u8;
-    for (o, w) in out[2..].chunks_exact_mut(2).zip(cs.windows(3)) {
+    for (o, w) in out[2..].as_chunks_mut::<2>().0.iter_mut().zip(cs.windows(3)) {
         let this = w[1] as u32 * 3;
         o[0] = ((this + w[0] as u32 + 8) >> 4) as u8;
         o[1] = ((this + w[2] as u32 + 7) >> 4) as u8;
@@ -101,7 +101,7 @@ fn ycc(y: u8, cb: u8, cr: u8) -> (u32, u32, u32) {
 
 pub(crate) fn gray(y: &[u8], out: &mut [u32]) {
     for (o, &v) in out.iter_mut().zip(y) {
-        *o = 0xFF00_0000 | v as u32 * 0x0001_0101;
+        *o = 0xFF00_0000 | (v as u32 * 0x0001_0101);
     }
 }
 

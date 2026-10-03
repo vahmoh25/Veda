@@ -1,4 +1,4 @@
-﻿//! Kernel panics and fatal CPU exceptions.
+//! Kernel panics and fatal CPU exceptions.
 //!
 //! A panic stops every CPU, prints a report to the serial console and paints
 //! a "stop screen" on the framebuffer.
@@ -53,7 +53,7 @@ fn paint_stop_screen() {
             put(x, y, 0x0010_3C8C);
         }
     }
-    // ":(" â€” two eyes and a frown, scaled to the screen.
+    // ":(" — two eyes and a frown, scaled to the screen.
     let s = (h / 120).max(2);
     let (ox, oy) = (w / 10, h / 5);
     for dy in 0..6 * s {

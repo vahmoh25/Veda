@@ -18,13 +18,16 @@
 //! # Algorithms and accuracy
 //!
 //! The transcendental functions are ports of the FreeBSD/musl versions of Sun's
-//! `fdlibm` (same polynomials, splitting tricks and special-case handling).
-//! Measured against the host C library, `sin`, `cos`, `tan`, `asin`, `acos`,
-//! `atan`, `exp`, `exp2`, `exp_m1`, `ln`, `log2`, `log10`, `ln_1p`, `cbrt`,
-//! `hypot` and `powf` stay within 1 ulp; `atan2`, `sinh`, `cosh`, `tanh` and
-//! the inverse hyperbolic functions within 2 ulp. `sqrt`, the rounding
-//! functions, `fmod`, `rem_euclid`, `div_euclid`, `abs`, `copysign` and
-//! `signum` are exact.
+//! `fdlibm` (same polynomials, splitting tricks and special-case handling;
+//! `powf` additionally fixes fdlibm's inexact `log2` split for |y| > 2^31).
+//! Measured against the host C library on ~200k-600k inputs per function,
+//! `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `exp2`, `ln`,
+//! `log2`, `log10`, `ln_1p`, `hypot` and `powf` stay within 1 ulp; `cbrt` and
+//! `exp_m1` within 2 ulp of the C library, whose own results were off in the
+//! worst cases (vmath's are within 0.61 ulp and correctly rounded there);
+//! `sinh`, `cosh`, `tanh` and the inverse hyperbolic functions within 2 ulp.
+//! `sqrt`, the rounding functions, `fmod`, `rem_euclid`, `div_euclid`, `abs`,
+//! `copysign` and `signum` are exact.
 //!
 //! Trigonometric argument reduction is accurate for every finite argument:
 //! a three-part Cody–Waite reduction below 2^20·π/2 and an integer
@@ -38,7 +41,7 @@
 //!
 //! Most functions are `const fn` and can be used to build tables at compile
 //! time; functions that need `sqrt` (`hypot`, `asin`, `acos`, `asinh`,
-//! `acosh`, `powf`) are not.
+//! `acosh`, `powf`, `powi`) are not.
 
 pub use core::f64::consts;
 
@@ -741,7 +744,7 @@ pub(crate) const fn rem_pio2(x: f64) -> (i32, f64, f64) {
         return (n & 3, y0, y1);
     }
     if ix >= 0x7ff0_0000 {
-        let nan = x - x;
+        let nan = f64::NAN;
         return (0, nan, nan);
     }
     rem_pio2_large(x)
@@ -880,7 +883,7 @@ pub const fn sin(x: f64) -> f64 {
         return k_sin(x, 0.0, false);
     }
     if ix >= 0x7ff0_0000 {
-        return x - x; // NaN for ±∞ and NaN
+        return f64::NAN; // sin(±∞) and sin(NaN)
     }
     let (n, y0, y1) = rem_pio2(x);
     match n {
@@ -901,7 +904,7 @@ pub const fn cos(x: f64) -> f64 {
         return k_cos(x, 0.0);
     }
     if ix >= 0x7ff0_0000 {
-        return x - x;
+        return f64::NAN;
     }
     let (n, y0, y1) = rem_pio2(x);
     match n {
@@ -922,7 +925,7 @@ pub const fn sin_cos(x: f64) -> (f64, f64) {
         return (s, c);
     }
     if ix >= 0x7ff0_0000 {
-        let nan = x - x;
+        let nan = f64::NAN;
         return (nan, nan);
     }
     let (n, y0, y1) = rem_pio2(x);
@@ -946,7 +949,7 @@ pub const fn tan(x: f64) -> f64 {
         return k_tan(x, 0.0, false);
     }
     if ix >= 0x7ff0_0000 {
-        return x - x;
+        return f64::NAN;
     }
     let (n, y0, y1) = rem_pio2(x);
     k_tan(y0, y1, n & 1 != 0)
@@ -990,7 +993,7 @@ pub fn asin(x: f64) -> f64 {
     }
     if ix < 0x3fe0_0000 {
         // |x| < 0.5
-        if ix < 0x3e50_0000 && ix >= 0x0010_0000 {
+        if (0x0010_0000..0x3e50_0000).contains(&ix) {
             return x; // 2^-1022 <= |x| < 2^-26
         }
         return x + x * asin_r(x * x);
@@ -1246,10 +1249,10 @@ pub const fn exp(x: f64) -> f64 {
         if x.is_nan() {
             return x;
         }
-        if x > 709.782712893383973096 {
+        if x > 709.782_712_893_384 {
             return f64::INFINITY; // overflow
         }
-        if x < -745.13321910194110842 {
+        if x < -745.133_219_101_941_1 {
             return 0.0; // underflow
         }
     }
@@ -1504,7 +1507,7 @@ pub fn asinh(x: f64) -> f64 {
     let y = if e >= 0x3ff + 26 {
         // |x| >= 2^26 or ∞ or NaN
         ln(x) + core::f64::consts::LN_2
-    } else if e >= 0x3ff + 1 {
+    } else if e > 0x3ff {
         // |x| >= 2
         ln(2.0 * x + 1.0 / (sqrt(x * x + 1.0) + x))
     } else if e >= 0x3ff - 26 {
@@ -1522,7 +1525,7 @@ pub fn acosh(x: f64) -> f64 {
     if x < 1.0 {
         return f64::NAN;
     }
-    if e < 0x3ff + 1 {
+    if e <= 0x3ff {
         // 1 <= x < 2
         return ln_1p(x - 1.0 + sqrt((x - 1.0) * (x - 1.0) + 2.0 * (x - 1.0)));
     }
@@ -1732,24 +1735,32 @@ pub const fn ln_1p(x: f64) -> f64 {
 // Powers
 // ---------------------------------------------------------------------------
 
-/// `x` raised to an integer power by repeated squaring (the same algorithm and
-/// rounding as `std`'s `powi`).
+/// `x` raised to an integer power.
+///
+/// Exponents with |n| <= 4 use plain multiplication (error <= 2 ulp; `x * x`
+/// for `n = 2`), larger ones [`powf`] (error < 1 ulp). Spurious overflow or
+/// underflow of the intermediate power (as in `powi(1e160, -2)`) is avoided.
+/// (`std` leaves the rounding of `powi` unspecified: it is `pow(x, n)` with
+/// the MSVC runtime and repeated squaring elsewhere.)
 #[inline]
-pub const fn powi(x: f64, n: i32) -> f64 {
-    let mut a = x;
-    let mut b = n.unsigned_abs();
-    let mut r = 1.0;
-    loop {
-        if b & 1 != 0 {
-            r *= a;
-        }
-        b >>= 1;
-        if b == 0 {
-            break;
-        }
-        a *= a;
+pub fn powi(x: f64, n: i32) -> f64 {
+    let b = n.unsigned_abs();
+    if b > 4 {
+        return powf(x, n as f64);
     }
-    if n < 0 { 1.0 / r } else { r }
+    let p = match b {
+        0 => return 1.0,
+        1 => x,
+        2 => x * x,
+        3 => x * x * x,
+        _ => {
+            let x2 = x * x;
+            x2 * x2
+        }
+    };
+    let r = if n < 0 { 1.0 / p } else { p };
+    // A subnormal, zero or infinite intermediate power has lost precision.
+    if (p.is_normal() && r.is_normal()) || !x.is_finite() || x == 0.0 { r } else { powf(x, n as f64) }
 }
 
 /// `x` raised to the power `y` (C99 `pow` special cases: `powf(x, 0) = 1` and
@@ -1771,13 +1782,16 @@ pub fn powf(x: f64, y: f64) -> f64 {
     const LG2: f64 = f64::from_bits(0x3fe6_2e42_fefa_39ef);
     const LG2_H: f64 = f64::from_bits(0x3fe6_2e43_0000_0000);
     const LG2_L: f64 = f64::from_bits(0xbe20_5c61_0ca8_6c39);
-    const OVT: f64 = 8.0085662595372944372e-17; // -(1024 - log2(ovfl + 0.5ulp))
+    const OVT: f64 = 8.008_566_259_537_294e-17; // -(1024 - log2(ovfl + 0.5ulp))
     const CP: f64 = f64::from_bits(0x3fee_c709_dc3a_03fd); // 2/(3 ln2)
     const CP_H: f64 = f64::from_bits(0x3fee_c709_e000_0000);
     const CP_L: f64 = f64::from_bits(0xbe3e_2fe0_145b_01f5);
     const IVLN2: f64 = f64::from_bits(0x3ff7_1547_652b_82fe);
-    const IVLN2_H: f64 = f64::from_bits(0x3ff7_1547_6000_0000);
-    const IVLN2_L: f64 = f64::from_bits(0x3e54_ae0b_f85d_df44);
+    // 1/ln2 split into 21 leading bits and the rest. (fdlibm uses a 24-bit head,
+    // which makes IVLN2_H * t inexact for the 32-bit t below and costs up to
+    // several hundred ulps when |y| > 2^31.)
+    const IVLN2_H: f64 = f64::from_bits(0x3ff7_1547_0000_0000);
+    const IVLN2_L: f64 = f64::from_bits(0x3e99_4ae0_bf85_ddf4);
 
     let hx = high_word(x) as i32;
     let lx = low_word(x);
@@ -1872,9 +1886,7 @@ pub fn powf(x: f64, y: f64) -> f64 {
     }
 
     // t1 + t2 = log2(|x|) in extra precision.
-    let t1;
-    let t2;
-    if iy > 0x41e0_0000 {
+    let (t1, t2) = if iy > 0x41e0_0000 {
         // |y| > 2^31
         if iy > 0x43f0_0000 {
             // |y| > 2^64: must overflow or underflow
@@ -1892,13 +1904,14 @@ pub fn powf(x: f64, y: f64) -> f64 {
         if ix > 0x3ff0_0000 {
             return if hy > 0 { s * HUGE * HUGE } else { s * TINY * TINY };
         }
-        // |1 - x| <= 2^-20: log(x) ~= x - x^2/2 + x^3/3 - x^4/4.
+        // |1 - x| <= 2^-20: log(x) ~= x - x^2/2 + x^3/3 - x^4/4. t has at most
+        // 32 significant bits, so IVLN2_H * t is exact.
         let t = ax - 1.0;
-        let w = (t * t) * (0.5 - t * (0.333_333_333_333_333_333_33 - t * 0.25));
+        let w = (t * t) * (0.5 - t * (1.0 / 3.0 - t * 0.25));
         let u = IVLN2_H * t;
         let v = t * IVLN2_L - w * IVLN2;
-        t1 = clear_low_word(u + v);
-        t2 = v - (t1 - u);
+        let t1 = clear_low_word(u + v);
+        (t1, v - (t1 - u))
     } else {
         let mut n: i32 = 0;
         // Subnormal x.
@@ -1949,9 +1962,9 @@ pub fn powf(x: f64, y: f64) -> f64 {
         let z_l = CP_L * p_h + p_l * CP + DP_L[k];
         // log2(ax) = (ss + ...) * 2/(3 log2) = n + dp_h + z_h + z_l
         let t = n as f64;
-        t1 = clear_low_word(((z_h + z_l) + DP_H[k]) + t);
-        t2 = z_l - (((t1 - t) - DP_H[k]) - z_h);
-    }
+        let t1 = clear_low_word(((z_h + z_l) + DP_H[k]) + t);
+        (t1, z_l - (((t1 - t) - DP_H[k]) - z_h))
+    };
 
     // Split y into y1 + y2 and compute (y1 + y2) * (t1 + t2).
     let y1 = clear_low_word(y);
