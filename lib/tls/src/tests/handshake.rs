@@ -355,43 +355,50 @@ fn key_updates() {
 /// section 5.1; TLS 1.3 authenticates records with a fixed version).
 #[test]
 fn damaged_server_flights() {
-    for versions in [TLS13, TLS12] {
-        // The undamaged first flight, to know its records.
-        let flight = alloc::rc::Rc::new(core::cell::RefCell::new(Vec::new()));
-        let mut server = ServerSetup::new().versions(versions).start();
-        let copy = flight.clone();
-        server.tamper = Some(Box::new(move |b: &mut Vec<u8>| {
-            if copy.borrow().is_empty() {
-                copy.borrow_mut().extend_from_slice(b);
-            }
-        }));
-        exercise(&mut connect(&mut server).unwrap(), 100);
-        let flight = flight.borrow().clone();
-        // The offsets of the version fields of the record headers.
-        let mut unprotected = Vec::new();
+    /// What happened to the flight of one run.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Damage {
+        /// Not damaged (yet, or the flight was shorter than the offset).
+        None,
+        /// A record header's version field.
+        Unprotected,
+        Protected,
+    }
+    // The offsets of the version fields of the record headers of `flight`.
+    fn version_fields(flight: &[u8]) -> Vec<usize> {
+        let mut fields = Vec::new();
         let mut at = 0;
         while at + 5 <= flight.len() {
-            unprotected.extend([at + 1, at + 2]);
+            fields.extend([at + 1, at + 2]);
             at += 5 + usize::from(u16::from_be_bytes([flight[at + 3], flight[at + 4]]));
         }
+        fields
+    }
 
-        for offset in 0..flight.len() {
+    for versions in [TLS13, TLS12] {
+        let mut damaged = 0;
+        // The first flight of the P-256 server is under 800 bytes.
+        for offset in 0..800 {
             let mut server = ServerSetup::new().versions(versions).start();
+            let damage = alloc::rc::Rc::new(core::cell::Cell::new(Damage::None));
+            let record = damage.clone();
             let mut first = true;
-            server.tamper = Some(Box::new(move |b: &mut Vec<u8>| {
-                if first {
-                    first = false;
-                    b[offset] ^= 1 << (offset % 8);
+            server.tamper = Some(Box::new(move |flight: &mut Vec<u8>| {
+                if core::mem::take(&mut first) && offset < flight.len() {
+                    let kind =
+                        if version_fields(flight).contains(&offset) { Damage::Unprotected } else { Damage::Protected };
+                    record.set(kind);
+                    flight[offset] ^= 1 << (offset % 8);
                 }
             }));
-            match connect(&mut server) {
-                Err(_) => {}
-                Ok(mut tls) => {
-                    assert!(unprotected.contains(&offset), "damage at {offset} of {} went unnoticed", flight.len());
-                    exercise(&mut tls, 100);
-                }
+            let result = connect(&mut server);
+            match (result, damage.get()) {
+                (Err(_), _) => damaged += 1,
+                (Ok(_), Damage::Protected) => panic!("damage at offset {offset} went unnoticed"),
+                (Ok(mut tls), _) => exercise(&mut tls, 100),
             }
         }
+        assert!(damaged > 700, "only {damaged} runs failed");
     }
 }
 

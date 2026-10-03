@@ -378,7 +378,7 @@ impl ServerSetup {
             provider.cipher_suites = self.suites;
         }
         if !self.groups.is_empty() {
-            provider.kx_groups.retain(|g| self.groups.iter().any(|ours| format_group(*ours) == g.name()));
+            provider.kx_groups.retain(|g| self.groups.iter().any(|ours| named_group(*ours) == g.name()));
         }
         let chain = self.chain.iter().map(|name| CertificateDer::from(pki(name).to_vec())).collect();
         let key = CertifiedKey::new(chain, Arc::new(self.key));
@@ -404,7 +404,8 @@ impl ServerSetup {
     }
 }
 
-fn format_group(group: Group) -> rustls::NamedGroup {
+/// The TLS name of a key exchange group.
+pub(crate) fn named_group(group: Group) -> rustls::NamedGroup {
     match group {
         Group::X25519 => rustls::NamedGroup::X25519,
         Group::Secp256r1 => rustls::NamedGroup::secp256r1,

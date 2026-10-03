@@ -74,6 +74,8 @@ impl ClientConfig {
             random: &SYSTEM_RANDOM,
             clock: Arc::new(SystemClock),
             versions: TLS13_AND_TLS12,
+            #[cfg(test)]
+            adjust: None,
         }
     }
 
@@ -95,7 +97,14 @@ pub struct ClientConfigBuilder {
     random: &'static RandomSource,
     clock: Arc<dyn TimeProvider>,
     versions: &'static [&'static SupportedProtocolVersion],
+    /// Tests: changes to the provider (to force a cipher suite or group).
+    #[cfg(test)]
+    adjust: Option<AdjustProvider>,
 }
+
+/// A change to the provider, for tests.
+#[cfg(test)]
+type AdjustProvider = alloc::boxed::Box<dyn Fn(&mut rustls::crypto::CryptoProvider)>;
 
 impl fmt::Debug for ClientConfigBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -159,10 +168,22 @@ impl ClientConfigBuilder {
         self
     }
 
+    /// Changes the provider, for example to offer a single cipher suite.
+    #[cfg(test)]
+    pub(crate) fn adjust(mut self, adjust: impl Fn(&mut rustls::crypto::CryptoProvider) + 'static) -> Self {
+        self.adjust = Some(alloc::boxed::Box::new(adjust));
+        self
+    }
+
     /// The configuration.
     pub fn build(self) -> ClientConfig {
-        let provider = Arc::new(provider::provider(self.random));
-        let mut config = rustls::ClientConfig::builder_with_details(provider, self.clock)
+        #[allow(unused_mut)]
+        let mut provider = provider::provider(self.random);
+        #[cfg(test)]
+        if let Some(adjust) = &self.adjust {
+            adjust(&mut provider);
+        }
+        let mut config = rustls::ClientConfig::builder_with_details(Arc::new(provider), self.clock)
             .with_protocol_versions(self.versions)
             .expect("the provider has cipher suites for TLS 1.3 and TLS 1.2")
             .with_root_certificates(self.roots)
