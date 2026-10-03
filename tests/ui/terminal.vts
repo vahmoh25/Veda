@@ -1,0 +1,94 @@
+# Terminal (1280x800 with the taskbar): file commands with && chaining,
+# redirection, pipes and wildcards; error handling; Tab completion; the
+# history (Up and Ctrl+R); starting and ending programs; mouse selection
+# with the clipboard; scrolling and the context menu; exit. Results are
+# checked with the shell's `logger` command, which writes to the serial log.
+boot-cmdline "run=terminal"
+wait-serial "desktop ready" 90
+wait-serial "started terminal" 60
+wait 3
+# Maximise the window (Super+Up): the positions below assume it.
+key meta_l-up
+wait 2
+type "mkdir -p ~/t/a && cd ~/t && echo hello > a/x.txt && echo world >> a/x.txt && cp -r a b && mv b/x.txt b/y.txt && cat b/y.txt | grep world && logger vsh-files-ok"
+key ret
+wait-serial "terminal: vsh-files-ok" 30
+type "rm -r b && ls a/*.txt | grep x.txt && sync && logger vsh-glob-ok"
+key ret
+wait-serial "terminal: vsh-glob-ok" 30
+# Errors set the exit status, so || runs the second command.
+type "cat missing.txt || nosuchcommand || logger vsh-errors-ok"
+key ret
+wait-serial "terminal: vsh-errors-ok" 30
+# Tab completion: "/sys" -> "/system/", "b" -> "bin/".
+type "ls /sys"
+key tab
+type "b"
+key tab
+type " | grep files.exe && logger vsh-complete-ok"
+key ret
+wait-serial "terminal: vsh-complete-ok" 30
+# History: Up twice recalls the pwd command and runs it in /tmp; Ctrl+R
+# finds it again and runs it in /system.
+type "pwd >> /tmp/h.txt"
+key ret
+type "cd /tmp"
+key ret
+key up
+key up
+key ret
+type "grep tmp /tmp/h.txt && logger vsh-history-ok"
+key ret
+wait-serial "terminal: vsh-history-ok" 30
+type "cd /system"
+key ret
+key ctrl-r
+type "pwd >"
+wait 1
+shot target/vindows/terminal-1-search.png
+key ret
+type "grep system /tmp/h.txt && logger vsh-search-ok"
+key ret
+wait-serial "terminal: vsh-search-ok" 30
+type "ps | grep terminal && logger vsh-ps-ok"
+key ret
+wait-serial "terminal: vsh-ps-ok" 30
+# Start About, take the focus back (click outside About) and end it.
+type "run about"
+key ret
+wait-serial "started about" 30
+wait 3
+click 0.05 0.9
+type "kill about"
+key ret
+wait-serial "about exited with code -1002" 30
+# Double-click a word of the output, copy it and paste it as an argument.
+type "clear"
+key ret
+type "echo vsh-clip-ok"
+key ret
+wait 2
+double-click 0.031 0.093
+wait 1
+shot target/vindows/terminal-2-selection.png
+key ctrl-shift-c
+type "logger "
+key ctrl-shift-v
+key ret
+wait-serial "terminal: vsh-clip-ok" 30
+# Scroll back through the help text with the wheel; the context menu.
+type "help"
+key ret
+wait 2
+click 0.5 0.5 wheel-up
+click 0.5 0.5 wheel-up
+wait 1
+shot target/vindows/terminal-3-scrolled.png
+click 0.6 0.5 right
+wait 1
+shot target/vindows/terminal-4-menu.png
+key esc
+wait 1
+type "exit"
+key ret
+wait-serial "terminal exited with code 0" 30

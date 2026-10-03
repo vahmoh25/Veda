@@ -1,0 +1,92 @@
+# Files (1280x800 with the taskbar): copy and paste, rename (F2), new
+# folder, cut and paste into a folder, delete with confirmation, the
+# read-only system folder, typing a path, drag and drop onto the sidebar,
+# properties from the context menu (keyboard), the icon view, search, and
+# opening a file with its default app. Files logs each operation, which the
+# script checks.
+boot-cmdline "run=files"
+wait-serial "desktop ready" 90
+wait-serial "started files" 60
+wait 3
+# Maximise the window (Super+Up): the positions below assume it. Sidebar
+# rows: Documents y=0.276, Pictures 0.321, Music 0.366, System 0.506;
+# list rows: 0.18, 0.22, 0.26, ...
+key meta_l-up
+wait 2
+shot target/vindows/files-1-home.png
+# Copy a picture (selected by typing the start of its name) and paste it
+# into Documents.
+click 0.08 0.3213
+wait 1
+type "alpine"
+wait 1
+key ctrl-c
+click 0.08 0.2763
+wait 1
+key ctrl-v
+wait-serial "files: pasted 1 item into /home/user/Documents" 20
+# Rename it, then create a folder (named while it is created).
+key f2
+wait 1
+type "Lake"
+key ret
+wait-serial "files: renamed /home/user/Documents/Alpine Lake.jpg to Lake.jpg" 20
+key ctrl-shift-n
+wait 1
+type "Trips"
+key ret
+wait-serial "files: renamed /home/user/Documents/New folder to Trips" 20
+# Cut the picture and paste it into Trips (opened with a double click).
+wait 1
+type "lake"
+wait 1
+key ctrl-x
+double-click 0.25 0.18
+wait 1
+key ctrl-v
+wait-serial "files: moved 1 item into /home/user/Documents/Trips" 20
+# Back up (Trips is selected) and delete it, confirming with Enter.
+key backspace
+wait 1
+key delete
+wait 1
+shot target/vindows/files-2-confirm.png
+key ret
+wait-serial "files: deleted 1 item from /home/user/Documents" 20
+# The system image is read-only: creating a folder there is refused.
+click 0.08 0.5063
+wait 1
+key ctrl-shift-n
+wait-serial "files: Can't create folder: /system is part of the read-only system image." 20
+wait 1
+shot target/vindows/files-3-readonly.png
+key ret
+# Type a path (Ctrl+L), then drag the first picture onto Music.
+key ctrl-l
+wait 1
+type "/home/user/Pictures"
+key ret
+wait 2
+drag 0.25 0.18 0.08 0.3663
+wait-serial "files: moved 1 item into /home/user/Music" 20
+# Properties from the context menu, chosen with the keyboard (last item).
+click 0.25 0.18 right
+wait 1
+key up
+key ret
+wait 2
+shot target/vindows/files-4-properties.png
+key esc
+# Icon view with thumbnails.
+key ctrl-2
+wait 5
+shot target/vindows/files-5-icons.png
+# Search, then open the match with its default app (Photos).
+key ctrl-f
+wait 1
+type "sun"
+key ret
+wait 1
+key ret
+wait-serial "files: opened /home/user/Pictures/Retro Sunset.bmp with photos" 20
+wait-serial "started photos" 30
