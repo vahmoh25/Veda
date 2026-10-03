@@ -102,5 +102,7 @@ protocol! {
         /// Replaces (or creates) a file with the first `len` bytes of `data`.
         11 => fn write_file(path: String, data: Vmo, len: u64) -> Result<(), FsError>;
         12 => fn truncate(fd: u32, len: u64) -> Result<(), FsError>;
+        /// Writes all changes to persistent storage now (before power-off).
+        13 => fn sync() -> Result<(), FsError>;
     }
 }

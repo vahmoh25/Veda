@@ -92,7 +92,7 @@ impl pcidev::Server for DeviceSession<'_> {
     }
 
     fn config_read(&mut self, offset: u16, width: u8) -> Result<u32, PciError> {
-        if offset >= 256 || !matches!(width, 1 | 2 | 4) || offset % width as u16 != 0 {
+        if offset >= 256 || !matches!(width, 1 | 2 | 4) || !offset.is_multiple_of(width as u16) {
             return Err(PciError::BadOffset);
         }
         Ok(self.mgr.config.read(self.dev.address, offset, width))
@@ -100,7 +100,11 @@ impl pcidev::Server for DeviceSession<'_> {
 
     fn config_write(&mut self, offset: u16, width: u8, value: u32) -> Result<(), PciError> {
         // BARs are owned by the firmware/devmgr; drivers may not move them.
-        if offset >= 256 || !matches!(width, 1 | 2 | 4) || offset % width as u16 != 0 || (0x10..0x28).contains(&offset) {
+        if offset >= 256
+            || !matches!(width, 1 | 2 | 4)
+            || !offset.is_multiple_of(width as u16)
+            || (0x10..0x28).contains(&offset)
+        {
             return Err(PciError::BadOffset);
         }
         self.mgr.config.write(self.dev.address, offset, width, value);
@@ -131,25 +135,21 @@ impl pcidev::Server for DeviceSession<'_> {
 }
 
 /// Starts `driver` for a device, returning the server end of its channel.
-fn start_driver(driver: &str, info: &DeviceInfo) -> Option<Channel> {
-    let vfs = vproto::vfs::Client::new(vproto::connect(vproto::vfs::NAME).ok()?);
-    let path = alloc::format!("/system/bin/{driver}.exe");
-    let (vmo, len) = match vfs.read_file(path.clone()) {
-        Ok(Ok(v)) => v,
-        _ => {
-            println!("driver {} is not installed", driver);
-            return None;
-        }
+/// Driver images come straight from the system image (not through the file
+/// system, which may itself be waiting for a disk driver).
+fn start_driver(boot: &initrd::Archive<'static>, driver: &str, info: &DeviceInfo) -> Option<Channel> {
+    let path = alloc::format!("bin/{driver}.exe");
+    let Some(image) = boot.find(&path).map(|f| f.data) else {
+        println!("driver {} is not installed", driver);
+        return None;
     };
-    let mut image = alloc::vec![0u8; len as usize];
-    vmo.read(0, &mut image).ok()?;
     let registry = vproto::with_registry(|r| r.clone_registry()).ok()?.ok()?.ok()?;
     let (ours, theirs) = Channel::create().ok()?;
     let name = String::from(driver);
     let result = vrt::process::Spawn::new(&name)
         .handle(vabi::startup::role::REGISTRY, registry.into_handle())
         .handle(PCIDEV_ROLE, theirs.into_handle())
-        .start(&image);
+        .start(image);
     match result {
         Ok(_) => {
             println!(
@@ -165,6 +165,16 @@ fn start_driver(driver: &str, info: &DeviceInfo) -> Option<Channel> {
     }
 }
 
+/// Maps the system image (the initrd) that `init` hands over.
+fn boot_image() -> Option<initrd::Archive<'static>> {
+    let vmo = vrt::object::Vmo::from_handle(vrt::env::take_handle(vabi::startup::role::INITRD)?);
+    let size = vmo.size().ok()?;
+    let addr = vmo.map(0, size, vabi::map_flags::READ).ok()?;
+    // SAFETY: a read-only mapping that lives as long as the process.
+    let bytes: &'static [u8] = unsafe { core::slice::from_raw_parts(addr as *const u8, size) };
+    initrd::Archive::open(bytes).ok()
+}
+
 fn main() -> i32 {
     let take = |role| vrt::env::take_handle(role).map(Resource::from_handle);
     let (Some(io), Some(_irq), Some(mmio), Some(dma)) =
@@ -175,6 +185,10 @@ fn main() -> i32 {
     };
     let Ok(ports) = IoPorts::create(&io, 0xCF8, 8) else {
         println!("cannot access PCI configuration ports");
+        return 1;
+    };
+    let Some(boot) = boot_image() else {
+        println!("no system image to load drivers from");
         return 1;
     };
     let mgr = Manager { config: ConfigSpace::new(ports), mmio, dma };
@@ -195,7 +209,7 @@ fn main() -> i32 {
         let Some(m) = DRIVERS.iter().find(|m| m.vendor == info.vendor && m.devices.contains(&info.device)) else {
             continue;
         };
-        if let Some(ch) = start_driver(m.driver, &info) {
+        if let Some(ch) = start_driver(&boot, m.driver, &info) {
             bound.insert(next, Bound { address: a, info, channel: ch });
             next += 1;
         }

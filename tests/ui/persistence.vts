@@ -1,0 +1,21 @@
+# The home directory survives a reboot (1280x800): edit and save
+# Welcome.txt, restart the machine, and open it again.
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+expect-serial "home directory new, on the home disk"
+# Double-click Welcome.txt on the desktop, add a first line and save.
+double-click 0.0469 0.4425
+wait-serial "started editor" 30
+wait 5
+key ctrl-home
+type "Persistence check: this line was saved before a reboot."
+key ret
+key ctrl-s
+wait 3
+reset
+wait-serial "desktop ready" 90
+expect-serial "home directory restored from the home disk"
+double-click 0.0469 0.4425
+wait-serial "started editor" 30
+wait 5
+shot target/vindows/persist-after-reboot.png

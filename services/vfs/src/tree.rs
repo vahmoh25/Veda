@@ -155,7 +155,9 @@ impl Tree {
             Kind::File(d) => {
                 Stat { size: d.bytes().len() as u64, is_dir: false, read_only: self.read_only, modified: n.modified }
             }
-            Kind::Dir(c) => Stat { size: c.len() as u64, is_dir: true, read_only: self.read_only, modified: n.modified },
+            Kind::Dir(c) => {
+                Stat { size: c.len() as u64, is_dir: true, read_only: self.read_only, modified: n.modified }
+            }
         }
     }
 
@@ -177,10 +179,10 @@ impl Tree {
         let (name, dirs) = comps.split_last().ok_or(FsError::Invalid)?;
         let parent = self.lookup(dirs)?;
         let id = self.lookup(comps)?;
-        if let Kind::Dir(c) = &self.nodes[&id].kind {
-            if !c.is_empty() {
-                return Err(FsError::NotEmpty);
-            }
+        if let Kind::Dir(c) = &self.nodes[&id].kind
+            && !c.is_empty()
+        {
+            return Err(FsError::NotEmpty);
         }
         if let Some(Node { kind: Kind::Dir(children), .. }) = self.nodes.get_mut(&parent) {
             children.remove(*name);

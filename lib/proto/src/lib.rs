@@ -8,11 +8,14 @@
 
 extern crate alloc;
 
+pub mod audio;
+pub mod block;
 pub mod display;
 pub mod fs;
 pub mod init;
 pub mod input;
 pub mod pci;
+pub mod shell;
 
 pub use init::{launcher, registry};
 pub use fs::vfs;

@@ -1,12 +1,12 @@
 [package]
-name = "devmgr"
-description = "Device manager: enumerates PCI devices and starts their drivers"
+name = "virtio-blk"
+description = "Driver for virtio block devices (disks)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "devmgr"
+name = "virtio-blk"
 test = false
 bench = false
 
@@ -15,7 +15,7 @@ vrt = { workspace = true }
 vabi = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
-initrd = { workspace = true }
+vvirtio = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

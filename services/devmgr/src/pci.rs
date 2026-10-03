@@ -77,7 +77,13 @@ impl ConfigSpace {
             if orig & 1 == 1 {
                 let size = (!(probe & 0xFFFF_FFFC)).wrapping_add(1) & 0xFFFF;
                 if probe != 0 && size != 0 {
-                    bars.push(Bar { index: i, io: true, address: (orig & 0xFFFF_FFFC) as u64, size: size as u64, prefetchable: false });
+                    bars.push(Bar {
+                        index: i,
+                        io: true,
+                        address: (orig & 0xFFFF_FFFC) as u64,
+                        size: size as u64,
+                        prefetchable: false,
+                    });
                 }
                 i += 1;
                 continue;
