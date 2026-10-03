@@ -124,7 +124,8 @@ for applications and `input` for drivers.
   repeat) to the focused window; pointer events go to the window under the
   pointer, or to the one that grabbed it while a button is held. Dragging a
   window to the top or a side edge maximises it or snaps it to that half of
-  the screen. Alt+Tab shows the window switcher (live thumbnails), Alt+F4
+  the screen; Super+arrows do the same from the keyboard and Super+D shows
+  the desktop. Alt+Tab shows the window switcher (live thumbnails), Alt+F4
   closes, and tapping Super sends `StartMenuKey` to the shell.
 
 ## The desktop shell (`apps/shell`)

@@ -1,0 +1,24 @@
+# Window shortcuts (1280x800) on the Text Editor: Super+Right snaps it to the
+# right half, Super+Up maximises it, Super+Down restores it, Super+D shows the
+# desktop and brings the window back, and Super+Down minimises it.
+boot-cmdline "run=editor"
+wait-serial "started editor" 60
+wait 6
+key meta_l-right
+wait 2
+shot target/vindows/keys-1-right.png
+key meta_l-up
+wait 2
+shot target/vindows/keys-2-maximized.png
+key meta_l-down
+wait 2
+shot target/vindows/keys-3-restored.png
+key meta_l-d
+wait 2
+shot target/vindows/keys-4-desktop.png
+key meta_l-d
+wait 2
+shot target/vindows/keys-5-back.png
+key meta_l-down
+wait 2
+shot target/vindows/keys-6-minimized.png

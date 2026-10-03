@@ -156,6 +156,8 @@ struct Compositor {
     switcher: Option<Switcher>,
     /// Snap target (and its preview rectangle) of the window being moved.
     snap: Option<(Snap, Rect)>,
+    /// Windows minimised by Super+D, restored by the next Super+D.
+    desktop_shown: Vec<u32>,
 }
 
 fn layer(kind: WindowKind) -> u8 {
@@ -289,9 +291,11 @@ impl Compositor {
         let old = w.state;
         match state {
             WindowState::Maximized => {
-                if old == WindowState::Normal {
+                // A snapped window keeps the size it had before snapping.
+                if old == WindowState::Normal && !w.snapped {
                     w.restore_rect = w.client_rect;
                 }
+                w.snapped = false;
                 w.state = state;
                 w.client_rect = Rect::new(area.x, area.y + TITLE_HEIGHT, area.w, area.h - TITLE_HEIGHT);
             }
@@ -736,7 +740,87 @@ impl Compositor {
             }
             return;
         }
+        if pressed
+            && mods & dp::modifiers::SUPER != 0
+            && matches!(code, keys::LEFT | keys::RIGHT | keys::UP | keys::DOWN | keys::D)
+        {
+            if code == keys::D {
+                self.toggle_desktop();
+            } else {
+                self.arrange_focused(code);
+            }
+            return;
+        }
         self.deliver_key(out);
+    }
+
+    /// Super+arrows: Left/Right snap the focused window to that half of the
+    /// screen, Up maximises it, Down restores it or, if it is already in its
+    /// normal place, minimises it.
+    fn arrange_focused(&mut self, code: u16) {
+        let Some(id) = self.focused else { return };
+        let Some(w) = self.windows.get(&id) else { return };
+        if w.kind != WindowKind::Normal {
+            return;
+        }
+        let (state, snapped, resizable) = (w.state, w.snapped, w.resizable);
+        let area = self.work_area;
+        let half = area.w / 2;
+        match code {
+            keys::LEFT | keys::RIGHT if resizable => {
+                if state == WindowState::Maximized {
+                    self.set_state(id, WindowState::Normal);
+                }
+                let (snap, r) = if code == keys::LEFT {
+                    (Snap::Left, Rect::new(area.x, area.y, half, area.h))
+                } else {
+                    (Snap::Right, Rect::new(area.x + half, area.y, area.w - half, area.h))
+                };
+                self.apply_snap(id, snap, r);
+            }
+            keys::UP if resizable => self.set_state(id, WindowState::Maximized),
+            keys::DOWN if state == WindowState::Maximized => self.set_state(id, WindowState::Normal),
+            keys::DOWN if snapped => {
+                let Some(w) = self.windows.get_mut(&id) else { return };
+                let before = w.paint_bounds();
+                w.snapped = false;
+                w.client_rect = w.restore_rect;
+                let (c, st) = (w.client_rect, w.state);
+                let after = w.paint_bounds();
+                self.damage.add(before);
+                self.damage.add(after);
+                self.send(id, WindowEvent::Configure { width: c.w as u32, height: c.h as u32, state: st });
+            }
+            keys::DOWN => self.set_state(id, WindowState::Minimized),
+            _ => {}
+        }
+    }
+
+    /// Super+D: minimises every window, or brings them back if the desktop
+    /// is already showing.
+    fn toggle_desktop(&mut self) {
+        let visible: Vec<u32> = self
+            .order
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.windows
+                    .get(id)
+                    .is_some_and(|w| w.kind == WindowKind::Normal && w.state != WindowState::Minimized && !w.closing)
+            })
+            .collect();
+        if visible.is_empty() {
+            for id in core::mem::take(&mut self.desktop_shown) {
+                if self.windows.contains_key(&id) {
+                    self.set_state(id, WindowState::Normal);
+                }
+            }
+        } else {
+            for &id in &visible {
+                self.set_state(id, WindowState::Minimized);
+            }
+            self.desktop_shown = visible;
+        }
     }
 
     fn deliver_key(&mut self, out: keymap::KeyOutput) {
@@ -1250,6 +1334,7 @@ fn main() -> i32 {
         work_area: Rect::new(0, 0, width, height),
         switcher: None,
         snap: None,
+        desktop_shown: Vec::new(),
     };
     comp.update_cursor_rect();
     comp.damage.add(comp.screen_rect());

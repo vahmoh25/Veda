@@ -80,7 +80,8 @@ cargo xtask run --cmdline "run=editor"
 * Double-click desktop icons. Right-click the desktop to change the
   wallpaper.
 * Drag a window to the top of the screen to maximise it, or to a side to
-  fill that half. **Alt+Tab** switches windows and **Alt+F4** closes the
+  fill that half (or use **Super+Left/Right/Up/Down**). **Super+D** shows
+  the desktop, **Alt+Tab** switches windows and **Alt+F4** closes the
   active one.
 * The speaker icon on the taskbar opens the volume control (scroll over it
   to change the volume).

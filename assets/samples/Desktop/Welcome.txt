@@ -24,6 +24,9 @@ Keyboard shortcuts
   Super ............... open or close the start menu
   Alt+Tab ............. switch between windows
   Alt+F4 .............. close the active window
+  Super+Left / Right .. snap the window to the left or right half
+  Super+Up / Down ..... maximise, or restore and minimise the window
+  Super+D ............. show the desktop (again: bring the windows back)
   Ctrl+C / X / V ...... copy, cut and paste text
   Ctrl+Z / Ctrl+Y ..... undo and redo in the text editor
   Ctrl+S .............. save in the text editor
