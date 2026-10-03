@@ -56,6 +56,19 @@ pub(crate) enum Snap {
     Right,
 }
 
+impl Snap {
+    /// The part of the work area `area` that a window snapped here fills
+    /// (title bar included).
+    pub(crate) fn rect(self, area: Rect) -> Rect {
+        let half = area.w / 2;
+        match self {
+            Snap::Maximize => area,
+            Snap::Left => Rect::new(area.x, area.y, half, area.h),
+            Snap::Right => Rect::new(area.x + half, area.y, area.w - half, area.h),
+        }
+    }
+}
+
 pub(crate) struct DisplayClient {
     pub(crate) channel: Channel,
     pub(crate) windows: Vec<u32>,
@@ -91,6 +104,14 @@ pub(crate) struct Compositor {
     pub(crate) snap: Option<(Snap, Rect)>,
     /// Windows minimised by Super+D, restored by the next Super+D.
     pub(crate) desktop_shown: Vec<u32>,
+}
+
+/// The client rectangle of an automatically placed `w` x `h` window, with a
+/// title bar `tb` high, in cascade slot `slot` of the work area `area`.
+fn auto_rect(area: Rect, w: i32, h: i32, tb: i32, slot: i32) -> Rect {
+    let x = area.x + (area.w - w) / 2 + slot * 28 - 70;
+    let y = area.y + (area.h - h - tb) / 2 + slot * 28 - 50;
+    Rect::new(x.clamp(area.x, (area.right() - w).max(area.x)), y.max(area.y) + tb, w, h)
 }
 
 /// The stacking layer of a window (higher layers are drawn on top). The
@@ -132,8 +153,11 @@ impl Compositor {
         self.screen.rect()
     }
 
+    /// Recomputes the work area (the screen minus the panels) and fits the
+    /// windows to it if it changed.
     pub(crate) fn update_work_area(&mut self) {
         let s = self.screen_rect();
+        let old = self.work_area;
         let mut area = s;
         for w in self.windows.values() {
             if w.kind == WindowKind::Panel && w.state != WindowState::Minimized {
@@ -148,6 +172,51 @@ impl Compositor {
             }
         }
         self.work_area = area;
+        if area != old {
+            self.fit_to_work_area();
+        }
+    }
+
+    /// After the work area changed (a panel appeared or went away):
+    /// maximised and snapped windows take their new space, and windows that
+    /// were placed automatically and never moved are placed again — so
+    /// where a window opens does not depend on whether the taskbar existed
+    /// yet.
+    fn fit_to_work_area(&mut self) {
+        let area = self.work_area;
+        let mut configure = Vec::new();
+        for w in self.windows.values_mut() {
+            if !matches!(w.kind, WindowKind::Normal | WindowKind::Borderless) || w.closing {
+                continue;
+            }
+            let tb = if w.kind == WindowKind::Normal { TITLE_HEIGHT } else { 0 };
+            if let Some(slot) = w.auto_slot {
+                w.restore_rect = auto_rect(area, w.restore_rect.w, w.restore_rect.h, tb, slot);
+            }
+            let target = match (w.state, w.snapped) {
+                (WindowState::Maximized, _) => Rect::new(area.x, area.y + TITLE_HEIGHT, area.w, area.h - TITLE_HEIGHT),
+                (WindowState::Normal, Some(snap)) => {
+                    let r = snap.rect(area);
+                    Rect::new(r.x, r.y + TITLE_HEIGHT, r.w, r.h - TITLE_HEIGHT)
+                }
+                (WindowState::Normal, None) if w.auto_slot.is_some() => w.restore_rect,
+                _ => continue,
+            };
+            if target == w.client_rect {
+                continue;
+            }
+            let before = w.paint_bounds();
+            let resized = (target.w, target.h) != (w.client_rect.w, w.client_rect.h);
+            w.client_rect = target;
+            self.damage.add(before);
+            self.damage.add(w.paint_bounds());
+            if resized {
+                configure.push((w.id, target, w.state));
+            }
+        }
+        for (id, r, state) in configure {
+            self.send(id, WindowEvent::Configure { width: r.w as u32, height: r.h as u32, state });
+        }
     }
 
     pub(crate) fn notify_shell(&self) {
@@ -199,20 +268,20 @@ impl Compositor {
         self.focus(top);
     }
 
-    pub(crate) fn place_new_window(&self, spec: &WindowSpec) -> Rect {
-        let area = self.work_area;
+    /// Where a new window goes: where the client asked, or cascaded around
+    /// the centre of the work area. Returns the client rectangle and, for
+    /// automatically placed windows, their cascade slot.
+    pub(crate) fn place_new_window(&self, spec: &WindowSpec) -> (Rect, Option<i32>) {
         let (w, h) = (spec.width as i32, spec.height as i32);
         let tb = if spec.kind == WindowKind::Normal { TITLE_HEIGHT } else { 0 };
         if spec.x != i32::MIN && spec.y != i32::MIN {
-            return Rect::new(spec.x, spec.y + tb, w, h);
+            return (Rect::new(spec.x, spec.y + tb, w, h), None);
         }
         match spec.kind {
-            WindowKind::Desktop => self.screen_rect(),
+            WindowKind::Desktop => (self.screen_rect(), None),
             _ => {
-                let n = self.windows.values().filter(|w| w.kind == WindowKind::Normal).count() as i32;
-                let x = area.x + (area.w - w) / 2 + (n % 6) * 28 - 70;
-                let y = area.y + (area.h - h - tb) / 2 + (n % 6) * 28 - 50;
-                Rect::new(x.clamp(area.x, (area.right() - w).max(area.x)), y.max(area.y) + tb, w, h)
+                let slot = self.windows.values().filter(|w| w.kind == WindowKind::Normal).count() as i32 % 6;
+                (auto_rect(self.work_area, w, h, tb, slot), Some(slot))
             }
         }
     }
@@ -229,10 +298,10 @@ impl Compositor {
         match state {
             WindowState::Maximized => {
                 // A snapped window keeps the size it had before snapping.
-                if old == WindowState::Normal && !w.snapped {
+                if old == WindowState::Normal && w.snapped.is_none() {
                     w.restore_rect = w.client_rect;
                 }
-                w.snapped = false;
+                w.snapped = None;
                 w.state = state;
                 w.client_rect = Rect::new(area.x, area.y + TITLE_HEIGHT, area.w, area.h - TITLE_HEIGHT);
             }
@@ -288,7 +357,8 @@ impl Compositor {
         }
         let Some(w) = self.windows.get_mut(&id) else { return };
         let before = w.paint_bounds();
-        w.snapped = false;
+        w.snapped = None;
+        w.auto_slot = None;
         w.client_rect = Rect::new(x - (rest.w as f32 * frac) as i32, y + TITLE_HEIGHT / 2, rest.w, rest.h);
         let (c, st) = (w.client_rect, w.state);
         let after = w.paint_bounds();
@@ -309,12 +379,7 @@ impl Compositor {
             _ if x >= area.right() - 2 => Some(Snap::Right),
             _ => None,
         };
-        let half = area.w / 2;
-        let target = zone.map(|z| match z {
-            Snap::Maximize => (z, area),
-            Snap::Left => (z, Rect::new(area.x, area.y, half, area.h)),
-            Snap::Right => (z, Rect::new(area.x + half, area.y, area.w - half, area.h)),
-        });
+        let target = zone.map(|z| (z, z.rect(area)));
         if target != self.snap {
             for (_, r) in [self.snap, target].into_iter().flatten() {
                 self.damage.add(r.inflate(8));
@@ -330,10 +395,11 @@ impl Compositor {
             return;
         }
         let Some(w) = self.windows.get_mut(&id) else { return };
-        if !w.snapped {
+        if w.snapped.is_none() {
             w.restore_rect = w.client_rect;
         }
-        w.snapped = true;
+        w.snapped = Some(snap);
+        w.auto_slot = None;
         let before = w.paint_bounds();
         w.client_rect = Rect::new(r.x, r.y + TITLE_HEIGHT, r.w, r.h - TITLE_HEIGHT);
         let (c, st) = (w.client_rect, w.state);
@@ -374,27 +440,22 @@ impl Compositor {
         if w.kind != WindowKind::Normal {
             return;
         }
-        let (state, snapped, resizable) = (w.state, w.snapped, w.resizable);
+        let (state, snapped, resizable) = (w.state, w.snapped.is_some(), w.resizable);
         let area = self.work_area;
-        let half = area.w / 2;
         match code {
             keys::LEFT | keys::RIGHT if resizable => {
                 if state == WindowState::Maximized {
                     self.set_state(id, WindowState::Normal);
                 }
-                let (snap, r) = if code == keys::LEFT {
-                    (Snap::Left, Rect::new(area.x, area.y, half, area.h))
-                } else {
-                    (Snap::Right, Rect::new(area.x + half, area.y, area.w - half, area.h))
-                };
-                self.apply_snap(id, snap, r);
+                let snap = if code == keys::LEFT { Snap::Left } else { Snap::Right };
+                self.apply_snap(id, snap, snap.rect(area));
             }
             keys::UP if resizable => self.set_state(id, WindowState::Maximized),
             keys::DOWN if state == WindowState::Maximized => self.set_state(id, WindowState::Normal),
             keys::DOWN if snapped => {
                 let Some(w) = self.windows.get_mut(&id) else { return };
                 let before = w.paint_bounds();
-                w.snapped = false;
+                w.snapped = None;
                 w.client_rect = w.restore_rect;
                 let (c, st) = (w.client_rect, w.state);
                 let after = w.paint_bounds();

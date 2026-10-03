@@ -7,6 +7,8 @@ use vproto::display::{Cursor, WindowKind, WindowState};
 use vrt::object::Channel;
 use vrt::vm::Mapping;
 
+use crate::state::Snap;
+
 /// Height of the title bar of decorated windows.
 pub const TITLE_HEIGHT: i32 = 36;
 /// Corner radius of decorated windows.
@@ -102,7 +104,10 @@ pub struct Window {
     /// The client asked to close; destroy after the close animation.
     pub closing: bool,
     /// Snapped to half of the screen (dragging restores `restore_rect`).
-    pub snapped: bool,
+    pub snapped: Option<Snap>,
+    /// Placed automatically in this cascade slot and not moved by the user
+    /// since: the window is placed again when the work area changes.
+    pub auto_slot: Option<i32>,
 }
 
 impl Window {
