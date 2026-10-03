@@ -171,7 +171,7 @@ impl Session {
             Hypervisor::Qemu(install) => *install,
             Hypervisor::VirtualBox { resolution } => {
                 let vbox = crate::vbox::VBox::locate()?;
-                vbox.configure(&vm, disk, vm.home_disk.as_deref(), &serial_log, resolution)?;
+                vbox.configure(&vm, disk, vm.home_disk.as_deref(), &serial_log, resolution, None)?;
                 vbox.start(true)?;
                 let (w, h) = resolution
                     .split_once('x')

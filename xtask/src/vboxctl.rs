@@ -13,7 +13,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
 use crate::util::Result;
-use crate::vbox::{VBox, VM};
+use crate::vbox::VBox;
 
 /// Largest relative step sent at once. PS/2 deltas are 9-bit signed, and
 /// VirtualBox adds up the events the guest has not read yet and clamps the
@@ -203,8 +203,8 @@ struct MouseHelper {
 }
 
 impl MouseHelper {
-    fn start() -> Result<MouseHelper> {
-        let script = MOUSE_HELPER.replace("__VM__", VM);
+    fn start(vm: &str) -> Result<MouseHelper> {
+        let script = MOUSE_HELPER.replace("__VM__", vm);
         let mut child = Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
             .stdin(Stdio::piped())
@@ -265,7 +265,7 @@ impl Control {
 
     fn mouse(&mut self) -> Result<&mut MouseHelper> {
         if self.mouse.is_none() {
-            self.mouse = Some(MouseHelper::start()?);
+            self.mouse = Some(MouseHelper::start(self.vbox.name())?);
         }
         Ok(self.mouse.as_mut().unwrap())
     }

@@ -18,6 +18,7 @@ cargo xtask test --ui          # ... plus every GUI script in tests/ui
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
 cargo xtask run --vm virtualbox            # the same in VirtualBox (VM "Vindows")
 cargo xtask run --vm virtualbox --net bridged   # ... on the host's real network
+cargo xtask run --vm virtualbox --resolution 1600x1000 --scale 2   # larger desktop, window at 2x
 cargo xtask test --ui --vm virtualbox      # the test suite in VirtualBox
 cargo xtask run --disk-bus ahci             # QEMU with SATA disks (as VirtualBox has)
 cargo xtask run --net wifi     # boot with the virtual Wi-Fi radio and airsim
@@ -36,10 +37,17 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
   `home.vmdk`) that point at the raw images, so VirtualBox and QEMU use the
   same files (not at the same time). The serial console goes to
   `target/vindows/serial-vbox.log` and the terminal; Ctrl+C powers the
-  machine off. Scripts drive VirtualBox through `VBoxManage` (keys as PS/2
-  scan codes, screenshots) and its COM API (the mouse, through a helper
-  PowerShell process); `test` skips scripts that need QEMU's simulated
-  Wi-Fi.
+  machine off. The window enlarges the screen by the whole part of the
+  host's display scaling, as QEMU's window (GTK) does, lowered until the
+  window fits on the screen, and opens in the middle of the screen when the
+  resolution or the scale changes; `--scale 2` or `--scale 250%` chooses
+  the factor and `--scale 1` shows the screen pixel for pixel. Resolutions
+  missing from the firmware's list become a custom video mode. Inside the
+  window, View > Virtual Screen changes the scale, Host+F switches to full
+  screen and Host+C to scaled mode, whose window can be resized freely.
+  Scripts drive VirtualBox through `VBoxManage` (keys as PS/2 scan codes,
+  screenshots) and its COM API (the mouse, through a helper PowerShell
+  process); `test` skips scripts that need QEMU's simulated Wi-Fi.
 * With `--net wifi`, xtask builds and starts `airsim` (the simulated Wi-Fi
   environment) next to QEMU; it logs to `target/vindows/airsim.log` and
   prints its control port, which takes commands such as `ap home off`,
@@ -59,6 +67,8 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
   set `CARGO_TARGET_DIR` (cargo output) and `VINDOWS_OUT` (disk image, serial
   log, screenshots) to private paths, e.g. in PowerShell
   `$env:CARGO_TARGET_DIR="target/agent-x"; $env:VINDOWS_OUT="target/agent-x/vindows"`.
+  With `--vm virtualbox`, each output directory also gets its own machine
+  (here "Vindows-target-agent-x-vindows").
   Paths in automation scripts (`shot FILE`) are relative to the repository.
 
 ## The system image

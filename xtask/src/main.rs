@@ -44,6 +44,9 @@ BUILD OPTIONS:
 
 RUN OPTIONS:
     --vm HYPERVISOR     qemu (default) or virtualbox (run, shot, script, test)
+    --scale FACTOR      VirtualBox: how much the window enlarges the screen, such as 2 or
+                        250% (default: the whole part of the Windows display scaling, as
+                        QEMU's window has it, lowered if the window would not fit)
     --smp N             Number of virtual CPUs (default 4)
     --memory MiB        Guest RAM in MiB (default 1024)
     --headless          No display window (serial console only)
@@ -86,6 +89,8 @@ struct Options {
     fresh_home: bool,
     /// The hypervisor for `run`, `shot`, `script` and `test`.
     hypervisor: Hypervisor,
+    /// VirtualBox: the window's scale (`None`: from the host's display).
+    scale: Option<f64>,
 }
 
 /// Which hypervisor runs Vindows.
@@ -109,6 +114,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         skip: Vec::new(),
         fresh_home: false,
         hypervisor: Hypervisor::Qemu,
+        scale: None,
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -116,7 +122,12 @@ fn parse_options(args: &[String]) -> Result<Options> {
         match arg.as_str() {
             "--debug" => o.profile = Profile::Debug,
             "--release" => o.profile = Profile::Release,
-            "--resolution" => o.resolution = value(arg)?,
+            "--resolution" => {
+                let v = value(arg)?;
+                let (w, h) =
+                    resolution_size(&v).ok_or("--resolution expects WxH, at least 640x480 (such as 1920x1080)")?;
+                o.resolution = format!("{w}x{h}");
+            }
             "--cmdline" => o.cmdline = value(arg)?,
             "--smp" => o.vm.cpus = value(arg)?.parse().map_err(|_| "--smp expects a number")?,
             "--memory" => o.vm.memory_mib = value(arg)?.parse().map_err(|_| "--memory expects MiB")?,
@@ -139,6 +150,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
                     v => return Err(format!("unknown hypervisor '{v}' (qemu, virtualbox)")),
                 }
             }
+            "--scale" => o.scale = parse_scale(&value(arg)?)?,
             "--bridge" => o.vm.bridge_adapter = Some(value(arg)?),
             "--net" => {
                 let v = value(arg)?;
@@ -153,6 +165,28 @@ fn parse_options(args: &[String]) -> Result<Options> {
         }
     }
     Ok(o)
+}
+
+/// The width and height in a resolution such as "1920x1080".
+fn resolution_size(v: &str) -> Option<(u32, u32)> {
+    let (w, h) = v.split_once(['x', 'X'])?;
+    let (w, h) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    (w >= 640 && h >= 480).then_some((w, h))
+}
+
+/// A `--scale` value: `auto`, a factor (`2`, `2.5`) or a percentage (`250%`).
+fn parse_scale(v: &str) -> Result<Option<f64>> {
+    if v.eq_ignore_ascii_case("auto") {
+        return Ok(None);
+    }
+    let (number, divisor) = match v.strip_suffix('%') {
+        Some(percent) => (percent, 100.0),
+        None => (v, 1.0),
+    };
+    match number.trim().parse::<f64>().map(|n| n / divisor) {
+        Ok(scale) if (0.5..=4.0).contains(&scale) => Ok(Some(scale)),
+        _ => Err(format!("--scale expects a factor from 0.5 to 4, such as 2 or 250%, or auto (not '{v}')")),
+    }
 }
 
 /// Host tools that generate media into `target/generated` at build time,
@@ -293,6 +327,9 @@ fn run(o: &Options) -> Result {
     if o.vm.net == qemu::NetMode::Bridged {
         return Err("bridged networking needs VirtualBox (--vm virtualbox)".into());
     }
+    if o.scale.is_some() {
+        return Err("--scale is for VirtualBox (--vm virtualbox); QEMU's window zooms from its View menu".into());
+    }
     let install = qemu::QemuInstall::locate()?;
     let disk = build(o)?;
     let vars = qemu::vars_file(&install)?;
@@ -333,9 +370,15 @@ fn run_vbox(o: &Options) -> Result {
     qemu::prepare_home_disk(&home, o.fresh_home)?;
     let serial = o.vm.serial_file.clone().unwrap_or_else(|| util::out_dir().join("serial-vbox.log"));
     let _ = std::fs::remove_file(&serial);
-    vbox.configure(&o.vm, &disk, Some(&home), &serial, &o.resolution)?;
+    // The window enlarges the screen as QEMU's does on a high-DPI display.
+    let (width, height) = resolution_size(&o.resolution).unwrap_or((1280, 800));
+    let scale = o.vm.display.then(|| o.scale.unwrap_or_else(|| vbox::auto_scale(width, height)));
+    vbox.configure(&o.vm, &disk, Some(&home), &serial, &o.resolution, scale)?;
+    if let Some(scale) = scale {
+        util::status("Display", format!("{}, shown at {:.0}% (--resolution, --scale)", o.resolution, scale * 100.0));
+    }
     vbox.start(!o.vm.display)?;
-    util::status("Running", format!("VirtualBox machine \"{}\" (Ctrl+C powers it off)", vbox::VM));
+    util::status("Running", format!("VirtualBox machine \"{}\" (Ctrl+C powers it off)", vbox.name()));
     vbox::follow(&vbox, &serial, o.vm.serial_file.is_none())
 }
 

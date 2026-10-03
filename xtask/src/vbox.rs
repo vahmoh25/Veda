@@ -2,7 +2,8 @@
 //! (`cargo xtask run --vm virtualbox`).
 //!
 //! The virtual machine ("Vindows", its files under `target/vindows/vbox`) is
-//! created on first use and brought in line with the options on every run.
+//! created on first use and brought in line with the options on every run;
+//! an output directory moved with `$VINDOWS_OUT` gets a machine of its own.
 //! Its disks are the very raw images QEMU uses, described by small VMDK
 //! files ("monolithicFlat"), so a rebuild needs no conversion and the home
 //! directory is shared between both hypervisors. The machine is closer to a
@@ -18,13 +19,12 @@ use std::time::{Duration, Instant};
 use crate::qemu::{NetMode, VmConfig};
 use crate::util::{self, Result};
 
-/// Name of the virtual machine.
-pub const VM: &str = "Vindows";
-
-/// The VirtualBox installation (`VBoxManage`).
+/// The VirtualBox installation (`VBoxManage`) and the machine Vindows runs
+/// in.
 #[derive(Clone)]
 pub struct VBox {
     manage: PathBuf,
+    vm: String,
 }
 
 impl VBox {
@@ -49,7 +49,12 @@ impl VBox {
                 .find(|p| p.is_file())
             })
             .ok_or("VirtualBox not found: install it or set VBOX_MSI_INSTALL_PATH")?;
-        Ok(VBox { manage })
+        Ok(VBox { manage, vm: machine_name(&util::workspace_root(), &util::out_dir()) })
+    }
+
+    /// The machine's name.
+    pub fn name(&self) -> &str {
+        &self.vm
     }
 
     /// Runs `VBoxManage` and returns its standard output.
@@ -71,7 +76,7 @@ impl VBox {
     /// The machine's settings (`showvminfo --machinereadable`), or `None` if
     /// it does not exist or cannot be read.
     fn info(&self) -> Option<BTreeMap<String, String>> {
-        let text = self.manage(&["showvminfo", VM, "--machinereadable"]).ok()?;
+        let text = self.manage(&["showvminfo", self.name(), "--machinereadable"]).ok()?;
         Some(
             text.lines()
                 .filter_map(|l| l.split_once('='))
@@ -94,24 +99,26 @@ impl VBox {
         if self.info().is_some() {
             return Ok(());
         }
+        let vm = self.name();
         // Registered but inaccessible (its folder was cleaned): unregister it.
-        if self.manage(&["list", "vms"])?.lines().any(|l| l.starts_with(&format!("\"{VM}\""))) {
-            let _ = self.manage(&["unregistervm", VM]);
+        if self.manage(&["list", "vms"])?.lines().any(|l| l.starts_with(&format!("\"{vm}\""))) {
+            let _ = self.manage(&["unregistervm", vm]);
         }
         let folder = util::out_dir().join("vbox");
         std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
-        let stale = folder.join(VM);
+        let stale = folder.join(vm);
         if stale.exists() {
             let _ = std::fs::remove_dir_all(&stale);
         }
         let folder = folder.to_string_lossy().to_string();
-        self.manage(&["createvm", "--name", VM, "--ostype", "Other_64", "--basefolder", &folder, "--register"])?;
-        util::status("Created", format!("VirtualBox machine \"{VM}\""));
+        self.manage(&["createvm", "--name", vm, "--ostype", "Other_64", "--basefolder", &folder, "--register"])?;
+        util::status("Created", format!("VirtualBox machine \"{vm}\""));
         Ok(())
     }
 
-    /// Brings the machine in line with `cfg`: hardware, network, disks and
-    /// the serial console (written to `serial`).
+    /// Brings the machine in line with `cfg`: hardware, network, disks, the
+    /// screen resolution, the serial console (written to `serial`) and, if
+    /// given, how much the window enlarges the screen (`scale`).
     pub fn configure(
         &self,
         cfg: &VmConfig,
@@ -119,9 +126,11 @@ impl VBox {
         home: Option<&Path>,
         serial: &Path,
         resolution: &str,
+        scale: Option<f64>,
     ) -> Result {
+        let vm = self.name();
         if self.is_running() {
-            return Err(format!("the VirtualBox machine \"{VM}\" is already running; close it first"));
+            return Err(format!("the VirtualBox machine \"{vm}\" is already running; close it first"));
         }
         self.ensure_vm()?;
         let cpus = cfg.cpus.to_string();
@@ -129,7 +138,7 @@ impl VBox {
         let serial_path = serial.to_string_lossy().to_string();
         let mut args: Vec<String> = [
             "modifyvm",
-            VM,
+            vm,
             "--firmware",
             "efi64",
             "--chipset",
@@ -187,9 +196,45 @@ impl VBox {
         args.extend(self.network_args(cfg)?);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.manage(&refs)?;
-        // The firmware's display mode, which the boot loader then uses.
-        self.manage(&["setextradata", VM, "VBoxInternal2/EfiGraphicsResolution", resolution])?;
+        self.set_display(resolution, scale)?;
         self.attach_disks(boot, home)
+    }
+
+    /// A value from the machine's extra data.
+    fn extradata(&self, key: &str) -> Option<String> {
+        let out = self.manage(&["getextradata", self.name(), key]).ok()?;
+        out.trim().strip_prefix("Value: ").map(str::to_string)
+    }
+
+    /// The firmware's display mode, which the boot loader then uses, and the
+    /// window's scale (`GUI/ScaleFactor`: at 2, each pixel of Vindows covers
+    /// 2x2 pixels of the host's screen). When either changes, the window is
+    /// placed in the middle of the screen again: VirtualBox would keep its
+    /// old corner and let the larger window run off the screen.
+    fn set_display(&self, resolution: &str, scale: Option<f64>) -> Result {
+        let vm = self.name();
+        const RESOLUTION: &str = "VBoxInternal2/EfiGraphicsResolution";
+        const SCALE: &str = "GUI/ScaleFactor";
+        const WINDOW: &str = "GUI/LastNormalWindowPosition";
+        let size = resolution.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+        let window = scale.zip(size).zip(host_display()).map(|((s, (w, h)), host)| window_geometry(host, w, h, s));
+        let scale = scale.map(|s| s.to_string());
+        let changed = self.extradata(RESOLUTION).as_deref() != Some(resolution)
+            || scale.as_ref().is_some_and(|s| self.extradata(SCALE).as_ref() != Some(s));
+        // The firmware offers a list of common modes and the custom ones; a
+        // resolution missing from the list (1600x1000) needs to be custom.
+        self.manage(&["setextradata", vm, "CustomVideoMode1", &format!("{resolution}x32")])?;
+        self.manage(&["setextradata", vm, RESOLUTION, resolution])?;
+        if let Some(scale) = &scale {
+            self.manage(&["setextradata", vm, SCALE, scale])?;
+        }
+        if changed {
+            match &window {
+                Some(geometry) => self.manage(&["setextradata", vm, WINDOW, geometry])?,
+                None => self.manage(&["setextradata", vm, WINDOW])?,
+            };
+        }
+        Ok(())
     }
 
     fn network_args(&self, cfg: &VmConfig) -> Result<Vec<String>> {
@@ -254,11 +299,12 @@ impl VBox {
     /// Attaches the boot disk (port 0) and the home disk (port 1) to the SATA
     /// controller, with the serial numbers Vindows looks for.
     fn attach_disks(&self, boot: &Path, home: Option<&Path>) -> Result {
+        let vm = self.name();
         let info = self.info().ok_or("cannot read the machine's settings")?;
         if !info.keys().any(|k| k.starts_with("storagecontrollername") && info[k] == "SATA") {
             self.manage(&[
                 "storagectl",
-                VM,
+                vm,
                 "--name",
                 "SATA",
                 "--add",
@@ -278,12 +324,12 @@ impl VBox {
                 Some(image) => {
                     let vmdk = flat_vmdk(image)?;
                     self.attach(&p, &vmdk)?;
-                    self.manage(&["setextradata", VM, &key, serial])?;
+                    self.manage(&["setextradata", vm, &key, serial])?;
                 }
                 None => {
                     let _ = self.manage(&[
                         "storageattach",
-                        VM,
+                        vm,
                         "--storagectl",
                         "SATA",
                         "--port",
@@ -302,10 +348,11 @@ impl VBox {
     /// Attaches a VMDK to a SATA port, re-registering it if VirtualBox still
     /// knows an older version (for example with a different size).
     fn attach(&self, port: &str, vmdk: &Path) -> Result {
+        let vm = self.name();
         let path = vmdk.to_string_lossy().to_string();
         let args = [
             "storageattach",
-            VM,
+            vm,
             "--storagectl",
             "SATA",
             "--port",
@@ -322,7 +369,7 @@ impl VBox {
         }
         let _ = self.manage(&[
             "storageattach",
-            VM,
+            vm,
             "--storagectl",
             "SATA",
             "--port",
@@ -337,11 +384,11 @@ impl VBox {
     }
 
     pub fn start(&self, headless: bool) -> Result {
-        self.manage(&["startvm", VM, "--type", if headless { "headless" } else { "gui" }]).map(|_| ())
+        self.manage(&["startvm", self.name(), "--type", if headless { "headless" } else { "gui" }]).map(|_| ())
     }
 
     pub fn poweroff(&self) {
-        let _ = self.manage(&["controlvm", VM, "poweroff"]);
+        let _ = self.manage(&["controlvm", self.name(), "poweroff"]);
         let start = Instant::now();
         while self.is_running() && start.elapsed() < Duration::from_secs(10) {
             std::thread::sleep(Duration::from_millis(200));
@@ -349,11 +396,11 @@ impl VBox {
     }
 
     pub fn reset(&self) -> Result {
-        self.manage(&["controlvm", VM, "reset"]).map(|_| ())
+        self.manage(&["controlvm", self.name(), "reset"]).map(|_| ())
     }
 
     pub fn screenshot(&self, path: &Path) -> Result {
-        self.manage(&["controlvm", VM, "screenshotpng", &path.to_string_lossy()]).map(|_| ())
+        self.manage(&["controlvm", self.name(), "screenshotpng", &path.to_string_lossy()]).map(|_| ())
     }
 
     /// Sends raw PS/2 set-1 scan codes.
@@ -362,14 +409,121 @@ impl VBox {
             return Ok(());
         }
         let hex: Vec<String> = codes.iter().map(|c| format!("{c:02x}")).collect();
-        let mut args = vec!["controlvm", VM, "keyboardputscancode"];
+        let mut args = vec!["controlvm", self.name(), "keyboardputscancode"];
         args.extend(hex.iter().map(String::as_str));
         self.manage(&args).map(|_| ())
     }
 
     pub fn set_link(&self, up: bool) -> Result {
-        self.manage(&["controlvm", VM, "setlinkstate1", if up { "on" } else { "off" }]).map(|_| ())
+        self.manage(&["controlvm", self.name(), "setlinkstate1", if up { "on" } else { "off" }]).map(|_| ())
     }
+}
+
+/// Name of the virtual machine for an output directory: "Vindows" for the
+/// usual one, and one derived from the directory for others, so that builds
+/// side by side (`$VINDOWS_OUT`) get machines of their own.
+fn machine_name(root: &Path, out: &Path) -> String {
+    if out == root.join("target").join("vindows") {
+        return "Vindows".into();
+    }
+    let rel = out.strip_prefix(root).unwrap_or(out).to_string_lossy().to_string();
+    let words: Vec<&str> = rel.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    format!("Vindows-{}", words.join("-"))
+}
+
+/// The window scale when none is asked for: the whole part of the host's
+/// display scaling (2 at 250%), as QEMU's window (GTK) has it, which keeps
+/// the pixels sharp; lowered in quarter steps until the window of a
+/// `width` x `height` screen fits on the host's screen. 1 if the host's
+/// display is unknown.
+pub fn auto_scale(width: u32, height: u32) -> f64 {
+    let Some(host) = host_display() else { return 1.0 };
+    fit_scale(host, width, height)
+}
+
+/// The host's display: its scale (Windows' display scaling, 2.5 at 250%)
+/// and the primary screen's work area in physical pixels.
+#[derive(Debug, Clone, Copy)]
+struct HostDisplay {
+    scale: f64,
+    left: i32,
+    top: i32,
+    width: u32,
+    height: u32,
+}
+
+/// The height of VirtualBox's menu and status bars and of the window's
+/// title bar, in logical pixels (measured on Windows 11).
+const WINDOW_BARS: f64 = 54.0;
+const WINDOW_TITLE: f64 = 29.0;
+
+fn fit_scale(host: HostDisplay, width: u32, height: u32) -> f64 {
+    // The window's bars and borders, with a little room to spare.
+    let (frame_w, frame_h) = (20.0 * host.scale, (WINDOW_BARS + WINDOW_TITLE + 17.0) * host.scale);
+    let fits =
+        |s: f64| width as f64 * s + frame_w <= host.width as f64 && height as f64 * s + frame_h <= host.height as f64;
+    let mut scale = host.scale.floor().max(1.0);
+    while scale > 1.0 && !fits(scale) {
+        scale -= 0.25;
+    }
+    scale
+}
+
+/// The window's place in the middle of the screen, as VirtualBox saves it
+/// (`GUI/LastNormalWindowPosition`: the position and size of the area
+/// below the title bar, in logical pixels).
+fn window_geometry(host: HostDisplay, width: u32, height: u32, scale: f64) -> String {
+    let logical = |physical: f64| physical / host.scale;
+    let w = logical(width as f64 * scale);
+    let h = logical(height as f64 * scale) + WINDOW_BARS;
+    let (area_w, area_h) = (logical(host.width as f64), logical(host.height as f64));
+    let x = logical(host.left as f64) + ((area_w - w) / 2.0).max(0.0);
+    let y = logical(host.top as f64) + ((area_h - h - WINDOW_TITLE) / 2.0).max(0.0) + WINDOW_TITLE;
+    format!("{},{},{},{}", x.round(), y.round(), w.round(), h.round())
+}
+
+#[cfg(windows)]
+fn host_display() -> Option<HostDisplay> {
+    #[repr(C)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetThreadDpiAwarenessContext(context: isize) -> isize;
+        fn GetDpiForSystem() -> u32;
+        fn SystemParametersInfoW(action: u32, param: u32, data: *mut Rect, flags: u32) -> i32;
+    }
+    const DPI_AWARENESS_CONTEXT_SYSTEM_AWARE: isize = -2;
+    const SPI_GETWORKAREA: u32 = 0x30;
+    let mut work = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+    // SAFETY: plain Win32 calls; DPI awareness (without it, Windows reports
+    // 96 DPI and scaled-down sizes) is switched on for this thread only and
+    // restored afterwards.
+    let (dpi, ok) = unsafe {
+        let previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+        let dpi = GetDpiForSystem();
+        let ok = SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut work, 0) != 0;
+        if previous != 0 {
+            SetThreadDpiAwarenessContext(previous);
+        }
+        (dpi, ok)
+    };
+    (ok && dpi > 0 && work.right > work.left && work.bottom > work.top).then(|| HostDisplay {
+        scale: dpi as f64 / 96.0,
+        left: work.left,
+        top: work.top,
+        width: (work.right - work.left) as u32,
+        height: (work.bottom - work.top) as u32,
+    })
+}
+
+#[cfg(not(windows))]
+fn host_display() -> Option<HostDisplay> {
+    None
 }
 
 /// Ctrl+C in the terminal: noticed instead of ending xtask, so that it can
@@ -407,13 +561,14 @@ pub mod ctrl_c {
 /// on Ctrl+C. Returns when the machine has stopped.
 pub fn follow(vbox: &VBox, serial: &Path, echo: bool) -> Result {
     use std::io::{Read, Seek, SeekFrom, Write};
+    let vm = vbox.name();
     ctrl_c::install();
     let mut offset = 0u64;
     let mut last_check = Instant::now();
     let mut stdout = std::io::stdout();
     loop {
         if ctrl_c::pressed() {
-            util::status("Stopping", format!("VirtualBox machine \"{VM}\""));
+            util::status("Stopping", format!("VirtualBox machine \"{vm}\""));
             vbox.poweroff();
             return Ok(());
         }
@@ -434,7 +589,7 @@ pub fn follow(vbox: &VBox, serial: &Path, echo: bool) -> Result {
         if last_check.elapsed() >= Duration::from_millis(500) {
             last_check = Instant::now();
             if !vbox.is_running() {
-                util::status("Stopped", format!("VirtualBox machine \"{VM}\""));
+                util::status("Stopped", format!("VirtualBox machine \"{vm}\""));
                 return Ok(());
             }
         }
@@ -511,5 +666,42 @@ mod tests {
         assert_eq!(a.len(), 36);
         assert_eq!(&a[14..15], "4");
         assert!("89ab".contains(&a[19..20]));
+    }
+
+    #[test]
+    fn machines_follow_the_output_directory() {
+        let root = Path::new(r"C:\src\vindows");
+        assert_eq!(machine_name(root, &root.join("target").join("vindows")), "Vindows");
+        assert_eq!(machine_name(root, &root.join(r"target\agent-x\vindows")), "Vindows-target-agent-x-vindows");
+        assert_eq!(machine_name(root, Path::new(r"D:\vm out")), "Vindows-D-vm-out");
+    }
+
+    fn display(scale: f64, width: u32, height: u32) -> HostDisplay {
+        HostDisplay { scale, left: 0, top: 0, width, height }
+    }
+
+    #[test]
+    fn the_window_scale_fits_the_screen() {
+        // A 3840x2400 laptop screen at 250% (the taskbar takes 120 pixels).
+        let laptop = display(2.5, 3840, 2280);
+        assert_eq!(fit_scale(laptop, 1280, 800), 2.0);
+        assert_eq!(fit_scale(laptop, 1600, 1000), 2.0);
+        assert_eq!(fit_scale(laptop, 1920, 1200), 1.5);
+        assert_eq!(fit_scale(laptop, 3840, 2400), 1.0);
+        // 1920x1080 at 100% and 150%; 4K at 300%.
+        assert_eq!(fit_scale(display(1.0, 1920, 1032), 1280, 800), 1.0);
+        assert_eq!(fit_scale(display(1.5, 1920, 1032), 1280, 800), 1.0);
+        assert_eq!(fit_scale(display(3.0, 3840, 2088), 1280, 800), 2.0);
+    }
+
+    #[test]
+    fn the_window_starts_in_the_middle() {
+        // As measured: 1280x800 at 2.5 on a 3840x2400 screen at 250%.
+        assert_eq!(window_geometry(display(2.5, 3840, 2400), 1280, 800, 2.5), "128,68,1280,854");
+        assert_eq!(window_geometry(display(2.5, 3840, 2400), 1280, 800, 2.0), "256,148,1024,694");
+        // A taskbar on the left; a window larger than the screen.
+        let left = HostDisplay { scale: 1.0, left: 100, top: 0, width: 1820, height: 1080 };
+        assert_eq!(window_geometry(left, 1280, 800, 1.0), "370,128,1280,854");
+        assert_eq!(window_geometry(display(1.0, 1920, 1032), 1920, 1200, 1.0), "0,29,1920,1254");
     }
 }

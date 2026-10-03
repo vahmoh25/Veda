@@ -125,6 +125,16 @@ in software). The machine is closer to a real
 PC: SATA disks, an Intel PRO/1000 network card, PS/2 keyboard and mouse.
 Click into the window to use the mouse; the right **Ctrl** key releases it.
 
+On a high-DPI display the window enlarges the screen as QEMU's does, by the
+whole part of the display scaling (2x at 250%), or less if the window
+would not fit on the screen. `--scale` sets the factor (`--scale 2.5`
+matches other programs at 250%; whole numbers look sharpest) and
+`--resolution` gives Vindows a larger desktop:
+
+```bash
+cargo xtask run --vm virtualbox --resolution 1600x1000 --scale 2
+```
+
 To put Vindows on your real network (your router's DHCP and DNS, the real
 Internet) through the host's network adapter, Wi-Fi included:
 
