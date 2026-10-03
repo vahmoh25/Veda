@@ -1,4 +1,5 @@
-//! About Vindows: the system's version, hardware and licences.
+//! About Vindows: the system's version, hardware and licences. The voice
+//! agent reads what the window shows and can show the licences.
 
 #![no_std]
 #![no_main]
@@ -7,10 +8,18 @@ extern crate alloc;
 
 use alloc::format;
 use alloc::string::String;
+use alloc::vec;
 
+use vui::agent::{self, Action, AppAgentInfo, Value, arg_bool, object};
 use vui::{Align, App, Font, Icon, Rect, Ui, WindowSpec};
 
 vrt::entry!(main);
+
+/// What "Show licences" shows.
+const LICENCES: &str = "Vindows is written from scratch in Rust and released under the MIT license. \
+                        Fonts: Inter (© The Inter Project Authors), \
+                        Lato (© tyPoland Lukasz Dziedzic) and JetBrains Mono (© The JetBrains Mono Project Authors), \
+                        all under the SIL Open Font License 1.1.";
 
 struct About {
     info: vabi::SystemInfo,
@@ -21,6 +30,13 @@ struct About {
 fn cstr(b: &[u8]) -> String {
     let n = b.iter().position(|&c| c == 0).unwrap_or(b.len());
     String::from_utf8_lossy(&b[..n]).trim().into()
+}
+
+impl About {
+    /// The memory line ("512 MiB free of 1024 MiB").
+    fn memory(&self) -> String {
+        format!("{} MiB free of {} MiB", self.info.free_memory >> 20, self.info.total_memory >> 20)
+    }
 }
 
 impl App for About {
@@ -60,11 +76,7 @@ impl App for About {
         let rows: [(Icon, &str, String); 5] = [
             (Icon::Cpu, "Processor", cstr(&self.info.cpu_brand)),
             (Icon::Grid, "Cores", format!("{} online", self.info.cpu_count)),
-            (
-                Icon::Chart,
-                "Memory",
-                format!("{} MiB free of {} MiB", self.info.free_memory >> 20, self.info.total_memory >> 20),
-            ),
+            (Icon::Chart, "Memory", self.memory()),
             (Icon::Clock, "Uptime", fmt_uptime(self.info.uptime_ns)),
             (
                 Icon::List,
@@ -85,15 +97,56 @@ impl App for About {
         self.show_details = toggle;
         ui.label(Rect::new(area.x + 54, ty, 300, 28), "Show licences", Font::Regular, t.font_size, t.text, Align::Left);
         if self.show_details {
-            let text = "Vindows is written from scratch in Rust and released under the MIT license. \
-                        Fonts: Inter (© The Inter Project Authors), \
-                        Lato (© tyPoland Lukasz Dziedzic) and JetBrains Mono (© The JetBrains Mono Project Authors), \
-                        all under the SIL Open Font License 1.1.";
-            ui.paragraph(Rect::new(area.x, ty + 40, area.w, 80), text, t.small_size + 1.0, t.text_dim);
+            ui.paragraph(Rect::new(area.x, ty + 40, area.w, 80), LICENCES, t.small_size + 1.0, t.text_dim);
         }
         let br = Rect::new(area.right() - 110, area.bottom() - 36, 110, 36);
         if ui.primary_button(br, "OK") {
             ui.close_window();
+        }
+    }
+
+    fn agent_info(&self) -> Option<AppAgentInfo> {
+        Some(agent::info(
+            "The About Vindows window: the version of Vindows, the processor, memory and uptime, and the licences.",
+            vec![
+                Action::new("show_licences", "Shows the licences in the window (or hides them)")
+                    .param("show", "boolean", "Show them (the default) or hide them", false)
+                    .build(),
+            ],
+        ))
+    }
+
+    fn agent_state(&self) -> Value {
+        let i = &self.info;
+        let mut v = object! {
+            "version" => cstr(&i.version),
+            "edition" => "microkernel edition",
+            "processor" => cstr(&i.cpu_brand),
+            "cores" => i.cpu_count,
+            "memory" => self.memory(),
+            "uptime" => fmt_uptime(i.uptime_ns),
+            "processes" => i.process_count,
+            "threads" => i.thread_count,
+            "licences_shown" => self.show_details,
+        };
+        if self.show_details {
+            v.set("licences", LICENCES);
+        }
+        v
+    }
+
+    fn agent_invoke(&mut self, action: &str, args: &Value) -> Result<Value, String> {
+        match action {
+            "show_licences" => {
+                // As the "Show licences" switch does.
+                self.show_details = arg_bool(args, "show").unwrap_or(true);
+                let mut v = object! { "licences_shown" => self.show_details };
+                if self.show_details {
+                    v.set("licences", LICENCES);
+                }
+                Ok(v)
+            }
+            other => Err(format!("About Vindows has no action called {other}")),
         }
     }
 }
