@@ -240,7 +240,6 @@ pub fn draw_orb(ui: &mut Ui, r: Rect, a: &AgentModel, t: f32) {
 
 /// The agent's window.
 pub struct AgentWindow {
-    origin: (i32, i32),
     /// "Always allow" ticked on the approval being shown.
     always: bool,
     started: u64,
@@ -265,14 +264,18 @@ pub fn approval_title(ui: &mut Ui, r: Rect, text: &str) -> i32 {
 }
 
 impl AgentWindow {
-    pub fn new(origin: (i32, i32)) -> AgentWindow {
-        AgentWindow { origin, always: false, started: vrt::time::now_ns() }
+    pub fn new() -> AgentWindow {
+        AgentWindow { always: false, started: vrt::time::now_ns() }
     }
 
     pub fn update(&mut self, ui: &mut Ui, m: &mut Model) {
         let th = ui.theme().clone();
         let (w, h) = (ui.width, ui.height);
-        chrome::mica(&mut ui.canvas, &m.wallpaper.blurred, self.origin, TINT);
+        // The taskbar's own colour (what the bar looks like where it is),
+        // not the wallpaper behind the window.
+        let bar = Rect::new(0, m.screen.h - taskbar::HEIGHT, m.screen.w, taskbar::HEIGHT);
+        let bg = chrome::mica_color(&m.wallpaper.blurred, bar, TINT);
+        ui.canvas.fill_rect(ui.rect(), bg);
         if ui.input.key(vproto::input::keys::ESC) {
             ui.close_window();
         }

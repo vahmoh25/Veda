@@ -15,6 +15,31 @@ pub fn mica(c: &mut Canvas, blurred: &Bitmap, origin: (i32, i32), tint: Color) {
     c.fill_rect(r, tint);
 }
 
+/// The colour a mica surface over `area` of the screen has on average:
+/// `tint` over the blurred wallpaper there (sampled sparsely).
+pub fn mica_color(blurred: &Bitmap, area: Rect, tint: Color) -> Color {
+    let (mut r, mut g, mut b, mut n) = (0u64, 0u64, 0u64, 0u64);
+    let mut y = area.y.max(0);
+    while y < area.bottom().min(blurred.height) {
+        let mut x = area.x.max(0);
+        while x < area.right().min(blurred.width) {
+            let p = blurred.pixels[(y * blurred.width + x) as usize];
+            r += ((p >> 16) & 0xFF) as u64;
+            g += ((p >> 8) & 0xFF) as u64;
+            b += (p & 0xFF) as u64;
+            n += 1;
+            x += 8;
+        }
+        y += 4;
+    }
+    if n == 0 {
+        return tint;
+    }
+    let a = ((tint.0 >> 24) & 0xFF) as u64;
+    let mix = |t: u32, sum: u64| ((t as u64 * a + sum / n * (255 - a)) / 255) as u8;
+    Color::rgb(mix((tint.0 >> 16) & 0xFF, r), mix((tint.0 >> 8) & 0xFF, g), mix(tint.0 & 0xFF, b))
+}
+
 /// Standard popup background: mica, a hairline border and rounded corners.
 /// Call [`round_corners`] after drawing the content.
 pub fn popup_background(c: &mut Canvas, blurred: &Bitmap, origin: (i32, i32)) {

@@ -427,7 +427,7 @@ impl Shell {
         spec.app_id = "agent".into();
         match Host::new(&self.display, spec) {
             Ok(host) => {
-                self.agent_win = Some(Popup { host, ui: agent::AgentWindow::new((r.x, r.y)) });
+                self.agent_win = Some(Popup { host, ui: agent::AgentWindow::new() });
                 self.model.agent.window_open = true;
                 // Approvals now appear in the window.
                 self.notes.remove_approvals(self.model.screen);
