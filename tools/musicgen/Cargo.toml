@@ -1,0 +1,23 @@
+[package]
+name = "musicgen"
+description = "Composes and renders the sample music shipped with Vindows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+default-run = "musicgen"
+
+[[bin]]
+name = "musicgen"
+path = "src/main.rs"
+
+[[bin]]
+name = "audiocheck"
+path = "src/audiocheck.rs"
+
+[dependencies]
+vaudio = { workspace = true }
+vimage = { workspace = true }
+
+[lints]
+workspace = true

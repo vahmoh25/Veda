@@ -1,0 +1,12 @@
+[package]
+name = "vaudio"
+description = "Audio formats, mixing, resampling and synthesis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vmath = { workspace = true }
+
+[lints]
+workspace = true

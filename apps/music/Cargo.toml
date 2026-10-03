@@ -1,0 +1,27 @@
+[package]
+name = "music"
+description = "Music player"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "music"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+vui = { workspace = true }
+vgfx = { workspace = true }
+vmath = { workspace = true }
+vaudio = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true
