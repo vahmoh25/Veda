@@ -79,8 +79,8 @@ eager FPU/SSE/AVX state switching with XSAVE.
 ## User space
 
 * **Executables** are PE32+ images (built for `x86_64-pc-windows-msvc` with
-  `#![no_std]`, linked at `0x140000000` with no imports), so C++ compiled by
-  MSVC links straight in.
+  `#![no_std]`, linked at `0x140000000` with no imports): this target gives
+  stable Rust hard-float SSE code, while the kernel is soft-float.
 * **`vrt`** is the runtime every program links: entry point and startup
   message, syscall wrappers, heap (TLSF), threads, futex-based locks, time,
   logging and process creation.
@@ -177,10 +177,11 @@ Frames are drawn only when input arrives or an animation asks for one.
 There is no GPU: `v3d` renders on the CPU, usually under QEMU's TCG
 emulator, where integer instructions are cheap and floating point is very
 expensive. Floating point is therefore used once per draw call (matrices
-and light parameters, in Rust); everything per vertex and per pixel is
-fixed-point integer code in a freestanding C++20 core (`lib/v3d/cpp`).
-`vbuild` compiles it with MSVC, Rust calls it through a small C ABI
-(`src/ffi.rs`), and the core never allocates: Rust owns all memory.
+and light parameters); everything per vertex and per pixel is fixed-point
+integer code (`src/pipeline`). Each render mode gets its own monomorphised
+rasteriser, and hot loops are kept scalar: TCG emulates SSE integer
+multiplies with slow helper calls, so auto-vectorised loops would be
+several times slower there.
 
 * **Geometry.** Objects outside the view frustum are skipped. Vertices are
   transformed and lit (Gouraud: sun, hemisphere ambient, point lights, fog)
@@ -244,7 +245,7 @@ the pool's workers on different CPUs at once.
 | `lib/ipc`, `lib/proto` | message encoding and the service protocols |
 | `lib/gfx`, `lib/ui`, `lib/text` | 2D drawing, the GUI toolkit, the text editing model |
 | `lib/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
-| `lib/v3d` | the software 3D renderer (Rust with a C++ core) and the game harness |
+| `lib/v3d` | the fixed-point software 3D renderer and the game harness |
 | `lib/audio` | audio formats, resampling, mixing, FFT and the synthesiser |
 | `lib/virtio` | virtio device access shared by the drivers |
 | `services/`, `drivers/`, `apps/`, `games/` | system services, drivers, applications and games |

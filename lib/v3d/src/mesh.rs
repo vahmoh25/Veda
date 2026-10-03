@@ -13,8 +13,8 @@ use alloc::vec::Vec;
 
 use vmath::{Mat3, Mat4, Vec2, Vec3};
 
-use crate::ffi::FxVertex;
 use crate::fixed::{fx14, fx16};
+use crate::pipeline::FxVertex;
 
 /// A mesh vertex.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,7 +127,6 @@ pub(crate) fn pack_vertex(v: &Vertex) -> FxVertex {
         nx: fx14(n.x).clamp(-16384, 16384) as i16,
         ny: fx14(n.y).clamp(-16384, 16384) as i16,
         nz: fx14(n.z).clamp(-16384, 16384) as i16,
-        pad: 0,
         u: fx16(v.uv.x),
         v: fx16(v.uv.y),
         color: v.color,

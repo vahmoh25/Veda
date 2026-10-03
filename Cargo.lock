@@ -254,7 +254,6 @@ name = "v3d"
 version = "0.1.0"
 dependencies = [
  "vabi",
- "vbuild",
  "vgfx",
  "vmath",
  "vproto",

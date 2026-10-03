@@ -5,7 +5,7 @@
 //!
 //! 1. [`Renderer::frame`] starts a [`Frame`]; every [`Frame::draw`] culls the
 //!    object against the view frustum and converts its matrices, material
-//!    and lights into the fixed-point parameters of the C++ core.
+//!    and lights into the fixed-point parameters of the [`pipeline`].
 //! 2. When the frame ends, opaque draws are sorted front to back (early
 //!    depth rejection) and blended ones back to front. Every draw is split
 //!    into chunks of triangles; the chunks are divided into contiguous,
@@ -30,10 +30,10 @@ use vmath::{FloatExt, Mat4, Vec2, Vec3};
 use crate::camera::{Camera, Frustum};
 use crate::clip::clip_triangle;
 use crate::env::Environment;
-use crate::ffi::{self, FxPointLight, FxVertex, MAX_POINT_LIGHTS, Setup, TVert, Target, Tri, Xform};
 use crate::fixed::{alpha_of, dir14, fx8, fx16, out_rgb, rgb_of};
 use crate::material::{Blend, Cull, Material, Shading};
 use crate::mesh::{CHUNK_TRIS, Chunk, Mesh, Vertex, build_chunks, pack_vertex};
+use crate::pipeline::{self, FxPointLight, FxVertex, MAX_POINT_LIGHTS, Setup, TVert, Target, Tri, Xform};
 use crate::pool::{ThreadPool, partition};
 use crate::texture::{Texture, TextureId};
 
@@ -361,7 +361,8 @@ impl Renderer {
                 let t0 = clock();
                 // SAFETY: the buffers hold w*h and (2w)*(2h) pixels.
                 unsafe {
-                    let func = if f == Upscale2x::FastSimd { ffi::v3d_upscale2x_fast } else { ffi::v3d_upscale2x_swar };
+                    let func =
+                        if f == Upscale2x::FastSimd { pipeline::upscale2x_fast } else { pipeline::upscale2x_swar };
                     func(self.color.as_ptr(), w, h, w, dst.as_mut_ptr(), 2 * w, 0, 2 * h);
                 }
                 let dt = clock() - t0;
@@ -438,14 +439,14 @@ impl Renderer {
         match mat.shading {
             Shading::Unlit => {}
             Shading::Lambert | Shading::Phong { .. } => {
-                flags |= ffi::XF_LIT;
+                flags |= pipeline::XF_LIT;
                 xf.light_dir = dir14(to_obj(sun));
                 xf.up_dir = dir14(to_obj(Vec3::Y));
                 xf.sun_rgb = rgb8(env.sun_color * base);
                 xf.sky_rgb = rgb8(env.sky_ambient * base);
                 xf.ground_rgb = rgb8(env.ground_ambient * base);
                 if let Shading::Phong { shininess, specular } = mat.shading {
-                    flags |= ffi::XF_SPECULAR;
+                    flags |= pipeline::XF_SPECULAR;
                     let view_dir = (self.camera.position - center_world).normalize_or(Vec3::Y);
                     xf.half_dir = dir14(to_obj((sun + view_dir).normalize_or(sun)));
                     xf.spec_rgb = out_rgb(specular * env.sun_color);
@@ -471,7 +472,6 @@ impl Renderer {
                         pos: [fx16(p.x), fx16(p.y), fx16(p.z)],
                         radius: fx16(l.radius / scale),
                         rgb: [c[0], c[1], c[2]],
-                        pad: 0,
                     };
                     xf.num_points = k as i32 + 1;
                 }
@@ -481,15 +481,15 @@ impl Renderer {
         xf.base_rgba = [b[0], b[1], b[2], (alpha * 256.0 + 0.5) as i32];
         xf.emit_rgb = out_rgb(mat.emissive);
         if mat.vertex_colors {
-            flags |= ffi::XF_VCOLOR;
+            flags |= pipeline::XF_VCOLOR;
         }
         if mat.two_sided_lighting {
-            flags |= ffi::XF_TWO_SIDED;
+            flags |= pipeline::XF_TWO_SIDED;
         }
         if let (Some(fog), true) = (env.fog, mat.fog) {
-            flags |= ffi::XF_FOG;
+            flags |= pipeline::XF_FOG;
             if matches!(mat.blend, Blend::Additive | Blend::Alpha) {
-                flags |= ffi::XF_FOG_FADE;
+                flags |= pipeline::XF_FOG_FADE;
             }
             xf.fog_rgb = out_rgb(fog.color);
             xf.fog_start = fx16(fog.start);
@@ -514,41 +514,40 @@ impl Renderer {
     fn make_setup(&self, mat: &Material) -> Setup {
         let tex = mat.texture.and_then(|t| self.textures.get(t.0 as usize));
         let mut mode = match mat.blend {
-            Blend::Opaque => ffi::M_OPAQUE,
-            Blend::Alpha => ffi::M_ALPHA,
-            Blend::Additive => ffi::M_ADD,
-            Blend::Multiply => ffi::M_MUL,
+            Blend::Opaque => pipeline::M_OPAQUE,
+            Blend::Alpha => pipeline::M_ALPHA,
+            Blend::Additive => pipeline::M_ADD,
+            Blend::Multiply => pipeline::M_MUL,
         };
         if tex.is_some() {
-            mode |= ffi::M_TEX;
+            mode |= pipeline::M_TEX;
             if mat.alpha_test {
-                mode |= ffi::M_ATEST;
+                mode |= pipeline::M_ATEST;
             }
             if mat.bilinear {
-                mode |= ffi::M_BILINEAR;
+                mode |= pipeline::M_BILINEAR;
             }
             if mat.affine {
-                mode |= ffi::M_AFFINE;
+                mode |= pipeline::M_AFFINE;
             }
         }
         if mat.depth_test {
-            mode |= ffi::M_ZTEST;
+            mode |= pipeline::M_ZTEST;
         }
         if mat.depth_write {
-            mode |= ffi::M_ZWRITE;
+            mode |= pipeline::M_ZWRITE;
         }
         Setup {
             width: self.width,
             height: self.height,
             mode,
             cull: match mat.cull {
-                Cull::Back => ffi::CULL_BACK,
-                Cull::Front => ffi::CULL_FRONT,
-                Cull::None => ffi::CULL_NONE,
+                Cull::Back => pipeline::CULL_BACK,
+                Cull::Front => pipeline::CULL_FRONT,
+                Cull::None => pipeline::CULL_NONE,
             },
-            tex: tex.map(|t| &t.fx as *const ffi::FxTexture).unwrap_or(core::ptr::null()),
+            tex: tex.map(|t| &t.fx as *const pipeline::FxTexture).unwrap_or(core::ptr::null()),
             lod_bias: mat.lod_bias,
-            pad: 0,
         }
     }
 
@@ -565,7 +564,7 @@ impl Renderer {
         let mut setup = self.make_setup(mat);
         let layer = if sky {
             // Only where no geometry was drawn: test depth, never write it.
-            setup.mode = (setup.mode | ffi::M_ZTEST) & !ffi::M_ZWRITE;
+            setup.mode = (setup.mode | pipeline::M_ZTEST) & !pipeline::M_ZWRITE;
             LAYER_SKY
         } else if mat.is_blended() {
             LAYER_BLENDED
@@ -678,7 +677,7 @@ impl Renderer {
             let rows = &self.row_colors;
             let (tx, w, h) = (self.tiles_x, self.width, self.height);
             let next = AtomicUsize::new(0);
-            let mut counters = [ffi::RasterStats::default(); 16];
+            let mut counters = [pipeline::RasterStats::default(); 16];
             let counters_ptr = SharedPtr(counters.as_mut_ptr());
             let mut busy = [0u64; 16];
             let busy_ptr = SharedPtr(busy.as_mut_ptr());
@@ -705,21 +704,11 @@ impl Renderer {
                     // is written by one thread; the triangle and bin arrays
                     // are only read during this phase.
                     unsafe {
-                        ffi::v3d_clear_rect(t, x0, y0, x1, y1, rows.as_ptr());
+                        pipeline::clear_rect(&*t, x0, y0, x1, y1, rows);
                         for wk in workers {
                             let bin = &wk.bins[tile as usize];
                             if !bin.is_empty() {
-                                ffi::v3d_raster(
-                                    t,
-                                    x0,
-                                    y0,
-                                    x1,
-                                    y1,
-                                    wk.tris.as_ptr(),
-                                    bin.as_ptr(),
-                                    bin.len() as i32,
-                                    st,
-                                );
+                                pipeline::raster(&*t, x0, y0, x1, y1, &wk.tris, bin, st);
                             }
                         }
                     }
@@ -784,10 +773,10 @@ impl Renderer {
         let bands = (threads * 2).max(1);
         let two = dst_w == 2 * sw as usize && dst_h == 2 * sh as usize;
         let same = dst_w == sw as usize && dst_h == sh as usize;
-        let up2: unsafe extern "C" fn(*const u32, i32, i32, i32, *mut u32, i32, i32, i32) = match self.upscale2x {
-            Upscale2x::Smooth => ffi::v3d_upscale2x,
-            Upscale2x::FastSimd => ffi::v3d_upscale2x_fast,
-            Upscale2x::FastScalar => ffi::v3d_upscale2x_swar,
+        let up2: unsafe fn(*const u32, i32, i32, i32, *mut u32, i32, i32, i32) = match self.upscale2x {
+            Upscale2x::Smooth => pipeline::upscale2x,
+            Upscale2x::FastSimd => pipeline::upscale2x_fast,
+            Upscale2x::FastScalar => pipeline::upscale2x_swar,
         };
         self.pool.for_each(bands, &|i| {
             let mut y0 = dst_h * i / bands;
@@ -812,7 +801,19 @@ impl Renderer {
                         );
                     }
                 } else {
-                    ffi::v3d_upscale(src, sw, sh, sw, out.get(), dst_w as i32, dst_h as i32, dst_stride as i32, y0, y1);
+                    let src = core::slice::from_raw_parts(src, (sw * sh) as usize);
+                    pipeline::upscale(
+                        src,
+                        sw,
+                        sh,
+                        sw,
+                        out.get(),
+                        dst_w as i32,
+                        dst_h as i32,
+                        dst_stride as i32,
+                        y0,
+                        y1,
+                    );
                 }
             }
         });
@@ -848,33 +849,12 @@ impl GeomCtx<'_> {
         let vs = &vertices[c.vmin as usize..(c.vmin + c.vcount) as usize];
         let idx = &local[c.tri_start as usize * 3..(c.tri_start + c.tri_count) as usize * 3];
         let n = c.tri_count as usize;
-        w.tverts.clear();
-        w.tverts.reserve(vs.len());
         w.tris.reserve(n);
         w.deferred.clear();
-        w.deferred.reserve(n);
         let base = w.tris.len();
-        let mut nd = 0i32;
-        // SAFETY: capacities were reserved above; the core writes `vs.len()`
-        // transformed vertices, at most `n` triangles and `n` deferred
-        // indices, and reads indices that are local to `vs`.
-        let made = unsafe {
-            ffi::v3d_transform(&d.xform, vs.as_ptr(), vs.len() as i32, w.tverts.as_mut_ptr());
-            w.tverts.set_len(vs.len());
-            let made = ffi::v3d_setup_batch(
-                &d.setup,
-                w.tverts.as_ptr(),
-                idx.as_ptr(),
-                n as i32,
-                w.tris.as_mut_ptr().add(base),
-                w.deferred.as_mut_ptr(),
-                &mut nd,
-            );
-            w.deferred.set_len(nd.max(0) as usize);
-            made.max(0) as usize
-        };
-        // SAFETY: the core initialised `made` triangles after `base`.
-        unsafe { w.tris.set_len(base + made) };
+        pipeline::transform(&d.xform, vs, &mut w.tverts);
+        // SAFETY: the draw's texture outlives the frame.
+        unsafe { pipeline::setup_batch(&d.setup, &w.tverts, idx, &mut w.tris, &mut w.deferred) };
         w.triangles += c.tri_count;
         // Triangles crossing the near plane or the guard band.
         for k in 0..w.deferred.len() {
@@ -884,13 +864,8 @@ impl GeomCtx<'_> {
             w.clipped += 1;
             let tris = &mut w.tris;
             clip_triangle(&d.xform, &a, &b, &cc, |p, q, r| {
-                tris.push(Tri::ZERO);
-                let at = tris.len() - 1;
-                // SAFETY: valid vertices and a slot for the result.
-                let ok = unsafe { ffi::v3d_setup_tri(&d.setup, p, q, r, &mut tris[at]) };
-                if ok == 0 {
-                    tris.pop();
-                }
+                // SAFETY: the draw's texture outlives the frame.
+                unsafe { pipeline::setup_tri(&d.setup, p, q, r, tris) };
             });
         }
         // Bin the new triangles.

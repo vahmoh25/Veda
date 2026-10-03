@@ -8,10 +8,7 @@ These rules apply to every crate in the repository.
   features, no `RUSTC_BOOTSTRAP`.
 * **No external crates.** Everything is written from scratch in this
   repository. `core`, `alloc` and (for host tools only) `std` are available.
-* C++ (MSVC, C++20, freestanding: no exceptions, no RTTI, no CRT, no STL) is
-  used for selected performance-critical components. C++ code is compiled by
-  the `vbuild` helper from a crate's `build.rs` and exposed to Rust through a
-  small `extern "C"` API with a safe Rust wrapper.
+* **Rust only**, performance-critical code included (see Performance below).
 
 ## Targets
 
@@ -46,8 +43,12 @@ Vindows usually runs under QEMU's TCG emulator, which is roughly 5-20x
 slower than native code. Hot loops (pixel processing, rasterisation, codecs)
 should avoid per-pixel divisions, allocation and bounds-check-heavy indexing,
 prefer integer/fixed-point arithmetic where it is natural, and process data in
-cache-friendly order. Always build the OS with optimisations (`--release` is
-the default for `cargo xtask`).
+cache-friendly order. TCG emulates SSE integer multiplies and shuffles with
+slow helper calls, so a hot loop that LLVM auto-vectorises can become
+several times slower than its scalar form: check the generated code of hot
+loops and keep them scalar where needed (`scalar_loop` in
+`lib/v3d/src/pipeline`). Always build the OS with optimisations (`--release`
+is the default for `cargo xtask`).
 
 ## Robustness and errors
 

@@ -8,7 +8,7 @@ use std::vec::Vec;
 
 use vmath::{Mat4, Quat, Vec2, Vec3};
 
-use crate::ffi::{self, Setup, TVert, Target, Tri};
+use crate::pipeline::{self, Setup, TVert, Target, Tri};
 use crate::*;
 
 // -- Helpers -----------------------------------------------------------------
@@ -107,10 +107,10 @@ impl Canvas {
 
     /// Sets up and rasterises one triangle over the whole canvas.
     fn tri(&mut self, a: TVert, b: TVert, c: TVert, mode: u32, cull: u32) -> bool {
-        let s = Setup { width: self.w, height: self.h, mode, cull, tex: core::ptr::null(), lod_bias: 0, pad: 0 };
-        let mut t = Tri::ZERO;
-        // SAFETY: valid inputs and output.
-        if unsafe { ffi::v3d_setup_tri(&s, &a, &b, &c, &mut t) } == 0 {
+        let s = Setup { width: self.w, height: self.h, mode, cull, tex: core::ptr::null(), lod_bias: 0 };
+        let mut tris: Vec<Tri> = Vec::new();
+        // SAFETY: untextured.
+        if !unsafe { pipeline::setup_tri(&s, &a, &b, &c, &mut tris) } {
             return false;
         }
         let target = Target {
@@ -120,9 +120,8 @@ impl Canvas {
             width: self.w,
             height: self.h,
         };
-        let idx = [0u32];
-        // SAFETY: one triangle, valid target.
-        unsafe { ffi::v3d_raster(&target, 0, 0, self.w, self.h, &t, idx.as_ptr(), 1, core::ptr::null_mut()) };
+        // SAFETY: the target's buffers match its size; untextured.
+        unsafe { pipeline::raster(&target, 0, 0, self.w, self.h, &tris, &[0], &mut pipeline::RasterStats::default()) };
         true
     }
 
@@ -131,8 +130,8 @@ impl Canvas {
     }
 }
 
-const ADD: u32 = ffi::M_ADD;
-const OPAQUE_Z: u32 = ffi::M_OPAQUE | ffi::M_ZTEST | ffi::M_ZWRITE;
+const ADD: u32 = pipeline::M_ADD;
+const OPAQUE_Z: u32 = pipeline::M_OPAQUE | pipeline::M_ZTEST | pipeline::M_ZWRITE;
 
 // -- Rasterisation -------------------------------------------------------------
 
@@ -145,8 +144,8 @@ fn top_left_rule_square_through_pixel_centres() {
     let (a, b, c, d) = (sv(2.5, 2.5, 100, red), sv(6.5, 2.5, 100, red), sv(6.5, 6.5, 100, red), sv(2.5, 6.5, 100, red));
     // Counter-clockwise on screen (y down) is clockwise in NDC: draw both
     // windings without culling.
-    assert!(cv.tri(a, d, c, ADD, ffi::CULL_NONE));
-    assert!(cv.tri(a, c, b, ADD, ffi::CULL_NONE));
+    assert!(cv.tri(a, d, c, ADD, pipeline::CULL_NONE));
+    assert!(cv.tri(a, c, b, ADD, pipeline::CULL_NONE));
     for y in 0..10 {
         for x in 0..10 {
             let inside = (2..6).contains(&x) && (2..6).contains(&y);
@@ -170,7 +169,7 @@ fn shared_edges_cover_every_pixel_exactly_once() {
         .collect();
     for i in 0..17 {
         let (p, q) = (ring[i], ring[(i + 1) % 17]);
-        cv.tri(sv(center.0, center.1, 1, one), sv(p.0, p.1, 1, one), sv(q.0, q.1, 1, one), ADD, ffi::CULL_NONE);
+        cv.tri(sv(center.0, center.1, 1, one), sv(p.0, p.1, 1, one), sv(q.0, q.1, 1, one), ADD, pipeline::CULL_NONE);
     }
     for y in 0..64 {
         for x in 0..64 {
@@ -184,10 +183,10 @@ fn back_faces_are_culled() {
     let mut cv = Canvas::new(8, 8);
     let (a, b, c) = (sv(1.0, 1.0, 1, 0xFFFFFF), sv(7.0, 1.0, 1, 0xFFFFFF), sv(1.0, 7.0, 1, 0xFFFFFF));
     // As seen on screen, a -> c -> b runs counter-clockwise: a front face.
-    assert!(cv.tri(a, c, b, OPAQUE_Z, ffi::CULL_BACK));
-    assert!(!cv.tri(a, b, c, OPAQUE_Z, ffi::CULL_BACK));
-    assert!(!cv.tri(a, c, b, OPAQUE_Z, ffi::CULL_FRONT));
-    assert!(cv.tri(a, b, c, OPAQUE_Z, ffi::CULL_FRONT));
+    assert!(cv.tri(a, c, b, OPAQUE_Z, pipeline::CULL_BACK));
+    assert!(!cv.tri(a, b, c, OPAQUE_Z, pipeline::CULL_BACK));
+    assert!(!cv.tri(a, c, b, OPAQUE_Z, pipeline::CULL_FRONT));
+    assert!(cv.tri(a, b, c, OPAQUE_Z, pipeline::CULL_FRONT));
 }
 
 #[test]
@@ -197,8 +196,8 @@ fn depth_test_keeps_the_nearest_surface() {
         let near = [sv(0.0, 0.0, 2000, 0xFF0000), sv(16.0, 0.0, 2000, 0xFF0000), sv(0.0, 16.0, 2000, 0xFF0000)];
         let far = [sv(0.0, 0.0, 1000, 0x00FF00), sv(16.0, 0.0, 1000, 0x00FF00), sv(0.0, 16.0, 1000, 0x00FF00)];
         let (first, second) = if order { (near, far) } else { (far, near) };
-        cv.tri(first[0], first[1], first[2], OPAQUE_Z, ffi::CULL_NONE);
-        cv.tri(second[0], second[1], second[2], OPAQUE_Z, ffi::CULL_NONE);
+        cv.tri(first[0], first[1], first[2], OPAQUE_Z, pipeline::CULL_NONE);
+        cv.tri(second[0], second[1], second[2], OPAQUE_Z, pipeline::CULL_NONE);
         assert_eq!(cv.at(3, 3), 0xFF0000, "order {order}");
     }
 }
@@ -209,10 +208,10 @@ fn depth_interpolates_across_an_intersection() {
     let mut cv = Canvas::new(32, 8);
     let r = |x: f32, y: f32, q: i32| sv(x, y, q, 0xFF0000);
     let g = |x: f32, y: f32, q: i32| sv(x, y, q, 0x00FF00);
-    cv.tri(r(0.0, 0.0, 1000), r(32.0, 0.0, 3000), r(0.0, 8.0, 1000), OPAQUE_Z, ffi::CULL_NONE);
-    cv.tri(r(32.0, 0.0, 3000), r(32.0, 8.0, 3000), r(0.0, 8.0, 1000), OPAQUE_Z, ffi::CULL_NONE);
-    cv.tri(g(0.0, 0.0, 3000), g(32.0, 0.0, 1000), g(0.0, 8.0, 3000), OPAQUE_Z, ffi::CULL_NONE);
-    cv.tri(g(32.0, 0.0, 1000), g(32.0, 8.0, 1000), g(0.0, 8.0, 3000), OPAQUE_Z, ffi::CULL_NONE);
+    cv.tri(r(0.0, 0.0, 1000), r(32.0, 0.0, 3000), r(0.0, 8.0, 1000), OPAQUE_Z, pipeline::CULL_NONE);
+    cv.tri(r(32.0, 0.0, 3000), r(32.0, 8.0, 3000), r(0.0, 8.0, 1000), OPAQUE_Z, pipeline::CULL_NONE);
+    cv.tri(g(0.0, 0.0, 3000), g(32.0, 0.0, 1000), g(0.0, 8.0, 3000), OPAQUE_Z, pipeline::CULL_NONE);
+    cv.tri(g(32.0, 0.0, 1000), g(32.0, 8.0, 1000), g(0.0, 8.0, 3000), OPAQUE_Z, pipeline::CULL_NONE);
     assert_eq!(cv.at(4, 4), 0x00FF00);
     assert_eq!(cv.at(28, 4), 0xFF0000);
 }
@@ -224,8 +223,8 @@ fn gouraud_colours_interpolate() {
     let b = sv(64.0, 0.0, 1, 0xFF0000);
     let c = sv(64.0, 4.0, 1, 0xFF0000);
     let d = sv(0.0, 4.0, 1, 0x000000);
-    cv.tri(a, b, c, ffi::M_OPAQUE, ffi::CULL_NONE);
-    cv.tri(a, c, d, ffi::M_OPAQUE, ffi::CULL_NONE);
+    cv.tri(a, b, c, pipeline::M_OPAQUE, pipeline::CULL_NONE);
+    cv.tri(a, c, d, pipeline::M_OPAQUE, pipeline::CULL_NONE);
     let mid = (cv.at(32, 2) >> 16) as i32;
     assert!((mid - 128).abs() <= 3, "mid {mid}");
     assert!(cv.at(1, 2) >> 16 <= 8 && cv.at(62, 2) >> 16 >= 247);
@@ -286,9 +285,9 @@ fn triangle_behind_the_camera_is_invisible() {
 
 /// Viewport and clipping parameters for a `w` x `h` target: near plane at
 /// `near`, guard band at 8x the half viewport.
-fn clip_xform(w: i32, h: i32, near: f32) -> ffi::Xform {
+fn clip_xform(w: i32, h: i32, near: f32) -> pipeline::Xform {
     let (half_w, half_h) = (w * 8, h * 8); // 28.4
-    ffi::Xform {
+    pipeline::Xform {
         near_w: crate::fixed::fx16(near),
         far_w: crate::fixed::fx16(1000.0),
         guard: 8 << 16,
@@ -297,13 +296,13 @@ fn clip_xform(w: i32, h: i32, near: f32) -> ffi::Xform {
         vp_sx: half_w,
         vp_sy: half_h,
         q_scale: (crate::fixed::fx16(near) as i64) << 30,
-        ..ffi::Xform::default()
+        ..pipeline::Xform::default()
     }
 }
 
 /// A clip-space vertex (white in the additive colour) with texture `u`,
 /// projected to get its outcode and screen position.
-fn clip_vertex(xf: &ffi::Xform, x: f32, y: f32, w: f32, u: f32) -> TVert {
+fn clip_vertex(xf: &pipeline::Xform, x: f32, y: f32, w: f32, u: f32) -> TVert {
     let f = crate::fixed::fx16;
     let mut v = TVert {
         cx: f(x),
@@ -318,8 +317,7 @@ fn clip_vertex(xf: &ffi::Xform, x: f32, y: f32, w: f32, u: f32) -> TVert {
         add: [0xFF00; 3],
         outcode: 0,
     };
-    // SAFETY: valid vertex and parameters.
-    unsafe { ffi::v3d_project(xf, &mut v) };
+    pipeline::project(xf, &mut v);
     v
 }
 
@@ -335,7 +333,7 @@ fn near_plane_clipping_keeps_the_visible_quad() {
     let a = clip_vertex(&xf, -1.0, -1.0, 2.0, 0.0);
     let b = clip_vertex(&xf, 1.0, -1.0, 2.0, 0.0);
     let c = clip_vertex(&xf, 0.0, 1.0, -1.0, 1.0);
-    assert!(c.outcode & ffi::OC_NEAR != 0 && (a.outcode | b.outcode) & ffi::OC_NEAR == 0);
+    assert!(c.outcode & pipeline::OC_NEAR != 0 && (a.outcode | b.outcode) & pipeline::OC_NEAR == 0);
     let mut out: Vec<[TVert; 3]> = Vec::new();
     crate::clip::clip_triangle(&xf, &a, &b, &c, |p, q, r| out.push([*p, *q, *r]));
     // One vertex behind the near plane leaves a quad: two triangles.
@@ -352,7 +350,7 @@ fn near_plane_clipping_keeps_the_visible_quad() {
     for t in &out {
         assert!(screen_area(t) < 0, "winding flipped");
         for v in t {
-            assert!(v.cw >= xf.near_w && v.outcode & ffi::OC_NEAR == 0);
+            assert!(v.cw >= xf.near_w && v.outcode & pipeline::OC_NEAR == 0);
             assert!(v.q > 0);
         }
     }
@@ -372,7 +370,7 @@ fn guard_band_clipping_bounds_huge_triangles() {
     let a = clip_vertex(&xf, -5000.0, -1.0, 1.0, 0.0);
     let b = clip_vertex(&xf, 5000.0, -1.0, 1.0, 0.0);
     let c = clip_vertex(&xf, 0.0, 1.0, 1.0, 0.0);
-    assert!(a.outcode & ffi::OC_GUARD != 0 && b.outcode & ffi::OC_GUARD != 0);
+    assert!(a.outcode & pipeline::OC_GUARD != 0 && b.outcode & pipeline::OC_GUARD != 0);
     let mut out: Vec<[TVert; 3]> = Vec::new();
     crate::clip::clip_triangle(&xf, &a, &b, &c, |p, q, r| out.push([*p, *q, *r]));
     assert!(!out.is_empty());
@@ -384,7 +382,7 @@ fn guard_band_clipping_bounds_huge_triangles() {
     // ... and the pieces still cover the whole viewport, without gaps.
     let mut cv = Canvas::new(64, 64);
     for t in &out {
-        cv.tri(t[0], t[1], t[2], ADD, ffi::CULL_NONE);
+        cv.tri(t[0], t[1], t[2], ADD, pipeline::CULL_NONE);
     }
     for y in 0..64 {
         for x in 0..64 {
@@ -549,10 +547,10 @@ fn general_upscaler_matches_reference_bilinear() {
         // In two bands, as presenting splits the work between threads.
         let split = dh as i32 / 2;
         for (y0, y1) in [(0, split), (split, dh as i32)] {
-            // SAFETY: the buffers hold sw*sh and dw*dh pixels.
+            // SAFETY: the destination holds dw*dh pixels.
             unsafe {
-                ffi::v3d_upscale(
-                    src.as_ptr(),
+                pipeline::upscale(
+                    &src,
                     sw as i32,
                     sh as i32,
                     sw as i32,
@@ -574,7 +572,7 @@ fn general_upscaler_matches_reference_bilinear() {
     }
 }
 
-type Upscale2xFn = unsafe extern "C" fn(*const u32, i32, i32, i32, *mut u32, i32, i32, i32);
+type Upscale2xFn = unsafe fn(*const u32, i32, i32, i32, *mut u32, i32, i32, i32);
 
 #[test]
 fn fast_2x_filters_agree_and_respect_bands() {
@@ -592,11 +590,11 @@ fn fast_2x_filters_agree_and_respect_bands() {
     };
     let whole = [(0, dh as i32)];
     let split = [(0, 5), (5, 6), (6, 13), (13, dh as i32)];
-    let simd = run(ffi::v3d_upscale2x_fast, &whole);
-    let swar = run(ffi::v3d_upscale2x_swar, &whole);
+    let simd = run(pipeline::upscale2x_fast, &whole);
+    let swar = run(pipeline::upscale2x_swar, &whole);
     assert!(simd == swar, "SSE2 and scalar fast filters differ");
-    assert!(run(ffi::v3d_upscale2x_fast, &split) == simd);
-    assert!(run(ffi::v3d_upscale2x_swar, &split) == swar);
+    assert!(run(pipeline::upscale2x_fast, &split) == simd);
+    assert!(run(pipeline::upscale2x_swar, &split) == swar);
     // Source pixels land on the even output pixels; the others average
     // their neighbours (sampling at the source pixel corners).
     for y in 0..sh {
@@ -606,8 +604,8 @@ fn fast_2x_filters_agree_and_respect_bands() {
     }
     // The smooth filter is pixel-centre aligned bilinear, like the general
     // scaler at exactly 2x.
-    let smooth = run(ffi::v3d_upscale2x, &split);
-    assert!(run(ffi::v3d_upscale2x, &whole) == smooth);
+    let smooth = run(pipeline::upscale2x, &split);
+    assert!(run(pipeline::upscale2x, &whole) == smooth);
     for y in 0..dh {
         for x in 0..dw {
             let want = bilinear_reference(&src, sw, sh, dw, dh, x, y);
@@ -768,7 +766,20 @@ fn render_test_scene() {
     let top = px[2 * w + w / 2];
     assert!(top & 0xFF > (top >> 16) & 0xFF, "sky {top:08x}");
     save_png("v3d-scene.png", w, h, px);
+    let scene_hash = fnv1a(px);
     let mut big = vec![0u32; w * 2 * h * 2];
     r.present(&mut big, w * 2, w * 2, h * 2);
     save_png("v3d-scene-2x.png", w * 2, h * 2, &big);
+    // The exact image. Rendering is deterministic (one thread), so any change
+    // to these hashes is a change to the renderer's output: check the PNGs
+    // ($V3D_TEST_OUT) and update the hashes if it is intended.
+    assert_eq!((scene_hash, fnv1a(&big)), (0x62b4_ca3c_6147_8e8e, 0x0ba1_525e_6c4c_d760), "rendered image changed");
+}
+
+/// FNV-1a hash of an image.
+fn fnv1a(pixels: &[u32]) -> u64 {
+    pixels
+        .iter()
+        .flat_map(|p| p.to_le_bytes())
+        .fold(0xCBF2_9CE4_8422_2325, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01B3))
 }

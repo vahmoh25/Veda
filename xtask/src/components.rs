@@ -3,9 +3,9 @@
 //! * The UEFI loader and the kernel are built for `x86_64-unknown-uefi`
 //!   (freestanding, soft-float, PE/COFF output).
 //! * User-space programs are `no_std` PE executables built for
-//!   `x86_64-pc-windows-msvc`, which gives us hard-float SSE code and lets us
-//!   link C++ objects produced by MSVC. Each program's `build.rs` (via the
-//!   `vbuild` helper crate) supplies the Vindows-specific linker options.
+//!   `x86_64-pc-windows-msvc`, which gives us hard-float SSE code on stable
+//!   Rust, linked by the Microsoft linker. Each program's `build.rs` (via
+//!   the `vbuild` helper crate) supplies the Vindows-specific linker options.
 
 use std::path::PathBuf;
 

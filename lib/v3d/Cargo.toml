@@ -1,6 +1,6 @@
 [package]
 name = "v3d"
-description = "Vindows 3D: a multi-threaded software renderer with a C++ rasterizer core"
+description = "Vindows 3D: a multi-threaded fixed-point software renderer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,9 +16,6 @@ vabi = { workspace = true }
 vui = { workspace = true, optional = true }
 vgfx = { workspace = true, optional = true }
 vproto = { workspace = true, optional = true }
-
-[build-dependencies]
-vbuild = { workspace = true }
 
 [lints]
 workspace = true

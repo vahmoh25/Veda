@@ -2,8 +2,8 @@
 //!
 //! * [`user_program`] emits the linker options that turn a `no_std` binary
 //!   into a Vindows PE executable (fixed base, custom entry point, no CRT).
-//! * [`compile_cpp`] compiles freestanding C++ sources with MSVC and links
-//!   them into the crate.
+//! * [`find_msvc`] locates the Microsoft linker, which Rust's
+//!   `x86_64-pc-windows-msvc` target links with (`cargo xtask doctor`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -36,11 +36,10 @@ pub fn user_program() {
     }
 }
 
-/// Locations of the MSVC tools.
+/// The MSVC tools Vindows needs.
 pub struct Msvc {
-    pub cl: PathBuf,
-    pub lib: PathBuf,
-    pub include: PathBuf,
+    /// The linker, `link.exe`.
+    pub link: PathBuf,
 }
 
 /// Finds MSVC through `vswhere` (or the `VCToolsInstallDir` environment
@@ -65,7 +64,7 @@ pub fn find_msvc() -> Result<Msvc, String> {
             .map_err(|e| format!("running {}: {e}", vswhere.display()))?;
         let install = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if install.is_empty() {
-            return Err("Visual Studio with the C++ tools was not found".into());
+            return Err("Visual Studio (or its Build Tools) with the MSVC build tools was not found".into());
         }
         let version_file = Path::new(&install).join(r"VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt");
         let version = std::fs::read_to_string(&version_file)
@@ -74,59 +73,9 @@ pub fn find_msvc() -> Result<Msvc, String> {
             .to_string();
         Path::new(&install).join(r"VC\Tools\MSVC").join(version)
     };
-    let bin = tools_dir.join(r"bin\Hostx64\x64");
-    let msvc = Msvc { cl: bin.join("cl.exe"), lib: bin.join("lib.exe"), include: tools_dir.join("include") };
-    if !msvc.cl.is_file() {
-        return Err(format!("cl.exe not found at {}", msvc.cl.display()));
+    let link = tools_dir.join(r"bin\Hostx64\x64\link.exe");
+    if !link.is_file() {
+        return Err(format!("link.exe not found at {}", link.display()));
     }
-    Ok(msvc)
-}
-
-/// Compiles freestanding C++20 `sources` (paths relative to the crate) into
-/// a static library named `name` and links it into the crate.
-///
-/// The code is compiled without exceptions, RTTI, security cookies or the
-/// C runtime; the Vindows runtime (`vrt`) supplies the few symbols the
-/// compiler may reference (`memcpy`, `memset`, `_fltused`, ...).
-pub fn compile_cpp(name: &str, sources: &[&str], include_dirs: &[&str]) {
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
-    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let msvc = find_msvc().unwrap_or_else(|e| panic!("C++ compiler unavailable: {e}"));
-    let profile_release = std::env::var("PROFILE").is_ok_and(|p| p == "release");
-    let mut objects = Vec::new();
-    for src in sources {
-        let path = manifest.join(src);
-        println!("cargo:rerun-if-changed={}", path.display());
-        let obj = out_dir.join(Path::new(src).file_stem().unwrap()).with_extension("obj");
-        let mut cmd = Command::new(&msvc.cl);
-        cmd.args(["/nologo", "/c", "/std:c++20", "/GS-", "/GR-", "/EHs-c-", "/Zl", "/X", "/fp:fast", "/Gy", "/W4"]);
-        cmd.arg(if profile_release { "/O2" } else { "/Od" });
-        cmd.arg(format!("/I{}", msvc.include.display()));
-        for inc in include_dirs {
-            let dir = manifest.join(inc);
-            println!("cargo:rerun-if-changed={}", dir.display());
-            cmd.arg(format!("/I{}", dir.display()));
-        }
-        cmd.arg(format!("/Fo{}", obj.display())).arg(&path);
-        let output = cmd.output().unwrap_or_else(|e| panic!("running cl.exe: {e}"));
-        if !output.status.success() {
-            panic!(
-                "cl.exe failed on {}:\n{}{}",
-                src,
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        objects.push(obj);
-    }
-    let lib_path = out_dir.join(format!("{name}.lib"));
-    let status = Command::new(&msvc.lib)
-        .arg("/nologo")
-        .arg(format!("/OUT:{}", lib_path.display()))
-        .args(&objects)
-        .status()
-        .unwrap_or_else(|e| panic!("running lib.exe: {e}"));
-    assert!(status.success(), "lib.exe failed");
-    println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static={name}");
+    Ok(Msvc { link })
 }

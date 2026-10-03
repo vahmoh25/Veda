@@ -85,7 +85,7 @@ impl App for About {
         self.show_details = toggle;
         ui.label(Rect::new(area.x + 54, ty, 300, 28), "Show licences", Font::Regular, t.font_size, t.text, Align::Left);
         if self.show_details {
-            let text = "Vindows is written from scratch in Rust and C++ and released under the MIT license. \
+            let text = "Vindows is written from scratch in Rust and released under the MIT license. \
                         Fonts: Inter (© The Inter Project Authors), \
                         Lato (© tyPoland Lukasz Dziedzic) and JetBrains Mono (© The JetBrains Mono Project Authors), \
                         all under the SIL Open Font License 1.1.";

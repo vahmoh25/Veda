@@ -6,7 +6,7 @@
 //! would overflow) are clipped; everything else is rasterised directly and
 //! the edge functions do the screen-edge clipping per pixel.
 
-use crate::ffi::{self, OC_GUARD, OC_NEAR, TVert, Xform};
+use crate::pipeline::{self, OC_GUARD, OC_NEAR, TVert, Xform};
 
 /// Most vertices a triangle can have after clipping against five planes.
 const MAX_POLY: usize = 8;
@@ -110,8 +110,7 @@ pub(crate) fn clip_triangle(xf: &Xform, a: &TVert, b: &TVert, c: &TVert, mut emi
         core::mem::swap(&mut cur, &mut next);
     }
     for v in cur[..n].iter_mut() {
-        // SAFETY: `v` is a valid vertex and `xf` valid parameters.
-        unsafe { ffi::v3d_project(xf, v) };
+        pipeline::project(xf, v);
     }
     for i in 1..n - 1 {
         emit(&cur[0], &cur[i], &cur[i + 1]);

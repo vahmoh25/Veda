@@ -1,8 +1,8 @@
 # Vindows
 
-Vindows is a modern x86-64 operating system written from scratch in Rust,
-with C++ where it fits. It is built around a capability-based microkernel
-and ships a polished graphical desktop, everyday applications and two 3D
+Vindows is a modern x86-64 operating system written from scratch,
+entirely in Rust. It is built around a capability-based microkernel and
+ships a polished graphical desktop, everyday applications and two 3D
 games. Everything — bootloader, kernel, drivers, services, toolkit,
 applications — is in this repository, with no external crates.
 
@@ -51,11 +51,12 @@ All screenshots are taken in QEMU by `cargo xtask script docs/screenshots.vts`.
 ### Requirements
 
 * Windows 10 or 11, x64. (User-space programs are PE executables linked by
-  the MSVC toolchain.)
+  the Microsoft linker.)
 * [Rust](https://rustup.rs) (stable). `rust-toolchain.toml` makes rustup
   install the extra `x86_64-unknown-uefi` target on first use.
-* Visual Studio 2022 or the Build Tools with the **Desktop development with
-  C++** workload (provides `cl.exe` and `link.exe`).
+* The Microsoft linker that Rust uses on Windows: Visual Studio 2022 or the
+  Visual Studio Build Tools with the MSVC build tools (`link.exe`). The
+  Rust installer offers to set these up.
 * [QEMU](https://www.qemu.org/download/#windows) for Windows, which includes
   the OVMF UEFI firmware.
 
@@ -106,7 +107,7 @@ restarts and rebuilds (`--fresh-home` starts over).
 
 | Application | What it does |
 |-------------|--------------|
-| **Text Editor** | Tabs, syntax highlighting (Rust, C/C++, TOML, Markdown), find and replace, word wrap, line numbers, zoom, unlimited undo, open/save dialogs. |
+| **Text Editor** | Tabs, syntax highlighting (Rust, C, TOML, Markdown), find and replace, word wrap, line numbers, zoom, unlimited undo, open/save dialogs. |
 | **Photos** | A thumbnail library of `~/Pictures` and a viewer with zoom, pan, rotation, full screen, details and "set as wallpaper"; PNG, JPEG (including progressive), BMP and QOI. |
 | **Music** | A library of `~/Music`, now playing with cover art and a live spectrum visualiser, seeking, shuffle and repeat; plays QOA and WAV through the audio service. |
 | **Files** | Places sidebar, breadcrumbs, list and icon views with thumbnails, search, copy/cut/paste, rename, delete, new folders and documents, properties, free space. |
@@ -116,8 +117,8 @@ restarts and rebuilds (`--fresh-home` starts over).
 | **Velocity** | An arcade 3D racing game against computer opponents on a procedurally generated circuit. |
 | **Starfall** | A 3D space shooter through asteroid fields and enemy waves. |
 
-The games are drawn by `v3d`, a multi-threaded software 3D renderer whose
-fixed-point core is written in C++; there is no GPU.
+The games are drawn by `v3d`, a multi-threaded fixed-point software 3D
+renderer; there is no GPU.
 
 ## Testing
 

@@ -9,7 +9,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::ffi::{FxTexture, MAX_MIPS, Mip};
+use crate::pipeline::{FxTexture, MAX_MIPS, Mip};
 
 /// Handle of a texture registered with a [`crate::Renderer`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -128,7 +128,7 @@ impl Texture {
 
     fn from_levels(width: u32, height: u32, levels: Vec<Vec<u32>>) -> Texture {
         let empty = Mip { pixels: core::ptr::null(), wlog2: 0, hlog2: 0 };
-        let mut fx = FxTexture { levels: [empty; MAX_MIPS], count: levels.len() as i32, flags: 0 };
+        let mut fx = FxTexture { levels: [empty; MAX_MIPS], count: levels.len() as i32 };
         let (mut w, mut h) = (width, height);
         for (i, l) in levels.iter().enumerate() {
             fx.levels[i] =

@@ -1,9 +1,9 @@
-//! Symbols that compiled Rust and C++ code expect from a C runtime.
+//! Symbols that compiled Rust code expects from a C runtime.
 //!
 //! Vindows programs link no CRT, so the runtime provides the memory
-//! primitives LLVM/MSVC emit calls to, MSVC's stack probe and floating-point
-//! marker, and a stub exception personality (we always build with
-//! `panic = "abort"`, so it is never called).
+//! primitives LLVM emits calls to, the stack probe and floating-point
+//! marker of the MSVC target, and a stub exception personality (we always
+//! build with `panic = "abort"`, so it is never called).
 //!
 //! `memcpy`/`memset` use 16-byte SSE moves in a loop rather than
 //! `rep movsb`, which is markedly faster under QEMU's TCG emulator.
@@ -198,19 +198,6 @@ pub static _fltused: i32 = 0;
 /// `core`/`alloc`. Vindows builds with `panic = "abort"`, so it never runs.
 #[unsafe(no_mangle)]
 pub extern "C" fn __CxxFrameHandler3() -> ! {
-    crate::sys::process_exit(-1)
-}
-
-/// `atexit` for C++ static destructors (we never run them).
-#[unsafe(no_mangle)]
-pub extern "C" fn atexit(_f: extern "C" fn()) -> i32 {
-    0
-}
-
-/// Called by MSVC for pure virtual calls.
-#[unsafe(no_mangle)]
-pub extern "C" fn _purecall() -> i32 {
-    crate::io::write_str("pure virtual function call\n");
     crate::sys::process_exit(-1)
 }
 

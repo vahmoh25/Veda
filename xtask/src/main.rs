@@ -390,7 +390,7 @@ fn doctor() -> Result {
             }
         }),
     );
-    check("msvc (C++ compiler and linker)", vbuild::find_msvc().map(|m| m.cl.display().to_string()));
+    check("msvc linker", vbuild::find_msvc().map(|m| m.link.display().to_string()));
     match qemu::QemuInstall::locate() {
         Ok(q) => {
             check("qemu", Ok(q.binary.display().to_string()));

@@ -1,12 +1,11 @@
-//! `v3d` — Vindows 3D: a multi-threaded software renderer with a C++
-//! rasterizer core.
+//! `v3d` — Vindows 3D: a multi-threaded fixed-point software renderer.
 //!
 //! There is no GPU: everything runs on the CPU, usually under QEMU's TCG
 //! emulator, where integer instructions are cheap and floating point is
 //! very expensive. So floating point is used only once per draw call (to
 //! build matrices and light parameters); vertex transformation and
 //! lighting, clipping, triangle setup and rasterisation are fixed-point
-//! integer code in the C++ core (`cpp/`, compiled by `vbuild`).
+//! integer code (the [`pipeline`] module).
 //!
 //! # Pipeline
 //!
@@ -45,11 +44,11 @@ pub mod app;
 pub mod camera;
 mod clip;
 pub mod env;
-pub mod ffi;
 mod fixed;
 pub mod material;
 pub mod mesh;
 pub mod particles;
+pub mod pipeline;
 pub mod pool;
 pub mod renderer;
 pub mod shapes;
