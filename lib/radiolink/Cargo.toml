@@ -1,0 +1,9 @@
+[package]
+name = "vradiolink"
+description = "The message format between Vindows' virtual Wi-Fi radio and the airsim host simulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

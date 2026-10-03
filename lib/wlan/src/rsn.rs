@@ -449,6 +449,8 @@ pub fn ap_rsne(security: Security, pmf_required: bool) -> Option<Rsne> {
         }
         Security::Wpa3Personal => (alloc::vec![Akm::Sae], caps::MFPC | caps::MFPR),
         Security::Wpa2Wpa3Personal => (alloc::vec![Akm::Psk, Akm::Sae], caps::MFPC),
+        // Advertised only (simulated networks that stations cannot join).
+        Security::Enterprise => (alloc::vec![Akm::Ieee8021x], caps::MFPC),
         _ => return None,
     };
     if pmf_required {
