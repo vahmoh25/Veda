@@ -90,7 +90,8 @@ impl Notifications {
                 let view = View {
                     title: title.into(),
                     body: body.into(),
-                    icon: Icon::by_name(icon).unwrap_or(Icon::Info),
+                    // An installed application's id shows its own tile.
+                    icon: m.app(icon).map(apps::icon_for).or_else(|| Icon::by_name(icon)).unwrap_or(Icon::Info),
                     color: icon.into(),
                     origin,
                     hovered: false,

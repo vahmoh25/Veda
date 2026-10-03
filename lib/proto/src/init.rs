@@ -2,7 +2,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use vipc::{enumeration, message, protocol};
+use vipc::{enumeration, message, protocol, union};
 use vrt::object::Channel;
 
 enumeration! {
@@ -63,6 +63,21 @@ message! {
     }
 }
 
+union! {
+    /// News about programs started by init, delivered on the channel
+    /// returned by [`launcher::Client::watch`].
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum TaskEvent {
+        /// An application stopped unexpectedly (a CPU fault or a panic).
+        /// `name` is its process name, which is the id of an installed
+        /// application.
+        1 => Crashed { koid: u64, name: String },
+    }
+}
+
+/// Event ordinal of [`TaskEvent`]s on a watch channel.
+pub const TASK_EVENT: u32 = 1;
+
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum LaunchError {
@@ -95,5 +110,7 @@ protocol! {
         5 => fn kill(koid: u64) -> Result<(), LaunchError>;
         /// Shuts down or reboots the machine.
         6 => fn power(action: u32) -> Result<(), LaunchError>;
+        /// A channel on which [`TaskEvent`]s arrive.
+        7 => fn watch() -> Result<Channel, LaunchError>;
     }
 }

@@ -622,6 +622,8 @@ impl Default for SystemInfo {
 pub const EXIT_CODE_CRASHED: i64 = -1001;
 /// Exit code reported for processes killed with `process_kill`.
 pub const EXIT_CODE_KILLED: i64 = -1002;
+/// Exit code of a program that panicked (set by the runtime's panic handler).
+pub const EXIT_CODE_PANICKED: i64 = -1003;
 
 /// Boot-time information the kernel hands to `init` in a VMO.
 #[repr(C)]

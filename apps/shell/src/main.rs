@@ -38,7 +38,7 @@ use vabi::{WaitItem, signals};
 use vgfx::Rect;
 use vproto::audio::{AudioStatus, audio};
 use vproto::display::{WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowState};
-use vproto::init::{AppInfo, launcher};
+use vproto::init::{AppInfo, TaskEvent, launcher};
 use vproto::shell::{ShellError, shell};
 use vproto::vfs;
 use vrt::object::{Channel, Vmo};
@@ -137,6 +137,8 @@ struct Shell {
     notes: notify::Notifications,
     listener: Option<Channel>,
     clients: Vec<Channel>,
+    /// Crash reports from the launcher (`launcher::watch`).
+    task_events: Option<Channel>,
     /// Windows minimised by "show desktop", restored by the next click.
     hidden_by_show_desktop: Vec<u32>,
 }
@@ -516,6 +518,38 @@ impl Shell {
         }
     }
 
+    /// Turns the launcher's crash reports into notifications.
+    fn check_tasks(&mut self) {
+        let Some(ch) = self.task_events.take() else { return };
+        let mut crashed = Vec::new();
+        let alive = loop {
+            match ch.read() {
+                Ok(msg) => {
+                    if let Ok((_, TaskEvent::Crashed { name, .. })) = vipc::decode_event::<TaskEvent>(msg) {
+                        crashed.push(name);
+                    }
+                }
+                Err(vabi::Error::ShouldWait) => break true,
+                Err(_) => break false,
+            }
+        };
+        if alive {
+            self.task_events = Some(ch);
+        }
+        for name in crashed {
+            let (title, body, icon) = match self.model.app(&name) {
+                Some(app) => (
+                    app.name.clone(),
+                    "It stopped because of an error. You can open it again from the start menu.",
+                    app.id.clone(),
+                ),
+                None => (name, "It stopped because of an error.", String::from("warning")),
+            };
+            println!("{} closed unexpectedly", title);
+            self.post_notification(&format!("{title} closed unexpectedly"), body, &icon);
+        }
+    }
+
     /// Blocks until a surface, client or timer needs attention.
     fn wait(&mut self) {
         let mut items: Vec<WaitItem> = Vec::new();
@@ -552,6 +586,9 @@ impl Shell {
         for c in &self.clients {
             items.push(WaitItem { handle: c.raw(), signals: readable, ..Default::default() });
         }
+        if let Some(c) = &self.task_events {
+            items.push(WaitItem { handle: c.raw(), signals: readable, ..Default::default() });
+        }
         items.truncate(vabi::WAIT_MANY_MAX);
         if !self.model.actions.is_empty() {
             deadline = 0;
@@ -571,6 +608,7 @@ impl Shell {
             }
             self.perform_actions();
             self.serve();
+            self.check_tasks();
             self.wait();
         }
     }
@@ -617,6 +655,7 @@ fn main() -> i32 {
     };
     let vfs = vproto::connect(vfs::NAME).ok().map(vfs::Client::new);
     let launcher = vproto::connect(launcher::NAME).ok().map(launcher::Client::new);
+    let task_events = launcher.as_ref().and_then(|l| l.watch().ok()).and_then(|r| r.ok());
     let audio = connect_running(audio::NAME).map(audio::Client::new);
     let mut apps = launcher.as_ref().and_then(|l| l.apps().ok()).unwrap_or_default();
     apps::sort(&mut apps);
@@ -701,6 +740,7 @@ fn main() -> i32 {
         notes: notify::Notifications::new(),
         listener,
         clients: Vec::new(),
+        task_events,
         hidden_by_show_desktop: Vec::new(),
     };
     shell.refresh_windows();

@@ -17,6 +17,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use vipc::Bytes;
 use vproto::fs::{FsError, open_flags, vfs};
+use vproto::init::TaskEvent;
 use vproto::launcher;
 use vrt::object::{Channel, Event, Vmo};
 use vrt::println;
@@ -120,6 +121,28 @@ fn test_service_restart() -> TestResult {
     }
 }
 
+/// Applications that crash are reported to launcher watchers (the shell
+/// shows a notification): start a copy of this program that faults.
+fn test_crash_report() -> TestResult {
+    let l = launcher::Client::new(vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    let events = l.watch().map_err(|e| e.to_string())?.map_err(|e| alloc::format!("watch: {e:?}"))?;
+    let koid = l
+        .launch("/system/bin/systest.exe".into(), alloc::vec!["crash".into()])
+        .map_err(|e| e.to_string())?
+        .map_err(|e| alloc::format!("launch: {e:?}"))?;
+    let deadline = vrt::time::deadline_after(vrt::time::Duration::from_secs(10));
+    let msg = events.read_blocking(deadline).map_err(|e| alloc::format!("no crash report: {e}"))?;
+    let (_, event) = vipc::decode_event::<TaskEvent>(msg).map_err(|e| e.to_string())?;
+    check(event == TaskEvent::Crashed { koid, name: "systest".into() }, "the report names the crashed process")
+}
+
+/// `systest crash`: the faulting child of [`test_crash_report`].
+fn crash() -> ! {
+    // SAFETY: `ud2` raises an invalid-opcode exception on purpose; the
+    // kernel ends the process.
+    unsafe { core::arch::asm!("ud2", options(noreturn)) }
+}
+
 fn test_threads_and_locks() -> TestResult {
     let counter = Arc::new(Mutex::new(0u64));
     let mut handles = Vec::new();
@@ -191,13 +214,17 @@ fn test_ipc_primitives() -> TestResult {
 type Test = (&'static str, fn() -> TestResult);
 
 fn main() -> i32 {
+    if vrt::env::args().get(1).is_some_and(|a| a == "crash") {
+        crash();
+    }
     println!("starting");
-    let tests: [Test; 6] = [
+    let tests: [Test; 7] = [
         ("ipc primitives", test_ipc_primitives),
         ("threads and locks", test_threads_and_locks),
         ("vfs system image", test_vfs_system_image),
         ("vfs read/write", test_vfs_read_write),
         ("launcher", test_launcher),
+        ("crash report", test_crash_report),
         ("service restart", test_service_restart),
     ];
     let mut failed = 0;

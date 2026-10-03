@@ -23,7 +23,9 @@ use alloc::vec::Vec;
 use vabi::startup::role;
 use vabi::{resource_kind, signals};
 use vipc::WaitSet;
-use vproto::init::{AppInfo, LISTENER_CONNECT, LaunchError, RegistryError, TaskInfo, launcher, registry};
+use vproto::init::{
+    AppInfo, LISTENER_CONNECT, LaunchError, RegistryError, TASK_EVENT, TaskEvent, TaskInfo, launcher, registry,
+};
 use vrt::object::{Channel, Handle, Process, Resource, Vmo};
 use vrt::println;
 
@@ -65,6 +67,8 @@ pub struct Init {
     next_key: u64,
     /// Recent restart times of each supervised service.
     restarts: BTreeMap<String, Vec<u64>>,
+    /// Channels that receive [`TaskEvent`]s (from `launcher::watch`).
+    watchers: Vec<Channel>,
 }
 
 const CHILD_KEY: u64 = 1 << 48;
@@ -237,6 +241,16 @@ impl Init {
                 let res = self.0.root.create(resource_kind::POWER, 0, 0).map_err(|_| LaunchError::Denied)?;
                 vrt::object::power(&res, action as usize).map_err(|_| LaunchError::Failed)
             }
+
+            fn watch(&mut self) -> Result<Channel, LaunchError> {
+                const MAX_WATCHERS: usize = 16;
+                if self.0.watchers.len() >= MAX_WATCHERS {
+                    return Err(LaunchError::Denied);
+                }
+                let (ours, theirs) = Channel::create().map_err(|_| LaunchError::NoMemory)?;
+                self.0.watchers.push(ours);
+                Ok(theirs)
+            }
         }
         let reply = launcher::dispatch(&mut Launch(self), msg);
         if let (Ok(reply), Some(conn)) = (reply, self.conns.get(&key)) {
@@ -247,10 +261,18 @@ impl Init {
     fn on_child_exit(&mut self, koid: u64) {
         let Some(child) = self.children.remove(&koid) else { return };
         let code = child.process.info().map(|i| i.exit_code).unwrap_or(0);
-        if code == vabi::EXIT_CODE_CRASHED {
-            println!("{} crashed", child.name);
-        } else {
-            println!("{} exited with code {}", child.name, code);
+        match code {
+            vabi::EXIT_CODE_CRASHED => println!("{} crashed", child.name),
+            vabi::EXIT_CODE_PANICKED => println!("{} panicked", child.name),
+            _ => println!("{} exited with code {}", child.name, code),
+        }
+        if child.app && matches!(code, vabi::EXIT_CODE_CRASHED | vabi::EXIT_CODE_PANICKED) {
+            // Tell the watchers (the shell shows a notification). Watchers
+            // that went away are dropped; a full channel just misses this.
+            let event = TaskEvent::Crashed { koid, name: child.name.clone() };
+            self.watchers.retain(|w| {
+                !matches!(vipc::send_event(w, TASK_EVENT, event.clone()), Err(vipc::IpcError::PeerClosed))
+            });
         }
         // Drop the services it provided.
         self.services.retain(|name, (_, owner)| {
@@ -347,6 +369,7 @@ fn main() -> i32 {
         apps: Vec::new(),
         next_key: 0,
         restarts: BTreeMap::new(),
+        watchers: Vec::new(),
     };
     init.apps = apps::load(&init.initrd);
     println!("{} application(s) installed", init.apps.len());

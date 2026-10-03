@@ -140,7 +140,9 @@ main loop performs. Running windows come from the compositor
 (`list_windows`, refreshed on `WindowsChanged`); installed applications
 come from the launcher in `init`, which reads the `.app` manifests. The
 shell serves the `shell` protocol so applications can change the wallpaper
-and post notifications.
+and post notifications. When an application crashes (a CPU fault or a panic),
+`init` reports it on the channels handed out by `launcher::watch`, and the
+shell tells the user with a notification.
 
 ## Graphics and the toolkit
 
@@ -183,7 +185,8 @@ Frames are drawn only when input arrives or an animation asks for one.
   heap, IPC codec, service protocols, math, rasteriser, fonts, image
   codecs, 2D graphics, text editing, audio, build tool).
 * `systest`, a program that runs inside Vindows and exercises kernel objects,
-  threads, the file system and the launcher.
+  threads, the file system, the launcher, crash reports and the restart of
+  the window system.
 * GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
   mouse, keyboard, waits on log lines, screenshots — and fail on panics.
 

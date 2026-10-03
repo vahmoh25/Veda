@@ -67,5 +67,5 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     let mut b = Buf { data: [0; 512], len: 0 };
     let _ = core::fmt::write(&mut b, format_args!("panic: {info}\n"));
     sys::debug_write(&b.data[..b.len]);
-    sys::process_exit(-2)
+    sys::process_exit(vabi::EXIT_CODE_PANICKED)
 }

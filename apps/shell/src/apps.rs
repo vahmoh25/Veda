@@ -26,6 +26,8 @@ pub fn tile_colors(id: &str) -> (Color, Color) {
         "about" => (Color::hex(0x8C7CFF), Color::hex(0x4B3FD1)),
         "racer" => (Color::hex(0xFF9A4A), Color::hex(0xE0402F)),
         "starfall" => (Color::hex(0x7A6BFF), Color::hex(0x231C78)),
+        // Notifications about problems.
+        "warning" => (Color::hex(0xFFC14D), Color::hex(0xE0761F)),
         _ => {
             // Stable colours for unknown apps, from a small palette.
             const PALETTE: [(u32, u32); 5] = [

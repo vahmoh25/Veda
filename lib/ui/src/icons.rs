@@ -594,6 +594,7 @@ impl Icon {
             "clock" => Icon::Clock,
             "calendar" => Icon::Calendar,
             "palette" => Icon::Palette,
+            "warning" => Icon::Warning,
             _ => return None,
         })
     }
