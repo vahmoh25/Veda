@@ -38,6 +38,9 @@ const HOME: &str = "/home/user";
 const MAX_READ: usize = 24 * 1024;
 /// How long an application may take to answer.
 const APP_TIMEOUT_NS: u64 = 3_000_000_000;
+/// How long an application's action may take (copying a big folder, say);
+/// it runs on the application's main thread like the user's own commands.
+const INVOKE_TIMEOUT_NS: u64 = 30_000_000_000;
 /// How long a starting application has to register.
 const START_TIMEOUT: Duration = Duration::from_secs(6);
 
@@ -488,10 +491,10 @@ impl Ctx {
                 }));
             }
             let link = self.apps.get(&app.id).ok_or("the application went away")?;
-            let result = link
-                .client
-                .invoke(action.clone(), call_args.to_string())
-                .map_err(|_| format!("{} did not answer", app.name))?;
+            link.client.set_timeout(INVOKE_TIMEOUT_NS);
+            let result = link.client.invoke(action.clone(), call_args.to_string());
+            link.client.set_timeout(APP_TIMEOUT_NS);
+            let result = result.map_err(|_| format!("{} did not answer", app.name))?;
             Ok(Outcome::Result(if result.ok {
                 tools::ok(vjson::parse(&result.result).unwrap_or(Value::String(result.result)))
             } else {
@@ -914,18 +917,37 @@ fn describe_info(info: &AppAgentInfo) -> Value {
 
 /// Arguments as they read in an approval request.
 fn describe_args(args: &Value) -> String {
+    /// The most of one argument shown.
+    const MAX: usize = 160;
     let Some(m) = args.as_object() else { return String::new() };
     let parts: Vec<String> = m
         .iter()
         .map(|(k, v)| {
-            let val: String = match v {
-                Value::String(s) => s.chars().take(80).collect(),
-                other => other.to_string().chars().take(80).collect(),
+            // Lists (an array, or one item per line) show their items,
+            // with a count of any that do not fit.
+            let items: Vec<String> = match v {
+                Value::Array(a) => a.iter().map(|x| x.as_str().map_or_else(|| x.to_string(), String::from)).collect(),
+                Value::String(s) => s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect(),
+                other => alloc::vec![other.to_string()],
             };
+            let mut val = String::new();
+            for (i, item) in items.iter().enumerate() {
+                let sep = if i == 0 { "" } else { ", " };
+                if val.chars().count() + sep.len() + item.chars().count() > MAX {
+                    if i == 0 {
+                        val = item.chars().take(MAX).collect::<String>() + "\u{2026}";
+                    } else {
+                        val.push_str(&format!(" and {} more", items.len() - i));
+                    }
+                    break;
+                }
+                val.push_str(sep);
+                val.push_str(item);
+            }
             format!("{k}: {val}")
         })
         .collect();
-    parts.join(", ")
+    parts.join("; ")
 }
 
 /// The applications and their actions, for the prompt.

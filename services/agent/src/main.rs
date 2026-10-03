@@ -531,9 +531,17 @@ impl Agent {
     fn finished(&mut self, done: Done) {
         let Done::Call { id, name, outcome } = done;
         if let Some(label) = self.approved.remove(&id) {
-            // An approved action: tell the agent how it went.
+            // An approved action: tell the agent how it went (a result can
+            // be a failure: the file was gone by then, say).
             let text = match outcome {
-                Outcome::Result(r) => format!("[Vindows] The user allowed \"{label}\" and it was done. Result: {r}"),
+                Outcome::Result(r) => match vjson::parse(&r).ok().filter(|v| v["ok"].as_bool() == Some(false)) {
+                    Some(v) => {
+                        let why = v.str("error").unwrap_or("it failed").to_string();
+                        println!("approved action failed: {why}");
+                        format!("[Vindows] The user allowed \"{label}\", but it failed: {why}")
+                    }
+                    None => format!("[Vindows] The user allowed \"{label}\" and it was done. Result: {r}"),
+                },
                 _ => format!("[Vindows] The user allowed \"{label}\", but it could not be done."),
             };
             self.notice(&text);

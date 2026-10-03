@@ -33,3 +33,17 @@ agent-call files '{"operation":"info","path":"~/Documents/keep.txt"}' 30
 agent-result "no such file"
 wait 1
 shot target/vindows/agent-notification-2.png
+# Allowed after the file went elsewhere: the agent hears that it failed,
+# not that it was done.
+agent-call files '{"operation":"write","path":"~/Documents/gone.txt","text":"x"}' 30
+agent-result saved
+agent-call files '{"operation":"delete","path":"~/Documents/gone.txt"}' 30
+wait-serial "approval 3 requested" 10
+agent-call files '{"operation":"move","path":"~/Documents/gone.txt","to":"~/Documents/moved.txt"}' 30
+agent-result '"ok":true'
+wait 2
+agent-mark
+click 0.9438 0.8875
+wait-serial "approval 3 allowed" 10
+agent-expect "but it failed" 20
+wait-serial "approved action failed" 5

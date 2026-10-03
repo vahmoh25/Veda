@@ -65,8 +65,9 @@ impl Action {
         })
     }
 
-    /// Adds a parameter: `kind` is `"string"`, `"integer"`, `"number"` or
-    /// `"boolean"`.
+    /// Adds a parameter: `kind` is `"string"`, `"integer"`, `"number"`,
+    /// `"boolean"` or `"array"` (a list of text; read it with
+    /// [`arg_list`]).
     pub fn param(mut self, name: &str, kind: &str, description: &str, required: bool) -> Action {
         self.0.params.push(ParamSpec {
             name: name.into(),
@@ -138,6 +139,21 @@ pub fn arg_bool(args: &Value, name: &str) -> Option<bool> {
         },
         _ => None,
     }
+}
+
+/// Reads a list of text: a JSON array of strings, or one item per line
+/// (language models sometimes send either).
+pub fn arg_list(args: &Value, name: &str) -> Result<Vec<String>, String> {
+    let items: Vec<String> = match args.get(name) {
+        Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|s| s.trim().to_string()).collect(),
+        Some(Value::String(s)) => s.lines().map(|l| l.trim().to_string()).collect(),
+        _ => return Err(alloc::format!("missing list argument '{name}'")),
+    };
+    let items: Vec<String> = items.into_iter().filter(|s| !s.is_empty()).collect();
+    if items.is_empty() {
+        return Err(alloc::format!("'{name}' is empty"));
+    }
+    Ok(items)
 }
 
 /// Reads an optional whole-number argument (`None` when absent).

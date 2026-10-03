@@ -60,6 +60,10 @@ pub fn schema(params: &[P]) -> Value {
             _ => "string",
         };
         let mut s = object! { "type" => kind, "description" => p.description };
+        // Lists are lists of text (file names, paths).
+        if kind == "array" {
+            s.set("items", object! { "type" => "string" });
+        }
         if !p.choices.is_empty() {
             s.set("enum", p.choices.iter().map(|c| Value::from(*c)).collect::<Vec<_>>());
         }
