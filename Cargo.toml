@@ -27,6 +27,7 @@ members = [
     "lib/entropy",
     "lib/netstack",
     "lib/net",
+    "lib/wlan",
     "services/init",
     "services/vfs",
     "services/devmgr",
@@ -93,6 +94,20 @@ vaudio = { path = "lib/audio" }
 ventropy = { path = "lib/entropy" }
 vnetstack = { path = "lib/netstack" }
 vnet = { path = "lib/net" }
+vwlan = { path = "lib/wlan" }
+# Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
+sha1 = { version = "0.11", default-features = false }
+sha2 = { version = "0.11", default-features = false }
+hmac = { version = "0.13", default-features = false }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+hkdf = { version = "0.13", default-features = false }
+aes = { version = "0.9", default-features = false }
+ccm = { version = "0.6", default-features = false }
+cmac = { version = "0.8", default-features = false }
+aes-kw = { version = "0.3", default-features = false }
+p256 = { version = "0.14", default-features = false, features = ["arithmetic", "hash2curve"] }
+subtle = { version = "2.6", default-features = false }
+zeroize = { version = "1.9", default-features = false }
 # HTTP/1.x message parsing (no_std).
 httparse = { version = "1.10", default-features = false }
 # The TCP/IP stack (vendored with a security patch, see third_party/).

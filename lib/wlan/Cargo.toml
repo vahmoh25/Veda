@@ -1,0 +1,23 @@
+[package]
+name = "vwlan"
+description = "IEEE 802.11 for Vindows: frames, information elements, RSN, WPA2 handshakes, WPA3 SAE, CCMP, BIP, and the station and access point state machines"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+pbkdf2 = { workspace = true }
+hkdf = { workspace = true }
+aes = { workspace = true }
+ccm = { workspace = true }
+cmac = { workspace = true }
+aes-kw = { workspace = true }
+p256 = { workspace = true }
+subtle = { workspace = true }
+zeroize = { workspace = true }
+
+[lints]
+workspace = true
