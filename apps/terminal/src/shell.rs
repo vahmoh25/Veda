@@ -232,7 +232,8 @@ impl Shell {
     /// Adds a line to the history (skipping blanks and repeats) and to the
     /// history file.
     pub fn remember(&mut self, line: &str) {
-        let line = line.trim();
+        let redacted = self.redact(line.trim());
+        let line = redacted.as_str();
         if line.is_empty() || self.history.last().is_some_and(|l| l == line) {
             return;
         }
@@ -241,6 +242,24 @@ impl Shell {
             self.history.remove(0);
         }
         let _ = self.fs.append(HISTORY_FILE, format!("{line}\n").as_bytes());
+    }
+
+    /// A command line as it may be kept in the history: Wi-Fi passwords
+    /// (`wifi connect SSID PASSWORD`) are replaced by stars.
+    fn redact(&self, line: &str) -> String {
+        if let Ok(toks) = self.tokenize(line) {
+            let words: Vec<&str> = toks
+                .iter()
+                .map_while(|t| match t {
+                    Tok::Word(w, _) => Some(w.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if words.len() >= 4 && words[0] == "wifi" && words[1] == "connect" && words.len() == toks.len() {
+                return format!("wifi connect {} ********", escape(words[2]));
+            }
+        }
+        line.to_string()
     }
 
     /// Loads the history saved by earlier sessions (keeping the file short).

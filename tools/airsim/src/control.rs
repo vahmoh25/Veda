@@ -17,6 +17,7 @@
 //! wired up|down                     the wired network behind the access points
 //! dhcp on|off                       DHCP messages pass or are dropped
 //! dns normal|unanswered|servfail    how DNS queries are treated
+//! radio drop [<seconds>]            disconnect the guest's radio for a while (default 3 s)
 //! ```
 
 use crate::world::{DnsMode, World};
@@ -36,6 +37,15 @@ pub fn run(world: &mut World, line: &str, now: u64) -> Result<String, String> {
         }
         ["dhcp", state] => {
             world.wired.dhcp = on_off(state, "on", "off")?;
+            Ok(String::new())
+        }
+        ["radio", "drop", rest @ ..] => {
+            let secs: u64 = match rest {
+                [] => 3,
+                [s] => s.parse().ok().filter(|&s| s <= 600).ok_or_else(|| format!("bad duration {s:?}"))?,
+                _ => return Err("usage: radio drop [<seconds>]".into()),
+            };
+            world.radio_drop = Some(secs);
             Ok(String::new())
         }
         ["dns", mode] => {
@@ -103,4 +113,5 @@ ap <name> on|off | signal <dBm> | loss <percent> | deauth [<reason>] | rekey | p
 wired up|down
 dhcp on|off
 dns normal|unanswered|servfail
+radio drop [<seconds>]
 ";

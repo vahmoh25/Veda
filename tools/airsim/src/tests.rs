@@ -649,3 +649,14 @@ fn malformed_frames_from_the_guest_are_harmless() {
     let up = h.frame_to_gateway(&udp4(40000, 80, b"still here"));
     assert!(h.send_ethernet(&up));
 }
+
+#[test]
+fn radio_drop_is_validated_and_recorded() {
+    let mut h = Harness::new();
+    assert_eq!(h.control("radio drop"), "");
+    assert_eq!(h.world.radio_drop.take(), Some(3));
+    assert_eq!(h.control("radio drop 10"), "");
+    assert_eq!(h.world.radio_drop.take(), Some(10));
+    assert!(control::run(&mut h.world, "radio drop forever", 0).is_err());
+    assert!(control::run(&mut h.world, "radio drop 9999", 0).is_err());
+}

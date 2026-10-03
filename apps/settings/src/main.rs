@@ -3,16 +3,20 @@
 //! * **Personalization**: a gallery of the system wallpapers (from the desktop
 //!   shell, or `/system/wallpapers` when the shell is not running) and of the
 //!   pictures in `~/Pictures`; clicking one makes it the desktop wallpaper.
+//! * **Network & Internet**: Wi-Fi (switch, connection, networks in range,
+//!   saved networks), interfaces and addresses, Wi-Fi diagnostics.
 //! * **Display**: the screen resolution and the work area left by panels.
 //! * **System**: version, processor, memory and uptime, refreshed live.
 //! * **About**: version information and licences.
 //!
-//! Usage: `settings [personalization|display|system|about]`.
+//! Usage: `settings [personalization|network|display|system|about]`.
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
+
+mod network;
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -41,13 +45,15 @@ const SIDEBAR_W: i32 = 230;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Personalization,
+    Network,
     Display,
     System,
     About,
 }
 
-const SECTIONS: [(Section, &str, Icon, &str); 4] = [
+const SECTIONS: [(Section, &str, Icon, &str); 5] = [
     (Section::Personalization, "Personalization", Icon::Palette, "Wallpaper"),
+    (Section::Network, "Network & Internet", Icon::Wifi, "Wi-Fi, Ethernet, status"),
     (Section::Display, "Display", Icon::Monitor, "Resolution, work area"),
     (Section::System, "System", Icon::Cpu, "Processor, memory"),
     (Section::About, "About", Icon::Info, "Version, licences"),
@@ -86,6 +92,7 @@ struct Settings {
     cursor: Option<usize>,
     /// Height of the content drawn last frame (for scrolling).
     content_h: i32,
+    net: network::NetworkPage,
 }
 
 /// The pictures (files Photos can open) in `dir`, as sorted paths.
@@ -241,6 +248,7 @@ impl Settings {
             show_licence: false,
             cursor: None,
             content_h: 600,
+            net: network::NetworkPage::new(),
         }
     }
 
@@ -926,6 +934,10 @@ impl App for Settings {
         if self.shell_state == ShellState::Unavailable && self.retry_at != u64::MAX {
             ui.repaint_at(self.retry_at);
         }
+        if self.section == Section::Network {
+            let next = self.net.poll(now);
+            ui.repaint_at(next);
+        }
         // Keys go to the error message while it is shown.
         let error_at_start = self.error.is_some();
         if !error_at_start {
@@ -937,6 +949,7 @@ impl App for Settings {
         let section = self.section;
         let id = match section {
             Section::Personalization => "content-p",
+            Section::Network => "content-n",
             Section::Display => "content-d",
             Section::System => "content-s",
             Section::About => "content-a",
@@ -946,6 +959,7 @@ impl App for Settings {
             let r = Rect::new(content.x + 36, content.y + 30 - off, content.w - 72, content.h);
             let used = match section {
                 Section::Personalization => self.personalization(ui, r),
+                Section::Network => self.net.draw(ui, r),
                 Section::Display => self.display(ui, r),
                 Section::System => self.system(ui, r),
                 Section::About => self.about(ui, r),
@@ -975,6 +989,9 @@ impl App for Settings {
         if let Some(t) = &self.thumbs {
             v.push((t.event_handle(), vabi::signals::SIGNALED));
         }
+        if let Some(h) = self.net.wait_handle() {
+            v.push((h, vabi::signals::READABLE | vabi::signals::PEER_CLOSED));
+        }
         v
     }
 }
@@ -982,6 +999,7 @@ impl App for Settings {
 fn main() -> i32 {
     let section = match vrt::env::args().get(1).map(|s| s.to_ascii_lowercase()) {
         Some(s) if s.starts_with("disp") => Section::Display,
+        Some(s) if s.starts_with("net") || s.starts_with("wi") => Section::Network,
         Some(s) if s.starts_with("sys") => Section::System,
         Some(s) if s.starts_with("about") => Section::About,
         _ => Section::Personalization,

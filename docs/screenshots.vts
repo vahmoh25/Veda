@@ -3,8 +3,10 @@
 #   cargo xtask script docs/screenshots.vts
 #
 # which writes docs/images/*.png. Applications are started from the start
-# menu's search and the Terminal, so only Music's play button is clicked
-# by position.
+# menu's search and the Terminal, so only Music's play button and the
+# taskbar's network icon are clicked by position. The machine has the
+# virtual Wi-Fi radio and airsim's simulated networks.
+net wifi
 fail-on "PANIC"
 wait-serial "desktop ready" 90
 wait 4
@@ -134,3 +136,31 @@ wait-serial "starfall: level 1 wave 1" 20
 move 0.97 0.08
 wait 9
 shot docs/images/starfall.png
+key alt-f4
+wait-serial "starfall exited" 20
+wait 2
+
+# Wi-Fi: join "Vindows Home" from the Terminal, then show the network
+# flyout and the network page of Settings.
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 30
+wait 4
+type "wifi connect 'Vindows Home' vindows-wifi && settings network && exit"
+key ret
+wait-serial "connected to Vindows Home" 90
+wait-serial "started settings" 30
+wait-serial "Routable via wlan0" 60
+move 0.97 0.08
+wait 8
+shot docs/images/settings-network.png
+key alt-f4
+wait-serial "settings exited" 20
+wait 2
+click 0.859 0.97
+wait 3
+move 0.6 0.3
+wait 3
+shot docs/images/wifi.png

@@ -19,7 +19,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 pub use vproto::wlan::{
-    BssInfo, ConnState, FailReason, LogEntry, NetworkInfo, SavedNetwork, Security, WlanCounters, WlanDiagnostics,
+    Band, BssInfo, ConnState, FailReason, LogEntry, NetworkInfo, SavedNetwork, Security, WlanCounters, WlanDiagnostics,
     WlanError, WlanEvent, WlanStatus, signal_bars, ssid_display,
 };
 

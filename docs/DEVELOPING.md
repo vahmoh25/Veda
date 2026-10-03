@@ -16,6 +16,9 @@ cargo xtask script tests/ui/about-interaction.vts   # scripted GUI test
 cargo xtask test               # host unit tests + in-system integration tests
 cargo xtask test --ui          # ... plus every GUI script in tests/ui
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
+cargo xtask run --net wifi     # boot with the virtual Wi-Fi radio and airsim
+cargo xtask run --net both     # ... plus the wired card (or --net none)
+cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
 ```
 
 * The serial console (kernel log plus every program's `println!`) is saved
@@ -23,6 +26,15 @@ cargo xtask script docs/screenshots.vts   # retake the README screenshots
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
 * Headless runs record audio to `target/vindows/audio.wav`.
+* With `--net wifi`, xtask builds and starts `airsim` (the simulated Wi-Fi
+  environment) next to QEMU; it logs to `target/vindows/airsim.log` and
+  prints its control port, which takes commands such as `ap home off`,
+  `ap home signal -80`, `wired down` or `dns servfail` (see
+  [NETWORKING.md](NETWORKING.md)). Scripts use the same commands with
+  `air`, `air-expect` and `air-wait` after a `net wifi` line.
+* `--cmdline "run=nettest"` checks the Internet connection from inside
+  Vindows; `run=nettest:wifi` first joins the simulated "Vindows Home"
+  network (`run=NAME:ARG1,ARG2` passes arguments).
 * The home directory is kept on its own disk, `target/vindows/home.img`,
   across builds and runs; `--fresh-home` starts over with a new one.
   Scripted runs (`shot`, `script`, `test`) always use a fresh home disk.

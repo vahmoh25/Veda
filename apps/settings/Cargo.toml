@@ -18,6 +18,7 @@ vgfx = { workspace = true }
 vmath = { workspace = true }
 vfiles = { workspace = true, features = ["thumbnails"] }
 vui = { workspace = true }
+vnet = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

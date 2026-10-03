@@ -6,8 +6,16 @@ These rules apply to every crate in the repository.
 
 * Rust 2024 edition, **stable** toolchain (tested with 1.99). No nightly
   features, no `RUSTC_BOOTSTRAP`.
-* **No external crates.** Everything is written from scratch in this
-  repository. `core`, `alloc` and (for host tools only) `std` are available.
+* **Few, mature external crates.** The system is written in this
+  repository. Where a protocol or cryptographic primitive has a mature,
+  widely reviewed Rust implementation, that is used instead of a new one:
+  smoltcp (TCP/IP, vendored in `third_party/` with documented patches),
+  the RustCrypto crates (hashes, HMAC, PBKDF2, AES, CCM, CMAC, AES key wrap,
+  P-256), `subtle`, `zeroize` and `httparse`. A new dependency must build
+  `no_std` (check with `--target x86_64-unknown-uefi`), be declared in the
+  workspace's `[workspace.dependencies]`, and come with a reason; avoid
+  crates with large dependency trees. `core`, `alloc` and (for host tools
+  only) `std` are available.
 * **Rust only**, performance-critical code included (see Performance below).
 
 ## Targets

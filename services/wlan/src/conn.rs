@@ -29,6 +29,9 @@ const WEAK_SCAN_MS: u64 = 30_000;
 const MANUAL_ATTEMPTS: u32 = 3;
 /// The loop wakes at least this often (retry delays, status).
 const MAX_SLEEP_MS: u64 = 1_000;
+/// Only access points heard this recently are joined (an older entry may
+/// be an access point that is gone or out of range).
+const JOIN_FRESH_MS: u64 = 15_000;
 
 pub fn mac_string(m: &[u8; 6]) -> String {
     format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5])
@@ -233,6 +236,9 @@ impl Wlan {
         let reason = fail_reason(f);
         self.last_failure = Some(reason);
         self.set_link(false);
+        if matches!(f, Failure::NoResponse | Failure::SignalLost) {
+            self.unresponsive.insert(cur.bss.bssid, now);
+        }
         if was_connected {
             self.counters.disconnections += 1;
             self.log(format!("lost the connection to {}: {}", name, reason));
@@ -259,6 +265,7 @@ impl Wlan {
                     // network may be there).
                     self.backoff.remove(&req.ssid);
                     self.next_scan_ms = now;
+                    self.rescan_first = true;
                     req.attempts = 0;
                 } else {
                     self.backoff.entry(req.ssid.clone()).or_default().failed(now);
@@ -459,10 +466,17 @@ impl Wlan {
             self.request = Some(req);
             return;
         }
-        let seen = self.table.fresh(now);
+        let seen = self.join_candidates(now);
         let best = seen.iter().filter(|b| req.accepts(b)).max_by_key(|b| policy::score(b)).cloned();
         match best {
-            Some(bss) => self.start_join(req, bss, false, now),
+            Some(bss) => {
+                // Only a probe response names a hidden network: remember it
+                // as hidden so it is probed for next time.
+                if self.table.beacon_hides_name(&bss.bssid) {
+                    req.hidden = true;
+                }
+                self.start_join(req, bss, false, now)
+            }
             None if !req.scanned => {
                 req.scanned = true;
                 self.request = Some(req);
@@ -500,11 +514,12 @@ impl Wlan {
             return true;
         }
         let mut directed: Vec<Vec<u8>> = self.profiles.iter().filter(|p| p.hidden).map(|p| p.ssid.clone()).collect();
+        // A requested network that was not heard may hide its name: ask
+        // for it by name.
         if let Some(r) = &self.request
-            && r.hidden
             && !directed.contains(&r.ssid)
         {
-            directed.push(r.ssid.clone());
+            directed.insert(0, r.ssid.clone());
         }
         directed.truncate(8);
         let radio = self.radio.as_ref().expect("usable radio");
@@ -530,6 +545,7 @@ impl Wlan {
     fn finish_scan(&mut self, now: u64) {
         let Some(scan) = self.scan.take() else { return };
         self.counters.scans += 1;
+        self.rescan_first = false;
         // Back to the network's channel.
         if let Some(c) = self.current.as_ref().map(|c| c.bss.channel)
             && let Some(r) = self.radio.as_mut()
@@ -569,7 +585,7 @@ impl Wlan {
         let mut req = cur.request.clone();
         req.sae_only |= cur.sae;
         req.manual = false;
-        let seen = self.table.fresh(now);
+        let seen = self.join_candidates(now);
         let Some(target) = policy::roam_target(&profile, &current_bssid, self.sta.signal_dbm, &seen).cloned() else {
             return;
         };
@@ -615,12 +631,16 @@ impl Wlan {
             }
             return;
         }
+        if self.rescan_first {
+            self.start_scan(false, now);
+            return;
+        }
         if self.request.is_some() {
             self.try_request(now);
         } else if !self.user_disconnected {
             let usable: Vec<Profile> =
                 self.profiles.iter().filter(|p| !self.rejected.contains(&p.ssid)).cloned().collect();
-            let seen = self.table.fresh(now);
+            let seen = self.join_candidates(now);
             if let Some((i, bss)) = policy::choose(&usable, &seen, &self.backoff, now) {
                 let req = Request::from_profile(&usable[i]);
                 let bss = bss.clone();
@@ -631,6 +651,15 @@ impl Wlan {
         if self.current.is_none() && self.scan.is_none() && now >= self.next_scan_ms {
             self.start_scan(false, now);
         }
+    }
+
+    /// Access points that may be joined: heard recently, and heard again
+    /// since they last stopped answering.
+    fn join_candidates(&mut self, now: u64) -> Vec<Bss> {
+        let seen = self.table.recent(now, JOIN_FRESH_MS);
+        self.unresponsive.retain(|bssid, failed| seen.iter().any(|b| b.bssid == *bssid && b.seen_ms <= *failed));
+        let unresponsive = &self.unresponsive;
+        seen.into_iter().filter(|b| !unresponsive.contains_key(&b.bssid)).collect()
     }
 
     /// When the loop must run again (milliseconds).

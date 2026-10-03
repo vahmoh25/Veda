@@ -17,6 +17,7 @@
 extern crate alloc;
 
 mod commands;
+mod netcmds;
 mod screen;
 mod shell;
 

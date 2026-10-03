@@ -112,6 +112,32 @@ eager FPU/SSE/AVX state switching with XSAVE.
   Files, the Terminal's `open`, the desktop icons and the pickers of Photos,
   Music and Settings all use it.
 
+## Networking
+
+Networking is three layers of processes (details in
+[NETWORKING.md](NETWORKING.md)):
+
+* **Drivers** only move frames: `virtio-net` offers Ethernet frames to the
+  network service, `vwifi` (the virtual radio under QEMU, a virtio-serial
+  port connected to the `airsim` simulator on the host) offers raw 802.11
+  frames to the Wi-Fi service. Frames travel through shared-memory rings
+  (`vproto::netring`) with wake-up events; neither side trusts the other's
+  indices or lengths.
+* **`wlan`** (the Wi-Fi service, built on `vwlan`) scans, authenticates
+  (open system, SAE), associates, runs the key handshakes, encrypts with
+  CCMP, protects management frames, keeps the saved networks and decides
+  when to reconnect or roam. It presents each radio to `netd` as `wlan0`.
+* **`netd`** (on `vnetstack` and smoltcp) runs interfaces, DHCP, IPv6
+  autoconfiguration, routes, a caching DNS resolver and the sockets that
+  applications use through `vnet`, one channel per socket with
+  credit-based flow control in both directions.
+
+`netd` and `wlan` are restarted by `init` if they exit; drivers attach to
+the new instance. Calls from a service to a driver have timeouts and the
+driver reports its state with one-way events, so a hung or crashed driver
+cannot block a service. Random numbers (TCP sequence numbers, DHCP and DNS
+ids, Wi-Fi nonces and keys) come from the kernel's ChaCha20 generator.
+
 ## The window system (`services/compositor`)
 
 The compositor owns the framebuffer and serves two protocols: `display`
@@ -227,7 +253,11 @@ the pool's workers on different CPUs at once.
   tool).
 * `systest`, a program that runs inside Vindows and exercises kernel objects,
   threads, the file system, the launcher, crash reports and the restart of
-  the window system.
+  the window system; `nettest` checks DNS, UDP, TCP, HTTP and ping over
+  Ethernet or Wi-Fi.
+* Network host tests: the 802.11 protocol and its cryptography against
+  published vectors, a station against an access point, two TCP/IP stacks
+  over a simulated cable, and the Wi-Fi simulator.
 * GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
   mouse, keyboard, waits on log lines, screenshots — and fail on panics.
 
@@ -248,8 +278,13 @@ the pool's workers on different CPUs at once.
 | `lib/v3d` | the fixed-point software 3D renderer and the game harness |
 | `lib/audio` | audio formats, resampling, mixing, FFT and the synthesiser |
 | `lib/virtio` | virtio device access shared by the drivers |
+| `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
+| `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
+| `lib/wlan`, `lib/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
+| `third_party/` | vendored crates with documented patches (smoltcp) |
 | `services/`, `drivers/`, `apps/` | system services, drivers and applications (the games included) |
 | `tests/` | in-system tests and GUI automation scripts |
+| `tools/` | host programs: media generators, `airsim` (the simulated Wi-Fi environment) |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |
 | `assets/` | fonts and other data shipped in the initrd |
 | `docs/` | documentation |

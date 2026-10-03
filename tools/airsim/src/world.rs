@@ -200,6 +200,9 @@ pub struct World {
     pub rng: SimRandom,
     /// Counters for the `status` command.
     pub stats: Stats,
+    /// A control command asked to cut the guest's radio link for this
+    /// many seconds (carried out by `main.rs`).
+    pub radio_drop: Option<u64>,
     out: Vec<Output>,
 }
 
@@ -222,6 +225,7 @@ impl World {
             guest_mac: DEFAULT_GUEST_MAC,
             rng,
             stats: Stats::default(),
+            radio_drop: None,
             out: Vec::new(),
         }
     }
@@ -274,6 +278,9 @@ impl World {
     /// closed). The access points drop the guest, as real ones would after
     /// their inactivity timeout.
     pub fn guest_disconnected(&mut self, now: u64) {
+        if !self.radio.connected {
+            return;
+        }
         let mac = self.radio.mac;
         self.radio.connected = false;
         self.radio.on = false;

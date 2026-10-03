@@ -5,8 +5,8 @@
 //! * the **desktop** ([`desktop`]): wallpaper and desktop icons;
 //! * the **taskbar** ([`taskbar`]): start button, pinned and running apps,
 //!   clock;
-//! * the **start menu** ([`start`]), **calendar** ([`calendar`]) and
-//!   **volume** ([`volume`]) popups;
+//! * the **start menu** ([`start`]), **calendar** ([`calendar`]),
+//!   **volume** ([`volume`]) and **network** ([`wifi`]) popups;
 //! * **notifications** ([`notify`]).
 //!
 //! Every surface is a [`vui::Host`] window. Surfaces draw from the shared
@@ -29,6 +29,7 @@ mod taskbar;
 mod tooltip;
 mod volume;
 mod wallpaper;
+mod wifi;
 
 use alloc::format;
 use alloc::string::String;
@@ -71,6 +72,21 @@ pub enum Action {
     CloseCalendar,
     ToggleVolume,
     CloseVolume,
+    ToggleWifi,
+    CloseWifi,
+    /// Turns the Wi-Fi radio on or off.
+    WifiRadio(bool),
+    WifiScan,
+    /// Joins a Wi-Fi network.
+    WifiConnect {
+        ssid: Vec<u8>,
+        password: Option<String>,
+        auto: bool,
+        hidden: bool,
+    },
+    WifiDisconnect,
+    /// Opens the network page of Settings.
+    OpenNetworkSettings,
     /// Sets the master volume (0..=1) and mute state.
     SetVolume(f32, bool),
     /// Minimises every window, or restores them if the desktop is showing.
@@ -92,13 +108,24 @@ pub struct Model {
     pub wallpaper_generation: u64,
     /// The audio system's state (`None` without the audio service).
     pub audio: Option<AudioStatus>,
+    /// The Wi-Fi state (`None` without the Wi-Fi service).
+    pub wifi: Option<vnet::wifi::WlanStatus>,
+    /// Wi-Fi networks in range.
+    pub wifi_networks: Vec<vnet::wifi::NetworkInfo>,
+    /// The last failed connection attempt: SSID and why.
+    pub wifi_error: Option<(Vec<u8>, String)>,
+    /// A wired interface is connected, and how to describe it.
+    pub wired_up: bool,
+    pub wired_label: String,
     pub start_open: bool,
     pub calendar_open: bool,
     pub volume_open: bool,
+    pub wifi_open: bool,
     /// When a popup was last dismissed (see [`DISMISS_GRACE_NS`]).
     pub start_dismissed_at: u64,
     pub calendar_dismissed_at: u64,
     pub volume_dismissed_at: u64,
+    pub wifi_dismissed_at: u64,
     /// The taskbar button under the pointer, for its tooltip.
     pub tip: Option<tooltip::Tip>,
     pub actions: Vec<Action>,
@@ -133,6 +160,11 @@ struct Shell {
     start: Option<Popup<start::StartMenu>>,
     calendar: Option<Popup<calendar::Calendar>>,
     volume: Option<Popup<volume::VolumeFlyout>>,
+    wifi: Option<Popup<wifi::WifiFlyout>>,
+    /// Wi-Fi events (`None` while the Wi-Fi service is not running).
+    wifi_watch: Option<vnet::wifi::Watcher>,
+    /// When to next look at the network state (and retry the watcher).
+    next_net_poll: u64,
     tooltip: Option<tooltip::Tooltip>,
     notes: notify::Notifications,
     listener: Option<Channel>,
@@ -221,6 +253,9 @@ impl Shell {
         if let Some(p) = &mut self.volume {
             p.host.invalidate();
         }
+        if let Some(p) = &mut self.wifi {
+            p.host.invalidate();
+        }
         self.notes.invalidate_all();
     }
 
@@ -293,6 +328,7 @@ impl Shell {
     fn open_start(&mut self) {
         self.close_calendar();
         self.close_volume();
+        self.close_wifi();
         let r = start::placement(self.model.screen);
         match Host::new(&self.display, Self::popup_spec("Start", r)) {
             Ok(host) => {
@@ -314,6 +350,7 @@ impl Shell {
     fn open_calendar(&mut self) {
         self.close_start();
         self.close_volume();
+        self.close_wifi();
         let r = calendar::placement(self.model.screen);
         match Host::new(&self.display, Self::popup_spec("Calendar", r)) {
             Ok(host) => {
@@ -335,6 +372,7 @@ impl Shell {
     fn open_volume(&mut self) {
         self.close_start();
         self.close_calendar();
+        self.close_wifi();
         self.refresh_audio();
         let r = volume::placement(self.model.screen);
         match Host::new(&self.display, Self::popup_spec("Volume", r)) {
@@ -354,6 +392,152 @@ impl Shell {
         }
     }
 
+    fn open_wifi(&mut self) {
+        self.close_start();
+        self.close_calendar();
+        self.close_volume();
+        self.refresh_wifi();
+        let _ = vnet::wifi::scan();
+        let r = wifi::placement(self.model.screen);
+        match Host::new(&self.display, Self::popup_spec("Network", r)) {
+            Ok(host) => {
+                self.wifi = Some(Popup { host, ui: wifi::WifiFlyout::new((r.x, r.y)) });
+                self.model.wifi_open = true;
+                self.taskbar_host.invalidate();
+            }
+            Err(e) => println!("cannot open the network flyout: {:?}", e),
+        }
+    }
+
+    fn close_wifi(&mut self) {
+        if self.wifi.take().is_some() {
+            self.model.wifi_open = false;
+            self.taskbar_host.invalidate();
+        }
+    }
+
+    fn invalidate_network(&mut self) {
+        self.taskbar_host.invalidate();
+        if let Some(p) = &mut self.wifi {
+            p.host.invalidate();
+        }
+    }
+
+    /// Re-reads the Wi-Fi status and the networks in range.
+    fn refresh_wifi(&mut self) {
+        match vnet::wifi::status() {
+            Ok(s) => {
+                self.model.wifi = Some(s);
+                self.model.wifi_networks = vnet::wifi::networks().unwrap_or_default();
+            }
+            Err(_) => {
+                self.model.wifi = None;
+                self.model.wifi_networks.clear();
+                self.wifi_watch = None;
+            }
+        }
+        self.invalidate_network();
+    }
+
+    /// Looks at the wired network, and (re)connects to the Wi-Fi service's
+    /// events if needed. Runs every few seconds.
+    fn poll_network(&mut self) {
+        let now = vrt::time::now_ns();
+        if now < self.next_net_poll {
+            return;
+        }
+        // Every second while the Wi-Fi service is away (it may be
+        // restarting), otherwise every five.
+        self.next_net_poll = now + if self.wifi_watch.is_none() { 1_000_000_000 } else { 5_000_000_000 };
+        let (up, label) = match vnet::interfaces() {
+            Ok(list) => match list
+                .iter()
+                .find(|i| i.kind == vnet::InterfaceKind::Ethernet && i.link_up && !i.gateways.is_empty())
+            {
+                Some(i) => (true, format!("Wired: {} connected", i.name)),
+                None => (false, String::new()),
+            },
+            Err(_) => (false, String::new()),
+        };
+        if (up, &label) != (self.model.wired_up, &self.model.wired_label) {
+            self.model.wired_up = up;
+            self.model.wired_label = label;
+            self.invalidate_network();
+        }
+        if self.wifi_watch.is_none() && vnet::wifi::available() {
+            self.wifi_watch = vnet::wifi::Watcher::new().ok();
+            self.refresh_wifi();
+        }
+    }
+
+    /// Handles Wi-Fi events: status changes, finished scans, failures.
+    fn check_wifi(&mut self) {
+        let Some(w) = &self.wifi_watch else { return };
+        let mut events = Vec::new();
+        let gone = loop {
+            match w.try_next() {
+                Ok(Some(ev)) => events.push(ev),
+                Ok(None) => break false,
+                Err(_) => break true,
+            }
+        };
+        if gone {
+            self.wifi_watch = None;
+            self.model.wifi = None;
+            self.model.wifi_networks.clear();
+            self.invalidate_network();
+        }
+        for ev in events {
+            match ev {
+                vnet::wifi::WlanEvent::StatusChanged { status } => {
+                    let changed_network = self.model.wifi.as_ref().map(|s| (s.state, s.ssid.clone()))
+                        != Some((status.state, status.ssid.clone()));
+                    if status.state == vnet::wifi::ConnState::Connected {
+                        self.model.wifi_error = None;
+                    }
+                    self.model.wifi = Some(status);
+                    if changed_network {
+                        self.model.wifi_networks = vnet::wifi::networks().unwrap_or_default();
+                    }
+                    self.invalidate_network();
+                }
+                vnet::wifi::WlanEvent::ScanDone {} => {
+                    self.model.wifi_networks = vnet::wifi::networks().unwrap_or_default();
+                    self.invalidate_network();
+                }
+                vnet::wifi::WlanEvent::ConnectFailed { ssid, name, reason } => {
+                    let why = format!("{reason}");
+                    let mut msg = why.clone();
+                    if let Some(c) = msg.get_mut(0..1) {
+                        c.make_ascii_uppercase();
+                    }
+                    self.model.wifi_error = Some((ssid.0, msg));
+                    if self.wifi.is_none() {
+                        self.post_notification(
+                            &format!("Couldn't connect to {name}"),
+                            &format!("Because {why}."),
+                            "wifi",
+                        );
+                    }
+                    self.invalidate_network();
+                }
+            }
+        }
+    }
+
+    fn wifi_connect(&mut self, ssid: Vec<u8>, password: Option<String>, auto: bool, hidden: bool) {
+        self.model.wifi_error = None;
+        let opts = vnet::wifi::ConnectOptions { security: None, save: true, auto_connect: auto, hidden };
+        if let Err(e) = vnet::wifi::connect_with(&ssid, password.as_deref(), &opts) {
+            let mut msg = format!("{e}");
+            if let Some(c) = msg.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            self.model.wifi_error = Some((ssid, msg));
+        }
+        self.invalidate_network();
+    }
+
     fn show_desktop(&mut self) {
         let visible: Vec<u32> =
             self.model.windows.iter().filter(|w| w.state != WindowState::Minimized).map(|w| w.id).collect();
@@ -371,7 +555,8 @@ impl Shell {
 
     /// Shows, replaces or hides the taskbar tooltip.
     fn update_tooltip(&mut self) {
-        let popup_open = self.start.is_some() || self.calendar.is_some() || self.volume.is_some();
+        let popup_open =
+            self.start.is_some() || self.calendar.is_some() || self.volume.is_some() || self.wifi.is_some();
         let due = self.model.tip.as_ref().filter(|t| !popup_open && vrt::time::now_ns() >= t.since + tooltip::DELAY_NS);
         match due {
             Some(tip) => {
@@ -391,7 +576,8 @@ impl Shell {
     /// Lets every surface process its events and draw.
     fn pump(&mut self) {
         let now = vrt::time::now_ns();
-        let Shell { model, desktop_host, desktop, taskbar_host, taskbar, start, calendar, volume, notes, .. } = self;
+        let Shell { model, desktop_host, desktop, taskbar_host, taskbar, start, calendar, volume, wifi, notes, .. } =
+            self;
         desktop_host.pump(|ui| desktop.update(ui, model));
         let mut windows_changed = false;
         for ev in taskbar_host.pump(|ui| taskbar.update(ui, model)) {
@@ -426,6 +612,15 @@ impl Shell {
                 model.push(Action::CloseVolume);
             } else if p.host.close_requested {
                 model.push(Action::CloseVolume);
+            }
+        }
+        if let Some(p) = wifi {
+            let events = p.host.pump(|ui| p.ui.update(ui, model));
+            if p.host.window.closed || events.iter().any(|e| matches!(e, WindowEvent::CloseRequested {})) {
+                model.wifi_dismissed_at = now;
+                model.push(Action::CloseWifi);
+            } else if p.host.close_requested {
+                model.push(Action::CloseWifi);
             }
         }
         notes.pump(model);
@@ -471,6 +666,31 @@ impl Shell {
                     }
                 }
                 Action::CloseVolume => self.close_volume(),
+                Action::ToggleWifi => {
+                    if self.wifi.is_some() {
+                        self.close_wifi();
+                    } else {
+                        self.open_wifi();
+                    }
+                }
+                Action::CloseWifi => self.close_wifi(),
+                Action::WifiRadio(on) => {
+                    let _ = vnet::wifi::set_radio(on);
+                    self.refresh_wifi();
+                }
+                Action::WifiScan => {
+                    let _ = vnet::wifi::scan();
+                    self.refresh_wifi();
+                }
+                Action::WifiConnect { ssid, password, auto, hidden } => self.wifi_connect(ssid, password, auto, hidden),
+                Action::WifiDisconnect => {
+                    let _ = vnet::wifi::disconnect();
+                    self.refresh_wifi();
+                }
+                Action::OpenNetworkSettings => {
+                    self.close_wifi();
+                    self.launch("settings", alloc::vec![String::from("network")]);
+                }
                 Action::SetVolume(v, muted) => self.set_volume(v, muted),
                 Action::ShowDesktop => self.show_desktop(),
                 Action::Power(what) => {
@@ -569,6 +789,9 @@ impl Shell {
         if let Some(p) = &self.volume {
             add_host(&p.host, &mut items);
         }
+        if let Some(p) = &self.wifi {
+            add_host(&p.host, &mut items);
+        }
         if let Some(t) = &self.tooltip {
             add_host(t.host(), &mut items);
         }
@@ -589,6 +812,10 @@ impl Shell {
         if let Some(c) = &self.task_events {
             items.push(WaitItem { handle: c.raw(), signals: readable, ..Default::default() });
         }
+        if let Some(w) = &self.wifi_watch {
+            items.push(WaitItem { handle: w.handle().raw(), signals: readable, ..Default::default() });
+        }
+        deadline = deadline.min(self.next_net_poll);
         items.truncate(vabi::WAIT_MANY_MAX);
         if !self.model.actions.is_empty() {
             deadline = 0;
@@ -609,6 +836,8 @@ impl Shell {
             self.perform_actions();
             self.serve();
             self.check_tasks();
+            self.poll_network();
+            self.check_wifi();
             self.wait();
         }
     }
@@ -712,12 +941,19 @@ fn main() -> i32 {
         wallpaper,
         wallpaper_generation: 0,
         audio: None,
+        wifi: None,
+        wifi_networks: Vec::new(),
+        wifi_error: None,
+        wired_up: false,
+        wired_label: String::new(),
         start_open: false,
         calendar_open: false,
         volume_open: false,
+        wifi_open: false,
         start_dismissed_at: 0,
         calendar_dismissed_at: 0,
         volume_dismissed_at: 0,
+        wifi_dismissed_at: 0,
         tip: None,
         actions: Vec::new(),
     };
@@ -736,6 +972,9 @@ fn main() -> i32 {
         start: None,
         calendar: None,
         volume: None,
+        wifi: None,
+        wifi_watch: None,
+        next_net_poll: 0,
         tooltip: None,
         notes: notify::Notifications::new(),
         listener,

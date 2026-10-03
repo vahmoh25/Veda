@@ -1,5 +1,5 @@
 //! The taskbar: start button, pinned and running applications in the middle,
-//! and the clock on the right.
+//! and the network, volume and clock buttons on the right.
 
 use alloc::format;
 use alloc::string::String;
@@ -10,7 +10,7 @@ use vproto::display::WindowState;
 use vui::{Font, Icon, Ui};
 
 use crate::tooltip::Tip;
-use crate::{Action, DISMISS_GRACE_NS, Model, apps, chrome, volume};
+use crate::{Action, DISMISS_GRACE_NS, Model, apps, chrome, volume, wifi};
 
 /// Height of the taskbar in pixels.
 pub const HEIGHT: i32 = 48;
@@ -80,11 +80,12 @@ pub struct Taskbar {
     start_pressed_at: u64,
     clock_pressed_at: u64,
     volume_pressed_at: u64,
+    network_pressed_at: u64,
 }
 
 impl Taskbar {
     pub fn new() -> Taskbar {
-        Taskbar { start_pressed_at: 0, clock_pressed_at: 0, volume_pressed_at: 0 }
+        Taskbar { start_pressed_at: 0, clock_pressed_at: 0, volume_pressed_at: 0, network_pressed_at: 0 }
     }
 
     /// Hover/press/active background of a button.
@@ -211,6 +212,22 @@ impl Taskbar {
                 Some(_) => format!("Volume: {}%", (level * 100.0 + 0.5) as u32),
             };
             tip = Some((label, vol.center().0));
+        }
+
+        // Network: opens the Wi-Fi flyout.
+        let net = Rect::new(vol.x - 44, 4, 40, h - 8);
+        let resp = ui.interact(ui.id("network"), net);
+        Self::button_bg(ui, net, resp.hovered, resp.held, m.wifi_open);
+        let (icon, dim) = wifi::icon(m);
+        ui.icon(net, icon, 18.0, if dim { t.text_faint } else { t.text });
+        if resp.pressed {
+            self.network_pressed_at = ui.now();
+        }
+        if resp.clicked && m.wifi_dismissed_at + DISMISS_GRACE_NS < self.network_pressed_at {
+            m.push(Action::ToggleWifi);
+        }
+        if resp.hovered {
+            tip = Some((wifi::tooltip(m).replace('\n', " \u{00b7} "), net.center().0));
         }
 
         // "Show desktop" sliver at the far right.

@@ -31,6 +31,7 @@ mod world;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use vradiolink::{LinkError, Reader, msg};
@@ -104,10 +105,20 @@ fn log(start: Instant, line: &str) {
     println!("[{:>5}.{:03}] {line}", t.as_secs(), t.subsec_millis());
 }
 
+/// Until when (if at all) the radio link must stay down (`radio drop`).
+type Hold = Arc<Mutex<Option<Instant>>>;
+
 /// Connects to the guest's port (retrying while QEMU starts, and again
 /// after the connection drops) and forwards what arrives.
-fn radio_thread(addr: SocketAddr, events: Sender<Event>) {
+fn radio_thread(addr: SocketAddr, events: Sender<Event>, hold: Hold) {
     loop {
+        let until = *hold.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(t) = until
+            && Instant::now() < t
+        {
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
         match TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
             Ok(stream) => {
                 let _ = stream.set_nodelay(true);
@@ -116,17 +127,30 @@ fn radio_thread(addr: SocketAddr, events: Sender<Event>) {
                     return;
                 }
                 let mut stream = stream;
+                // Wake up regularly: on Windows, shutting the socket down from
+                // another thread does not interrupt a blocked read, so a
+                // `radio drop` is noticed here.
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
                 let mut buf = vec![0u8; 16384];
                 loop {
                     match stream.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
+                        Ok(0) => break,
                         Ok(n) => {
                             if events.send(Event::RadioData(buf[..n].to_vec())).is_err() {
                                 return;
                             }
                         }
+                        Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                            let held =
+                                hold.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| Instant::now() < t);
+                            if held {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
                     }
                 }
+                drop(stream);
                 if events.send(Event::RadioDown).is_err() {
                     return;
                 }
@@ -213,10 +237,11 @@ fn main() {
         let remote = opts.wired_remote;
         std::thread::spawn(move || wired_thread(socket, remote, events));
     }
+    let hold: Hold = Arc::new(Mutex::new(None));
     {
-        let events = events.clone();
+        let (events, hold) = (events.clone(), hold.clone());
         let radio = opts.radio;
-        std::thread::spawn(move || radio_thread(radio, events));
+        std::thread::spawn(move || radio_thread(radio, events, hold));
     }
     if let Some(addr) = opts.control {
         let listener = TcpListener::bind(addr).unwrap_or_else(|e| {
@@ -284,6 +309,14 @@ fn main() {
                     log(start, &format!("control: {} -> {}", line.trim(), text.lines().last().unwrap_or("")));
                 }
                 let _ = answer.send(text);
+                if let Some(secs) = world.radio_drop.take() {
+                    log(start, &format!("cutting the radio link for {secs} s"));
+                    *hold.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now() + Duration::from_secs(secs));
+                    if let Some(g) = guest.take() {
+                        let _ = g.stream.shutdown(Shutdown::Both);
+                        world.guest_disconnected(now());
+                    }
+                }
             }
             Ok(Event::Quit) | Err(RecvTimeoutError::Disconnected) => break,
             Err(RecvTimeoutError::Timeout) => {}

@@ -369,3 +369,56 @@ fn reconnects_after_disconnecting() {
         assert!(s.ap.stations().is_empty(), "the AP still lists the station");
     }
 }
+
+#[test]
+fn random_and_altered_frames_leave_the_connection_intact() {
+    for security in [Security::Wpa2Personal, Security::Wpa3Personal] {
+        let mut cfg = ap_config(security, "sturdy password");
+        cfg.pmf_required = security == Security::Wpa3Personal;
+        let mut s = Sim::new(cfg);
+        s.connect("sturdy password", true);
+        assert!(s.run_until(8000, |s| s.connected()), "{security:?}: {:?}", s.events);
+        s.exchange_data();
+        let captured = s.ap_frames.clone();
+        let mut x = 0x2468_ACE1u32;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        for i in 0..4000u32 {
+            let mut f: Vec<u8> = if i % 3 == 0 {
+                let len = (next() % 400) as usize;
+                (0..len).map(|_| next() as u8).collect()
+            } else {
+                // A copy of something the access point sent, with a few bits
+                // flipped and sometimes cut short.
+                let mut f = captured[next() as usize % captured.len()].clone();
+                for _ in 0..1 + next() % 4 {
+                    if !f.is_empty() {
+                        let p = next() as usize % f.len();
+                        f[p] ^= 1 << (next() % 8);
+                    }
+                }
+                if i % 5 == 0 {
+                    let keep = next() as usize % (f.len() + 1);
+                    f.truncate(keep);
+                }
+                f
+            };
+            // Half of them appear to come from the access point to us.
+            if i % 2 == 0 && f.len() >= 16 {
+                f[4..10].copy_from_slice(&STA_MAC);
+                f[10..16].copy_from_slice(&AP_MAC);
+            }
+            let a = s.sta.receive(&f, -50, s.now, &mut s.rng);
+            s.sta_actions(a);
+            s.pump();
+        }
+        assert!(!s.events.iter().any(|e| matches!(e, StaEvent::Disconnected(_))), "{security:?}: {:?}", s.events);
+        assert!(s.sta.counters.decrypt_errors > 0, "altered protected frames were rejected");
+        s.run(2000);
+        s.exchange_data();
+    }
+}

@@ -134,6 +134,13 @@ pub struct Wlan {
     pub current: Option<Current>,
     /// Join this access point once the current connection is left.
     pub roam_to: Option<(Request, vwlan::scan::Bss)>,
+    /// Look around (scan) before joining anything automatically: set when
+    /// a connection is lost, as the access point may be gone and others
+    /// of the network may be on other channels.
+    pub rescan_first: bool,
+    /// Access points that stopped answering, and when: they are not joined
+    /// again until heard after that.
+    pub unresponsive: BTreeMap<vwlan::frame::Mac, u64>,
     /// The Wi-Fi switch.
     pub radio_on: bool,
     /// The user disconnected: do not join anything automatically.
@@ -637,6 +644,8 @@ fn main() -> i32 {
         request: None,
         current: None,
         roam_to: None,
+        rescan_first: false,
+        unresponsive: BTreeMap::new(),
         radio_on: true,
         user_disconnected: false,
         last_failure: None,

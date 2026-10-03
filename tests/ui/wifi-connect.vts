@@ -1,0 +1,76 @@
+# Joining Wi-Fi networks from the desktop (1280x800 screen) with the
+# simulated networks of airsim: the network flyout on the taskbar (a wrong
+# password first, then the right one), the network page of Settings, and
+# the Terminal's wifi commands for WPA3, hidden, open and unsupported
+# networks.
+net wifi
+fail-on "PANIC"
+wait-serial "desktop ready" 240
+wait-serial "attached to the network service as wlan0" 120
+wait 8
+
+# Open the network flyout (taskbar icon left of the volume icon).
+click 0.859 0.97
+wait 4
+shot target/vindows/wifi-1-flyout.png
+# Expand "Vindows Home" (first row), type a wrong password and press Enter.
+click 0.85 0.4113
+wait 2
+click 0.8383 0.4713
+wait 1
+type "not-the-password"
+key ret
+wait-serial "could not join Vindows Home: the password is incorrect" 90
+wait 2
+shot target/vindows/wifi-2-wrong-password.png
+# Now the right one.
+click 0.8383 0.4713
+wait 1
+type "vindows-wifi"
+key ret
+wait-serial "connected to Vindows Home (WPA2, protected management frames)" 90
+wait-serial "Routable via wlan0" 60
+wait 3
+shot target/vindows/wifi-3-connected.png
+air-expect "list" "1 joined"
+
+# "Network settings" opens the network page of Settings.
+click 0.9117 0.8925
+wait-serial "started settings" 60
+wait 8
+shot target/vindows/wifi-4-settings.png
+key alt-f4
+wait 3
+
+# The Terminal: status, interfaces, ping, and joining other networks.
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 30
+wait 4
+type "wifi status; ifconfig; ping -c 2 10.0.3.2"
+key ret
+wait 6
+shot target/vindows/wifi-5-terminal.png
+type "clear; wifi connect 'Vindows WPA3' vindows-wifi"
+key ret
+wait-serial "connected to Vindows WPA3 (WPA3, protected management frames)" 120
+type "wifi connect 'Vindows Hidden' vindows-wifi"
+key ret
+wait-serial "connected to Vindows Hidden (WPA2" 120
+type "wifi connect 'Vindows Guest'"
+key ret
+wait-serial "connected to Vindows Guest (open)" 120
+type "wifi connect 'Vindows Corp' some-password"
+key ret
+wait 3
+type "wifi connect 'Vindows Mixed' vindows-wifi"
+key ret
+wait-serial "connected to Vindows Mixed (WPA3 (transition mode)" 120
+type "wifi saved; wifi list"
+key ret
+wait 4
+shot target/vindows/wifi-6-terminal-networks.png
+reject-serial "joining Vindows Corp"
+reject-serial "panicked"

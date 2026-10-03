@@ -18,7 +18,7 @@ pub const DWELL_MS: u64 = 130;
 /// Access points not heard for this long are forgotten...
 const MAX_AGE_MS: u64 = 90_000;
 /// ...and those not heard for this long are not offered as networks.
-const FRESH_MS: u64 = 45_000;
+const FRESH_MS: u64 = 30_000;
 /// Most access points remembered (a crowded place has a few hundred).
 const MAX_ENTRIES: usize = 512;
 
@@ -69,11 +69,16 @@ impl Scan {
 #[derive(Default)]
 pub struct Table {
     entries: BTreeMap<Mac, Bss>,
+    /// Access points whose beacons hide their name.
+    hiding: alloc::collections::BTreeSet<Mac>,
 }
 
 impl Table {
     /// Records an access point heard at `now`.
     pub fn update(&mut self, mut b: Bss) {
+        if b.hidden() {
+            self.hiding.insert(b.bssid);
+        }
         if let Some(old) = self.entries.get(&b.bssid) {
             // A hidden network's beacons carry no name; keep the name a
             // probe response told us.
@@ -91,10 +96,18 @@ impl Table {
 
     pub fn expire(&mut self, now: u64) {
         self.entries.retain(|_, b| now.saturating_sub(b.seen_ms) <= MAX_AGE_MS);
+        let entries = &self.entries;
+        self.hiding.retain(|m| entries.contains_key(m));
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.hiding.clear();
+    }
+
+    /// Whether the access point's beacons hide its name.
+    pub fn beacon_hides_name(&self, bssid: &Mac) -> bool {
+        self.hiding.contains(bssid)
     }
 
     pub fn get(&self, bssid: &Mac) -> Option<&Bss> {
@@ -103,7 +116,12 @@ impl Table {
 
     /// Access points heard recently.
     pub fn fresh(&self, now: u64) -> Vec<Bss> {
-        self.entries.values().filter(|b| now.saturating_sub(b.seen_ms) <= FRESH_MS).cloned().collect()
+        self.recent(now, FRESH_MS)
+    }
+
+    /// Access points heard in the last `max_age_ms` milliseconds.
+    pub fn recent(&self, now: u64, max_age_ms: u64) -> Vec<Bss> {
+        self.entries.values().filter(|b| now.saturating_sub(b.seen_ms) <= max_age_ms).cloned().collect()
     }
 
     /// Every access point, strongest first, for diagnostics.

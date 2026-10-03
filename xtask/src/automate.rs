@@ -6,6 +6,7 @@
 //!
 //! ```text
 //! wait-serial "desktop ready" 60   # wait for a log line (timeout in s)
+//! wait-serial-count "joined" 3 60  # wait until the text has appeared 3 times
 //! wait 2                           # sleep
 //! shot target/vindows/desktop.png  # save a screenshot
 //! move 0.5 0.5                     # move the pointer (fractions of screen)
@@ -19,6 +20,7 @@
 //! reject-serial "panic"            # fail if the log contains the text
 //! fail-on "PANIC"                  # abort later waits as soon as the text appears
 //! reset                            # reboot (disks are kept); later waits see only new output
+//! checkpoint                       # later waits and expects see only output from now on
 //! boot-cmdline "run=about"        # extra kernel command line, applied before boot
 //! double-click 0.05 0.44           # two quick clicks
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
@@ -93,6 +95,11 @@ impl Session {
     pub fn recent(&self) -> String {
         let b = self.serial_bytes();
         String::from_utf8_lossy(&b[self.since.min(b.len())..]).into_owned()
+    }
+
+    /// Makes later waits and expectations look only at output from now on.
+    pub fn checkpoint(&mut self) {
+        self.since = self.serial_bytes().len();
     }
 
     /// Resets the machine (a reboot that keeps the disks).
@@ -214,6 +221,29 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
                     let timeout = num(&w, 2).unwrap_or(60.0);
                     s.wait_serial(w.get(1).ok_or("missing text")?, Duration::from_secs_f64(timeout)).map_err(ctx)?
                 }
+                "wait-serial-count" => {
+                    let needle = w.get(1).ok_or("missing text")?.clone();
+                    let count = num(&w, 2).map_err(ctx)? as usize;
+                    let timeout = Duration::from_secs_f64(num(&w, 3).unwrap_or(60.0));
+                    let start = Instant::now();
+                    loop {
+                        let seen = s.recent().matches(needle.as_str()).count();
+                        if seen >= count {
+                            break;
+                        }
+                        let log = s.serial();
+                        if let Some(p) = s.fail_patterns.iter().find(|p| log.contains(p.as_str())) {
+                            return Err(ctx(format!("serial log contains failure pattern \"{p}\"")));
+                        }
+                        if start.elapsed() > timeout {
+                            return Err(ctx(format!(
+                                "timed out: \"{needle}\" appeared {seen} of {count} times in {}s",
+                                timeout.as_secs()
+                            )));
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
                 "shot" => {
                     let path = PathBuf::from(w.get(1).ok_or("missing file name")?);
                     let path = if path.is_absolute() { path } else { util::workspace_root().join(path) };
@@ -280,6 +310,7 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
                     }
                 }
                 "reset" => s.reset().map_err(ctx)?,
+                "checkpoint" => s.checkpoint(),
                 "mouse-down" => {
                     s.qmp.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
                     std::thread::sleep(Duration::from_millis(80));

@@ -75,6 +75,18 @@ pub enum Icon {
     Redo,
     Wallpaper,
     Speaker,
+    /// Wi-Fi with a strong signal (three arcs).
+    Wifi,
+    /// Wi-Fi, fair signal (two arcs).
+    WifiFair,
+    /// Wi-Fi, weak signal (one arc).
+    WifiWeak,
+    /// Wi-Fi, no usable signal (the dot only).
+    WifiNone,
+    /// Wi-Fi switched off or unavailable.
+    WifiOff,
+    /// A wired network connection.
+    Network,
 }
 
 /// Stroke-based icon geometry on a 24x24 grid; `filled` parts are filled.
@@ -426,6 +438,30 @@ fn build(icon: Icon) -> Builder {
             b.poly(&[(4.0, 7.5), (12.0, 12.0), (20.0, 7.5)], false);
             b.line(12.0, 12.0, 12.0, 21.0);
         }
+        Icon::Wifi | Icon::WifiFair | Icon::WifiWeak | Icon::WifiNone | Icon::WifiOff => {
+            let arcs = match icon {
+                Icon::WifiNone => 0,
+                Icon::WifiWeak => 1,
+                Icon::WifiFair => 2,
+                _ => 3,
+            };
+            for r in [5.5, 10.0, 14.5].into_iter().take(arcs) {
+                b.arc(12.0, 20.0, r, -135.0, 90.0);
+            }
+            b.dot(12.0, 20.0, 1.9);
+            if icon == Icon::WifiOff {
+                b.line(4.0, 4.5, 20.0, 20.5);
+            }
+        }
+        Icon::Network => {
+            b.poly(
+                &[(4.0, 8.0), (4.0, 19.0), (20.0, 19.0), (20.0, 8.0), (16.0, 8.0), (16.0, 5.0), (8.0, 5.0), (8.0, 8.0)],
+                true,
+            );
+            for x in [8.5, 11.0, 13.5, 16.0] {
+                b.line(x - 0.5, 12.0, x - 0.5, 15.5);
+            }
+        }
         Icon::Lock => {
             b.rrect(5.0, 11.0, 14.0, 10.0, 2.0);
             b.arc(12.0, 11.0, 4.5, 180.0, 180.0);
@@ -503,7 +539,7 @@ impl Icon {
     }
 
     /// Every icon (for galleries and tests).
-    pub const ALL: [Icon; 68] = [
+    pub const ALL: [Icon; 74] = [
         Icon::Folder,
         Icon::File,
         Icon::Document,
@@ -572,12 +608,20 @@ impl Icon {
         Icon::Redo,
         Icon::Wallpaper,
         Icon::Speaker,
+        Icon::Wifi,
+        Icon::WifiFair,
+        Icon::WifiWeak,
+        Icon::WifiNone,
+        Icon::WifiOff,
+        Icon::Network,
     ];
 
     /// Looks an icon up by its manifest name (`apps/*.app` `icon=` field).
     pub fn by_name(name: &str) -> Option<Icon> {
         Some(match name {
             "folder" | "files" => Icon::Folder,
+            "wifi" | "wireless" => Icon::Wifi,
+            "network" | "ethernet" => Icon::Network,
             "file" => Icon::File,
             "document" | "editor" | "text" => Icon::Document,
             "image" | "photos" => Icon::Image,

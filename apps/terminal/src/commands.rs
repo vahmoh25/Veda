@@ -33,6 +33,7 @@ pub struct Builtin {
 pub enum Group {
     Files,
     System,
+    Network,
     Shell,
 }
 
@@ -239,6 +240,63 @@ pub static BUILTINS: &[Builtin] = &[
         usage: "apps",
         help: "List the installed applications",
         run: cmd_apps,
+    },
+    // Network.
+    Builtin {
+        name: "wifi",
+        aliases: &[],
+        group: Group::Network,
+        usage: "wifi [status|scan|list|connect SSID [PASSWORD]|disconnect|saved|forget SSID|on|off|aps|log]",
+        help: "Wi-Fi: show the connection, find and join networks",
+        run: crate::netcmds::cmd_wifi,
+    },
+    Builtin {
+        name: "ifconfig",
+        aliases: &["ip", "ipconfig"],
+        group: Group::Network,
+        usage: "ifconfig [-a]",
+        help: "Show network interfaces and their addresses (-a: with loopback)",
+        run: crate::netcmds::cmd_ifconfig,
+    },
+    Builtin {
+        name: "ping",
+        aliases: &[],
+        group: Group::Network,
+        usage: "ping HOST [-c COUNT]",
+        help: "Check that a host answers (ICMP echo)",
+        run: crate::netcmds::cmd_ping,
+    },
+    Builtin {
+        name: "nslookup",
+        aliases: &["host"],
+        group: Group::Network,
+        usage: "nslookup NAME",
+        help: "Look up the addresses of a name (DNS)",
+        run: crate::netcmds::cmd_nslookup,
+    },
+    Builtin {
+        name: "netstat",
+        aliases: &[],
+        group: Group::Network,
+        usage: "netstat",
+        help: "List open network connections",
+        run: crate::netcmds::cmd_netstat,
+    },
+    Builtin {
+        name: "route",
+        aliases: &[],
+        group: Group::Network,
+        usage: "route",
+        help: "Show the routing table",
+        run: crate::netcmds::cmd_route,
+    },
+    Builtin {
+        name: "curl",
+        aliases: &["wget"],
+        group: Group::Network,
+        usage: "curl [-I] URL",
+        help: "Fetch a web page over HTTP (-I: headers only)",
+        run: crate::netcmds::cmd_curl,
     },
     Builtin {
         name: "uptime",
@@ -1757,9 +1815,12 @@ fn cmd_help(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
         names
     };
     let width = BUILTINS.iter().map(|b| label(b).chars().count()).max().unwrap_or(10) + 3;
-    for (group, title) in
-        [(Group::Files, "Files and folders"), (Group::System, "Programs and system"), (Group::Shell, "Shell")]
-    {
+    for (group, title) in [
+        (Group::Files, "Files and folders"),
+        (Group::System, "Programs and system"),
+        (Group::Network, "Network"),
+        (Group::Shell, "Shell"),
+    ] {
         io.print("\n");
         io.styled(&format!("{title}\n"), Style::BOLD);
         for b in BUILTINS.iter().filter(|b| b.group == group) {

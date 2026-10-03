@@ -75,6 +75,39 @@ impl<'a> Ui<'a> {
     /// A text box editing `value`. Clicking focuses it; typing, arrows,
     /// Home/End, Backspace/Delete, Shift-selection, Ctrl+A/C/X/V work.
     pub fn text_input(&mut self, r: Rect, id_label: &str, value: &mut String, placeholder: &str) -> TextInputResponse {
+        self.edit_line(r, id_label, value, placeholder, false)
+    }
+
+    /// A text box for a password: shows a bullet per character unless
+    /// `reveal`, and never copies or cuts its contents to the clipboard.
+    pub fn password_input(
+        &mut self,
+        r: Rect,
+        id_label: &str,
+        value: &mut String,
+        placeholder: &str,
+        reveal: bool,
+    ) -> TextInputResponse {
+        self.edit_line(r, id_label, value, placeholder, !reveal)
+    }
+
+    fn edit_line(
+        &mut self,
+        r: Rect,
+        id_label: &str,
+        value: &mut String,
+        placeholder: &str,
+        mask: bool,
+    ) -> TextInputResponse {
+        // With `mask`, what is measured and drawn is one bullet per
+        // character; offsets are converted between the two strings.
+        const BULLET: char = '\u{2022}';
+        let shown = |v: &str| -> String { if mask { v.chars().map(|_| BULLET).collect() } else { String::from(v) } };
+        let to_shown =
+            |v: &str, i: usize| -> usize { if mask { v[..i].chars().count() * BULLET.len_utf8() } else { i } };
+        let from_shown = |v: &str, j: usize| -> usize {
+            if mask { v.char_indices().nth(j / BULLET.len_utf8()).map_or(v.len(), |(i, _)| i) } else { j }
+        };
         let id = self.id(id_label) ^ 0x7e47;
         let t = self.ctx.theme.clone();
         let size = t.font_size;
@@ -89,21 +122,26 @@ impl<'a> Ui<'a> {
         if resp.pressed {
             self.focus(id);
             if let Some((px, _)) = self.input.pointer {
-                let idx = self.ctx.text.index_for_x(font, size, value, (px - text_x) as f32 + st.scroll);
+                let disp = shown(value);
+                let idx =
+                    from_shown(value, self.ctx.text.index_for_x(font, size, &disp, (px - text_x) as f32 + st.scroll));
                 st.cursor = idx;
                 if !self.input.shift() {
                     st.anchor = idx;
                 }
                 if resp.double_clicked {
-                    st.anchor = word_left(value, idx);
-                    st.cursor = word_right(value, idx);
+                    // Word boundaries would reveal where the spaces are.
+                    st.anchor = if mask { 0 } else { word_left(value, idx) };
+                    st.cursor = if mask { value.len() } else { word_right(value, idx) };
                 }
             }
             st.blink_start = self.now();
         } else if resp.held
             && let Some((px, _)) = self.input.pointer
         {
-            st.cursor = self.ctx.text.index_for_x(font, size, value, (px - text_x) as f32 + st.scroll);
+            let disp = shown(value);
+            st.cursor =
+                from_shown(value, self.ctx.text.index_for_x(font, size, &disp, (px - text_x) as f32 + st.scroll));
         }
         let focused = self.focused(id);
         let mut out = TextInputResponse { focused, ..Default::default() };
@@ -163,7 +201,7 @@ impl<'a> Ui<'a> {
                         st.anchor = 0;
                         st.cursor = value.len();
                     }
-                    keys::C | keys::X if ctrl => {
+                    keys::C | keys::X if ctrl && !mask => {
                         if s0 != s1 {
                             let text = String::from(&value[s0..s1]);
                             self.set_clipboard(&text);
@@ -211,7 +249,8 @@ impl<'a> Ui<'a> {
 
         // Keep the cursor visible.
         let inner_w = (r.w - 2 * pad) as f32;
-        let cx = self.ctx.text.x_for_index(font, size, value, st.cursor);
+        let disp = shown(value);
+        let cx = self.ctx.text.x_for_index(font, size, &disp, to_shown(value, st.cursor));
         if cx - st.scroll > inner_w {
             st.scroll = cx - inner_w;
         } else if cx < st.scroll {
@@ -236,8 +275,8 @@ impl<'a> Ui<'a> {
         self.canvas.clip_to(r.inset(pad - 2, 2, pad - 2, 2));
         let (s0, s1) = (st.cursor.min(st.anchor), st.cursor.max(st.anchor));
         if focused && s0 != s1 {
-            let x0 = self.ctx.text.x_for_index(font, size, value, s0) - st.scroll;
-            let x1 = self.ctx.text.x_for_index(font, size, value, s1) - st.scroll;
+            let x0 = self.ctx.text.x_for_index(font, size, &disp, to_shown(value, s0)) - st.scroll;
+            let x1 = self.ctx.text.x_for_index(font, size, &disp, to_shown(value, s1)) - st.scroll;
             let sel_rect = Rect::new(text_x + x0 as i32, r.y + 5, (x1 - x0) as i32, r.h - 10);
             self.canvas.fill_rect(sel_rect, t.selection);
         }
@@ -258,7 +297,7 @@ impl<'a> Ui<'a> {
                 size,
                 text_x as f32 - st.scroll,
                 baseline.floor_px(),
-                value,
+                &disp,
                 t.text,
             );
         }

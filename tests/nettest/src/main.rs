@@ -10,6 +10,14 @@
 //! * `nettest wifi [SSID [PASSWORD]]`: joins a Wi-Fi network through the
 //!   Wi-Fi service (by default the simulated "Vindows Home" network of
 //!   `cargo xtask run --net wifi`), then runs the online checks over it.
+//! * `nettest wifi-watch [SSID [PASSWORD]]`: joins (and saves) the network,
+//!   then reports every change of what a user would notice — the Wi-Fi
+//!   state and access point, whether the gateway answers pings, whether DNS
+//!   answers — as `watch: wifi=... ping=... dns=...` lines, forever. Tests
+//!   break the simulated network meanwhile and wait for the recovery.
+//!
+//! In SSID arguments `+` stands for a space (the kernel command line
+//! splits arguments at spaces).
 //!
 //! Every check prints `nettest: <name> ... ok` or `... FAILED: <why>`, and
 //! the run ends with `nettest: PASS` or `nettest: FAIL (n failed)`.
@@ -59,8 +67,15 @@ fn wifi(e: wifi::WifiError) -> String {
     format!("{e}")
 }
 
-/// Waits for the Wi-Fi adapter.
+/// Waits for the Wi-Fi service and its adapter (both may still be starting).
 fn check_wifi_adapter() -> Check {
+    let end = vrt::time::now_ns() + 60_000_000_000;
+    while !wifi::available() {
+        if vrt::time::now_ns() > end {
+            return Err(String::from("the Wi-Fi service is not running"));
+        }
+        vrt::time::sleep(Duration::from_millis(250));
+    }
     let s = wifi::wait_for(Duration::from_secs(60), |s| s.state != wifi::ConnState::NoAdapter).map_err(wifi)?;
     if s.state == wifi::ConnState::NoAdapter {
         return Err(String::from("no Wi-Fi adapter"));
@@ -184,6 +199,101 @@ fn check_ping(target: IpAddr) -> Check {
     Ok(format!("3/3 replies from {target}, average {}.{:03} ms", avg / 1000, avg % 1000))
 }
 
+/// Asks the DNS server for `example.com` by hand: "ok", "servfail" (or
+/// another error code) or "fail" (no answer).
+fn dns_probe(server: IpAddr, id: u16) -> String {
+    let Ok(mut sock) = UdpSocket::bind(SocketAddr::new(IpAddr::V4(vnet::Ipv4Addr::UNSPECIFIED), 0)) else {
+        return String::from("fail");
+    };
+    let mut q: Vec<u8> = alloc::vec![(id >> 8) as u8, id as u8, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+    for label in ["example", "com"] {
+        q.push(label.len() as u8);
+        q.extend_from_slice(label.as_bytes());
+    }
+    q.extend_from_slice(&[0, 0, 1, 0, 1]);
+    if sock.send_to(&q, SocketAddr::new(server, 53)).is_err() {
+        return String::from("fail");
+    }
+    let mut buf = [0u8; 1500];
+    let end = vrt::time::now_ns() + 3_000_000_000;
+    while vrt::time::now_ns() < end {
+        match sock.recv_from(&mut buf, Some(Duration::from_millis(500))) {
+            Ok((n, _)) if n >= 12 && buf[0..2] == q[0..2] && buf[2] & 0x80 != 0 => {
+                return match buf[3] & 0x0F {
+                    0 => String::from("ok"),
+                    2 => String::from("servfail"),
+                    c => format!("rcode{c}"),
+                };
+            }
+            _ => {}
+        }
+    }
+    String::from("fail")
+}
+
+/// `nettest wifi-watch`: joins the network, then reports changes forever.
+fn watch(ssid: &str, password: &str) -> i32 {
+    for (name, check) in
+        [("wifi adapter", &check_wifi_adapter as &dyn Fn() -> Check), ("wifi scan", &|| check_wifi_scan(ssid))]
+    {
+        match check() {
+            Ok(d) => println!("{} ... ok: {}", name, d),
+            Err(e) => {
+                println!("{} ... FAILED: {}", name, e);
+                println!("FAIL (1 failed)");
+                return 1;
+            }
+        }
+    }
+    // Saved, so the Wi-Fi service rejoins by itself after failures.
+    let pass = (!password.is_empty()).then_some(password);
+    if let Err(e) = wifi::connect(ssid, pass, true) {
+        println!("wifi connect ... FAILED: {}", e);
+        println!("FAIL (1 failed)");
+        return 1;
+    }
+    println!("watch: started for {}", ssid);
+    let mut last = String::new();
+    let mut seq: u16 = 0;
+    loop {
+        let wifi_part = match wifi::status() {
+            Ok(s) if s.state == wifi::ConnState::Connected => format!("connected ap={}", vnet::format_mac(&s.bssid)),
+            Ok(s) => format!("{:?}", s.state).to_ascii_lowercase(),
+            Err(_) => String::from("unavailable"),
+        };
+        let st = vnet::status().ok();
+        let online =
+            st.as_ref().is_some_and(|s| s.connectivity == Connectivity::Routable && s.default_interface == "wlan0");
+        let (ping, dns) = match (online, st) {
+            (true, Some(s)) => {
+                seq = seq.wrapping_add(1);
+                let ping = match (s.default_gateway, vnet::Pinger::new()) {
+                    (Some(gw), Ok(mut p)) => {
+                        if p.ping(gw, seq, 56, 0).is_ok() {
+                            "ok"
+                        } else {
+                            "fail"
+                        }
+                    }
+                    _ => "fail",
+                };
+                let dns = match s.dns_servers.first() {
+                    Some(&server) => dns_probe(server, 0x4000 | seq),
+                    None => String::from("none"),
+                };
+                (ping, dns)
+            }
+            _ => ("none", String::from("none")),
+        };
+        let line = format!("watch: wifi={wifi_part} ping={ping} dns={dns}");
+        if line != last {
+            println!("{}", line);
+            last = line;
+        }
+        vrt::time::sleep(Duration::from_millis(500));
+    }
+}
+
 fn run(checks: &[(&str, &dyn Fn() -> Check)]) -> i32 {
     let mut failed = 0;
     for (name, f) in checks {
@@ -239,8 +349,13 @@ fn main() -> i32 {
                 ("http local", &|| check_http(&url, "hello from the host")),
             ])
         }
+        "wifi-watch" => {
+            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Vindows Home"));
+            let password = args.get(3).cloned().unwrap_or_else(|| String::from("vindows-wifi"));
+            watch(&ssid, &password)
+        }
         "wifi" => {
-            let ssid = args.get(2).cloned().unwrap_or_else(|| String::from("Vindows Home"));
+            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Vindows Home"));
             let password = args.get(3).cloned().unwrap_or_else(|| String::from("vindows-wifi"));
             let gateway = || -> Check {
                 let st = vnet::status().map_err(net)?;

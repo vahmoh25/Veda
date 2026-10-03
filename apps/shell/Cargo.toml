@@ -20,6 +20,7 @@ vmath = { workspace = true }
 vimage = { workspace = true }
 vfiles = { workspace = true }
 vui = { workspace = true }
+vnet = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }
