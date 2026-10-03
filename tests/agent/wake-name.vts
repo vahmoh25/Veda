@@ -1,0 +1,27 @@
+# Waking the agent by its name, with the simulated services: asleep, the
+# agent keeps the microphone open but sends nothing while it is quiet.
+# Speech is streamed for recognition; speech that only mentions the agent
+# does not wake it, while speech addressed to it does, and becomes the
+# first thing said in the conversation.
+agent-asleep
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 3
+wait-serial "listening for its name" 30
+mic-silence 3
+# Quiet: no recognition at all.
+agent-listens 0
+mic-tone 1.5
+wait-serial "someone is speaking" 20
+agent-hear "I was telling Anna about Vera yesterday." 30
+mic-silence 6
+wait 1
+reject-serial "woken by its name"
+mic-tone 1.5
+wait-serial-count "someone is speaking" 2 20
+agent-hear "Hey Vera, what time is it?" 30
+wait-serial "woken by its name" 20
+agent-connected 60
+agent-expect "Hey Vera, what time is it?" 20
+agent-expect InjectUserMessage 5
+agent-listens 2

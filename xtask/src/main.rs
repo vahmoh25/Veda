@@ -405,7 +405,7 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     }
     let agent = if automate::needs_agentsim(script) { Some(agentsim::AgentSim::start()?) } else { None };
     if let Some(a) = &agent {
-        o.cmdline = format!("{} {}", o.cmdline, a.boot_arg()).trim().to_string();
+        o.cmdline = format!("{} {}", o.cmdline, a.boot_arg(!automate::agent_asleep(script))).trim().to_string();
     }
     for extra in automate::boot_cmdline(script) {
         o.cmdline = format!("{} {extra}", o.cmdline).trim().to_string();

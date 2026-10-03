@@ -29,6 +29,7 @@
 extern crate alloc;
 
 mod admin;
+mod listen;
 mod session;
 mod shared;
 mod store;
@@ -118,6 +119,11 @@ struct Agent {
     endpoint: String,
     /// Start a conversation as soon as the agent runs (tests).
     wake_at_start: bool,
+    /// Listening for the agent's name while it is asleep.
+    listener: Option<listen::Listener>,
+    /// Where speech is recognised then (a local simulator in tests).
+    listen_endpoint: Option<String>,
+    listen_retry_at: u64,
 }
 
 impl Agent {
@@ -174,6 +180,44 @@ impl Agent {
         } else {
             self.set_state(AgentState::Asleep, "");
         }
+        self.update_listening();
+    }
+
+    /// Listens for the agent's name while it is asleep (when the user
+    /// wants that and the microphone is on), and stops otherwise.
+    fn update_listening(&mut self) {
+        let (key, name, wanted) = {
+            let s = self.shared.lock();
+            (s.key.clone(), s.config.name.clone(), s.config.enabled && s.config.listen_for_name)
+        };
+        let key = key.or_else(|| self.listen_endpoint.as_ref().map(|_| String::from("test")));
+        let listen = wanted
+            && key.is_some()
+            && !self.muted
+            && self.state == AgentState::Asleep
+            && self.session.is_none()
+            && self.connector.is_none();
+        if !listen {
+            if self.listener.take().is_some()
+                && self.session.is_none()
+                && let Some(v) = &mut self.voice
+            {
+                v.close_mic();
+            }
+            return;
+        }
+        if self.listener.is_some() {
+            return;
+        }
+        let Some(v) = &mut self.voice else { return };
+        if !v.open_mic() {
+            return;
+        }
+        let url = match &self.listen_endpoint {
+            Some(e) => e.clone(),
+            None => deepgram::listen_url(&[name.as_str()]),
+        };
+        self.listener = Some(listen::Listener::new(&name, &key.unwrap_or_default(), url, vrt::time::now_ns()));
     }
 
     // ---- conversations -------------------------------------------------
@@ -200,6 +244,7 @@ impl Agent {
             }
         };
         println!("waking ({reason})");
+        self.listener = None;
         if let Some(v) = &mut self.voice
             && !self.muted
             && !v.open_mic()
@@ -417,13 +462,19 @@ impl Agent {
                 }
             }
             ServerMessage::Warning { code, description } => println!("Deepgram warning {code}: {description}"),
-            // Echoes of what this side sent, kept by Deepgram's history.
-            ServerMessage::Other { kind } if kind == "FunctionCallResponse" || kind == "History" => {}
+            // Echoes of what this side sent (kept by Deepgram's history),
+            // and Flux's turn-taking events (its decisions are acted on by
+            // Deepgram already).
+            ServerMessage::Other { kind }
+                if matches!(
+                    kind.as_str(),
+                    "FunctionCallResponse" | "History" | "StartOfTurn" | "EndOfTurn" | "EagerEndOfTurn" | "TurnResumed"
+                ) => {}
             ServerMessage::Other { kind } => {
                 if let Some(s) = &mut self.session
                     && s.unknown.insert(kind.clone())
                 {
-                    println!("(Deepgram sent a {kind} message, not handled)");
+                    println!("Deepgram sent a message not handled here: {kind}");
                 }
             }
         }
@@ -629,6 +680,12 @@ impl Agent {
         if self.muted {
             return;
         }
+        if self.session.is_none()
+            && let Some(l) = &mut self.listener
+        {
+            l.hear(&self.mic_buf, vrt::time::now_ns());
+            return;
+        }
         let failed = match &mut self.session {
             Some(s) => s.send_mic(&self.mic_buf).is_err(),
             None => false,
@@ -701,6 +758,8 @@ impl Agent {
         }
         if gc != self.seen_config {
             if self.session.is_none() {
+                // A new name is listened for from now on.
+                self.listener = None;
                 self.rest();
             }
             // The interface shows the agent's name.
@@ -708,6 +767,11 @@ impl Agent {
         }
         self.seen_config = gc;
         self.seen_apps = ga;
+        // The microphone may not have been there when the agent fell asleep.
+        if self.listener.is_none() && self.state == AgentState::Asleep && now >= self.listen_retry_at {
+            self.listen_retry_at = now + 5_000_000_000;
+            self.update_listening();
+        }
         self.check_timers();
         self.expire_approvals(now);
     }
@@ -758,6 +822,8 @@ impl Agent {
         const CONNECTOR: u64 = 3;
         const SESSION: u64 = 4;
         const VOICE: u64 = 5;
+        // Settings or applications changed (housekeeping looks every pass).
+        const CHANGED: u64 = 6;
         const CONN: u64 = 1 << 32;
         self.rest();
         if self.wake_at_start {
@@ -774,6 +840,9 @@ impl Agent {
                 keys.push(k);
             };
             add(listener.raw(), signals::READABLE, LISTENER);
+            if let Some(e) = &self.shared.lock().changed {
+                add(e.raw(), signals::SIGNALED, CHANGED);
+            }
             add(self.worker.handle(), signals::SIGNALED, WORKER);
             if let Some(c) = &self.connector {
                 add(c.handle(), signals::SIGNALED, CONNECTOR);
@@ -783,6 +852,11 @@ impl Agent {
             }
             if let Some(v) = &self.voice {
                 for (h, s) in v.wait_handles() {
+                    add(h, s, VOICE);
+                }
+            }
+            if let Some(l) = &self.listener {
+                for (h, s) in l.wait_handles() {
                     add(h, s, VOICE);
                 }
             }
@@ -834,6 +908,12 @@ impl Agent {
                     // Polled below on every pass: TLS may hold decrypted
                     // data the socket no longer signals.
                     SESSION => {}
+                    // Cleared before housekeeping looks at what changed.
+                    CHANGED => {
+                        if let Some(e) = &self.shared.lock().changed {
+                            let _ = e.clear();
+                        }
+                    }
                     VOICE => {}
                     k => {
                         let key = k - CONN;
@@ -846,6 +926,13 @@ impl Agent {
                 }
             }
             backlog = self.session.is_some() && !self.poll_session();
+            if let Some(l) = &mut self.listener
+                && let Some(said) = l.poll(vrt::time::now_ns())
+            {
+                // What woke it is the first thing the user said.
+                self.on_wake.push(said);
+                self.wake("its name");
+            }
             for k in closed {
                 if let Some(c) = self.conns.remove(&k)
                     && c.who.name == "shell"
@@ -965,6 +1052,7 @@ impl agent::Server for Client<'_> {
                 v.open_mic();
             }
         }
+        self.agent.update_listening();
         self.agent.publish();
         Ok(())
     }
@@ -1019,8 +1107,15 @@ fn main() -> i32 {
     // `agent.endpoint=ws://10.0.2.2:5000/` talks to a local simulator.
     let mut endpoint = String::from(deepgram::AGENT_URL);
     let mut wake_at_start = false;
+    let mut listen_endpoint = None;
     for a in vrt::env::args().iter().skip(1) {
         wake_at_start |= a == "agent.wake";
+        if let Some(e) = a.strip_prefix("agent.listen=")
+            && (e.starts_with("ws://") || e.starts_with("wss://"))
+        {
+            println!("using the speech recognition endpoint {}", e);
+            listen_endpoint = Some(String::from(e));
+        }
         if let Some(e) = a.strip_prefix("agent.endpoint=")
             && (e.starts_with("ws://") || e.starts_with("wss://"))
         {
@@ -1087,6 +1182,9 @@ fn main() -> i32 {
         last_live_ns: 0,
         endpoint,
         wake_at_start,
+        listener: None,
+        listen_endpoint,
+        listen_retry_at: 0,
     };
     agent.run(listener)
 }

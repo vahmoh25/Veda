@@ -12,6 +12,8 @@ use vagent::policy::Permissions;
 use vjson::{Value, object};
 use vproto::agent::{ActionSpec, AppAgentInfo, ParamSpec, Risk};
 
+use vrt::object::Event;
+
 use crate::store::{self, Store};
 
 /// A timer or reminder.
@@ -37,6 +39,9 @@ pub struct Shared {
     pub config_generation: u64,
     /// Incremented whenever the applications' abilities change.
     pub apps_generation: u64,
+    /// Signalled when either changes, so the main loop looks (Settings and
+    /// the worker change them on their own threads).
+    pub changed: Option<Event>,
 }
 
 fn risk_name(r: Risk) -> &'static str {
@@ -161,12 +166,20 @@ impl Shared {
             next_timer,
             config_generation: 0,
             apps_generation: 0,
+            changed: Event::create().ok(),
+        }
+    }
+
+    fn signal_change(&self) {
+        if let Some(e) = &self.changed {
+            let _ = e.signal();
         }
     }
 
     pub fn save_config(&mut self) {
         self.store.write(store::CONFIG, &self.config.to_json().pretty());
         self.config_generation += 1;
+        self.signal_change();
     }
 
     pub fn save_key(&mut self) {
@@ -177,6 +190,7 @@ impl Shared {
             None => self.store.remove(store::KEY),
         }
         self.config_generation += 1;
+        self.signal_change();
     }
 
     pub fn save_memory(&self) {
@@ -198,6 +212,7 @@ impl Shared {
         }
         self.store.write(APPS, &Value::Object(m).to_string());
         self.apps_generation += 1;
+        self.signal_change();
     }
 
     pub fn add_timer(&mut self, label: &str, due: u64) -> u64 {

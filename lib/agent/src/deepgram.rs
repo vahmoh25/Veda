@@ -341,15 +341,25 @@ pub fn listen_url(keyterms: &[&str]) -> String {
     url
 }
 
-/// A transcript from streaming speech-to-text: (text, final).
-pub fn parse_listen_result(json: &str) -> Option<(String, bool)> {
+/// A transcript from streaming speech-to-text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heard {
+    pub text: String,
+    /// This stretch of audio will not be transcribed again.
+    pub is_final: bool,
+    /// The speaker paused: the utterance is complete.
+    pub speech_final: bool,
+}
+
+/// Parses a `Results` message from streaming speech-to-text.
+pub fn parse_listen_result(json: &str) -> Option<Heard> {
     let v = vjson::parse(json).ok()?;
     if v.str("type") != Some("Results") {
         return None;
     }
-    let transcript = v.pointer("/channel/alternatives/0/transcript")?.as_str()?.to_string();
-    let is_final = v.get("is_final").and_then(Value::as_bool).unwrap_or(false);
-    Some((transcript, is_final))
+    let text = v.pointer("/channel/alternatives/0/transcript")?.as_str()?.to_string();
+    let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
+    Some(Heard { text, is_final: flag("is_final"), speech_final: flag("speech_final") })
 }
 
 /// The text-to-speech URL for voice previews (24 kHz linear16).
@@ -649,8 +659,16 @@ mod tests {
             parse_listen_result(
                 r#"{"type":"Results","is_final":true,"channel":{"alternatives":[{"transcript":"hey vera"}]}}"#
             ),
-            Some(("hey vera".into(), true))
+            Some(Heard { text: "hey vera".into(), is_final: true, speech_final: false })
         );
+        assert_eq!(
+            parse_listen_result(
+                r#"{"type":"Results","is_final":true,"speech_final":true,"channel":{"alternatives":[{"transcript":""}]}}"#
+            )
+            .map(|h| (h.text.is_empty(), h.speech_final)),
+            Some((true, true))
+        );
+        assert_eq!(parse_listen_result(r#"{"type":"Metadata","duration":1.5}"#), None);
         assert!(listen_url(&["Vera"]).ends_with("&keyterm=Vera"));
         assert_eq!(
             speak_url("aura-2-helena-en"),

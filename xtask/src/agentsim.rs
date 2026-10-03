@@ -8,9 +8,14 @@
 //! call and collect its result, play voice, report that the user started
 //! speaking — while recording everything the agent sends.
 //!
-//! Script commands (see `automate.rs`): `agent-sim`, `agent-call NAME
-//! ARGS-JSON`, `agent-expect TEXT`, `agent-speak SECONDS`,
-//! `agent-interrupt`, `agent-say-text TEXT`.
+//! It also stands in for Deepgram's streaming speech recognition, which
+//! the agent uses to hear its name while asleep: the script decides what
+//! was "heard" (`agent-hear TEXT`) once the agent streams audio to it.
+//!
+//! Script commands (see `automate.rs`): `agent-connected`, `agent-call NAME
+//! ARGS-JSON`, `agent-result TEXT`, `agent-expect TEXT`, `agent-speak
+//! SECONDS`, `agent-interrupt`, `agent-send JSON`, `agent-audio BYTES`,
+//! `agent-hear TEXT`, and `agent-asleep` (the agent is not woken at start).
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -29,11 +34,17 @@ struct Log {
     /// Bytes of microphone audio received.
     audio_bytes: usize,
     connections: u32,
+    /// Speech recognition: connections, audio received, text messages.
+    listen_connections: u32,
+    listen_audio_bytes: usize,
+    listen_texts: Vec<String>,
 }
 
 struct Shared {
     log: Mutex<Log>,
     writer: Mutex<Option<TcpStream>>,
+    /// The open speech recognition connection.
+    listen_writer: Mutex<Option<TcpStream>>,
 }
 
 /// The simulated Voice Agent service.
@@ -47,7 +58,11 @@ impl AgentSim {
     pub fn start() -> Result<AgentSim> {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("agent simulator: {e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-        let shared = Arc::new(Shared { log: Mutex::new(Log::default()), writer: Mutex::new(None) });
+        let shared = Arc::new(Shared {
+            log: Mutex::new(Log::default()),
+            writer: Mutex::new(None),
+            listen_writer: Mutex::new(None),
+        });
         let s = shared.clone();
         std::thread::Builder::new()
             .name("agentsim".into())
@@ -65,9 +80,43 @@ impl AgentSim {
         Ok(AgentSim { port, shared, next_call: 1 })
     }
 
-    /// The kernel command line argument pointing the agent here.
-    pub fn boot_arg(&self) -> String {
-        format!("agent.endpoint=ws://10.0.2.2:{}/v1/agent/converse agent.wake", self.port)
+    /// The kernel command line arguments pointing the agent here (and,
+    /// with `wake`, starting a conversation at once).
+    pub fn boot_arg(&self, wake: bool) -> String {
+        format!(
+            "agent.endpoint=ws://10.0.2.2:{0}/v1/agent/converse agent.listen=ws://10.0.2.2:{0}/v1/listen{1}",
+            self.port,
+            if wake { " agent.wake" } else { "" }
+        )
+    }
+
+    /// Once the agent streams audio for recognition, says that `text` was
+    /// heard (a final transcript at the end of an utterance).
+    pub fn hear(&self, text: &str, timeout: Duration) -> Result {
+        let start = Instant::now();
+        loop {
+            let streaming = self.shared.listen_writer.lock().unwrap().is_some()
+                && self.shared.log.lock().unwrap().listen_audio_bytes > 0;
+            if streaming {
+                break;
+            }
+            if start.elapsed() > timeout {
+                return Err("the agent did not stream speech for recognition".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let msg = format!(
+            "{{\"type\":\"Results\",\"is_final\":true,\"speech_final\":true,\"channel\":{{\"alternatives\":[{{\"transcript\":{},\"confidence\":0.98}}]}}}}",
+            json_string(text)
+        );
+        let mut w = self.shared.listen_writer.lock().unwrap();
+        let s = w.as_mut().ok_or("the recognition stream closed")?;
+        s.write_all(&frame(1, msg.as_bytes())).map_err(|e| format!("agent simulator: {e}"))
+    }
+
+    /// How many recognition streams the agent opened.
+    pub fn listen_connections(&self) -> u32 {
+        self.shared.log.lock().unwrap().listen_connections
     }
 
     fn send(&self, frame: Vec<u8>) -> Result {
@@ -256,6 +305,10 @@ fn serve(mut stream: TcpStream, shared: &Shared) -> Result {
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
     );
     stream.write_all(resp.as_bytes()).map_err(|e| e.to_string())?;
+    let path = text.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("/");
+    if path.starts_with("/v1/listen") {
+        return serve_listen(stream, shared);
+    }
     *shared.writer.lock().unwrap() = Some(stream.try_clone().map_err(|e| e.to_string())?);
     shared.log.lock().unwrap().connections += 1;
     stream.write_all(&frame(1, br#"{"type":"Welcome","request_id":"sim-1"}"#)).map_err(|e| e.to_string())?;
@@ -306,6 +359,67 @@ fn serve(mut stream: TcpStream, shared: &Shared) -> Result {
         }
     }
     *shared.writer.lock().unwrap() = None;
+    Ok(())
+}
+
+/// Reads one client frame: (opcode, unmasked payload), or None at the end.
+fn read_frame(stream: &mut TcpStream) -> Result<Option<(u8, Vec<u8>)>> {
+    let mut h2 = [0u8; 2];
+    if stream.read_exact(&mut h2).is_err() {
+        return Ok(None);
+    }
+    let mut len = (h2[1] & 0x7F) as u64;
+    if len == 126 {
+        let mut b = [0u8; 2];
+        stream.read_exact(&mut b).map_err(|e| e.to_string())?;
+        len = u16::from_be_bytes(b) as u64;
+    } else if len == 127 {
+        let mut b = [0u8; 8];
+        stream.read_exact(&mut b).map_err(|e| e.to_string())?;
+        len = u64::from_be_bytes(b);
+    }
+    if h2[1] & 0x80 == 0 {
+        return Err("unmasked frame from the client".into());
+    }
+    let mut mask = [0u8; 4];
+    stream.read_exact(&mut mask).map_err(|e| e.to_string())?;
+    let mut payload = vec![0u8; len as usize];
+    stream.read_exact(&mut payload).map_err(|e| e.to_string())?;
+    for (i, b) in payload.iter_mut().enumerate() {
+        *b ^= mask[i & 3];
+    }
+    Ok(Some((h2[0] & 0x0F, payload)))
+}
+
+/// A speech recognition stream: audio in; transcripts come from the
+/// script (`agent-hear`). `CloseStream` ends it like Deepgram does.
+fn serve_listen(mut stream: TcpStream, shared: &Shared) -> Result {
+    *shared.listen_writer.lock().unwrap() = Some(stream.try_clone().map_err(|e| e.to_string())?);
+    shared.log.lock().unwrap().listen_connections += 1;
+    while let Some((opcode, payload)) = read_frame(&mut stream)? {
+        match opcode {
+            1 => {
+                let t = String::from_utf8_lossy(&payload).to_string();
+                let close = t.contains("CloseStream");
+                shared.log.lock().unwrap().listen_texts.push(t);
+                if close {
+                    let _ = stream.write_all(&frame(1, br#"{"type":"Metadata","duration":1.0}"#));
+                    let _ = stream.write_all(&frame(8, &1000u16.to_be_bytes()));
+                    break;
+                }
+            }
+            2 => shared.log.lock().unwrap().listen_audio_bytes += payload.len(),
+            8 => {
+                let _ = stream.write_all(&frame(8, &payload));
+                break;
+            }
+            9 => {
+                let _ = stream.write_all(&frame(10, &payload));
+            }
+            _ => {}
+        }
+    }
+    *shared.listen_writer.lock().unwrap() = None;
     Ok(())
 }
 

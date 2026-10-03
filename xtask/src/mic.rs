@@ -70,6 +70,22 @@ impl MicServer {
     }
 
     /// Queues `secs` of silence.
+    /// Something like a voice (a buzzing tone that rises and falls four
+    /// times a second, like syllables): enough for a voice detector, though
+    /// no recogniser would make words of it.
+    pub fn tone(&self, secs: f64) {
+        let n = (secs * RATE as f64) as usize;
+        let samples: Vec<i16> = (0..n)
+            .map(|i| {
+                let t = i as f64 / RATE as f64;
+                let syllables = 0.55 + 0.45 * (t * 4.0 * std::f64::consts::TAU).sin();
+                let buzz = (t * 150.0 * std::f64::consts::TAU).sin() + 0.5 * (t * 300.0 * std::f64::consts::TAU).sin();
+                (buzz * syllables * 7000.0) as i16
+            })
+            .collect();
+        self.enqueue(&samples);
+    }
+
     pub fn silence(&self, secs: f64) {
         let n = (secs * RATE as f64) as usize;
         self.shared.queue.lock().unwrap().extend(std::iter::repeat_n(0i16, n));

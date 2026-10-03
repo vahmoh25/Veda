@@ -15,6 +15,7 @@
 //! * [`policy`]: which actions need the user's approval, and the actions
 //!   the user always allows.
 //! * [`wake`]: recognising the agent's name in what it hears.
+//! * [`vad`]: telling speech from quiet in microphone audio.
 
 #![no_std]
 
@@ -26,6 +27,7 @@ pub mod memory;
 pub mod policy;
 pub mod prompt;
 pub mod tools;
+pub mod vad;
 pub mod wake;
 
 #[cfg(test)]

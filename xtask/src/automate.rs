@@ -356,6 +356,12 @@ pub fn needs_qemu(script: &str) -> Option<&'static str> {
     None
 }
 
+/// Whether a script starts with the agent asleep (`agent-asleep`) rather
+/// than in a conversation.
+pub fn agent_asleep(script: &str) -> bool {
+    script.lines().map(words).any(|w| w.first().is_some_and(|c| c == "agent-asleep"))
+}
+
 /// Whether a script talks to the simulated Voice Agent service.
 pub fn needs_agentsim(script: &str) -> bool {
     script.lines().map(words).any(|w| w.first().is_some_and(|c| c.starts_with("agent-")))
@@ -364,7 +370,9 @@ pub fn needs_agentsim(script: &str) -> bool {
 /// Whether a script uses the test microphone.
 pub fn needs_mic(script: &str) -> bool {
     script.lines().map(words).any(|w| {
-        w.first().is_some_and(|c| matches!(c.as_str(), "say" | "say-async" | "mic-wav" | "mic-silence" | "mic-wait"))
+        w.first().is_some_and(|c| {
+            matches!(c.as_str(), "say" | "say-async" | "mic-wav" | "mic-silence" | "mic-tone" | "mic-wait")
+        })
     })
 }
 
@@ -569,6 +577,7 @@ pub fn run_script(
                     m.wait_drained(Duration::from_secs_f64(secs)).map_err(ctx)?;
                 }
                 "mic-silence" => mic_ref().map_err(ctx)?.silence(num(&w, 1).map_err(ctx)?),
+                "mic-tone" => mic_ref().map_err(ctx)?.tone(num(&w, 1).map_err(ctx)?),
                 c if c.starts_with("agent-") => {
                     let a = agent.as_mut().ok_or_else(|| ctx("this run has no agent simulator".into()))?;
                     match c {
@@ -599,6 +608,20 @@ pub fn run_script(
                         }
                         "agent-speak" => a.speak(num(&w, 1).map_err(ctx)?).map_err(ctx)?,
                         "agent-interrupt" => a.send_json(r#"{"type":"UserStartedSpeaking"}"#).map_err(ctx)?,
+                        "agent-hear" => {
+                            let text = w.get(1).ok_or("missing text")?;
+                            a.hear(text, Duration::from_secs_f64(num(&w, 2).unwrap_or(30.0))).map_err(ctx)?
+                        }
+                        "agent-asleep" => {}
+                        "agent-listens" => {
+                            let n = num(&w, 1).map_err(ctx)? as u32;
+                            if a.listen_connections() != n {
+                                return Err(ctx(format!(
+                                    "the agent opened {} recognition streams, not {n}",
+                                    a.listen_connections()
+                                )));
+                            }
+                        }
                         "agent-send" => a.send_json(w.get(1).ok_or("missing message")?).map_err(ctx)?,
                         "agent-audio" => {
                             let want = num(&w, 1).map_err(ctx)? as usize;

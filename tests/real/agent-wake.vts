@@ -1,0 +1,34 @@
+# Waking the agent by its name with Deepgram's real speech recognition:
+# after the key is set in Settings the agent listens for its name; a
+# sentence that only mentions it does not wake it, one addressed to it
+# does, and the agent answers it. Uses (and is billed to) the key in
+# $DEEPGRAM_API_KEY, so it is not part of `cargo xtask test`:
+#
+#   cargo xtask script tests/real/agent-wake.vts
+fail-on "PANIC"
+boot-cmdline "run=settings:agent"
+mic-silence 1
+wait-serial "desktop ready" 120
+wait-serial "started settings" 60
+wait 4
+key meta_l-up
+wait 4
+click 0.38 0.29
+type-env DEEPGRAM_API_KEY
+key ret
+wait-serial "Deepgram key stored" 20
+wait-serial "listening for its name" 20
+mic-silence 2
+say "I think the weather will be nice tomorrow."
+wait-serial "someone is speaking" 20
+mic-silence 5
+reject-serial "woken by its name"
+say "Hey Vera, what day is it today?"
+wait-serial "woken by its name" 30
+wait-serial "agent: agent: " 30
+wait 6
+shot target/vindows/real-wake-1.png
+say "Thanks Vera, that's all."
+wait-serial "conversation ended" 60
+wait-serial-count "listening for its name" 2 20
+reject-serial "cannot listen for its name"
