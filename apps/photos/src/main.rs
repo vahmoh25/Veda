@@ -4,8 +4,10 @@
 //!   on the command line, or of the folder of a picture given there (which then opens
 //!   directly).
 //! * The viewer ([`viewer`]) shows one picture: fitted to the window or zoomed (wheel, `+`/`-`,
-//!   `0`, `1`) and panned by dragging, rotated with `R`, with a filmstrip, an info panel and a
-//!   full-screen mode (`F11` or a double-click). It can make the picture the wallpaper.
+//!   `0`, `1`) and panned by dragging, rotated with `R`, with a filmstrip, an info panel, a
+//!   full-screen mode (`F11` or a double-click) and a full-screen slideshow (`S`). It can make
+//!   the picture the wallpaper.
+//! * [`agent`] lets the voice agent do the same.
 //!
 //! Files are read and decoded on background threads ([`loader`]); the UI thread only scales
 //! ([`render`]) and draws, so it stays responsive under emulation.
@@ -15,6 +17,7 @@
 
 extern crate alloc;
 
+mod agent;
 mod catalog;
 mod library;
 mod loader;
@@ -35,12 +38,14 @@ use vui::{App, Font, Icon, Ui, WindowSpec, WindowState};
 use crate::catalog::{Entry, Thumb};
 use crate::loader::{Done, Loader, Picture};
 use crate::render::ViewCache;
-use crate::viewer::View;
+use crate::viewer::{Slideshow, View};
 
 vrt::entry!(main);
 
 /// At most this many pictures keep their thumbnails in memory (about 0.6 MB each).
 const MAX_THUMBS: usize = 240;
+/// The window's size when it opens.
+const WINDOW_SIZE: (i32, i32) = (1100, 720);
 
 /// What the window shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +92,11 @@ pub(crate) struct Photos {
     pub cache: ViewCache,
     pub show_info: bool,
     pub fullscreen: bool,
+    /// Entering or leaving full screen asked for between frames (it needs the window, so it
+    /// happens at the next frame).
+    pub pending_fullscreen: Option<bool>,
+    /// The viewer moves on by itself.
+    pub slideshow: Option<Slideshow>,
     /// Return to a maximised window when leaving full screen.
     restore_maximized: bool,
     last_size: (i32, i32),
@@ -117,6 +127,8 @@ impl Photos {
             cache: ViewCache::new(),
             show_info: false,
             fullscreen: false,
+            pending_fullscreen: None,
+            slideshow: None,
             restore_maximized: false,
             last_size: (0, 0),
             last_pointer: None,
@@ -161,6 +173,26 @@ impl Photos {
         }
     }
 
+    /// Shows the pictures of the folder `dir` in the library (the viewer closes); the same
+    /// folder is listed again.
+    pub fn set_folder(&mut self, dir: &str) {
+        if self.mode == Mode::Viewer {
+            self.close_viewer();
+        }
+        if dir != self.dir {
+            if let Some(l) = &self.loader {
+                l.cancel_thumbs();
+            }
+            self.dir = dir.to_string();
+            self.entries.clear();
+            self.current = 0;
+            self.keyboard_nav = false;
+        }
+        self.reload();
+        self.reveal_selection = true;
+        vrt::println!("showing {} pictures in {}", self.entries.len(), self.dir);
+    }
+
     /// Opens picture `index` in the viewer.
     pub fn open(&mut self, index: usize) {
         if index < self.entries.len() {
@@ -171,6 +203,7 @@ impl Photos {
 
     /// Returns to the library with the current picture selected.
     pub fn close_viewer(&mut self) {
+        self.stop_slideshow();
         self.mode = Mode::Library;
         self.reveal_selection = true;
         self.view = View::default();
@@ -358,8 +391,11 @@ impl Photos {
         self.toast = Some(Toast { text: text.to_string(), icon, shown_at: now, until: now + 2_800_000_000 });
     }
 
-    /// Enters or leaves full screen.
+    /// Enters or leaves full screen (leaving it ends a slideshow).
     pub fn set_fullscreen(&mut self, ui: &mut Ui, on: bool) {
+        if !on {
+            self.stop_slideshow();
+        }
         if on == self.fullscreen {
             return;
         }
@@ -445,6 +481,9 @@ impl App for Photos {
         self.absorb();
         self.track_window(ui);
         self.track_pointer(ui);
+        if let Some(on) = self.pending_fullscreen.take() {
+            self.set_fullscreen(ui, on);
+        }
         match self.mode {
             Mode::Library => self.library(ui),
             Mode::Viewer => self.viewer(ui),
@@ -466,6 +505,18 @@ impl App for Photos {
 
     fn handle_signaled(&mut self, _index: usize, _observed: u32) {
         self.absorb();
+    }
+
+    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+        Some(agent::info())
+    }
+
+    fn agent_state(&self) -> vui::agent::Value {
+        agent::state(self)
+    }
+
+    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+        Photos::agent_invoke(self, action, args)
     }
 }
 
@@ -501,7 +552,7 @@ fn main() -> i32 {
         app.open(index);
     }
     vrt::println!("showing {} pictures in {}", app.entries.len(), app.dir);
-    let mut spec = WindowSpec::new("Photos", 1100, 720);
+    let mut spec = WindowSpec::new("Photos", WINDOW_SIZE.0 as u32, WINDOW_SIZE.1 as u32);
     spec.min_width = 560;
     spec.min_height = 380;
     spec.app_id = "photos".into();

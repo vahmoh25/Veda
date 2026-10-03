@@ -1,5 +1,5 @@
 //! The viewer: one picture, fitted to the window or zoomed and panned, with a toolbar,
-//! navigation arrows, a filmstrip, an info panel and a full-screen mode.
+//! navigation arrows, a filmstrip, an info panel, a full-screen mode and a slideshow.
 
 use alloc::format;
 use alloc::string::String;
@@ -19,17 +19,21 @@ use crate::catalog::{self, Thumb};
 use crate::library::empty_state;
 use crate::loader::{STRIP_H, STRIP_W};
 use crate::render::{Placement, Quality, draw_rounded, rotated};
-use crate::{Photos, Slot};
+use crate::{Photos, Slot, WINDOW_SIZE};
 
 pub const TOOLBAR_H: i32 = 54;
 pub const STRIP_BAR_H: i32 = 86;
 const PANEL_W: i32 = 300;
 const MAX_SCALE: f32 = 16.0;
+/// A step of zooming in (zooming out divides by it).
+pub const ZOOM_STEP: f32 = 1.25;
 /// Full-screen controls hide this long after the pointer stops moving.
 const CONTROLS_NS: u64 = 2_500_000_000;
 /// Drafts are refined once the view has been still for this long.
 const SETTLE_NS: u64 = 180_000_000;
 const STAGE_BG: u32 = 0x111115;
+/// How long a slideshow shows each picture unless asked otherwise.
+pub const SLIDE_NS: u64 = 5_000_000_000;
 
 /// The area pictures are fitted into.
 #[derive(Debug, Clone, Copy)]
@@ -119,6 +123,26 @@ impl View {
     }
 }
 
+/// A slideshow: the viewer moves on to the next picture by itself (after the last, the first),
+/// full screen, until a key or a click stops it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Slideshow {
+    /// How long each picture stays.
+    pub interval: u64,
+    /// When the picture on screen gives way to the next; the time starts once it is shown.
+    pub next_at: Option<u64>,
+}
+
+/// Where the parts of the viewer go in the window.
+struct Layout {
+    toolbar: Rect,
+    stage: Rect,
+    strip: Rect,
+    /// The details panel, when there is room for it.
+    panel: Option<Rect>,
+    vp: Viewport,
+}
+
 /// Centres a picture smaller than the viewport; keeps a larger one covering it.
 fn clamp_offset(x: f32, y: f32, sw: f32, sh: f32, vp: Viewport) -> (f32, f32) {
     let (vw, vh) = (vp.w as f32, vp.h as f32);
@@ -146,6 +170,7 @@ enum Action {
     ToggleInfo,
     Wallpaper,
     Retry,
+    Slideshow(bool),
 }
 
 /// The next `w` pixels to the left of `x` (for right-aligned toolbar buttons).
@@ -157,6 +182,23 @@ fn take_left(x: &mut i32, w: i32, y: i32, h: i32) -> Rect {
 }
 
 impl Photos {
+    /// Where the parts of the viewer go in the window `full`.
+    fn layout(&self, full: Rect) -> Layout {
+        let fullscreen = self.fullscreen;
+        let (toolbar, rest) = if fullscreen { (Rect::default(), full) } else { full.split_top(TOOLBAR_H) };
+        let (main, strip) = if fullscreen { (rest, Rect::default()) } else { rest.split_bottom(STRIP_BAR_H) };
+        let with_panel = self.show_info && !fullscreen && main.w >= PANEL_W + 280;
+        let (stage, panel) = if with_panel { main.split_right(PANEL_W) } else { (main, Rect::default()) };
+        let vp = Viewport { w: stage.w, h: stage.h, margin: if fullscreen { 0 } else { 18 } };
+        Layout { toolbar, stage, strip, panel: with_panel.then_some(panel), vp }
+    }
+
+    /// The viewport in the window as last drawn (for changes asked for between frames).
+    pub(crate) fn viewport(&self) -> Viewport {
+        let (w, h) = if self.last_size == (0, 0) { WINDOW_SIZE } else { self.last_size };
+        self.layout(Rect::new(0, 0, w, h)).vp
+    }
+
     pub(crate) fn viewer(&mut self, ui: &mut Ui) {
         if self.entries.is_empty() {
             self.close_viewer();
@@ -167,17 +209,14 @@ impl Photos {
         let now = ui.now();
         let full = ui.rect();
         let fullscreen = self.fullscreen;
-        let (toolbar, rest) = if fullscreen { (Rect::default(), full) } else { full.split_top(TOOLBAR_H) };
-        let (main, strip) = if fullscreen { (rest, Rect::default()) } else { rest.split_bottom(STRIP_BAR_H) };
-        let with_panel = self.show_info && !fullscreen && main.w >= PANEL_W + 280;
-        let (stage, panel) = if with_panel { main.split_right(PANEL_W) } else { (main, Rect::default()) };
-        let vp = Viewport { w: stage.w, h: stage.h, margin: if fullscreen { 0 } else { 18 } };
+        let Layout { toolbar, stage, strip, panel, vp } = self.layout(full);
 
         // The picture on screen first, then a preview of it, then the neighbours.
         self.want_picture(self.current, true);
         self.want_thumbs(self.current, true);
         self.entries[self.current].used = now;
         self.prefetch();
+        self.slideshow_tick(ui);
         let dims = self.dims();
 
         let near_top = ui.input.pointer.is_some_and(|(_, y)| y < 84);
@@ -190,7 +229,7 @@ impl Photos {
         } else {
             self.toolbar(ui, toolbar, vp, dims, &mut actions);
             self.filmstrip(ui, strip, &mut actions);
-            if with_panel {
+            if let Some(panel) = panel {
                 self.info_panel(ui, panel, vp, dims, &mut actions);
             }
         }
@@ -199,8 +238,66 @@ impl Photos {
         }
     }
 
+    /// Starts a slideshow from the picture on screen, showing each picture for `interval`
+    /// nanoseconds; it runs full screen.
+    pub fn start_slideshow(&mut self, interval: u64) {
+        self.slideshow = Some(Slideshow { interval, next_at: None });
+        self.pending_fullscreen = Some(true);
+        self.show_toast("Slideshow: press any key to stop", Icon::Play);
+        vrt::println!("slideshow started: {} s a picture", interval / 1_000_000_000);
+    }
+
+    /// Ends a slideshow (the picture on screen stays).
+    pub fn stop_slideshow(&mut self) {
+        if self.slideshow.take().is_some() {
+            vrt::println!("slideshow stopped");
+        }
+    }
+
+    /// Moves a slideshow on once the picture on screen has been shown for its time.
+    fn slideshow_tick(&mut self, ui: &mut Ui) {
+        let Some(show) = self.slideshow else { return };
+        let now = ui.now();
+        let path = &self.entries[self.current].path;
+        let shown = self.pictures.iter().any(|(p, s)| p == path && !matches!(s, Slot::Loading));
+        match show.next_at {
+            // A frame follows when the picture arrives.
+            None if !shown => {}
+            None => {
+                let at = now + show.interval;
+                self.slideshow = Some(Slideshow { next_at: Some(at), ..show });
+                ui.repaint_at(at);
+            }
+            Some(at) if now >= at => {
+                self.slideshow = Some(Slideshow { next_at: None, ..show });
+                self.go_to((self.current + 1) % self.entries.len());
+                ui.repaint();
+            }
+            Some(at) => ui.repaint_at(at),
+        }
+    }
+
+    /// Turns the picture on screen by quarter turns (clockwise when positive), fitted again.
+    pub fn rotate_by(&mut self, quarter_turns: i8, now: u64) {
+        self.view.rot = (self.view.rot as i8 + quarter_turns).rem_euclid(4) as u8;
+        self.view.zoom = None;
+        self.view.moved_at = now;
+    }
+
+    /// Fits the picture on screen into the window again.
+    pub fn zoom_to_fit(&mut self, now: u64) {
+        self.view.zoom = None;
+        self.view.moved_at = now;
+    }
+
+    /// Shows or hides the details panel beside the picture.
+    pub fn show_details(&mut self, show: bool, now: u64) {
+        self.show_info = show;
+        self.view.moved_at = now;
+    }
+
     /// Size of the picture on screen, as soon as anything about it is known.
-    fn dims(&self) -> Option<(u32, u32)> {
+    pub(crate) fn dims(&self) -> Option<(u32, u32)> {
         let e = &self.entries[self.current];
         if let Some((_, Slot::Ready(p))) = self.pictures.iter().find(|(p, _)| *p == e.path) {
             return Some((p.width(), p.height()));
@@ -220,6 +317,12 @@ impl Photos {
             if k.modifiers & (modifiers::CTRL | modifiers::ALT | modifiers::SUPER) != 0 {
                 continue;
             }
+            // S starts or stops a slideshow; any other key ends it, then does what it does.
+            if k.code == keys::S {
+                actions.push(Action::Slideshow(self.slideshow.is_none()));
+                continue;
+            }
+            self.stop_slideshow();
             let a = match k.code {
                 keys::LEFT | keys::PAGEUP | keys::BACKSPACE => Action::Prev,
                 keys::RIGHT | keys::PAGEDOWN | keys::SPACE => Action::Next,
@@ -228,8 +331,8 @@ impl Photos {
                 keys::ESC if self.fullscreen => Action::Fullscreen(false),
                 keys::ESC => Action::Library,
                 keys::F11 | keys::F => Action::Fullscreen(!self.fullscreen),
-                keys::EQUAL | keys::KPPLUS => Action::ZoomBy(1.25),
-                keys::MINUS | keys::KPMINUS => Action::ZoomBy(0.8),
+                keys::EQUAL | keys::KPPLUS => Action::ZoomBy(ZOOM_STEP),
+                keys::MINUS | keys::KPMINUS => Action::ZoomBy(1.0 / ZOOM_STEP),
                 keys::KEY_0 | keys::KP0 => Action::Fit,
                 keys::KEY_1 | keys::KP1 => Action::Actual,
                 keys::R => Action::Rotate(if shift { -1 } else { 1 }),
@@ -347,10 +450,14 @@ impl Photos {
             }
         }
 
-        // Zooming with the wheel, panning by dragging, full screen with a double-click.
+        // Zooming with the wheel, panning by dragging, full screen with a double-click. A click
+        // ends a slideshow.
         let id = ui.id("stage");
         let resp = ui.interact(id, stage);
         let pointer = ui.input.pointer;
+        if resp.pressed {
+            self.stop_slideshow();
+        }
         if !over_arrow && let Some(d) = dims {
             if resp.double_clicked {
                 actions.push(Action::Fullscreen(!self.fullscreen));
@@ -408,6 +515,13 @@ impl Photos {
         if ui.icon_button(r, Icon::Wallpaper, "Set as wallpaper") {
             actions.push(Action::Wallpaper);
         }
+        let r = take_left(&mut x, 36, y, 36);
+        if self.slideshow.is_some() {
+            ui.canvas.fill_rounded_rect(r, t.radius, t.accent.with_alpha(60));
+        }
+        if ui.icon_button(r, Icon::Play, "Slideshow (S)") {
+            actions.push(Action::Slideshow(self.slideshow.is_none()));
+        }
         x -= 8;
         ui.canvas.fill_rect(Rect::new(x, y + 8, 1, 20), t.border_strong);
         x -= 12;
@@ -420,7 +534,7 @@ impl Photos {
         x -= 12;
         let r = take_left(&mut x, 36, y, 36);
         if ui.icon_button(r, Icon::ZoomIn, "Zoom in (+)") {
-            actions.push(Action::ZoomBy(1.25));
+            actions.push(Action::ZoomBy(ZOOM_STEP));
         }
         let r = take_left(&mut x, 64, y, 36);
         let scale = dims.map(|d| self.view.placement(d, vp).scale);
@@ -430,7 +544,7 @@ impl Photos {
         }
         let r = take_left(&mut x, 36, y, 36);
         if ui.icon_button(r, Icon::ZoomOut, "Zoom out (-)") {
-            actions.push(Action::ZoomBy(0.8));
+            actions.push(Action::ZoomBy(1.0 / ZOOM_STEP));
         }
         // Name and position in the folder.
         let name_x = bar.x + 152;
@@ -608,7 +722,11 @@ impl Photos {
         let bar = Rect::new(full.x, full.y, full.w, 84);
         ui.canvas.fill_vertical_gradient(bar, Color::rgba(0, 0, 0, (175.0 * fade) as u8), Color::rgba(0, 0, 0, 0));
         let e = &self.entries[self.current];
-        let (name, sub) = (e.name.clone(), format!("{} of {}", self.current + 1, self.entries.len()));
+        let mut sub = format!("{} of {}", self.current + 1, self.entries.len());
+        if self.slideshow.is_some() {
+            sub.push_str("  ·  Slideshow");
+        }
+        let name = e.name.clone();
         ui.label(
             Rect::new(full.x + 26, full.y + 16, full.w - 140, 22),
             &name,
@@ -653,10 +771,7 @@ impl Photos {
                     self.view.zoom_by(f, centre, d, vp, now);
                 }
             }
-            Action::Fit => {
-                self.view.zoom = None;
-                self.view.moved_at = now;
-            }
+            Action::Fit => self.zoom_to_fit(now),
             Action::Actual => {
                 if let Some(d) = dims {
                     let anchor = ui
@@ -668,17 +783,12 @@ impl Photos {
                     self.view.zoom_to(1.0, anchor, d, vp, now);
                 }
             }
-            Action::Rotate(dir) => {
-                self.view.rot = (self.view.rot as i8 + dir).rem_euclid(4) as u8;
-                self.view.zoom = None;
-                self.view.moved_at = now;
-            }
-            Action::ToggleInfo => {
-                self.show_info = !self.show_info;
-                self.view.moved_at = now;
-            }
+            Action::Rotate(dir) => self.rotate_by(dir, now),
+            Action::ToggleInfo => self.show_details(!self.show_info, now),
             Action::Wallpaper => self.set_wallpaper(),
             Action::Retry => self.retry(),
+            Action::Slideshow(true) => self.start_slideshow(SLIDE_NS),
+            Action::Slideshow(false) => self.set_fullscreen(ui, false),
         }
         ui.repaint();
     }

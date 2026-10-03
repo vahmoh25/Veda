@@ -1,0 +1,101 @@
+# The Photos agent interface, with a simulated Voice Agent service: the
+# agent shows pictures and folders, moves through them, zooms and turns a
+# picture, shows its details, runs a slideshow and sets the wallpaper, as the
+# user would with the mouse and keyboard. Photos never deletes files: the
+# agent deletes the picture on screen with its files function, which waits
+# for the user's OK, and Photos then lists the folder without it.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+# Photos starts for the agent and describes itself.
+agent-call app_actions '{"app":"photos"}' 60
+agent-result slideshow
+wait-serial "photos offers" 10
+agent-call read_app '{"app":"photos"}' 30
+agent-result '"showing":"library","folder":"~/Pictures","picture_count":8'
+# Zooming needs a picture on screen.
+agent-call use_app '{"app":"photos","action":"zoom","arguments":{"to":"in"}}' 30
+agent-result "no picture is open"
+# A picture named without its extension, at its actual size, turned, with
+# its details.
+agent-call use_app '{"app":"photos","action":"show_picture","arguments":{"picture":"lighthouse"}}' 30
+agent-result '"showing":"Lighthouse.jpg","number":4,"of":8'
+wait-serial "opened Lighthouse" 60
+agent-call use_app '{"app":"photos","action":"zoom","arguments":{"to":"actual_size"}}' 30
+agent-result '"zoom_percent":100,"fitted":false'
+agent-call use_app '{"app":"photos","action":"zoom","arguments":{"percent":50}}' 30
+agent-result '"zoom_percent":50'
+agent-call use_app '{"app":"photos","action":"rotate","arguments":{"direction":"anticlockwise"}}' 30
+agent-result '"rotation":270'
+agent-call use_app '{"app":"photos","action":"details","arguments":{"show":true}}' 30
+agent-result '"details_panel":true'
+agent-call read_app '{"app":"photos"}' 30
+agent-result '"name":"Lighthouse.jpg","path":"~/Pictures/Lighthouse.jpg","number":4,"status":"shown","width":1200,"height":1600,"format":"JPEG"'
+agent-result '"fitted":true,"rotation":270,"full_screen":false,"details_panel":true'
+wait 4
+shot target/vindows/agent-app-photos-1-viewer.png
+# The next picture, then a slideshow from it: two seconds a picture, full
+# screen. Each picture after the next is decoded only when the slideshow
+# reaches its neighbour.
+agent-call use_app '{"app":"photos","action":"go","arguments":{"to":"next"}}' 30
+agent-result '"showing":"Misty Forest.jpg","number":5,"of":8'
+wait-serial "opened Misty Forest" 60
+agent-call use_app '{"app":"photos","action":"slideshow","arguments":{"on":true,"seconds":2}}' 30
+agent-result '"from":"Misty Forest.jpg","number":5,"of":8,"seconds":2'
+wait-serial "slideshow started: 2 s a picture" 10
+wait-serial "opened Soap Film" 60
+wait-serial "opened Still Life" 60
+agent-call read_app '{"app":"photos"}' 30
+agent-result '"full_screen":true'
+agent-result '"slideshow":{"seconds":2.0}'
+shot target/vindows/agent-app-photos-2-slideshow.png
+agent-call use_app '{"app":"photos","action":"slideshow","arguments":{"on":false}}' 30
+agent-result '"showing":'
+wait-serial "slideshow stopped" 10
+wait 3
+agent-call read_app '{"app":"photos"}' 30
+agent-result '"full_screen":false,"details_panel":true,"slideshow":null'
+# Another folder: the wallpapers.
+agent-call use_app '{"app":"photos","action":"open_folder","arguments":{"path":"/system/wallpapers"}}' 30
+agent-result '"folder":"/system/wallpapers","picture_count":5'
+wait-serial "showing 5 pictures in /system/wallpapers" 10
+agent-call use_app '{"app":"photos","action":"go","arguments":{"to":"last"}}' 30
+agent-result '"selected":"Ridges.jpg","number":5,"of":5'
+agent-call use_app '{"app":"photos","action":"go","arguments":{"to":"next"}}' 30
+agent-result "Ridges.jpg is the last picture"
+# A picture by path becomes the wallpaper (Photos shows it, back in its
+# folder).
+agent-call use_app '{"app":"photos","action":"set_as_wallpaper","arguments":{"picture":"~/Pictures/Glass Orb.png"}}' 30
+agent-result '"wallpaper":"~/Pictures/Glass Orb.png"'
+wait-serial "showing 8 pictures in /home/user/Pictures" 10
+wait 4
+agent-call wallpaper '{"operation":"list"}' 30
+agent-result '"current":"Glass Orb"'
+agent-call read_app '{"app":"photos"}' 30
+agent-result '"showing":"viewer","folder":"~/Pictures"'
+agent-result '"name":"Glass Orb.png"'
+# Deleting the picture on screen is the files function's to do, with the
+# user's OK; Photos then lists the folder without it.
+agent-call use_app '{"app":"photos","action":"show_picture","arguments":{"picture":"Soap Film.jpg"}}' 30
+agent-result '"showing":"Soap Film.jpg"'
+wait-serial-count "opened Soap Film" 2 60
+agent-call files '{"operation":"delete","path":"~/Pictures/Soap Film.jpg"}' 30
+agent-result waiting_for_approval
+wait-serial "approval 1 requested" 10
+click 0.825 0.97
+wait 2
+agent-mark
+click 0.9375 0.8275
+wait-serial "approval 1 allowed" 10
+agent-expect "it was done" 20
+agent-expect "~/Pictures/Soap Film.jpg" 5
+agent-call use_app '{"app":"photos","action":"show_library"}' 30
+agent-result '"folder":"~/Pictures","picture_count":7'
+agent-call read_app '{"app":"photos"}' 30
+agent-result '"pictures":["Alpine Lake.jpg","City Lights.jpg","Glass Orb.png","Lighthouse.jpg","Misty Forest.jpg","Retro Sunset.bmp","Still Life.qoi"]'
+click 0.825 0.97
+wait 4
+shot target/vindows/agent-app-photos-3-library.png
+reject-serial "cannot open"
