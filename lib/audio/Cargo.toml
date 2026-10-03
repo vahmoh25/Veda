@@ -1,6 +1,6 @@
 [package]
 name = "vaudio"
-description = "Audio formats, mixing, resampling and synthesis"
+description = "Audio formats, mixing, resampling, voice processing and synthesis"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,4 +1,5 @@
-//! `vaudio` — audio formats, mixing, resampling, analysis and synthesis.
+//! `vaudio` — audio formats, mixing, resampling, analysis, voice processing
+//! and synthesis.
 //!
 //! Everything here is `no_std` + `alloc`, so the same code runs inside
 //! Vindows (the audio service, the Music player) and on the host (the
@@ -12,13 +13,39 @@
 //! | [`source`] | one streaming, seekable decoder interface over WAV and QOA files |
 //! | [`resample`] | exact rational sample-rate conversion (polyphase windowed sinc, integer arithmetic) |
 //! | [`mix`] | gains, volume curves, mixing and sample conversion |
-//! | [`fft`] | a real FFT, windows and log-spaced spectrum bands for visualisers |
+//! | [`fft`] | a real FFT and its inverse, windows and log-spaced spectrum bands for visualisers |
+//! | [`aec`] | an acoustic echo canceller for a microphone that hears the speakers (adaptive filter, delay estimation, residual echo suppression) |
+//! | [`vad`] | voice activity detection with utterance hysteresis |
+//! | [`level`] | RMS and peak levels in dBFS and a level meter with ballistics |
 //! | [`synth`] | oscillators, envelopes, filters, drums, effects and a sequencer for offline rendering |
 //!
 //! Samples are interleaved. Integer PCM is `i16`; the synthesiser works in
 //! `f32`. Hot paths that run inside Vindows (decoding, resampling, mixing)
 //! use integer arithmetic because the system usually runs under CPU
-//! emulation, where integer code is much cheaper than floating point.
+//! emulation, where integer code is much cheaper than floating point. The
+//! voice processing ([`aec`], [`vad`]) is spectral and works in `f32`, in
+//! blocks, with loops shaped for vectorisation.
+//!
+//! For an always-listening voice interface the pieces fit together like
+//! this: the echo canceller runs on the microphone with the mixed speaker
+//! output as its reference, the detector gates what leaves the device, and
+//! the meter drives the on-screen level:
+//!
+//! ```
+//! use vaudio::aec::EchoCanceller;
+//! use vaudio::level::LevelMeter;
+//! use vaudio::vad::Vad;
+//!
+//! let mut aec = EchoCanceller::new(16_000, 250);
+//! let mut vad = Vad::new(16_000);
+//! let mut meter = LevelMeter::new(16_000);
+//! let (mic, speaker) = ([0i16; 160], [0i16; 160]); // 10 ms from the drivers
+//! let mut clean = [0i16; 160];
+//! aec.process(&mic, &speaker, &mut clean);
+//! let speech = vad.process(&clean).is_speech() || vad.speaking();
+//! meter.process(&clean);
+//! assert!(!speech && meter.normalized() == 0.0);
+//! ```
 
 #![no_std]
 
@@ -28,6 +55,7 @@ extern crate std;
 
 pub mod aec;
 pub mod fft;
+pub mod level;
 pub mod mix;
 pub mod qoa;
 pub mod resample;
@@ -36,6 +64,7 @@ pub mod synth;
 pub mod tags;
 #[cfg(test)]
 mod testsig;
+pub mod vad;
 pub mod wav;
 
 pub use source::Source;
