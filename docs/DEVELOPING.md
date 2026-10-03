@@ -106,6 +106,9 @@ pinned=false
   scroll). Key codes are `vproto::input::keys`.
 * Animations: call `ui.repaint_at(deadline_ns)` (or `ui.repaint()`); frames
   are otherwise drawn only when events arrive.
+* The window: `ui.set_title`, `ui.window_state()` and
+  `ui.set_window_state` (maximise, minimise, full screen), `ui.activate()`
+  (bring it to the front), `ui.close_window()`.
 * Long-running work must not block `update`: use threads
   (`vrt::thread::spawn`) and signal the UI through an `Event` returned from
   `App::wait_handles`.

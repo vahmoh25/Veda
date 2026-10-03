@@ -118,8 +118,9 @@ for applications and `input` for drivers.
   once per display frame.
 * **Window kinds** form layers: the desktop, normal and borderless windows,
   panels (which reserve screen space), popups (closed when they lose focus)
-  and notifications. Decorations are drawn by the compositor, so a hung
-  client can still be moved and closed.
+  and notifications. A focused full-screen window rises above the panels.
+  Decorations are drawn by the compositor, so a hung client can still be
+  moved and closed.
 * **Input**: keyboard events go through a keymap (US layout, modifiers, key
   repeat) to the focused window; pointer events go to the window under the
   pointer, or to the one that grabbed it while a button is held. Dragging a
