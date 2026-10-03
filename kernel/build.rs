@@ -1,4 +1,4 @@
-//! Link the kernel as a fixed-address, higher-half PE image.
+﻿//! Link the kernel as a fixed-address, higher-half PE image.
 
 fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
@@ -12,8 +12,6 @@ fn main() {
         "/BASE:0xFFFFFFFF80000000",
         "/FIXED",
         "/DYNAMICBASE:NO",
-        // Keep sections page aligned so the loader can apply W^X per page.
-        "/ALIGN:4096",
         "/MERGE:.eh_fram=.rdata",
     ] {
         println!("cargo:rustc-link-arg-bins={arg}");

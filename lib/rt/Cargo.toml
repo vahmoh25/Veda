@@ -1,0 +1,19 @@
+﻿[package]
+name = "vrt"
+description = "The Vindows user-space runtime: process entry, system calls, heap, threads, synchronisation and I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vabi = { workspace = true }
+vheap = { workspace = true }
+vpe = { workspace = true }
+
+[features]
+default = ["runtime"]
+# Entry point, global allocator, panic handler and C runtime symbols.
+runtime = []
+
+[lints]
+workspace = true

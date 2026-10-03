@@ -7,6 +7,16 @@ name = "bootinfo"
 version = "0.1.0"
 
 [[package]]
+name = "init"
+version = "0.1.0"
+dependencies = [
+ "initrd",
+ "vabi",
+ "vbuild",
+ "vrt",
+]
+
+[[package]]
 name = "initrd"
 version = "0.1.0"
 
@@ -23,6 +33,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "vbuild"
+version = "0.1.0"
+
+[[package]]
+name = "vfont"
+version = "0.1.0"
+dependencies = [
+ "vraster",
+]
+
+[[package]]
+name = "vheap"
+version = "0.1.0"
+
+[[package]]
+name = "vimage"
+version = "0.1.0"
+
+[[package]]
 name = "vkernel"
 version = "0.1.0"
 dependencies = [
@@ -33,8 +62,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "vmath"
+version = "0.1.0"
+
+[[package]]
 name = "vpe"
 version = "0.1.0"
+
+[[package]]
+name = "vraster"
+version = "0.1.0"
+
+[[package]]
+name = "vrt"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vheap",
+ "vpe",
+]
 
 [[package]]
 name = "xtask"

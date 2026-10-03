@@ -1,4 +1,4 @@
-//! Cross-building the individual Vindows components with cargo.
+﻿//! Cross-building the individual Vindows components with cargo.
 //!
 //! * The UEFI loader and the kernel are built for `x86_64-unknown-uefi`
 //!   (freestanding, soft-float, PE/COFF output).
@@ -25,7 +25,7 @@ pub struct Program {
 
 /// Every user-space program that ships in the initrd, installed as
 /// `bin/<binary>.exe`.
-pub const PROGRAMS: &[Program] = &[];
+pub const PROGRAMS: &[Program] = &[Program { package: "init", binary: "init" }];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {

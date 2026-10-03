@@ -1,0 +1,22 @@
+[package]
+name = "init"
+description = "The first user-space process: starts and supervises system services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "init"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+initrd = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

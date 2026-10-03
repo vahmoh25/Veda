@@ -1,0 +1,9 @@
+[package]
+name = "vheap"
+description = "TLSF (two-level segregated fit) memory allocator used for user-space heaps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

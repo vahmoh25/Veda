@@ -1,0 +1,11 @@
+﻿[package]
+name = "vimage"
+description = "Image codecs (PNG, JPEG, BMP, QOI) and resampling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

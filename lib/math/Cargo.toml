@@ -1,0 +1,11 @@
+﻿[package]
+name = "vmath"
+description = "Vindows math: a no_std libm replacement, linear algebra, noise and random numbers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

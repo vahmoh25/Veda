@@ -1,4 +1,4 @@
-[workspace]
+﻿[workspace]
 resolver = "3"
 members = [
     "xtask",
@@ -8,6 +8,14 @@ members = [
     "lib/bootinfo",
     "lib/initrd",
     "lib/pe",
+    "lib/math",
+    "lib/raster",
+    "lib/font",
+    "lib/image",
+    "lib/heap",
+    "lib/build",
+    "lib/rt",
+    "services/init",
 ]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
 # inside Vindows is cross-built by `cargo xtask build`, which knows the correct
@@ -26,6 +34,13 @@ vabi = { path = "lib/abi" }
 bootinfo = { path = "lib/bootinfo" }
 initrd = { path = "lib/initrd" }
 vpe = { path = "lib/pe" }
+vmath = { path = "lib/math" }
+vraster = { path = "lib/raster" }
+vfont = { path = "lib/font" }
+vimage = { path = "lib/image" }
+vheap = { path = "lib/heap" }
+vbuild = { path = "lib/build" }
+vrt = { path = "lib/rt" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
