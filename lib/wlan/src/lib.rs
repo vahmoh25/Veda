@@ -29,3 +29,4 @@ pub mod frame;
 pub mod handshake;
 pub mod ie;
 pub mod rsn;
+pub mod sae;
