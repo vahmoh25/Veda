@@ -1,0 +1,127 @@
+# The screenshots in the README (1280x800). Regenerate them with
+#
+#   cargo xtask script docs/screenshots.vts
+#
+# which writes docs/images/*.png. Applications are started from the
+# Terminal and the start menu's search, so only Music's play button is
+# clicked by position.
+boot-cmdline "run=terminal"
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "started terminal" 30
+wait 4
+
+# The Terminal.
+type "ls Pictures"
+key ret
+wait 2
+type "df"
+key ret
+wait 2
+type "sysinfo"
+key ret
+move 0.97 0.08
+wait 3
+shot docs/images/terminal.png
+
+# The desktop: a Rust program in the Text Editor next to the picture
+# library, each snapped to half of the screen.
+type "edit Documents/primes.rs && run photos && exit"
+key ret
+wait-serial "started photos" 30
+wait 10
+key meta_l-right
+wait 2
+key-down alt
+key tab
+key-up alt
+wait 2
+key meta_l-left
+move 0.75 0.06
+wait 4
+shot docs/images/desktop.png
+
+# The start menu, searching.
+key meta_l
+wait 2
+type "mu"
+wait 2
+shot docs/images/start.png
+# Esc clears the search, then closes the menu.
+key esc
+wait 1
+key esc
+wait 3
+key alt-f4
+wait-serial "editor exited" 20
+wait 2
+key alt-f4
+wait-serial "photos exited" 20
+wait 2
+
+# Music, playing the first track.
+key meta_l
+wait 2
+type "music"
+key ret
+wait-serial "music: covers: 7 ready" 60
+wait 1
+click 0.5641 0.79
+wait-serial "music: playing" 30
+move 0.97 0.08
+wait 6
+shot docs/images/music.png
+key alt-f4
+wait-serial "music exited" 20
+wait 2
+
+# Files: the pictures as thumbnails.
+key meta_l
+wait 2
+type "files"
+key ret
+wait-serial "started files" 30
+wait 3
+key ctrl-l
+type "/home/user/Pictures"
+key ret
+wait 2
+key ctrl-2
+move 0.97 0.08
+wait 8
+shot docs/images/files.png
+key alt-f4
+wait-serial "files exited" 20
+wait 2
+
+# Velocity, with the computer driving.
+key meta_l
+wait 2
+type "velocity"
+key ret
+wait-serial "racer: ready" 90
+wait 2
+key ret
+wait 1
+key f8
+move 0.97 0.08
+wait 14
+shot docs/images/velocity.png
+key alt-f4
+wait-serial "racer exited" 20
+wait 2
+
+# Starfall, with the computer flying.
+key meta_l
+wait 2
+type "starfall"
+key ret
+wait-serial "starfall: ready" 90
+wait 2
+key ret
+wait 1
+key f8
+wait-serial "starfall: level 1 wave 1" 20
+move 0.97 0.08
+wait 9
+shot docs/images/starfall.png

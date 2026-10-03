@@ -34,6 +34,18 @@ applications — is in this repository, with no external crates.
   QEMU; scripted, headless test runs drive the GUI and check screenshots
   and logs.
 
+## Screenshots
+
+| ![The start menu](docs/images/start.png) | ![Music](docs/images/music.png) |
+|:---:|:---:|
+| The start menu | Music |
+| ![Files](docs/images/files.png) | ![Terminal](docs/images/terminal.png) |
+| Files | Terminal |
+| ![Velocity](docs/images/velocity.png) | ![Starfall](docs/images/starfall.png) |
+| *Velocity* | *Starfall* |
+
+All screenshots are taken in QEMU by `cargo xtask script docs/screenshots.vts`.
+
 ## Quick start
 
 ### Requirements
