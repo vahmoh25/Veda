@@ -204,6 +204,12 @@ pub struct Station {
     msg1_seen: u32,
 }
 
+impl Drop for Station {
+    fn drop(&mut self) {
+        self.forget_pmk();
+    }
+}
+
 impl Station {
     pub fn new(mac: Mac) -> Station {
         Station {
@@ -265,7 +271,7 @@ impl Station {
 
     fn reset(&mut self) {
         self.phase = Phase::Idle;
-        self.pmk = None;
+        self.forget_pmk();
         self.akm = None;
         self.pmf = false;
         self.own_rsne = None;
@@ -275,6 +281,14 @@ impl Station {
         self.sa_query = None;
         self.last_seq.clear();
         self.msg1_seen = 0;
+    }
+
+    fn forget_pmk(&mut self) {
+        use zeroize::Zeroize;
+        if let Some(p) = self.pmk.as_mut() {
+            p.zeroize();
+        }
+        self.pmk = None;
     }
 
     fn fail(&mut self, why: Failure) -> Vec<Action> {
