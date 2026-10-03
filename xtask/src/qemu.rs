@@ -62,6 +62,12 @@ pub enum NetMode {
     /// A wired card on QEMU's NAT (DHCP 10.0.2.15, gateway 10.0.2.2, DNS
     /// 10.0.2.3; the host is reachable at 10.0.2.2).
     Ethernet,
+    /// The virtual Wi-Fi radio only: a virtio-serial port connected to the
+    /// `airsim` simulator, whose access points bridge to a second NAT
+    /// (10.0.3.0/24: gateway 10.0.3.2, DNS 10.0.3.3).
+    Wifi,
+    /// Both the wired card and the Wi-Fi radio.
+    Both,
 }
 
 impl NetMode {
@@ -69,9 +75,30 @@ impl NetMode {
         match s {
             "none" | "off" => Some(NetMode::None),
             "ethernet" | "wired" | "user" => Some(NetMode::Ethernet),
+            "wifi" | "wi-fi" | "wireless" => Some(NetMode::Wifi),
+            "both" => Some(NetMode::Both),
             _ => None,
         }
     }
+
+    pub fn wired(self) -> bool {
+        matches!(self, NetMode::Ethernet | NetMode::Both)
+    }
+
+    pub fn wireless(self) -> bool {
+        matches!(self, NetMode::Wifi | NetMode::Both)
+    }
+}
+
+/// The local ports joining QEMU and `airsim` (see `crate::airsim`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WifiPorts {
+    /// QEMU listens here for the simulator's radio connection.
+    pub radio: u16,
+    /// QEMU's end of the bridged NAT link (UDP).
+    pub qemu_udp: u16,
+    /// The simulator's end of it (UDP).
+    pub sim_udp: u16,
 }
 
 /// User-tunable virtual machine settings.
@@ -101,6 +128,9 @@ pub struct VmConfig {
     pub net: NetMode,
     /// QEMU model of the wired card (`virtio-net-pci`, `e1000e`, ...).
     pub nic_model: String,
+    /// Ports for the Wi-Fi radio and its NAT link (required when `net`
+    /// includes Wi-Fi).
+    pub wifi: Option<WifiPorts>,
     /// Extra raw QEMU arguments.
     pub extra: Vec<String>,
 }
@@ -121,6 +151,7 @@ impl Default for VmConfig {
             allow_reboot: false,
             net: NetMode::Ethernet,
             nic_model: "virtio-net-pci".into(),
+            wifi: None,
             extra: Vec::new(),
         }
     }
@@ -187,15 +218,15 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         };
         cmd.args(["-device", "virtio-sound-pci,audiodev=audio0,streams=1"]);
     }
-    match cfg.net {
+    if cfg.net.wired() {
+        cmd.args(["-netdev", "user,id=net0"]);
+        cmd.args(["-device", &format!("{},netdev=net0,mac=52:54:00:12:34:56", cfg.nic_model)]);
+    } else {
         // Without this QEMU adds a default card.
-        NetMode::None => {
-            cmd.args(["-nic", "none"]);
-        }
-        NetMode::Ethernet => {
-            cmd.args(["-netdev", "user,id=net0"]);
-            cmd.args(["-device", &format!("{},netdev=net0,mac=52:54:00:12:34:56", cfg.nic_model)]);
-        }
+        cmd.args(["-nic", "none"]);
+    }
+    if let (true, Some(p)) = (cfg.net.wireless(), cfg.wifi) {
+        cmd.args(wifi_args(&p));
     }
     if cfg.display {
         // Not SDL: when the guest's virtio tablet driver starts, QEMU
@@ -226,6 +257,36 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     }
     cmd.args(&cfg.extra);
     cmd
+}
+
+/// QEMU arguments for the virtual Wi-Fi radio: a virtio-serial port named
+/// `org.vindows.wlan.0` that `airsim` connects to, and a NAT (`user`
+/// network) joined through a hub to a UDP link with `airsim`, whose access
+/// points bridge their stations onto it.
+pub fn wifi_args(p: &WifiPorts) -> Vec<String> {
+    [
+        "-device",
+        "virtio-serial-pci,id=vser0,max_ports=2",
+        "-chardev",
+        &format!("socket,id=wlanradio,host=127.0.0.1,port={},server=on,wait=off", p.radio),
+        "-device",
+        "virtserialport,bus=vser0.0,nr=1,chardev=wlanradio,name=org.vindows.wlan.0",
+        "-netdev",
+        "user,id=wlanwan,net=10.0.3.0/24",
+        "-netdev",
+        "hubport,id=wlanhub0,hubid=7,netdev=wlanwan",
+        "-netdev",
+        &format!(
+            "dgram,id=wlanair,local.type=inet,local.host=127.0.0.1,local.port={},\
+             remote.type=inet,remote.host=127.0.0.1,remote.port={}",
+            p.qemu_udp, p.sim_udp
+        ),
+        "-netdev",
+        "hubport,id=wlanhub1,hubid=7,netdev=wlanair",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 /// Returns the path of this machine's writable UEFI variable store, creating

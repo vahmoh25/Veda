@@ -211,7 +211,10 @@ fn wpa2_personal() {
     s.connect("correct horse battery", true);
     assert!(s.run_until(5000, |s| s.connected()), "events: {:?}", s.events);
     assert!(s.events.contains(&StaEvent::Securing));
-    assert!(matches!(s.events.last(), Some(StaEvent::Connected { security: Security::Wpa2Personal, pmf: true, .. })));
+    assert!(matches!(
+        s.events.last(),
+        Some(StaEvent::Connected { security: Security::Wpa2Personal, pmf: true, sae: false, .. })
+    ));
     s.exchange_data();
     let b = s.broadcast_from_host();
     assert_eq!(s.delivered.last(), Some(&b));
@@ -235,7 +238,7 @@ fn wpa3_personal_both_password_element_methods() {
         assert!(s.run_until(8000, |s| s.connected()), "h2e={h2e}: {:?}", s.events);
         assert!(matches!(
             s.events.last(),
-            Some(StaEvent::Connected { security: Security::Wpa3Personal, pmf: true, .. })
+            Some(StaEvent::Connected { security: Security::Wpa3Personal, pmf: true, sae: true, .. })
         ));
         s.exchange_data();
     }
@@ -246,11 +249,13 @@ fn transition_mode_prefers_wpa3() {
     let mut s = Sim::new(ap_config(Security::Wpa2Wpa3Personal, "mixed mode pass"));
     s.connect("mixed mode pass", true);
     assert!(s.run_until(8000, |s| s.connected()), "{:?}", s.events);
+    assert!(matches!(s.events.last(), Some(StaEvent::Connected { sae: true, .. })));
     s.exchange_data();
     // With WPA3 not allowed for this network, WPA2 is used.
     let mut s = Sim::new(ap_config(Security::Wpa2Wpa3Personal, "mixed mode pass"));
     s.connect("mixed mode pass", false);
     assert!(s.run_until(8000, |s| s.connected()), "{:?}", s.events);
+    assert!(matches!(s.events.last(), Some(StaEvent::Connected { sae: false, .. })));
     s.exchange_data();
 }
 

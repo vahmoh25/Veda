@@ -122,6 +122,13 @@ message! {
     }
 }
 
+/// Event ordinal on a [`wlanphy`] channel (driver to service, after
+/// `attach`): the hardware became usable or unusable; the payload is a
+/// [`RadioState`]. It is a one-way event rather than a call so that a driver
+/// reporting its state can never deadlock against the service calling it
+/// through [`wlanphy_ctl`].
+pub const RADIO_STATE_EVENT: u32 = 1;
+
 protocol! {
     /// Radio drivers offering a radio to the Wi-Fi service. One radio per
     /// channel; closing it removes the radio.
@@ -129,8 +136,6 @@ protocol! {
         /// Offers a radio. `control` is served by the driver with the
         /// [`wlanphy_ctl`] protocol.
         1 => fn attach(info: PhyInfo, link: LinkEndpoints, control: Channel, state: RadioState) -> Result<(), PhyError>;
-        /// The hardware became usable or unusable.
-        2 => fn set_state(state: RadioState) -> ();
     }
 }
 

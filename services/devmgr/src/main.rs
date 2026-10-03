@@ -50,6 +50,9 @@ const DRIVERS: &[DriverMatch] = &[
     DriverMatch { vendor: 0x1AF4, devices: &[0x1001, 0x1042], driver: "virtio-blk" },
     // virtio network card (transitional and modern)
     DriverMatch { vendor: 0x1AF4, devices: &[0x1000, 0x1041], driver: "virtio-net" },
+    // virtio console (transitional and modern): under QEMU, the virtual
+    // Wi-Fi radio is a named port of it
+    DriverMatch { vendor: 0x1AF4, devices: &[0x1003, 0x1043], driver: "vwifi" },
 ];
 
 fn class_name(info: &DeviceInfo) -> &'static str {

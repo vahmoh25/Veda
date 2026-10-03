@@ -7,6 +7,9 @@
 //! * `nettest local HOST PORT`: hermetic checks against the test servers
 //!   that `cargo xtask` runs on the host (an HTTP server and a TCP echo
 //!   server reachable at the gateway address).
+//! * `nettest wifi [SSID [PASSWORD]]`: joins a Wi-Fi network through the
+//!   Wi-Fi service (by default the simulated "Vindows Home" network of
+//!   `cargo xtask run --net wifi`), then runs the online checks over it.
 //!
 //! Every check prints `nettest: <name> ... ok` or `... FAILED: <why>`, and
 //! the run ends with `nettest: PASS` or `nettest: FAIL (n failed)`.
@@ -20,7 +23,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vnet::{Connectivity, Duration, IpAddr, NetError, SocketAddr, TcpStream, UdpSocket};
+use vnet::{Connectivity, Duration, IpAddr, NetError, SocketAddr, TcpStream, UdpSocket, wifi};
 use vrt::println;
 
 vrt::entry!(main);
@@ -31,12 +34,13 @@ fn net(e: NetError) -> String {
     format!("{e}")
 }
 
-/// Waits until the network has a default route.
-fn wait_online(timeout: Duration) -> Check {
+/// Waits until the network has a default route (through `via`, if given).
+fn wait_online_via(timeout: Duration, via: Option<&str>) -> Check {
     let end = vrt::time::now_ns() + timeout.as_nanos() as u64;
     loop {
         if let Ok(st) = vnet::status()
             && st.connectivity == Connectivity::Routable
+            && via.is_none_or(|v| st.default_interface == v)
         {
             return Ok(format!("via {} (gateway {:?})", st.default_interface, st.default_gateway));
         }
@@ -45,6 +49,78 @@ fn wait_online(timeout: Duration) -> Check {
         }
         vrt::time::sleep(Duration::from_millis(250));
     }
+}
+
+fn wait_online(timeout: Duration) -> Check {
+    wait_online_via(timeout, None)
+}
+
+fn wifi(e: wifi::WifiError) -> String {
+    format!("{e}")
+}
+
+/// Waits for the Wi-Fi adapter.
+fn check_wifi_adapter() -> Check {
+    let s = wifi::wait_for(Duration::from_secs(60), |s| s.state != wifi::ConnState::NoAdapter).map_err(wifi)?;
+    if s.state == wifi::ConnState::NoAdapter {
+        return Err(String::from("no Wi-Fi adapter"));
+    }
+    Ok(format!("{} {:02x?}", s.adapter, s.mac))
+}
+
+/// Scans until `ssid` shows up.
+fn check_wifi_scan(ssid: &str) -> Check {
+    let end = vrt::time::now_ns() + 60_000_000_000;
+    loop {
+        let _ = wifi::scan();
+        let w = wifi::Watcher::new().map_err(wifi)?;
+        while let Ok(Some(ev)) = w.next(Duration::from_secs(5)) {
+            if matches!(ev, wifi::WlanEvent::ScanDone {}) {
+                break;
+            }
+        }
+        let nets = wifi::networks().map_err(wifi)?;
+        if let Some(n) = nets.iter().find(|n| n.name == ssid) {
+            let names: Vec<&str> = nets.iter().map(|n| n.name.as_str()).collect();
+            return Ok(format!(
+                "{} ({}, {} dBm, {} access points); in range: {}",
+                n.name,
+                n.security.label(),
+                n.signal_dbm,
+                n.access_points,
+                names.join(", ")
+            ));
+        }
+        if vrt::time::now_ns() > end {
+            return Err(format!("{ssid} not found"));
+        }
+    }
+}
+
+/// Joins `ssid` and waits for the connection.
+fn check_wifi_connect(ssid: &str, password: &str) -> Check {
+    let pass = (!password.is_empty()).then_some(password);
+    wifi::connect(ssid, pass, false).map_err(wifi)?;
+    let t0 = vrt::time::now_ns();
+    let s = wifi::wait_for(Duration::from_secs(45), |s| {
+        s.state == wifi::ConnState::Connected || (s.state == wifi::ConnState::Disconnected && s.last_failure.is_some())
+    })
+    .map_err(wifi)?;
+    if s.state != wifi::ConnState::Connected {
+        return Err(match s.last_failure {
+            Some(f) => format!("{f}"),
+            None => format!("still {:?}", s.state),
+        });
+    }
+    Ok(format!(
+        "{} via {:02x?}, channel {}, {} dBm, {} in {} ms",
+        s.name,
+        s.bssid,
+        s.channel,
+        s.signal_dbm,
+        s.security.label(),
+        (vrt::time::now_ns() - t0) / 1_000_000
+    ))
 }
 
 fn check_dns(host: &str) -> Check {
@@ -161,6 +237,26 @@ fn main() -> i32 {
             run(&[
                 ("link", &|| wait_online(Duration::from_secs(60))),
                 ("http local", &|| check_http(&url, "hello from the host")),
+            ])
+        }
+        "wifi" => {
+            let ssid = args.get(2).cloned().unwrap_or_else(|| String::from("Vindows Home"));
+            let password = args.get(3).cloned().unwrap_or_else(|| String::from("vindows-wifi"));
+            let gateway = || -> Check {
+                let st = vnet::status().map_err(net)?;
+                let gw = st.default_gateway.ok_or("no gateway")?;
+                check_ping(gw)
+            };
+            run(&[
+                ("wifi adapter", &check_wifi_adapter),
+                ("wifi scan", &|| check_wifi_scan(&ssid)),
+                ("wifi connect", &|| check_wifi_connect(&ssid, &password)),
+                ("link", &|| wait_online_via(Duration::from_secs(60), Some("wlan0"))),
+                ("dns example.com", &|| check_dns("example.com")),
+                ("udp dns query", &check_udp),
+                ("tcp 1.1.1.1:443", &|| check_tcp("1.1.1.1", 443)),
+                ("http example.com", &|| check_http("http://example.com/", "Example Domain")),
+                ("ping gateway", &gateway),
             ])
         }
         other => {

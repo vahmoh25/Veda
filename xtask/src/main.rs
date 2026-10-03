@@ -2,6 +2,7 @@
 //!
 //! Run `cargo xtask help` for the list of commands.
 
+mod airsim;
 mod automate;
 mod components;
 mod image;
@@ -48,7 +49,8 @@ RUN OPTIONS:
     --gdb               Wait for a debugger on localhost:1234
     --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
     --fresh-home        Start with a new home directory (deletes target/vindows/home.img)
-    --net MODE          Network: ethernet (default, QEMU's NAT) or none
+    --net MODE          Network: ethernet (default, QEMU's NAT), wifi (the virtual Wi-Fi
+                        radio and the airsim access points), both, or none
     --nic MODEL         QEMU model of the wired card (default virtio-net-pci; e1000e, ...)
 
 SHOT OPTIONS:
@@ -264,6 +266,23 @@ fn run(o: &Options) -> Result {
     qemu::prepare_home_disk(&home, o.fresh_home)?;
     let mut vm = o.vm.clone();
     vm.home_disk = Some(home);
+    // The simulated Wi-Fi environment runs while QEMU does.
+    let _sim = if vm.net.wireless() {
+        let sim = airsim::AirSim::start(&airsim::build()?, &util::out_dir().join("airsim.log"))?;
+        vm.wifi = Some(sim.ports);
+        util::status(
+            "Wi-Fi",
+            format!(
+                "simulated networks (password \"{}\"); log {}; control: telnet 127.0.0.1 {}",
+                airsim::PASSWORD,
+                sim.log.display(),
+                sim.control
+            ),
+        );
+        Some(sim)
+    } else {
+        None
+    };
     let mut cmd = qemu::command(&install, &disk, &vars, &vm);
     util::status("Running", format!("{}", install.binary.display()));
     util::run(&mut cmd)
@@ -292,6 +311,9 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     vm.audio_wav = Some(util::out_dir().join("audio.wav"));
     // Scripts that reboot the machine need QEMU to stay up across it.
     vm.allow_reboot = script.lines().any(|l| l.trim() == "reset");
+    if let Some(net) = automate::net_mode(script)? {
+        vm.net = net;
+    }
     // Every scripted run starts with a new, empty home directory.
     let home = util::out_dir().join("test-home.img");
     qemu::prepare_home_disk(&home, true)?;
@@ -329,6 +351,9 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("ventropy", &[]),
     ("vnetstack", &[]),
     ("vnet", &[]),
+    ("vwlan", &[]),
+    ("vradiolink", &[]),
+    ("airsim", &[]),
     ("xtask", &[]),
 ];
 

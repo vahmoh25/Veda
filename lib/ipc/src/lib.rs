@@ -24,8 +24,10 @@ use alloc::vec::Vec;
 use core::fmt;
 
 pub use codec::{Bytes, Decode, DecodeError, Decoder, Encode, Encoder};
+pub use vabi::DEADLINE_INFINITE;
 use vabi::{Error, RawHandle, WaitItem};
 pub use vrt::object::{Channel, Handle, Message};
+pub use vrt::time::now_ns;
 
 /// Size of the message header.
 pub const HEADER_LEN: usize = 12;
@@ -119,9 +121,16 @@ pub fn open(msg: &mut Message) -> Result<(Header, Decoder<'_>), IpcError> {
 
 /// Sends a request and waits for the response with the same transaction id.
 pub fn call(ch: &Channel, request: Encoder, txid: u32) -> Result<Message, IpcError> {
+    call_until(ch, request, txid, vabi::DEADLINE_INFINITE)
+}
+
+/// Like [`call`], but gives up at `deadline` (kernel time in nanoseconds)
+/// with `IpcError::Kernel(Error::TimedOut)`. A reply that arrives later is
+/// dropped by the next call on the channel.
+pub fn call_until(ch: &Channel, request: Encoder, txid: u32, deadline: u64) -> Result<Message, IpcError> {
     request.send(ch)?;
     loop {
-        let msg = ch.read_blocking(vabi::DEADLINE_INFINITE)?;
+        let msg = ch.read_blocking(deadline)?;
         let h = Header::parse(&msg.bytes)?;
         if h.flags & FLAG_RESPONSE != 0 && h.txid == txid {
             return Ok(msg);
@@ -184,11 +193,27 @@ macro_rules! protocol {
             pub struct Client {
                 channel: $crate::Channel,
                 txid: core::cell::Cell<u32>,
+                /// Nanoseconds to wait for each reply (0: forever).
+                timeout_ns: core::cell::Cell<u64>,
             }
 
             impl Client {
                 pub fn new(channel: $crate::Channel) -> Client {
-                    Client { channel, txid: core::cell::Cell::new(1) }
+                    Client { channel, txid: core::cell::Cell::new(1), timeout_ns: core::cell::Cell::new(0) }
+                }
+
+                /// Makes every call give up after `ns` nanoseconds without a
+                /// reply (0: wait forever, the default). Use it towards peers
+                /// that may hang, such as drivers.
+                pub fn set_timeout(&self, ns: u64) {
+                    self.timeout_ns.set(ns);
+                }
+
+                fn deadline(&self) -> u64 {
+                    match self.timeout_ns.get() {
+                        0 => $crate::DEADLINE_INFINITE,
+                        t => $crate::now_ns().saturating_add(t),
+                    }
                 }
 
                 pub fn channel(&self) -> &$crate::Channel {
@@ -212,7 +237,7 @@ macro_rules! protocol {
                         #[allow(unused_mut)]
                         let mut e = $crate::Encoder::with_header($ord, txid, $crate::FLAG_REQUEST);
                         $( $crate::Encode::encode($arg, &mut e); )*
-                        let mut reply = $crate::call(&self.channel, e, txid)?;
+                        let mut reply = $crate::call_until(&self.channel, e, txid, self.deadline())?;
                         let (_, mut d) = $crate::open(&mut reply)?;
                         Ok(<$ret as $crate::Decode>::decode(&mut d)?)
                     }

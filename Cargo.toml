@@ -34,6 +34,7 @@ members = [
     "services/devmgr",
     "services/compositor",
     "services/netd",
+    "services/wlan",
     "apps/about",
     "apps/shell",
     "apps/editor",
@@ -54,6 +55,7 @@ members = [
     "drivers/ps2",
     "drivers/virtio-blk",
     "drivers/virtio-net",
+    "drivers/vwifi",
     "tests/systest",
     "tests/nettest",
 ]

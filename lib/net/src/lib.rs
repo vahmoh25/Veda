@@ -13,6 +13,7 @@
 //!   in a later version, layered on [`TcpStream`]).
 //! * [`status`], [`interfaces`], ... — the state of the network, and
 //!   configuration for the Settings app and the Terminal.
+//! * [`wifi`] — Wi-Fi: networks in range, joining, saved networks, events.
 //!
 //! Addresses are the standard `core::net` types. Errors are
 //! [`NetError`]s. Every socket owns a channel to the network service and is
@@ -31,6 +32,7 @@ pub mod http;
 mod ping;
 mod tcp;
 mod udp;
+pub mod wifi;
 
 use alloc::string::String;
 use alloc::vec::Vec;

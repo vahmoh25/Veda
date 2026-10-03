@@ -111,6 +111,8 @@ pub enum StaEvent {
         channel: u8,
         security: Security,
         pmf: bool,
+        /// WPA3 (SAE) was used.
+        sae: bool,
     },
     /// A connection attempt failed.
     JoinFailed(Failure),
@@ -712,6 +714,7 @@ impl Station {
             channel: t.bss.channel,
             security: t.bss.security,
             pmf: self.pmf,
+            sae: self.akm == Some(Akm::Sae),
         })]
     }
 

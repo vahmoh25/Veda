@@ -8,7 +8,11 @@
 //!   CCMP-128 and BIP-CMAC-128;
 //! * [`eapol`], [`handshake`]: EAPOL-Key frames and the 4-way and group key
 //!   handshakes (station and access point sides);
-//! * [`sae`]: Simultaneous Authentication of Equals (WPA3-Personal).
+//! * [`sae`]: Simultaneous Authentication of Equals (WPA3-Personal);
+//! * [`scan`], [`station`], [`ap`]: scan results and the station and access
+//!   point state machines;
+//! * [`profile`], [`policy`]: saved networks, and the choice of network,
+//!   retry delays and roaming.
 //!
 //! Everything here parses untrusted frames: parsers return errors instead
 //! of panicking, and the cryptographic checks of the standard are applied
@@ -29,6 +33,8 @@ pub mod eapol;
 pub mod frame;
 pub mod handshake;
 pub mod ie;
+pub mod policy;
+pub mod profile;
 pub mod rsn;
 pub mod sae;
 pub mod scan;

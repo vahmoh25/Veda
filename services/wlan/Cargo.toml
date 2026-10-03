@@ -1,0 +1,25 @@
+[package]
+name = "wlan"
+description = "The Wi-Fi service: scanning, WPA2/WPA3 authentication, association, saved networks and reconnection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wlan"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+vwlan = { workspace = true }
+vfiles = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

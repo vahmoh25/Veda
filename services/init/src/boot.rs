@@ -24,17 +24,17 @@ pub mod roles {
 }
 
 /// System services in start order. File systems come first (everything
-/// else loads data through them), then the network service (drivers attach
-/// to it as they start), device management and drivers, the window system,
-/// audio and the desktop shell.
-const SERVICES: [&str; 7] = ["vfs", "netd", "devmgr", "ps2", "compositor", "audio", "shell"];
+/// else loads data through them), then the network and Wi-Fi services
+/// (drivers attach to them as they start), device management and drivers,
+/// the window system, audio and the desktop shell.
+const SERVICES: [&str; 8] = ["vfs", "netd", "wlan", "devmgr", "ps2", "compositor", "audio", "shell"];
 
 /// Services that are started again if they exit. They hold no state other
-/// processes cannot recover: drivers reconnect to a restarted compositor
-/// or network service, and the shell rebuilds its windows. (The file
+/// processes cannot recover: drivers reconnect to a restarted compositor,
+/// network or Wi-Fi service, and the shell rebuilds its windows. (The file
 /// system and the device manager are not restarted: one holds the user's
 /// files, the other owns the running drivers.)
-pub const RESTARTABLE: [&str; 5] = ["compositor", "shell", "audio", "ps2", "netd"];
+pub const RESTARTABLE: [&str; 6] = ["compositor", "shell", "audio", "ps2", "netd", "wlan"];
 
 fn dup(h: &Option<vrt::Vmo>) -> Option<Handle> {
     h.as_ref().and_then(|v| v.0.duplicate(None).ok())
@@ -109,13 +109,18 @@ pub fn cmdline(init: &Init) -> alloc::string::String {
     alloc::string::String::from_utf8_lossy(&info.cmdline[..len]).into_owned()
 }
 
-/// Starts optional programs requested on the kernel command line.
+/// Starts optional programs requested on the kernel command line:
+/// `run=NAME` or `run=NAME:ARG1,ARG2,...`.
 pub fn start_requested(init: &mut Init) {
     let cmdline = cmdline(init);
     for arg in cmdline.split_whitespace() {
-        if let Some(name) = arg.strip_prefix("run=") {
+        if let Some(spec) = arg.strip_prefix("run=") {
+            let (name, args): (&str, Vec<alloc::string::String>) = match spec.split_once(':') {
+                Some((name, args)) => (name, args.split(',').filter(|a| !a.is_empty()).map(Into::into).collect()),
+                None => (spec, Vec::new()),
+            };
             let path = alloc::format!("bin/{name}.exe");
-            match init.spawn(name, &path, &[], Vec::new(), false) {
+            match init.spawn(name, &path, &args, Vec::new(), false) {
                 Ok(_) => {}
                 Err(e) => println!("cannot start {}: {:?}", name, e),
             }

@@ -21,13 +21,18 @@
 //! reset                            # reboot (disks are kept); later waits see only new output
 //! boot-cmdline "run=about"        # extra kernel command line, applied before boot
 //! double-click 0.05 0.44           # two quick clicks
+//! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
+//! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
+//! air-expect "list" "1 joined"     # fail unless the simulator's answer contains the text
+//! air-wait "list" "1 joined" 60    # wait until it does (timeout in s)
 //! ```
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::qemu::{self, QemuInstall, VmConfig};
+use crate::airsim::AirSim;
+use crate::qemu::{self, NetMode, QemuInstall, VmConfig};
 use crate::qmp::Qmp;
 use crate::util::{self, Result};
 
@@ -41,6 +46,8 @@ pub struct Session {
     /// Byte offset in the serial log where `wait-serial` and `expect-serial`
     /// start looking (moved past the output of earlier boots by `reset`).
     since: usize,
+    /// The Wi-Fi simulator, when the machine has the virtual radio.
+    pub sim: Option<AirSim>,
 }
 
 impl Session {
@@ -56,6 +63,13 @@ impl Session {
         vm.serial_file = Some(serial_log.clone());
         vm.qmp_port = Some(port);
         vm.debug_exit = true;
+        let sim = if vm.net.wireless() {
+            let sim = AirSim::start(&crate::airsim::build()?, &out.join("airsim.log"))?;
+            vm.wifi = Some(sim.ports);
+            Some(sim)
+        } else {
+            None
+        };
         let vars = qemu::vars_file(install)?;
         let mut cmd = qemu::command(install, disk, &vars, &vm);
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
@@ -63,7 +77,7 @@ impl Session {
         let qmp = Qmp::connect(port, Duration::from_secs(20))?;
         // Kernel panics print "PANIC", user-space panics "panicked at".
         let fail_patterns = vec!["PANIC".into(), "panicked at".into()];
-        Ok(Session { child, qmp, serial_log, fail_patterns, since: 0 })
+        Ok(Session { child, qmp, serial_log, fail_patterns, since: 0, sim })
     }
 
     fn serial_bytes(&self) -> Vec<u8> {
@@ -167,6 +181,25 @@ pub fn boot_cmdline(script: &str) -> Vec<String> {
         .collect()
 }
 
+/// The network a script asks for with `net` (it must be known before the
+/// machine starts).
+pub fn net_mode(script: &str) -> Result<Option<NetMode>> {
+    let mut mode = None;
+    for w in script.lines().map(words) {
+        if w.first().is_some_and(|c| c == "net") {
+            let m = w.get(1).ok_or("net: missing mode")?;
+            mode = Some(NetMode::parse(m).ok_or(format!("net: unknown mode '{m}'"))?);
+        }
+    }
+    Ok(mode)
+}
+
+impl Session {
+    fn sim(&self) -> Result<&AirSim> {
+        self.sim.as_ref().ok_or_else(|| "this run has no Wi-Fi simulator (add `net wifi`)".to_string())
+    }
+}
+
 /// Runs an automation script against a fresh VM booted from `disk`.
 pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str) -> Result<String> {
     let mut s = Session::start(install, disk, vm)?;
@@ -213,7 +246,39 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
                     s.qmp.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" => {}
+                "boot-cmdline" | "net" => {}
+                "air" => {
+                    let line = w.get(1).ok_or("missing command")?;
+                    s.sim().and_then(|sim| sim.command(line)).map_err(ctx)?;
+                }
+                "air-expect" => {
+                    let (line, needle) = (w.get(1).ok_or("missing command")?, w.get(2).ok_or("missing text")?);
+                    let answer = s.sim().and_then(|sim| sim.command(line)).map_err(ctx)?;
+                    if !answer.contains(needle.as_str()) {
+                        return Err(ctx(format!("airsim's answer to \"{line}\" lacks \"{needle}\":\n{answer}")));
+                    }
+                }
+                "air-wait" => {
+                    let (line, needle) = (w.get(1).ok_or("missing command")?, w.get(2).ok_or("missing text")?);
+                    let timeout = Duration::from_secs_f64(num(&w, 3).unwrap_or(60.0));
+                    let start = Instant::now();
+                    loop {
+                        let answer = s.sim().and_then(|sim| sim.command(line)).map_err(ctx)?;
+                        if answer.contains(needle.as_str()) {
+                            break;
+                        }
+                        let log = s.serial();
+                        if let Some(p) = s.fail_patterns.iter().find(|p| log.contains(p.as_str())) {
+                            return Err(ctx(format!("serial log contains failure pattern \"{p}\"")));
+                        }
+                        if start.elapsed() > timeout {
+                            return Err(ctx(format!(
+                                "timed out waiting for \"{needle}\" in airsim's answer to \"{line}\":\n{answer}"
+                            )));
+                        }
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                }
                 "reset" => s.reset().map_err(ctx)?,
                 "mouse-down" => {
                     s.qmp.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
@@ -257,8 +322,15 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
         Some(p) => Err(format!("serial log contains failure pattern \"{p}\"")),
         None => Ok(()),
     });
+    let sim_log = s.sim.as_ref().map(|sim| sim.log.clone());
     s.finish();
-    result.map(|_| log.clone()).map_err(|e| format!("{e}\n--- serial log ---\n{}", tail(&log, 60)))
+    result.map(|_| log.clone()).map_err(|e| {
+        let mut msg = format!("{e}\n--- serial log ---\n{}", tail(&log, 60));
+        if let Some(text) = sim_log.and_then(|p| std::fs::read_to_string(p).ok()) {
+            msg.push_str(&format!("\n--- airsim log ---\n{}", tail(&text, 30)));
+        }
+        msg
+    })
 }
 
 /// The last `n` lines of `text`.

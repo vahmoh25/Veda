@@ -142,7 +142,7 @@ enumeration! {
 
 message! {
     /// Options for a TCP connection.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub struct TcpOptions {
         /// Send small segments immediately (disables Nagle's algorithm).
         pub nodelay: bool,
@@ -153,12 +153,6 @@ message! {
         /// Abort the connection when it is idle (nothing received) this long
         /// in milliseconds (0 = never).
         pub idle_timeout_ms: u32,
-    }
-}
-
-impl Default for TcpOptions {
-    fn default() -> Self {
-        TcpOptions { nodelay: false, keepalive_ms: 0, connect_timeout_ms: 0, idle_timeout_ms: 0 }
     }
 }
 
@@ -559,8 +553,22 @@ impl DeviceAttachment {
         slot_size: u32,
         link_up: bool,
     ) -> Result<DeviceAttachment, AttachError> {
+        Self::attach_timeout(info, slots, slot_size, link_up, 0)
+    }
+
+    /// Like [`DeviceAttachment::attach`], but each call to the stack gives
+    /// up after `timeout_ns` nanoseconds (0: wait forever), for services
+    /// that must stay responsive while the network service restarts.
+    pub fn attach_timeout(
+        info: DeviceInfo,
+        slots: u32,
+        slot_size: u32,
+        link_up: bool,
+        timeout_ns: u64,
+    ) -> Result<DeviceAttachment, AttachError> {
         let channel = crate::connect(netdev::NAME).map_err(|_| AttachError::Unavailable)?;
         let client = netdev::Client::new(channel);
+        client.set_timeout(timeout_ns);
         let (link, ends) = crate::netring::Link::create(slots, slot_size).map_err(|_| AttachError::NoMemory)?;
         match client.attach(info, ends, link_up) {
             Ok(Ok(name)) => Ok(DeviceAttachment { client, link, name }),
