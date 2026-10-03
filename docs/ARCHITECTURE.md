@@ -252,6 +252,16 @@ the pool's workers on different CPUs at once.
 * `vaudio` holds the formats (WAV, QOA), the resampler, mixing, an FFT for
   visualisers, and a synthesiser and sequencer that `tools/musicgen` uses
   to render the bundled album at build time.
+* `vaudio` also holds the voice processing for an always-listening
+  assistant. `aec::EchoCanceller` removes the loudspeakers' sound from the
+  microphone, given the mixed speaker output as reference: a
+  partitioned-block frequency-domain adaptive filter (tails up to 1 s)
+  whose step follows the estimated residual echo, so it holds still during
+  double talk and re-converges after the echo path changes, a bulk delay
+  estimator (0 to 500 ms) and a residual echo suppressor; it adds 16 ms of
+  latency at 16 kHz. `vad::Vad` flags speech every 10 ms (minimum-statistics
+  noise floors, a likelihood ratio test, click rejection, hysteresis per
+  utterance), and `level` meters RMS and peak levels in dBFS.
 
 ## Testing
 
@@ -285,7 +295,7 @@ the pool's workers on different CPUs at once.
 | `lib/gfx`, `lib/ui`, `lib/text` | 2D drawing, the GUI toolkit, the text editing model |
 | `lib/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
 | `lib/v3d` | the fixed-point software 3D renderer and the game harness |
-| `lib/audio` | audio formats, resampling, mixing, FFT and the synthesiser |
+| `lib/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
 | `lib/virtio` | virtio device access shared by the drivers |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
