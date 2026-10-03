@@ -3,7 +3,8 @@
 //! Fly through asteroid fields and waves of enemy ships against a nebula.
 //! The world streams towards the player; the ship moves in a box in front of
 //! the camera. Shields regenerate, the hull does not; pickups restore them
-//! or upgrade the guns. Rendering uses the `v3d` software renderer.
+//! or upgrade the guns. Rendering uses the `v3d` software renderer;
+//! [`agent`] lets the voice agent start, pause and resume games.
 //!
 //! Controls: arrows/WASD fly, Space fire, Esc pause, Enter confirm, F3
 //! performance overlay.
@@ -13,6 +14,7 @@
 
 extern crate alloc;
 
+mod agent;
 mod hud;
 mod models;
 
@@ -253,6 +255,8 @@ struct Starfall {
     shake: f32,
     rng: Rng,
     cam_pos: Vec3,
+    /// The registration with the voice agent.
+    agent: Option<agent::Link>,
 }
 
 const PAUSE_ITEMS: [&str; 3] = ["Resume", "Restart", "Quit to title"];
@@ -329,6 +333,7 @@ impl Starfall {
             shake: 0.0,
             rng,
             cam_pos: Vec3::new(0.0, 3.0, 15.0),
+            agent: None,
         };
         // Some scenery for the title screen.
         g.rock_stream = (1.0e9, 0.6);
@@ -336,6 +341,8 @@ impl Starfall {
             let z = g.rng.range_f32(SPAWN_Z, -40.0);
             g.spawn_rock(z, 0.0);
         }
+        // Ready to answer the agent from the first frame on.
+        g.agent = Some(agent::Link::new());
         g
     }
 
@@ -363,6 +370,27 @@ impl Starfall {
         self.phase_time = 0.0;
         self.paused = false;
         self.say("GET READY");
+    }
+
+    /// Pauses the game (Esc, or the window lost the keyboard).
+    fn pause(&mut self) {
+        self.paused = true;
+        self.menu = 0;
+    }
+
+    /// Back to the title screen (the pause menu's "Quit to title").
+    fn quit_to_title(&mut self) {
+        self.paused = false;
+        self.phase = Phase::Title;
+        self.ship = Ship::new();
+        self.enemies.clear();
+        self.shots.clear();
+        self.rock_stream = (1.0e9, 0.6);
+    }
+
+    /// The score multiplier of the current kill streak.
+    fn multiplier(&self) -> u32 {
+        1 + (self.combo / 5).min(3)
     }
 
     fn say(&mut self, s: &str) {
@@ -589,8 +617,7 @@ impl Starfall {
         }
         self.combo = (self.combo + 1).min(40);
         self.combo_timer = 2.5;
-        let mult = 1 + (self.combo / 5).min(3) as u64;
-        let p = points * mult;
+        let p = points * self.multiplier() as u64;
         self.score += p;
         self.high = self.high.max(self.score);
         self.popups.push(Popup { pos: at, text: format!("+{}", p), age: 0.0 });
@@ -1050,8 +1077,9 @@ fn segment_hits(a: Vec3, b: Vec3, c: Vec3, r: f32) -> bool {
     (a + ab * t).distance_squared(c) < r * r
 }
 
-impl Game for Starfall {
-    fn update(&mut self, app: &mut AppState, dt: f32) {
+impl Starfall {
+    /// Input and simulation for one frame.
+    fn step(&mut self, app: &mut AppState, dt: f32) {
         let k = &app.keys;
         let enter = k.any_pressed(&[keys::ENTER, keys::KPENTER]);
         let esc = k.pressed(keys::ESC);
@@ -1076,14 +1104,7 @@ impl Game for Starfall {
                 match self.menu {
                     0 => self.paused = false,
                     1 => self.reset(),
-                    _ => {
-                        self.paused = false;
-                        self.phase = Phase::Title;
-                        self.ship = Ship::new();
-                        self.enemies.clear();
-                        self.shots.clear();
-                        self.rock_stream = (1.0e9, 0.6);
-                    }
+                    _ => self.quit_to_title(),
                 }
             }
             return;
@@ -1104,8 +1125,7 @@ impl Game for Starfall {
             }
             Phase::Playing => {
                 if esc || !app.focused {
-                    self.paused = true;
-                    self.menu = 0;
+                    self.pause();
                     return;
                 }
                 if self.wave == 0 && self.phase_time > 2.0 {
@@ -1134,6 +1154,15 @@ impl Game for Starfall {
         let s = &self.ship;
         let want = Vec3::new(s.pos.x * 0.55, s.pos.y * 0.55 + 3.4, 15.0);
         self.cam_pos += (want - self.cam_pos) * (1.0 - (-dt * 5.0).exp());
+    }
+}
+
+impl Game for Starfall {
+    fn update(&mut self, app: &mut AppState, dt: f32) {
+        self.step(app, dt);
+        // The agent's requests come after the keyboard's, so what they
+        // change shows in this frame.
+        agent::serve(self, app);
     }
 
     fn render(&mut self, r: &mut Renderer) {
@@ -1324,7 +1353,7 @@ impl Game for Starfall {
                 let info = hud::Info {
                     score: self.score,
                     high: self.high,
-                    multiplier: 1 + (self.combo / 5).min(3),
+                    multiplier: self.multiplier(),
                     level: self.level,
                     wave: self.wave.max(1),
                     shield: self.ship.shield / 100.0,

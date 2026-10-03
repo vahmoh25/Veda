@@ -17,6 +17,7 @@ v3d = { workspace = true, features = ["app"] }
 vmath = { workspace = true }
 vproto = { workspace = true }
 vgfx = { workspace = true }
+vui = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }
