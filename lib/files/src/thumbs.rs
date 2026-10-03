@@ -1,10 +1,12 @@
-//! Image thumbnails, decoded on a background thread.
+//! Image thumbnails, decoded on a background thread (feature `thumbnails`).
 //!
 //! The UI asks for a thumbnail with [`Thumbnailer::get`]; unknown paths are
 //! queued for a worker thread that reads the file through its own VFS
 //! connection, decodes it with `vimage` and scales it down. Finished
-//! thumbnails are handed back through a mutex and an [`Event`] that the UI
-//! waits on (see `App::wait_handles`), so decoding never blocks drawing.
+//! thumbnails come back through a mutex and an [`Event`] that the UI waits
+//! on (return [`Thumbnailer::event_handle`] from `App::wait_handles` and
+//! call [`Thumbnailer::collect`] in `update`), so decoding never blocks
+//! drawing.
 
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::string::String;
@@ -16,7 +18,7 @@ use vgfx::Bitmap;
 use vrt::object::Event;
 use vrt::sync::{Condvar, Mutex};
 
-use crate::fsutil::Fs;
+use crate::fs::Fs;
 
 /// Files larger than this are not decoded.
 const MAX_FILE: u64 = 48 << 20;
@@ -27,10 +29,11 @@ struct Shared {
     done: Mutex<Vec<(String, Option<Bitmap>)>>,
 }
 
-/// A cache of thumbnails filled by a worker thread.
+/// A cache of thumbnails (premultiplied bitmaps) filled by a worker thread.
 pub struct Thumbnailer {
     shared: Arc<Shared>,
     event: Event,
+    /// Finished thumbnails; `None` for files that could not be decoded.
     cache: BTreeMap<String, Option<Bitmap>>,
     pending: BTreeSet<String>,
 }
@@ -51,7 +54,8 @@ impl Thumbnailer {
         Some(Thumbnailer { shared, event, cache: BTreeMap::new(), pending: BTreeSet::new() })
     }
 
-    /// The thumbnail of `path` if it is ready; otherwise queues it.
+    /// The thumbnail of the image at `path` if it is ready; otherwise queues
+    /// it (once) and returns `None`.
     pub fn get(&mut self, path: &str) -> Option<&Bitmap> {
         if self.cache.contains_key(path) {
             return self.cache.get(path).and_then(|b| b.as_ref());
@@ -72,7 +76,7 @@ impl Thumbnailer {
         }
     }
 
-    /// Drops a cached thumbnail (the file changed).
+    /// Drops a cached thumbnail (the file changed or moved).
     pub fn invalidate(&mut self, path: &str) {
         self.cache.remove(path);
     }

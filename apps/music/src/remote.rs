@@ -34,7 +34,7 @@ struct Handler<'a> {
 
 impl remote::Server for Handler<'_> {
     fn open(&mut self, path: String) -> bool {
-        let ok = path.starts_with('/') && crate::library::is_audio_file(&path);
+        let ok = path.starts_with('/') && vfiles::kind::is_playable_audio(&path);
         if ok {
             self.files.push(path);
         }

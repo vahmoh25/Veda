@@ -18,6 +18,7 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use vfiles::path::{file_name, parent};
 use vgfx::{Align, Color, Rect};
 use vproto::display::modifiers;
 use vproto::fs::FsError;
@@ -35,18 +36,6 @@ vrt::entry!(main);
 const DEFAULT_DIR: &str = "/home/user/Documents";
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const TOAST_NS: u64 = 2_500_000_000;
-
-/// The parent directory of an absolute path.
-fn parent(path: &str) -> &str {
-    match path.rfind('/') {
-        Some(0) | None => "/",
-        Some(i) => &path[..i],
-    }
-}
-
-fn file_name(path: &str) -> String {
-    path.rsplit('/').next().unwrap_or(path).into()
-}
 
 /// Reads a text file; invalid UTF-8 is replaced (the flag reports it).
 fn read_text(vfs: &vfs::Client, path: &str) -> Result<(String, bool), FsError> {
@@ -102,7 +91,7 @@ impl Tab {
         Tab {
             doc: Document::from_text(text),
             path: Some(path.into()),
-            title: file_name(path),
+            title: file_name(path).into(),
             lang: Language::for_path(path),
             view: TextView::new(),
             read_only,
@@ -757,7 +746,7 @@ impl Editor {
                 Some(FileDialogResult::Chosen(path)) => {
                     let (tab, then) = (*tab, *then);
                     let t = &mut self.tabs[tab];
-                    t.title = file_name(&path);
+                    t.title = file_name(&path).into();
                     t.lang = Language::for_path(&path);
                     t.path = Some(path);
                     t.read_only = false;

@@ -318,6 +318,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vproto", &[]),
     ("vgfx", &[]),
     ("vtext", &[]),
+    ("vfiles", &["thumbnails"]),
     ("xtask", &[]),
 ];
 

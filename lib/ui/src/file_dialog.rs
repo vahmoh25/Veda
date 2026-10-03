@@ -16,6 +16,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use vfiles::format::human_size;
+use vfiles::path::{extension, join, parent, resolve};
 use vgfx::{Align, Color, Rect};
 use vproto::fs::DirEntry;
 use vproto::input::keys;
@@ -48,33 +50,6 @@ const PLACES: [(&str, &str, Icon); 6] = [
     ("Music", "/home/user/Music", Icon::Music),
     ("System", "/system", Icon::Cpu),
 ];
-
-/// Joins a directory and a name (or returns `name` if it is absolute).
-fn join(dir: &str, name: &str) -> String {
-    if name.starts_with('/') {
-        String::from(name)
-    } else if dir.ends_with('/') {
-        format!("{dir}{name}")
-    } else {
-        format!("{dir}/{name}")
-    }
-}
-
-/// The parent directory of an absolute path.
-fn parent(path: &str) -> &str {
-    match path.trim_end_matches('/').rfind('/') {
-        Some(0) | None => "/",
-        Some(i) => &path[..i],
-    }
-}
-
-fn human_size(n: u64) -> String {
-    match n {
-        0..1024 => format!("{n} B"),
-        1024..1_048_576 => format!("{:.1} KB", n as f32 / 1024.0),
-        _ => format!("{:.1} MB", n as f32 / 1_048_576.0),
-    }
-}
 
 pub struct FileDialog {
     mode: FileDialogMode,
@@ -136,9 +111,7 @@ impl FileDialog {
         if e.name.starts_with('.') {
             return false;
         }
-        e.is_dir
-            || self.filter.is_empty()
-            || e.name.rsplit_once('.').is_some_and(|(_, ext)| self.filter.iter().any(|f| *f == ext.to_lowercase()))
+        e.is_dir || self.filter.is_empty() || self.filter.contains(&extension(&e.name))
     }
 
     /// Lists `dir`; returns `false` if it cannot be read.
@@ -177,7 +150,7 @@ impl FileDialog {
         if name.is_empty() {
             return None;
         }
-        let path = join(&self.dir, name);
+        let path = resolve(&self.dir, name);
         let stat = self.vfs.as_ref().and_then(|v| v.stat(path.clone()).ok());
         match (self.mode, stat) {
             (_, Some(Ok(st))) if st.is_dir => {

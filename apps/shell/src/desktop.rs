@@ -6,6 +6,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use vfiles::FileKind;
 use vgfx::{Align, Color, Rect};
 use vproto::vfs;
 use vui::{Icon, MenuItem, Ui};
@@ -30,14 +31,13 @@ const DESKTOP_DIR: &str = "/home/user/Desktop";
 
 /// Which application opens a file, by extension.
 pub fn app_for_file(name: &str) -> Option<(&'static str, Icon)> {
-    let ext = name.rsplit_once('.')?.1.to_lowercase();
-    Some(match ext.as_str() {
-        "txt" | "md" | "rs" | "toml" | "cfg" | "ini" | "conf" | "log" | "c" | "cpp" | "h" | "hpp" | "json" | "csv"
-        | "app" => ("editor", Icon::Document),
-        "png" | "jpg" | "jpeg" | "bmp" | "qoi" => ("photos", Icon::Image),
-        "wav" | "qoa" => ("music", Icon::Music),
-        _ => return None,
-    })
+    let app = vfiles::default_app(name)?;
+    let icon = match vfiles::file_kind(name) {
+        FileKind::Image => Icon::Image,
+        FileKind::Audio => Icon::Music,
+        _ => Icon::Document,
+    };
+    Some((app.id, icon))
 }
 
 /// What the desktop looked like when last presented.
@@ -95,7 +95,7 @@ impl Desktop {
                 if e.is_dir {
                     items.push(Shortcut {
                         label: e.name.clone(),
-                        app: "files".into(),
+                        app: vfiles::kind::FILES.id.into(),
                         args: vec![path],
                         icon: Icon::Folder,
                         color: "files".into(),

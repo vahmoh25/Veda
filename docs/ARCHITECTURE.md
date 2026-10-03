@@ -102,6 +102,15 @@ eager FPU/SSE/AVX state switching with XSAVE.
   snapshot slots with checksums; saves alternate between them, so an
   interrupted save never damages the previous one. Unchanged sample files
   are stored as references to the system image.
+* Applications work with files through `vfiles`: paths (resolving against a
+  working directory and `~`, the read-only `/system`, wildcards, natural
+  name order, free names for new items), size and time formatting, a VFS
+  client with whole-file reads and writes, recursive copies, moves and
+  removals and the space left on a file system, and, with the `thumbnails`
+  feature, image thumbnails made on a background thread. Its table of file
+  types is the system's only list of which application opens which file:
+  Files, the Terminal's `open`, the desktop icons and the pickers of Photos,
+  Music and Settings all use it.
 
 ## The window system (`services/compositor`)
 
@@ -140,7 +149,9 @@ main loop performs. Running windows come from the compositor
 (`list_windows`, refreshed on `WindowsChanged`); installed applications
 come from the launcher in `init`, which reads the `.app` manifests. The
 shell serves the `shell` protocol so applications can change the wallpaper
-and post notifications. When an application crashes (a CPU fault or a panic),
+and post notifications; `vproto::shell::ShellLink` makes these calls from a
+background thread, because setting a wallpaper decodes and scales a large
+picture first. When an application crashes (a CPU fault or a panic),
 `init` reports it on the channels handed out by `launcher::watch`, and the
 shell tells the user with a notification.
 
@@ -183,7 +194,8 @@ Frames are drawn only when input arrives or an animation asks for one.
 
 * Host unit tests for the libraries with platform-independent logic (ABI,
   heap, IPC codec, service protocols, math, rasteriser, fonts, image
-  codecs, 2D graphics, text editing, audio, build tool).
+  codecs, 2D graphics, text editing, paths and file types, audio, build
+  tool).
 * `systest`, a program that runs inside Vindows and exercises kernel objects,
   threads, the file system, the launcher, crash reports and the restart of
   the window system.
@@ -203,6 +215,7 @@ Frames are drawn only when input arrives or an animation asks for one.
 | `lib/math`, `lib/raster`, `lib/font`, `lib/image` | math, vector rasterisation, fonts, image codecs |
 | `lib/ipc`, `lib/proto` | message encoding and the service protocols |
 | `lib/gfx`, `lib/ui`, `lib/text` | 2D drawing, the GUI toolkit, the text editing model |
+| `lib/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
 | `services/`, `drivers/`, `apps/`, `games/` | system services, drivers, applications and games |
 | `tests/` | in-system tests and GUI automation scripts |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |

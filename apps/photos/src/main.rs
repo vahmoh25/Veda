@@ -19,7 +19,6 @@ mod catalog;
 mod library;
 mod loader;
 mod render;
-mod shell_link;
 mod viewer;
 
 use alloc::format;
@@ -29,13 +28,13 @@ use alloc::vec::Vec;
 
 use vabi::RawHandle;
 use vgfx::{Align, Color, Rect, ShadowTemplate};
+use vproto::shell::{ShellLink, ShellReply};
 use vproto::vfs;
 use vui::{App, Font, Icon, Ui, WindowSpec, WindowState};
 
 use crate::catalog::{Entry, Thumb};
 use crate::loader::{Done, Loader, Picture};
 use crate::render::ViewCache;
-use crate::shell_link::ShellLink;
 use crate::viewer::View;
 
 vrt::entry!(main);
@@ -312,10 +311,11 @@ impl Photos {
         }
         let replies = self.shell.as_ref().map(|s| s.take()).unwrap_or_default();
         for reply in replies {
+            let ShellReply::WallpaperSet { result, .. } = reply else { continue };
             self.wallpaper_busy = false;
-            match reply {
+            match result {
                 Ok(()) => self.show_toast("Wallpaper changed", Icon::Check),
-                Err(e) => self.show_toast(&e, Icon::Warning),
+                Err(e) => self.show_toast(&e.to_string(), Icon::Warning),
             }
         }
     }

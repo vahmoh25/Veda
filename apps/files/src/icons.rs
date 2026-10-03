@@ -4,7 +4,8 @@
 use vgfx::{Bitmap, FillRule, Filter, Path};
 use vui::{Align, Color, Font, Icon, Rect, Ui};
 
-use crate::fsutil::{self, FileKind};
+use vfiles::kind::{FileKind, file_kind};
+use vfiles::path::extension;
 
 pub const FOLDER: Color = Color::hex(0xF5B43C);
 const IMAGE: Color = Color::hex(0xE879C9);
@@ -18,7 +19,7 @@ pub fn kind_color(name: &str, is_dir: bool) -> Color {
     if is_dir {
         return FOLDER;
     }
-    match fsutil::file_kind(name) {
+    match file_kind(name) {
         FileKind::Image => IMAGE,
         FileKind::Audio => AUDIO,
         FileKind::Text => TEXT,
@@ -32,12 +33,12 @@ pub fn small_icon(name: &str, is_dir: bool) -> Icon {
     if is_dir {
         return Icon::Folder;
     }
-    match fsutil::file_kind(name) {
+    match file_kind(name) {
         FileKind::Image => Icon::Image,
         FileKind::Audio => Icon::Music,
         FileKind::Text => Icon::Document,
         FileKind::Program => Icon::Cube,
-        FileKind::Other => match fsutil::extension(name).as_str() {
+        FileKind::Other => match extension(name).as_str() {
             "ttf" | "otf" => Icon::Edit,
             _ => Icon::File,
         },
@@ -89,7 +90,7 @@ pub fn draw_page(ui: &mut Ui, r: Rect, name: &str, opacity: f32) {
     let color = kind_color(name, false).fade(opacity);
     let icon_r = Rect::new(page.x, page.y + (s * 0.1) as i32, page.w, (s * 0.42) as i32);
     small_icon(name, false).draw(&mut ui.canvas, icon_r, s * 0.34, color);
-    let ext = fsutil::extension(name).to_ascii_uppercase();
+    let ext = extension(name).to_ascii_uppercase();
     if !ext.is_empty() && ext.len() <= 5 {
         let size = (s * 0.17).clamp(8.0, 13.0);
         let tw = ui.measure(&ext, Font::Bold, size) as i32 + 10;

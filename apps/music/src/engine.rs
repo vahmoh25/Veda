@@ -360,7 +360,8 @@ impl Engine {
         self.shared.viz.lock().reset(start);
         let frames = src.frames();
         let tags = src.tags();
-        self.title = if tags.title.is_empty() { library::file_stem(&path) } else { tags.title.clone() };
+        self.title =
+            if tags.title.is_empty() { String::from(vfiles::path::file_stem(&path)) } else { tags.title.clone() };
         println!(
             "{} {} ({}, {} Hz, {} ch, {})",
             if play { "playing" } else { "loaded" },

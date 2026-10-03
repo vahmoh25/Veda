@@ -21,6 +21,7 @@ members = [
     "lib/gfx",
     "lib/ui",
     "lib/text",
+    "lib/files",
     "lib/v3d",
     "lib/audio",
     "services/init",
@@ -77,6 +78,7 @@ vvirtio = { path = "lib/virtio" }
 vgfx = { path = "lib/gfx" }
 vui = { path = "lib/ui" }
 vtext = { path = "lib/text" }
+vfiles = { path = "lib/files" }
 v3d = { path = "lib/v3d" }
 vaudio = { path = "lib/audio" }
 

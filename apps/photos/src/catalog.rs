@@ -3,8 +3,9 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::cmp::Ordering;
 
+use vfiles::kind::is_image;
+use vfiles::path::{join, natural_cmp};
 use vproto::fs::FsError;
 use vproto::vfs;
 
@@ -37,16 +38,6 @@ pub struct Entry {
     pub used: u64,
 }
 
-/// File extensions Photos opens.
-pub fn is_picture(name: &str) -> bool {
-    match name.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() => {
-            matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "jpe" | "jfif" | "bmp" | "dib" | "qoi")
-        }
-        _ => false,
-    }
-}
-
 /// Lists the pictures in `dir`, in natural name order.
 pub fn list(vfs: &vfs::Client, dir: &str) -> Result<Vec<Entry>, String> {
     let items = match vfs.read_dir(dir.into()) {
@@ -57,7 +48,7 @@ pub fn list(vfs: &vfs::Client, dir: &str) -> Result<Vec<Entry>, String> {
     };
     let mut entries: Vec<Entry> = items
         .into_iter()
-        .filter(|e| !e.is_dir && is_picture(&e.name))
+        .filter(|e| !e.is_dir && is_image(&e.name))
         .map(|e| Entry {
             path: join(dir, &e.name),
             name: e.name,
@@ -69,47 +60,6 @@ pub fn list(vfs: &vfs::Client, dir: &str) -> Result<Vec<Entry>, String> {
         .collect();
     entries.sort_by(|a, b| natural_cmp(&a.name, &b.name));
     Ok(entries)
-}
-
-/// Compares names case-insensitively, with runs of digits compared by value ("2" < "10").
-pub fn natural_cmp(a: &str, b: &str) -> Ordering {
-    let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
-    loop {
-        match (a.first(), b.first()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let na = a.iter().take_while(|c| c.is_ascii_digit()).count();
-                let nb = b.iter().take_while(|c| c.is_ascii_digit()).count();
-                let (da, db) = (trim_zeros(&a[..na]), trim_zeros(&b[..nb]));
-                let ord = da.len().cmp(&db.len()).then_with(|| da.cmp(db));
-                if ord != Ordering::Equal {
-                    return ord;
-                }
-                a = &a[na..];
-                b = &b[nb..];
-            }
-            (Some(x), Some(y)) => {
-                let ord = x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase());
-                if ord != Ordering::Equal {
-                    return ord;
-                }
-                a = &a[1..];
-                b = &b[1..];
-            }
-        }
-    }
-}
-
-fn trim_zeros(d: &[u8]) -> &[u8] {
-    let n = d.iter().take_while(|&&c| c == b'0').count();
-    &d[n.min(d.len().saturating_sub(1))..]
-}
-
-/// `dir/name`.
-pub fn join(dir: &str, name: &str) -> String {
-    if dir.ends_with('/') { format!("{dir}{name}") } else { format!("{dir}/{name}") }
 }
 
 /// Splits a path into its folder and file name.

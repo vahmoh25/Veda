@@ -13,6 +13,7 @@ vproto = { workspace = true }
 vgfx = { workspace = true }
 vmath = { workspace = true }
 vraster = { workspace = true }
+vfiles = { workspace = true }
 
 [lints]
 workspace = true

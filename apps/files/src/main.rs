@@ -15,9 +15,7 @@
 
 extern crate alloc;
 
-mod fsutil;
 mod icons;
-mod thumbs;
 mod view;
 
 use alloc::collections::BTreeSet;
@@ -27,13 +25,18 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
+use vfiles::format::{friendly_time, human_size};
+use vfiles::fs::{Error, Space};
+use vfiles::kind::{default_app, kind_name};
+use vfiles::path::{
+    display_path, extension, file_name, is_read_only, is_within, join, natural_cmp, normalize, parent, resolve,
+};
+use vfiles::thumbs::Thumbnailer;
+use vfiles::{Fs, HOME};
 use vproto::display::modifiers;
 use vproto::init::{LaunchError, launcher};
 use vproto::input::keys;
 use vui::{App, Ui, WindowSpec};
-
-use fsutil::{Fs, HOME, file_name, join};
-use thumbs::Thumbnailer;
 
 vrt::entry!(main);
 
@@ -144,7 +147,8 @@ struct Files {
     grid_cols: usize,
     /// Rows per page in the last frame.
     page_rows: usize,
-    free_memory: Option<u64>,
+    /// How full the file system of the current folder is.
+    space: Option<Space>,
     /// The sidebar place a context menu was opened for.
     context_target: Option<String>,
     drag: Option<Drag>,
@@ -160,39 +164,15 @@ fn items(n: usize) -> String {
     if n == 1 { "1 item".to_string() } else { format!("{n} items") }
 }
 
-/// Compares names in natural order ("file2" < "file10"), ignoring case.
-fn natural_cmp(a: &str, b: &str) -> Ordering {
-    let (mut ai, mut bi) = (a.chars().peekable(), b.chars().peekable());
-    loop {
-        match (ai.peek().copied(), bi.peek().copied()) {
-            (None, None) => return a.cmp(b),
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let mut na = 0u64;
-                while let Some(d) = ai.peek().and_then(|c| c.to_digit(10)) {
-                    na = na.saturating_mul(10).saturating_add(d as u64);
-                    ai.next();
-                }
-                let mut nb = 0u64;
-                while let Some(d) = bi.peek().and_then(|c| c.to_digit(10)) {
-                    nb = nb.saturating_mul(10).saturating_add(d as u64);
-                    bi.next();
-                }
-                if na != nb {
-                    return na.cmp(&nb);
-                }
-            }
-            (Some(x), Some(y)) => {
-                let (lx, ly) = (x.to_lowercase().next().unwrap_or(x), y.to_lowercase().next().unwrap_or(y));
-                if lx != ly {
-                    return lx.cmp(&ly);
-                }
-                ai.next();
-                bi.next();
-            }
-        }
+/// "12.3 MiB free of 32.0 MiB", plus a note for file systems kept only in
+/// memory.
+pub fn space_text(s: &Space) -> String {
+    let free = s.total.saturating_sub(s.used);
+    let mut t = format!("{} free of {}", human_size(free), human_size(s.total));
+    if !s.persistent {
+        t.push_str(" (memory, not kept after a restart)");
     }
+    t
 }
 
 impl Files {
@@ -230,17 +210,17 @@ impl Files {
             reset_scroll: false,
             grid_cols: 1,
             page_rows: 10,
-            free_memory: None,
+            space: None,
             context_target: None,
             drag: None,
             drop_target: None,
             pending_single: None,
         };
-        let start = fsutil::resolve(HOME, start);
+        let start = resolve(HOME, start);
         match f.fs.stat(&start) {
             Ok(st) if st.is_dir => f.cwd = start,
             Ok(_) => {
-                f.cwd = fsutil::parent(&start);
+                f.cwd = parent(&start).to_string();
                 let name = file_name(&start).to_string();
                 f.reload();
                 f.select_name(&name);
@@ -272,6 +252,26 @@ impl Files {
         self.dialog = Some(Dialog::Error { title: title.into(), message });
     }
 
+    /// Reports the items an operation could not handle: `failed` lists each
+    /// item's name with its error. A full disk gets its own explanation.
+    fn report(&mut self, title: &str, failed: Vec<(String, Error)>) {
+        let Some((first, _)) = failed.first() else { return };
+        if failed.iter().any(|(_, e)| e.is_no_space()) {
+            let what = if failed.len() == 1 { format!("“{first}”") } else { items(failed.len()) };
+            let space = self.fs.space(&self.cwd).map(|s| format!(" ({})", space_text(&s))).unwrap_or_default();
+            self.error(
+                "Not enough space",
+                format!(
+                    "There is not enough free space{space}, so {what} could not be saved. \
+                     Delete files you no longer need and try again."
+                ),
+            );
+            return;
+        }
+        let lines: Vec<String> = failed.iter().map(|(name, e)| format!("{name}: {e}")).collect();
+        self.error(title, lines.join("\n"));
+    }
+
     // ---- listing -----------------------------------------------------------
 
     /// Name of the entry under the keyboard cursor.
@@ -300,9 +300,7 @@ impl Files {
         let names: BTreeSet<&str> = self.entries.iter().map(|e| e.name.as_str()).collect();
         self.selected.retain(|n| names.contains(n.as_str()));
         self.rebuild_view_keeping(cursor);
-        if let Ok(i) = vrt::object::system_info() {
-            self.free_memory = Some(i.free_memory);
-        }
+        self.space = self.fs.space(&self.cwd).ok();
     }
 
     /// Applies the filter and the sort order.
@@ -330,7 +328,7 @@ impl Files {
             let ord = match sort {
                 SortKey::Name => Ordering::Equal,
                 SortKey::Size => ea.size.cmp(&eb.size),
-                SortKey::Kind => fsutil::kind_name(&ea.name, ea.is_dir).cmp(&fsutil::kind_name(&eb.name, eb.is_dir)),
+                SortKey::Kind => kind_name(&ea.name, ea.is_dir).cmp(&kind_name(&eb.name, eb.is_dir)),
                 SortKey::Modified => ea.modified.cmp(&eb.modified),
             }
             .then_with(|| natural_cmp(&ea.name, &eb.name));
@@ -358,7 +356,7 @@ impl Files {
     }
 
     fn read_only(&self) -> bool {
-        fsutil::is_read_only(&self.cwd)
+        is_read_only(&self.cwd)
     }
 
     /// Selected paths in display order.
@@ -421,20 +419,20 @@ impl Files {
 
     /// Shows folder `path`; `record` adds the current folder to the history.
     fn navigate(&mut self, path: &str, record: bool) -> bool {
-        let path = fsutil::normalize(path);
+        let path = normalize(path);
         match self.fs.stat(&path) {
             Ok(st) if st.is_dir => {}
             Ok(_) => {
                 // A file: show its folder with the file selected.
-                let dir = fsutil::parent(&path);
+                let dir = parent(&path);
                 let name = file_name(&path).to_string();
-                if self.navigate(&dir, record) {
+                if self.navigate(dir, record) {
                     self.select_name(&name);
                 }
                 return true;
             }
             Err(e) => {
-                self.error("Can't open folder", format!("{}: {e}.", fsutil::display_path(&path)));
+                self.error("Can't open folder", format!("{}: {e}.", display_path(&path)));
                 return false;
             }
         }
@@ -462,7 +460,7 @@ impl Files {
         self.reload();
         // Going up selects the folder we came from.
         if let Some(prev) = came_from
-            && fsutil::parent(&prev) == self.cwd
+            && parent(&prev) == self.cwd
             && record
         {
             let n = file_name(&prev).to_string();
@@ -494,8 +492,8 @@ impl Files {
     fn go_up(&mut self) {
         if self.cwd != "/" {
             let child = self.cwd.clone();
-            let parent = fsutil::parent(&self.cwd);
-            if self.navigate(&parent, true) {
+            let up = parent(&self.cwd).to_string();
+            if self.navigate(&up, true) {
                 self.select_name(file_name(&child));
             }
         }
@@ -534,11 +532,11 @@ impl Files {
 
     /// Opens a file with its default application.
     fn open_file(&mut self, path: &str) {
-        let ext = fsutil::extension(path);
-        if let Some(app) = fsutil::default_app(path) {
-            self.launch(app, vec![path.to_string()]);
+        let ext = extension(path);
+        if let Some(app) = default_app(path) {
+            self.launch(app.exe, vec![path.to_string()]);
         } else if ext == "exe" {
-            if fsutil::is_read_only(path) {
+            if is_read_only(path) {
                 self.launch(path, Vec::new());
             } else {
                 self.error("Can't run program", "Only programs installed in /system/bin can be started.".into());
@@ -595,7 +593,7 @@ impl Files {
 
     fn ensure_writable(&mut self, what: &str) -> bool {
         if self.read_only() {
-            self.error(what, format!("{} is part of the read-only system image.", fsutil::display_path(&self.cwd)));
+            self.error(what, format!("{} is part of the read-only system image.", display_path(&self.cwd)));
             return false;
         }
         true
@@ -605,7 +603,7 @@ impl Files {
         if !self.ensure_writable("Can't create folder") {
             return;
         }
-        let name = fsutil::unique_name(&self.fs, &self.cwd, "New folder");
+        let name = self.fs.unique_name(&self.cwd, "New folder");
         match self.fs.mkdir(&self.path_of(&name)) {
             Ok(()) => {
                 vrt::println!("created folder {}", self.path_of(&name));
@@ -614,7 +612,7 @@ impl Files {
                 self.select_name(&name);
                 self.start_rename();
             }
-            Err(e) => self.error("Can't create folder", e.to_string()),
+            Err(e) => self.report("Can't create folder", vec![(name, e)]),
         }
     }
 
@@ -622,7 +620,7 @@ impl Files {
         if !self.ensure_writable("Can't create document") {
             return;
         }
-        let name = fsutil::unique_name(&self.fs, &self.cwd, "New document.txt");
+        let name = self.fs.unique_name(&self.cwd, "New document.txt");
         match self.fs.write(&self.path_of(&name), b"") {
             Ok(()) => {
                 vrt::println!("created document {}", self.path_of(&name));
@@ -631,16 +629,13 @@ impl Files {
                 self.select_name(&name);
                 self.start_rename();
             }
-            Err(e) => self.error("Can't create document", e.to_string()),
+            Err(e) => self.report("Can't create document", vec![(name, e)]),
         }
     }
 
     fn start_rename(&mut self) {
         if self.read_only() {
-            self.error(
-                "Can't rename",
-                format!("{} is part of the read-only system image.", fsutil::display_path(&self.cwd)),
-            );
+            self.error("Can't rename", format!("{} is part of the read-only system image.", display_path(&self.cwd)));
             return;
         }
         let Some(c) = self.cursor else { return };
@@ -675,7 +670,7 @@ impl Files {
                 self.reload();
                 self.select_name(&new);
             }
-            Err(e) => self.error("Can't rename", format!("{}: {e}.", r.original)),
+            Err(e) => self.report("Can't rename", vec![(r.original, e)]),
         }
     }
 
@@ -694,7 +689,7 @@ impl Files {
         let mut errors = Vec::new();
         for p in &paths {
             if let Err(e) = self.fs.remove_all(p) {
-                errors.push(format!("{}: {e}", file_name(p)));
+                errors.push((file_name(p).to_string(), e));
             }
             if let Some(t) = &mut self.thumbs {
                 t.invalidate(p);
@@ -707,9 +702,7 @@ impl Files {
         if let Some(c) = next.filter(|_| !self.view.is_empty()) {
             self.select_only(c.min(self.view.len() - 1));
         }
-        if !errors.is_empty() {
-            self.error("Some items could not be deleted", errors.join("\n"));
-        }
+        self.report("Some items could not be deleted", errors);
     }
 
     fn copy_selection(&mut self, cut: bool) {
@@ -737,20 +730,20 @@ impl Files {
         let mut pasted = Vec::new();
         for src in &paths {
             let name = file_name(src).to_string();
-            if cut && fsutil::parent(src) == self.cwd {
+            if cut && parent(src) == self.cwd {
                 pasted.push(name);
                 continue;
             }
-            if fsutil::is_within(&self.cwd, src) {
-                errors.push(format!("{name}: a folder can't be pasted into itself"));
+            if is_within(&self.cwd, src) {
+                errors.push((name, Error::IntoItself));
                 continue;
             }
-            let target_name = fsutil::unique_name(&self.fs, &self.cwd, &name);
+            let target_name = self.fs.unique_name(&self.cwd, &name);
             let target = self.path_of(&target_name);
             let r = if cut { self.fs.move_to(src, &target) } else { self.fs.copy(src, &target) };
             match r {
                 Ok(()) => pasted.push(target_name),
-                Err(e) => errors.push(format!("{name}: {e}")),
+                Err(e) => errors.push((name, e)),
             }
         }
         if cut && errors.is_empty() {
@@ -766,39 +759,34 @@ impl Files {
             self.anchor = self.cursor;
             self.reveal_cursor = true;
         }
-        if !errors.is_empty() {
-            self.error("Some items could not be pasted", errors.join("\n"));
-        }
+        self.report("Some items could not be pasted", errors);
     }
 
     /// Moves (or copies) dragged items into folder `target`.
     fn drop_into(&mut self, paths: Vec<String>, target: &str, copy: bool) {
-        if fsutil::is_read_only(target) {
-            self.error(
-                "Can't drop here",
-                format!("{} is part of the read-only system image.", fsutil::display_path(target)),
-            );
+        if is_read_only(target) {
+            self.error("Can't drop here", format!("{} is part of the read-only system image.", display_path(target)));
             return;
         }
         let mut errors = Vec::new();
         let (mut moved, mut copied) = (0, 0);
         for src in &paths {
             let name = file_name(src).to_string();
-            if src == target || fsutil::is_within(target, src) {
-                errors.push(format!("{name}: a folder can't be moved into itself"));
+            if src == target || is_within(target, src) {
+                errors.push((name, Error::IntoItself));
                 continue;
             }
             // Items from the read-only image can only be copied.
-            let copy = copy || fsutil::is_read_only(src);
-            if !copy && fsutil::parent(src) == target {
+            let copy = copy || is_read_only(src);
+            if !copy && parent(src) == target {
                 continue;
             }
-            let dst = join(target, &fsutil::unique_name(&self.fs, target, &name));
+            let dst = join(target, &self.fs.unique_name(target, &name));
             let r = if copy { self.fs.copy(src, &dst) } else { self.fs.move_to(src, &dst) };
             match r {
                 Ok(()) if copy => copied += 1,
                 Ok(()) => moved += 1,
-                Err(e) => errors.push(format!("{name}: {e}")),
+                Err(e) => errors.push((name, e)),
             }
             if let Some(t) = &mut self.thumbs {
                 t.invalidate(src);
@@ -812,9 +800,7 @@ impl Files {
         }
         self.selected.clear();
         self.reload();
-        if !errors.is_empty() {
-            self.error("Some items could not be moved", errors.join("\n"));
-        }
+        self.report("Some items could not be moved", errors);
     }
 
     fn show_properties(&mut self, path: &str) {
@@ -823,17 +809,17 @@ impl Files {
         let (size, contents) = if st.is_dir {
             let (mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64);
             self.measure(path, &mut files, &mut dirs, &mut bytes, 0);
-            (fsutil::human_size(bytes), Some(format!("{files} files, {dirs} folders")))
+            (human_size(bytes), Some(format!("{files} files, {dirs} folders")))
         } else {
-            (format!("{} ({} bytes)", fsutil::human_size(st.size), st.size), None)
+            (format!("{} ({} bytes)", human_size(st.size), st.size), None)
         };
         self.dialog = Some(Dialog::Properties(Props {
-            kind: fsutil::kind_name(&name, st.is_dir),
+            kind: kind_name(&name, st.is_dir),
             name,
             path: path.to_string(),
             size,
             contents,
-            modified: fsutil::friendly_time(st.modified),
+            modified: friendly_time(st.modified),
             read_only: st.read_only,
             is_dir: st.is_dir,
         }));
@@ -1002,7 +988,7 @@ impl Files {
             }
             Dialog::Error { title, message } => ui.message_box(title, message, &["OK"]).is_none(),
             Dialog::OpenUnknown(path) => {
-                let ext = fsutil::extension(path);
+                let ext = extension(path);
                 let what = if ext.is_empty() { "this file".to_string() } else { format!("“.{ext}” files") };
                 match ui.message_box(
                     "No app for this file",
@@ -1011,7 +997,7 @@ impl Files {
                 ) {
                     Some(0) => {
                         let p = path.clone();
-                        self.launch("/system/bin/editor.exe", vec![p]);
+                        self.launch(vfiles::kind::EDITOR.exe, vec![p]);
                         false
                     }
                     Some(_) => false,

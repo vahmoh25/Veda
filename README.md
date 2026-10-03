@@ -96,7 +96,7 @@ restarts and rebuilds (`--fresh-home` starts over).
 | **Text Editor** | Tabs, syntax highlighting (Rust, C/C++, TOML, Markdown), find and replace, word wrap, line numbers, zoom, unlimited undo, open/save dialogs. |
 | **Photos** | A thumbnail library of `~/Pictures` and a viewer with zoom, pan, rotation, full screen, details and "set as wallpaper"; PNG, JPEG (including progressive), BMP and QOI. |
 | **Music** | A library of `~/Music`, now playing with cover art and a live spectrum visualiser, seeking, shuffle and repeat; plays QOA and WAV through the audio service. |
-| **Files** | Places sidebar, breadcrumbs, list and icon views with thumbnails, search, copy/cut/paste, rename, delete, new folders and documents, properties. |
+| **Files** | Places sidebar, breadcrumbs, list and icon views with thumbnails, search, copy/cut/paste, rename, delete, new folders and documents, properties, free space. |
 | **Terminal** | A command shell with about forty built-in commands for files, processes and the system, history and tab completion. |
 | **Task Manager** | Processes with CPU and memory use, "end task", and live performance graphs. |
 | **Settings** | Wallpaper gallery, display information and system details. |
@@ -114,7 +114,7 @@ cargo xtask test
 
 runs the host unit tests of the libraries (kernel ABI, heap, IPC, service
 protocols, math, rasterizer, fonts, image codecs, 2D graphics, text editing,
-audio, build tool) and then boots Vindows headless with the `systest`
+paths and file types, audio, build tool) and then boots Vindows headless with the `systest`
 integration tests (IPC, threads, file system, launcher, crash reports and
 recovery of the window system after it is killed), failing on any panic.
 

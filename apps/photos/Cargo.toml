@@ -17,6 +17,7 @@ vproto = { workspace = true }
 vgfx = { workspace = true }
 vimage = { workspace = true }
 vmath = { workspace = true }
+vfiles = { workspace = true }
 vui = { workspace = true }
 
 [build-dependencies]

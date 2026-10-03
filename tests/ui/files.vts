@@ -36,9 +36,10 @@ wait 1
 type "Trips"
 key ret
 wait-serial "files: renamed /home/user/Documents/New folder to Trips" 20
-# Cut the picture and paste it into Trips (opened with a double click).
+# Cut the picture (second row, after the folder) and paste it into Trips
+# (opened with a double click).
 wait 1
-type "lake"
+click 0.25 0.22
 wait 1
 key ctrl-x
 double-click 0.25 0.18
@@ -61,13 +62,22 @@ wait-serial "files: Can't create folder: /system is part of the read-only system
 wait 1
 shot target/vindows/files-3-readonly.png
 key ret
-# Type a path (Ctrl+L), then drag the first picture onto Music.
+# Type a path (Ctrl+L), then drag the first picture onto Music, slowly
+# enough that Files sees the drag even on a busy host.
 key ctrl-l
 wait 1
 type "/home/user/Pictures"
 key ret
 wait 2
-drag 0.25 0.18 0.08 0.3663
+mouse-down 0.25 0.18
+wait 0.5
+move 0.2 0.22
+wait 0.5
+move 0.1 0.33
+wait 0.5
+move 0.08 0.3663
+wait 1
+mouse-up
 wait-serial "files: moved 1 item into /home/user/Music" 20
 # Properties from the context menu, chosen with the keyboard (last item).
 click 0.25 0.18 right

@@ -17,7 +17,6 @@
 extern crate alloc;
 
 mod commands;
-mod fsutil;
 mod screen;
 mod shell;
 
@@ -25,6 +24,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use vfiles::HOME;
+use vfiles::path::display_path;
 use vproto::display::modifiers;
 use vproto::input::keys;
 use vui::{App, Color, Cursor, Font, MenuItem, Rect, Ui, WindowSpec};
@@ -1047,7 +1048,7 @@ impl Terminal {
         self.draw(ui, layout, live, cursor_col);
         self.context_menu(ui);
         // Keep the window title in sync with the working directory.
-        let title = format!("Terminal — {}", fsutil::display_path(&self.shell.cwd));
+        let title = format!("Terminal — {}", display_path(&self.shell.cwd));
         if title != self.title {
             let _ = ui.ctx.display.set_title(ui.ctx.window_id, title.clone());
             self.title = title;
@@ -1057,7 +1058,7 @@ impl Terminal {
 
 fn main() -> i32 {
     let args = vrt::env::args();
-    let mut cwd = String::from(fsutil::HOME);
+    let mut cwd = String::from(HOME);
     let mut command: Option<String> = None;
     let mut i = 1;
     while i < args.len() {

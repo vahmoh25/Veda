@@ -1,5 +1,5 @@
 # Terminal (1280x800 with the taskbar): file commands with && chaining,
-# redirection, pipes and wildcards; error handling; Tab completion; the
+# redirection, pipes and wildcards; df; error handling; Tab completion; the
 # history (Up and Ctrl+R); starting and ending programs; mouse selection
 # with the clipboard; scrolling and the context menu; exit. Results are
 # checked with the shell's `logger` command, which writes to the serial log.
@@ -16,6 +16,10 @@ wait-serial "terminal: vsh-files-ok" 30
 type "rm -r b && ls a/*.txt | grep x.txt && sync && logger vsh-glob-ok"
 key ret
 wait-serial "terminal: vsh-glob-ok" 30
+# df: /tmp is kept in memory, /system is the read-only image.
+type "df | grep tmp | grep memory && df /system | grep read-only && logger vsh-df-ok"
+key ret
+wait-serial "terminal: vsh-df-ok" 30
 # Errors set the exit status, so || runs the second command.
 type "cat missing.txt || nosuchcommand || logger vsh-errors-ok"
 key ret

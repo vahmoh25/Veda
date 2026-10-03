@@ -14,10 +14,6 @@
 
 extern crate alloc;
 
-mod fsutil;
-mod shell_link;
-mod thumbs;
-
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -30,9 +26,9 @@ use vproto::init::launcher;
 use vproto::input::keys;
 use vui::{Align, App, ButtonKind, Color, Cursor, Font, Icon, Rect, Ui, WindowSpec};
 
-use fsutil::Fs;
-use shell_link::{Reply, Request, ShellLink};
-use thumbs::Thumbnailer;
+use vfiles::Fs;
+use vfiles::thumbs::Thumbnailer;
+use vproto::shell::{ShellLink, ShellReply};
 
 vrt::entry!(main);
 
@@ -90,6 +86,31 @@ struct Settings {
     cursor: Option<usize>,
     /// Height of the content drawn last frame (for scrolling).
     content_h: i32,
+}
+
+/// The pictures (files Photos can open) in `dir`, as sorted paths.
+fn images_in(fs: &Fs, dir: &str) -> Vec<String> {
+    let mut v: Vec<String> = fs
+        .read_dir(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| !e.is_dir && vfiles::kind::is_image(&e.name))
+        .map(|e| vfiles::path::join(dir, &e.name))
+        .collect();
+    v.sort();
+    v
+}
+
+/// A title for a picture: its file name without the extension, with dashes
+/// and underscores as spaces and a capital first letter ("misty-forest.jpg"
+/// → "Misty forest").
+fn title_of(path: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in vfiles::path::file_stem(path).chars().enumerate() {
+        let c = if c == '-' || c == '_' { ' ' } else { c };
+        if i == 0 { out.extend(c.to_uppercase()) } else { out.push(c) }
+    }
+    out
 }
 
 fn cstr(b: &[u8]) -> String {
@@ -193,11 +214,11 @@ fn draw_procedural(ui: &mut Ui, r: Rect) {
 impl Settings {
     fn new(section: Section) -> Settings {
         let fs = Fs::connect();
-        let wallpapers = fs.images_in(WALLPAPER_DIR);
-        let pictures = fs.images_in(PICTURES_DIR);
+        let wallpapers = images_in(&fs, WALLPAPER_DIR);
+        let pictures = images_in(&fs, PICTURES_DIR);
         let shell = ShellLink::start();
         if let Some(s) = &shell {
-            s.send(Request::Refresh);
+            s.request_wallpapers();
         }
         let licence = None;
         Settings {
@@ -236,7 +257,7 @@ impl Settings {
         }
         match (&self.shell, self.shell_state) {
             (Some(s), ShellState::Available) => {
-                s.send(Request::Apply(path.to_string()));
+                s.set_wallpaper(path);
                 self.applying = Some((path.to_string(), now));
             }
             _ => {
@@ -251,18 +272,18 @@ impl Settings {
         let Some(link) = &self.shell else { return };
         for reply in link.take() {
             match reply {
-                Reply::Unavailable => {
+                ShellReply::Unavailable => {
                     self.shell_state = ShellState::Unavailable;
                     self.retry_at = now + 3_000_000_000;
                 }
-                Reply::List { wallpapers, current } => {
+                ShellReply::Wallpapers { list: wallpapers, current } => {
                     self.shell_state = ShellState::Available;
                     if !wallpapers.is_empty() {
                         self.wallpapers = wallpapers;
                     }
                     self.current = current;
                 }
-                Reply::Applied { path, result } => {
+                ShellReply::WallpaperSet { path, result } => {
                     self.applying = None;
                     match result {
                         Ok(()) => {
@@ -272,9 +293,9 @@ impl Settings {
                         }
                         Err(e) => {
                             vrt::println!("cannot change the wallpaper to {path}: {e}");
-                            self.error = Some(e);
+                            self.error = Some(e.to_string());
                             if self.shell_state == ShellState::Available {
-                                link.send(Request::Refresh);
+                                link.request_wallpapers();
                             }
                         }
                     }
@@ -283,12 +304,12 @@ impl Settings {
         }
         if self.shell_state == ShellState::Unavailable && now >= self.retry_at {
             self.retry_at = u64::MAX;
-            link.send(Request::Refresh);
+            link.request_wallpapers();
         }
     }
 
     fn title_of(path: &str) -> String {
-        if path == PROCEDURAL { "Light Ribbon".to_string() } else { fsutil::title_of(path) }
+        if path == PROCEDURAL { "Light Ribbon".to_string() } else { title_of(path) }
     }
 
     fn launch_app(&self, id: &str) {
@@ -567,7 +588,7 @@ impl Settings {
                 let btn = Rect::new(banner.right() - 96, banner.y + (bh - 32) / 2, 86, 32);
                 if ui.button(btn, "Try again") {
                     if let Some(s) = &self.shell {
-                        s.send(Request::Refresh);
+                        s.request_wallpapers();
                     }
                     self.shell_state = ShellState::Checking;
                 }
@@ -814,7 +835,7 @@ impl Settings {
         let mut show = self.show_licence;
         ui.toggle(Rect::new(r.x, y, 44, 28), "licence-toggle", &mut show);
         if show && self.licence.is_none() {
-            let text = self.fs.read("/system/fonts/OFL.txt").map(|d| String::from_utf8_lossy(&d).into_owned());
+            let text = self.fs.read("/system/fonts/OFL.txt").ok().map(|d| String::from_utf8_lossy(&d).into_owned());
             self.licence = Some(text.unwrap_or_else(|| "The licence text could not be read.".into()));
         }
         self.show_licence = show;
@@ -871,9 +892,9 @@ impl Settings {
                     }
                 }
                 keys::F5 => {
-                    self.pictures = self.fs.images_in(PICTURES_DIR);
+                    self.pictures = images_in(&self.fs, PICTURES_DIR);
                     if let Some(s) = &self.shell {
-                        s.send(Request::Refresh);
+                        s.request_wallpapers();
                     }
                 }
                 _ => {}
@@ -896,7 +917,7 @@ impl App for Settings {
             self.screen = ui.ctx.display.screen_info().ok();
             self.info_at = now + 1_000_000_000;
             if self.section == Section::Personalization {
-                self.pictures = self.fs.images_in(PICTURES_DIR);
+                self.pictures = images_in(&self.fs, PICTURES_DIR);
             }
         }
         if matches!(self.section, Section::System | Section::Display) {

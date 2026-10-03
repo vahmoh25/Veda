@@ -67,6 +67,7 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
+ "vfiles",
  "vgfx",
  "vmath",
  "vproto",
@@ -81,9 +82,8 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
+ "vfiles",
  "vgfx",
- "vimage",
- "vipc",
  "vproto",
  "vrt",
  "vui",
@@ -112,6 +112,7 @@ dependencies = [
  "vabi",
  "vaudio",
  "vbuild",
+ "vfiles",
  "vgfx",
  "vipc",
  "vmath",
@@ -134,6 +135,7 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
+ "vfiles",
  "vgfx",
  "vimage",
  "vmath",
@@ -173,9 +175,8 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
+ "vfiles",
  "vgfx",
- "vimage",
- "vipc",
  "vmath",
  "vproto",
  "vrt",
@@ -188,6 +189,7 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
+ "vfiles",
  "vgfx",
  "vimage",
  "vipc",
@@ -239,6 +241,7 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
+ "vfiles",
  "vgfx",
  "vipc",
  "vproto",
@@ -281,6 +284,18 @@ dependencies = [
 [[package]]
 name = "vbuild"
 version = "0.1.0"
+
+[[package]]
+name = "vfiles"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vgfx",
+ "vimage",
+ "vipc",
+ "vproto",
+ "vrt",
+]
 
 [[package]]
 name = "vfont"
@@ -411,6 +426,7 @@ name = "vui"
 version = "0.1.0"
 dependencies = [
  "vabi",
+ "vfiles",
  "vgfx",
  "vipc",
  "vmath",

@@ -108,11 +108,8 @@ impl Wallpaper {
 pub fn list(vfs: &vproto::vfs::Client) -> Vec<String> {
     let mut out = Vec::new();
     if let Ok(Ok(entries)) = vfs.read_dir("/system/wallpapers".into()) {
-        for e in entries.iter().filter(|e| !e.is_dir) {
-            let lower = e.name.to_lowercase();
-            if [".png", ".jpg", ".jpeg", ".bmp", ".qoi"].iter().any(|ext| lower.ends_with(ext)) {
-                out.push(alloc::format!("/system/wallpapers/{}", e.name));
-            }
+        for e in entries.iter().filter(|e| !e.is_dir && vfiles::kind::is_image(&e.name)) {
+            out.push(alloc::format!("/system/wallpapers/{}", e.name));
         }
     }
     out.sort();

@@ -44,21 +44,6 @@ pub fn hash(s: &str) -> u64 {
     h
 }
 
-/// True for file names the player can open.
-pub fn is_audio_file(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.ends_with(".qoa") || lower.ends_with(".wav") || lower.ends_with(".wave")
-}
-
-/// The file name without directories and extension.
-pub fn file_stem(path: &str) -> String {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    match name.rfind('.') {
-        Some(i) if i > 0 => name[..i].to_string(),
-        _ => name.to_string(),
-    }
-}
-
 fn read_range(vfs: &vfs::Client, fd: u32, offset: u64, len: u32) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     while out.len() < len as usize {
@@ -86,7 +71,7 @@ pub fn probe(vfs: &vfs::Client, path: &str) -> Option<Track> {
     let (head, tail) = (head?, tail?);
     let p = source::probe(&head, &tail, stat.size).ok()?;
     let t = p.tags;
-    let title = if t.title.is_empty() { file_stem(path) } else { t.title.clone() };
+    let title = if t.title.is_empty() { vfiles::path::file_stem(path).to_string() } else { t.title.clone() };
     let seed = hash(&title);
     Some(Track {
         art: t.get("art").map(|s| s.to_string()),
@@ -124,7 +109,7 @@ pub fn listing(vfs: &vfs::Client) -> Vec<Entry> {
     let Ok(Ok(entries)) = vfs.read_dir(MUSIC_DIR.into()) else { return Vec::new() };
     entries
         .into_iter()
-        .filter(|e| !e.is_dir && is_audio_file(&e.name))
+        .filter(|e| !e.is_dir && vfiles::kind::is_playable_audio(&e.name))
         .map(|e| Entry { name: e.name, size: e.size, modified: e.modified })
         .collect()
 }

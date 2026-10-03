@@ -13,11 +13,10 @@ bench = false
 [dependencies]
 vrt = { workspace = true }
 vabi = { workspace = true }
-vipc = { workspace = true }
 vproto = { workspace = true }
 vgfx = { workspace = true }
 vmath = { workspace = true }
-vimage = { workspace = true }
+vfiles = { workspace = true, features = ["thumbnails"] }
 vui = { workspace = true }
 
 [build-dependencies]

@@ -19,6 +19,7 @@ vui = { workspace = true }
 vgfx = { workspace = true }
 vmath = { workspace = true }
 vaudio = { workspace = true }
+vfiles = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

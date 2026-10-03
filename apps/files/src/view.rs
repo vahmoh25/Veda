@@ -7,9 +7,12 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
+use vfiles::HOME;
+use vfiles::format::{friendly_time, human_size};
+use vfiles::kind::{FileKind, file_kind, kind_name};
+use vfiles::path::{display_path, file_name, is_read_only, is_within, join, parent, resolve};
 use vui::{Align, ButtonKind, Color, Cursor, Font, Icon, MenuItem, Rect, Ui};
 
-use crate::fsutil::{self, FileKind, HOME, join};
 use crate::icons;
 use crate::{Drag, Files, Props, SortKey, ViewMode};
 
@@ -98,9 +101,9 @@ fn finish_drag(f: &mut Files, ui: &mut Ui) {
         ui.set_cursor(Cursor::Move);
         let Some((px, py)) = ui.input.pointer else { return };
         let t = ui.theme().clone();
-        let copy = ui.input.ctrl() || d.paths.iter().any(|p| fsutil::is_read_only(p));
+        let copy = ui.input.ctrl() || d.paths.iter().any(|p| is_read_only(p));
         let what = if d.paths.len() == 1 {
-            format!("“{}”", fsutil::file_name(&d.paths[0]))
+            format!("“{}”", file_name(&d.paths[0]))
         } else {
             format!("{} items", d.paths.len())
         };
@@ -111,7 +114,7 @@ fn finish_drag(f: &mut Files, ui: &mut Ui) {
                 } else if target == "/" {
                     "Computer"
                 } else {
-                    fsutil::file_name(target)
+                    file_name(target)
                 };
                 format!("{} {what} to {name}", if copy { "Copy" } else { "Move" })
             }
@@ -149,7 +152,7 @@ fn finish_drag(f: &mut Files, ui: &mut Ui) {
 
 fn breadcrumbs(cwd: &str) -> Vec<(String, String, Option<Icon>)> {
     let mut out = Vec::new();
-    let rest = if fsutil::is_within(cwd, HOME) {
+    let rest = if is_within(cwd, HOME) {
         out.push(("Home".to_string(), HOME.to_string(), Some(Icon::Home)));
         &cwd[HOME.len()..]
     } else {
@@ -273,7 +276,7 @@ fn draw_toolbar(f: &mut Files, ui: &mut Ui, r: Rect, typing: &mut bool) {
         *typing = true;
         if resp.submitted {
             f.path_edit_focused = false;
-            let target = fsutil::resolve(&f.cwd, text.trim());
+            let target = resolve(&f.cwd, text.trim());
             ui.state.focus = None;
             f.navigate(&target, true);
         } else if !resp.focused && f.path_edit_focused && !ui.input.pressed[0] {
@@ -388,7 +391,7 @@ fn draw_sidebar(f: &mut Files, ui: &mut Ui, r: Rect) {
     let active = places
         .iter()
         .chain(locations.iter())
-        .filter(|(_, _, p)| fsutil::is_within(&f.cwd, p))
+        .filter(|(_, _, p)| is_within(&f.cwd, p))
         .max_by_key(|(_, _, p)| p.len())
         .map(|(_, _, p)| *p);
     let mut y = r.y + 14;
@@ -717,7 +720,7 @@ fn item(
         let icon_r = Rect::new(inner.x + (inner.w - 76) / 2, inner.y + 8, 76, 64);
         let mut drawn = false;
         if !e.is_dir
-            && fsutil::file_kind(&e.name) == FileKind::Image
+            && file_kind(&e.name) == FileKind::Image
             && let Some(bmp) = f.thumbs.as_mut().and_then(|th| th.get(&path))
         {
             icons::draw_thumbnail(ui, icon_r.inset(2, 2, 2, 2), bmp, op);
@@ -750,14 +753,14 @@ fn item(
                 n => format!("{n} items"),
             }
         } else {
-            fsutil::human_size(e.size)
+            human_size(e.size)
         };
         let dim = t.text_dim.fade(op);
         ui.label(cols.size.inset(4, 0, 8, 0), &size, Font::Regular, t.font_size - 1.0, dim, Align::Right);
         if cols.kind.w > 0 {
             ui.label(
                 cols.kind.inset(8, 0, 6, 0),
-                &fsutil::kind_name(&e.name, e.is_dir),
+                &kind_name(&e.name, e.is_dir),
                 Font::Regular,
                 t.font_size - 1.0,
                 dim,
@@ -767,7 +770,7 @@ fn item(
         if cols.modified.w > 0 {
             ui.label(
                 cols.modified.inset(8, 0, 4, 0),
-                &fsutil::friendly_time(e.modified),
+                &friendly_time(e.modified),
                 Font::Regular,
                 t.font_size - 1.0,
                 dim,
@@ -776,7 +779,7 @@ fn item(
         }
     }
     if resp.hovered && !renaming && grid && !e.is_dir {
-        let tip = format!("{} · {} · {}", e.name, fsutil::kind_name(&e.name, false), fsutil::human_size(e.size));
+        let tip = format!("{} · {} · {}", e.name, kind_name(&e.name, false), human_size(e.size));
         ui.tooltip(id, inner, &tip);
     }
     hit
@@ -845,7 +848,7 @@ fn draw_status(f: &mut Files, ui: &mut Ui, r: Rect) {
         let any_files = f.entries.iter().any(|e| f.selected.contains(&e.name) && !e.is_dir);
         left.push_str(&format!("  ·  {} selected", f.selected.len()));
         if any_files {
-            left.push_str(&format!(" ({})", fsutil::human_size(bytes)));
+            left.push_str(&format!(" ({})", human_size(bytes)));
         }
     }
     ui.label(Rect::new(r.x + 14, r.y, r.w / 2, r.h), &left, Font::Regular, t.small_size, t.text_dim, Align::Left);
@@ -856,11 +859,32 @@ fn draw_status(f: &mut Files, ui: &mut Ui, r: Rect) {
         ui.label(Rect::new(right - w, r.y, w, r.h), label, Font::Regular, t.small_size, t.warning, Align::Right);
         ui.icon(Rect::new(right - w - 20, r.y, 16, r.h), icon, 13.0, t.warning);
         right -= w + 34;
-    } else if let Some(free) = f.free_memory {
-        let label = format!("{} free", fsutil::human_size(free));
+    } else if let Some(s) = f.space.filter(|s| s.total > 0) {
+        // "12.3 MiB free of 32.0 MiB" with a small meter; warns when low.
+        let free = s.total.saturating_sub(s.used);
+        let low = free < s.total / 10;
+        let label = format!("{} free of {}", human_size(free), human_size(s.total));
         let w = ui.measure(&label, Font::Regular, t.small_size) as i32 + 4;
-        ui.label(Rect::new(right - w, r.y, w, r.h), &label, Font::Regular, t.small_size, t.text_dim, Align::Right);
-        right -= w + 24;
+        let color = if low { t.warning } else { t.text_dim };
+        ui.label(Rect::new(right - w, r.y, w, r.h), &label, Font::Regular, t.small_size, color, Align::Right);
+        let meter = Rect::new(right - w - 62, r.y + (r.h - 6) / 2, 50, 6);
+        ui.canvas.fill_rounded_rect(meter, 3.0, t.control_hover);
+        let used_w = ((meter.w as u128 * s.used.min(s.total) as u128) / s.total as u128) as i32;
+        if used_w > 0 {
+            let fill = Rect::new(meter.x, meter.y, used_w.max(6), meter.h);
+            ui.canvas.fill_rounded_rect(fill, 3.0, if low { t.warning } else { t.accent });
+        }
+        let area = Rect::new(meter.x, r.y, right - meter.x, r.h);
+        if ui.hovered(area) {
+            let what = if s.persistent {
+                format!("Disk: {} used of {}", human_size(s.used), human_size(s.total))
+            } else {
+                "In memory: not kept after a restart".to_string()
+            };
+            let id = ui.id("space-tip");
+            ui.tooltip(id, area, &what);
+        }
+        right = meter.x - 24;
     }
     if let Some((paths, cut)) = &f.clipboard {
         let label = format!("{} {} — paste with Ctrl+V", plural(paths.len()), if *cut { "cut" } else { "copied" });
@@ -979,7 +1003,7 @@ fn run_action(f: &mut Files, ui: &mut Ui, a: Action) {
         Action::Open => f.open_selection(),
         Action::OpenInEditor => {
             if let Some(p) = sel.first() {
-                f.launch("/system/bin/editor.exe", vec![p.clone()]);
+                f.launch(vfiles::kind::EDITOR.exe, vec![p.clone()]);
             }
         }
         Action::OpenTerminal => {
@@ -1038,7 +1062,7 @@ fn run_action(f: &mut Files, ui: &mut Ui, a: Action) {
 pub fn properties_dialog(ui: &mut Ui, p: &Props) -> bool {
     let mut closed = ui.input.key(vproto::input::keys::ESC) || ui.input.key(vproto::input::keys::ENTER);
     let rows: Vec<(&str, String)> = {
-        let mut v = vec![("Type", p.kind.clone()), ("Location", fsutil::display_path(&fsutil::parent(&p.path)))];
+        let mut v = vec![("Type", p.kind.clone()), ("Location", display_path(parent(&p.path)))];
         v.push(("Size", p.size.clone()));
         if let Some(c) = &p.contents {
             v.push(("Contains", c.clone()));

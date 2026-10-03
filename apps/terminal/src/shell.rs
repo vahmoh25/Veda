@@ -18,8 +18,12 @@ use alloc::vec::Vec;
 use vproto::init::{AppInfo, LaunchError, launcher};
 
 use crate::commands;
-use crate::fsutil::{self, Fs, HOME};
 use crate::screen::{Cell, Screen, Style, cells, color};
+use vfiles::path::{display_path, file_name, glob_match, has_wildcards, is_read_only, normalize, resolve};
+use vfiles::{Fs, HOME};
+
+/// Shown after an operation failed because the disk is full.
+const NO_SPACE_HINT: &str = "The disk is full: delete files you no longer need ('df' shows how much space is left).";
 
 /// The command history file (kept across sessions).
 const HISTORY_FILE: &str = "/home/user/.vsh_history";
@@ -79,6 +83,16 @@ impl Io<'_> {
     /// Prints a hint in grey on the terminal.
     pub fn hint(&mut self, msg: &str) {
         self.screen.write_styled(&format!("{msg}\n"), Style::DIM);
+    }
+
+    /// Prints `cmd: what: error` for a failed file operation (with a hint
+    /// when the disk is full); returns exit status 1.
+    pub fn fs_error(&mut self, cmd: &str, what: &str, e: &vfiles::Error) -> i32 {
+        let status = self.error(cmd, &format!("{what}: {e}"));
+        if e.is_no_space() {
+            self.hint(NO_SPACE_HINT);
+        }
+        status
     }
 
     /// Takes standard input (if any).
@@ -147,7 +161,7 @@ pub struct Shell {
 impl Shell {
     pub fn new(cwd: &str) -> Shell {
         let fs = Fs::connect();
-        let cwd = if fs.is_dir(cwd) { fsutil::normalize(cwd) } else { HOME.to_string() };
+        let cwd = if fs.is_dir(cwd) { normalize(cwd) } else { HOME.to_string() };
         let env = alloc::vec![
             ("HOME".to_string(), HOME.to_string()),
             ("USER".to_string(), "user".to_string()),
@@ -175,7 +189,7 @@ impl Shell {
     pub fn prompt(&self) -> Vec<Cell> {
         let mut c = cells("user@vindows", Style::fg(color::BRIGHT_GREEN).bold());
         c.extend(cells(":", Style::PLAIN));
-        c.extend(cells(&fsutil::display_path(&self.cwd), Style::fg(color::BRIGHT_BLUE).bold()));
+        c.extend(cells(&display_path(&self.cwd), Style::fg(color::BRIGHT_BLUE).bold()));
         c.extend(cells("$ ", Style::PLAIN));
         c
     }
@@ -212,7 +226,7 @@ impl Shell {
 
     /// Absolute form of a path argument.
     pub fn resolve(&self, p: &str) -> String {
-        fsutil::resolve(&self.cwd, p)
+        resolve(&self.cwd, p)
     }
 
     /// Adds a line to the history (skipping blanks and repeats) and to the
@@ -299,10 +313,10 @@ impl Shell {
             Ok(st) if !st.is_dir => {}
             _ => return Err(format!("{prog}: command not found")),
         }
-        if !fsutil::is_read_only(&path) {
+        if !is_read_only(&path) {
             return Err(format!("{prog}: only programs installed in /system/bin can be started"));
         }
-        let name = fsutil::file_name(&path).trim_end_matches(".exe").to_string();
+        let name = file_name(&path).trim_end_matches(".exe").to_string();
         let r = self.launcher().ok_or("the launcher is unavailable")?.launch(path, args);
         launch_result(r).map(|koid| (name, koid))
     }
@@ -371,6 +385,9 @@ impl Shell {
                 if let Err(e) = r {
                     screen.finish_line();
                     screen.write_styled(&format!("vsh: {path}: {e}\n"), Style::ERROR);
+                    if e.is_no_space() {
+                        screen.write_styled(&format!("{NO_SPACE_HINT}\n"), Style::DIM);
+                    }
                     status = 1;
                 }
             } else if !last {
@@ -418,7 +435,7 @@ impl Shell {
     fn expand(&self, words: &[(String, bool)]) -> Vec<String> {
         let mut out = Vec::new();
         for (w, glob) in words {
-            if !*glob || !fsutil::has_wildcards(w) {
+            if !*glob || !has_wildcards(w) {
                 out.push(w.clone());
                 continue;
             }
@@ -426,7 +443,7 @@ impl Shell {
                 Some(i) => (&w[..=i], &w[i + 1..]),
                 None => ("", w.as_str()),
             };
-            if fsutil::has_wildcards(dir_typed) {
+            if has_wildcards(dir_typed) {
                 out.push(w.clone());
                 continue;
             }
@@ -436,9 +453,7 @@ impl Shell {
                 .read_dir(&dir)
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|e| {
-                    (!e.name.starts_with('.') || pattern.starts_with('.')) && fsutil::glob_match(pattern, &e.name)
-                })
+                .filter(|e| (!e.name.starts_with('.') || pattern.starts_with('.')) && glob_match(pattern, &e.name))
                 .map(|e| format!("{dir_typed}{}", e.name))
                 .collect();
             if matches.is_empty() {

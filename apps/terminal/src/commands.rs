@@ -11,9 +11,12 @@ use alloc::vec::Vec;
 
 use vproto::fs::DirEntry;
 
-use crate::fsutil::{self, FileKind, HOME, human_size};
 use crate::screen::{Style, color};
 use crate::shell::{Io, Shell, launch_error};
+use vfiles::HOME;
+use vfiles::format::{format_time, human_size};
+use vfiles::kind::{EDITOR, FILES, FileKind, default_app, file_kind};
+use vfiles::path::{SYSTEM, display_path, extension, file_name, glob_match, is_read_only, join};
 
 /// A built-in command.
 pub struct Builtin {
@@ -195,6 +198,14 @@ pub static BUILTINS: &[Builtin] = &[
         usage: "sync",
         help: "Write all changes to the disk now",
         run: cmd_sync,
+    },
+    Builtin {
+        name: "df",
+        aliases: &[],
+        group: Group::Files,
+        usage: "df [PATH...]",
+        help: "Show how much space is used and free (home, /tmp and the system)",
+        run: cmd_df,
     },
     // Processes and system information.
     Builtin {
@@ -464,7 +475,7 @@ fn entry_style(name: &str, is_dir: bool) -> Style {
     if name.starts_with('.') {
         return Style::DIM;
     }
-    match fsutil::file_kind(name) {
+    match file_kind(name) {
         FileKind::Program => Style::fg(color::BRIGHT_GREEN).bold(),
         FileKind::Image => Style::fg(color::BRIGHT_MAGENTA),
         FileKind::Audio => Style::fg(color::BRIGHT_CYAN),
@@ -605,7 +616,7 @@ fn processes(all: bool) -> Vec<vabi::ProcessInfo> {
 // ---- files -----------------------------------------------------------------
 
 fn print_entry_long(io: &mut Io, e: &DirEntry) {
-    io.styled(&fsutil::format_time(e.modified), Style::DIM);
+    io.styled(&format_time(e.modified), Style::DIM);
     io.print("  ");
     if e.is_dir {
         let items = if e.size == 1 { "1 item".to_string() } else { format!("{} items", e.size) };
@@ -680,7 +691,7 @@ fn cmd_ls(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             if i > 0 {
                 io.print("\n");
             }
-            io.styled(&format!("{}:\n", fsutil::display_path(&path)), Style::BOLD);
+            io.styled(&format!("{}:\n", display_path(&path)), Style::BOLD);
         }
         if entries.is_empty() {
             io.styled("(empty folder)\n", Style::DIM);
@@ -707,7 +718,7 @@ fn cmd_ls(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                 plural(dirs, "folder"),
                 plural(files, "file"),
                 human_size(total),
-                if fsutil::is_read_only(&path) { " (read-only)" } else { "" }
+                if is_read_only(&path) { " (read-only)" } else { "" }
             ),
             Style::DIM,
         );
@@ -721,7 +732,7 @@ fn cmd_cd(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
         Some("-") => match &sh.prev_dir {
             Some(p) => {
                 let p = p.clone();
-                io.println(&fsutil::display_path(&p));
+                io.println(&display_path(&p));
                 p
             }
             None => return io.error("cd", "no previous folder"),
@@ -829,7 +840,7 @@ fn cmd_wc(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
 /// Collects the files below `dir` (for `grep -r`).
 fn walk_files(sh: &Shell, dir: &str, out: &mut Vec<String>) {
     for e in sh.fs.read_dir(dir).unwrap_or_default() {
-        let p = fsutil::join(dir, &e.name);
+        let p = join(dir, &e.name);
         if e.is_dir {
             walk_files(sh, &p, out);
         } else {
@@ -962,11 +973,11 @@ fn find_rec(
     found: &mut usize,
 ) {
     for e in sh.fs.read_dir(dir).unwrap_or_default() {
-        let path = fsutil::join(dir, &e.name);
-        let display = fsutil::join(shown, &e.name);
+        let path = join(dir, &e.name);
+        let display = join(shown, &e.name);
         let name_ok = match name {
-            Some((p, true)) => fsutil::glob_match(&p.to_lowercase(), &e.name.to_lowercase()),
-            Some((p, false)) => fsutil::glob_match(p, &e.name),
+            Some((p, true)) => glob_match(&p.to_lowercase(), &e.name.to_lowercase()),
+            Some((p, false)) => glob_match(p, &e.name),
             None => true,
         };
         if name_ok && kind.is_none_or(|d| d == e.is_dir) {
@@ -990,7 +1001,7 @@ fn cmd_tree(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     if !sh.fs.is_dir(&abs) {
         return io.error("tree", &format!("{arg}: not a folder"));
     }
-    io.styled(&fsutil::display_path(&abs), Style::fg(color::BRIGHT_BLUE).bold());
+    io.styled(&display_path(&abs), Style::fg(color::BRIGHT_BLUE).bold());
     io.print("\n");
     let mut counts = (0usize, 0usize);
     tree_rec(sh, io, &abs, "", opts.contains(&'a'), 0, &mut counts);
@@ -1012,7 +1023,7 @@ fn tree_rec(sh: &Shell, io: &mut Io, dir: &str, prefix: &str, all: bool, depth: 
             counts.0 += 1;
             if depth < 12 {
                 let p = format!("{prefix}{}", if last { "    " } else { "│   " });
-                tree_rec(sh, io, &fsutil::join(dir, &e.name), &p, all, depth + 1, counts);
+                tree_rec(sh, io, &join(dir, &e.name), &p, all, depth + 1, counts);
             }
         } else {
             counts.1 += 1;
@@ -1033,7 +1044,7 @@ fn cmd_mkdir(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
         let abs = sh.resolve(d);
         let r = if opts.contains(&'p') { sh.fs.mkdir_all(&abs) } else { sh.fs.mkdir(&abs) };
         if let Err(e) = r {
-            status = io.error("mkdir", &format!("{d}: {e}"));
+            status = io.fs_error("mkdir", d, &e);
         }
     }
     status
@@ -1078,7 +1089,7 @@ fn cmd_rm(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     for p in &paths {
         let abs = sh.resolve(p);
         if protected(&abs) {
-            status = io.error(&args[0], &format!("refusing to remove '{}'", fsutil::display_path(&abs)));
+            status = io.error(&args[0], &format!("refusing to remove '{}'", display_path(&abs)));
             continue;
         }
         let st = match sh.fs.stat(&abs) {
@@ -1131,7 +1142,7 @@ fn cmd_cp(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             status = io.error(&args[0], &format!("{s}: is a folder (use 'cp -r' to copy it)"));
             continue;
         }
-        let target = if dest_is_dir { fsutil::join(&dest_abs, fsutil::file_name(&src)) } else { dest_abs.clone() };
+        let target = if dest_is_dir { join(&dest_abs, file_name(&src)) } else { dest_abs.clone() };
         if target == src {
             status = io.error(&args[0], &format!("{s}: source and destination are the same"));
             continue;
@@ -1141,7 +1152,7 @@ fn cmd_cp(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             _ => sh.fs.copy(&src, &target),
         };
         if let Err(e) = r {
-            status = io.error(&args[0], &format!("{s}: {e}"));
+            status = io.fs_error(&args[0], s, &e);
         }
     }
     status
@@ -1165,7 +1176,7 @@ fn cmd_mv(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
     for s in sources {
         let src = sh.resolve(s);
         if protected(&src) {
-            status = io.error(&args[0], &format!("refusing to move '{}'", fsutil::display_path(&src)));
+            status = io.error(&args[0], &format!("refusing to move '{}'", display_path(&src)));
             continue;
         }
         let st = match sh.fs.stat(&src) {
@@ -1175,7 +1186,7 @@ fn cmd_mv(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                 continue;
             }
         };
-        let target = if dest_is_dir { fsutil::join(&dest_abs, fsutil::file_name(&src)) } else { dest_abs.clone() };
+        let target = if dest_is_dir { join(&dest_abs, file_name(&src)) } else { dest_abs.clone() };
         if target == src {
             continue;
         }
@@ -1187,7 +1198,7 @@ fn cmd_mv(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             let _ = sh.fs.remove(&target);
         }
         if let Err(e) = sh.fs.move_to(&src, &target) {
-            status = io.error(&args[0], &format!("{s}: {e}"));
+            status = io.fs_error(&args[0], s, &e);
         }
     }
     status
@@ -1204,7 +1215,7 @@ fn cmd_touch(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             continue;
         }
         if let Err(e) = sh.fs.touch(&abs) {
-            status = io.error("touch", &format!("{p}: {e}"));
+            status = io.fs_error("touch", p, &e);
         }
     }
     status
@@ -1221,7 +1232,7 @@ fn cmd_stat(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             Ok(st) => {
                 let label = |io: &mut Io, l: &str| io.styled(&format!("{l:>9}: "), Style::DIM);
                 label(io, "Name");
-                io.styled(fsutil::file_name(&abs), entry_style(fsutil::file_name(&abs), st.is_dir));
+                io.styled(file_name(&abs), entry_style(file_name(&abs), st.is_dir));
                 io.print("\n");
                 label(io, "Path");
                 io.println(&abs);
@@ -1229,7 +1240,7 @@ fn cmd_stat(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                 if st.is_dir {
                     io.println(&format!("folder ({} items)", st.size));
                 } else {
-                    let kind = match fsutil::file_kind(&abs) {
+                    let kind = match file_kind(&abs) {
                         FileKind::Text => "text document",
                         FileKind::Image => "image",
                         FileKind::Audio => "audio",
@@ -1241,12 +1252,12 @@ fn cmd_stat(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                     io.println(&format!("{} ({} bytes)", human_size(st.size), st.size));
                 }
                 label(io, "Modified");
-                io.println(&fsutil::format_time(st.modified));
+                io.println(&format_time(st.modified));
                 label(io, "Access");
                 io.println(if st.read_only { "read-only" } else { "read and write" });
-                if let Some(app) = fsutil::default_app(&abs).filter(|_| !st.is_dir) {
+                if let Some(app) = default_app(&abs).filter(|_| !st.is_dir) {
                     label(io, "Opens in");
-                    io.println(fsutil::file_name(app).trim_end_matches(".exe"));
+                    io.println(app.id);
                 }
             }
             Err(e) => status = io.error("stat", &format!("{p}: {e}")),
@@ -1259,15 +1270,14 @@ fn launch_with(sh: &mut Shell, io: &mut Io, cmd: &str, exe: &str, args: Vec<Stri
     let Some(l) = sh.launcher() else { return io.error(cmd, "the launcher is unavailable") };
     match l.launch(exe.into(), args) {
         Ok(Ok(_)) => 0,
-        Ok(Err(e)) => io.error(cmd, &format!("{}: {}", fsutil::file_name(exe), launch_error(e))),
+        Ok(Err(e)) => io.error(cmd, &format!("{}: {}", file_name(exe), launch_error(e))),
         Err(_) => io.error(cmd, "the launcher is not responding"),
     }
 }
 
 fn cmd_edit(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
-    const EDITOR: &str = "/system/bin/editor.exe";
     if args.len() < 2 {
-        return launch_with(sh, io, "edit", EDITOR, Vec::new());
+        return launch_with(sh, io, "edit", EDITOR.exe, Vec::new());
     }
     let mut status = 0;
     for p in &args[1..] {
@@ -1278,19 +1288,19 @@ fn cmd_edit(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
                 continue;
             }
             Ok(_) => {}
-            Err(_) if fsutil::is_read_only(&abs) => {
+            Err(_) if is_read_only(&abs) => {
                 status = io.error("edit", &format!("{p}: no such file in the read-only system folder"));
                 continue;
             }
             Err(_) => {
                 if let Err(e) = sh.fs.touch(&abs) {
-                    status = io.error("edit", &format!("{p}: {e}"));
+                    status = io.fs_error("edit", p, &e);
                     continue;
                 }
-                io.styled(&format!("Created {}\n", fsutil::display_path(&abs)), Style::DIM);
+                io.styled(&format!("Created {}\n", display_path(&abs)), Style::DIM);
             }
         }
-        status |= launch_with(sh, io, "edit", EDITOR, vec![abs]);
+        status |= launch_with(sh, io, "edit", EDITOR.exe, vec![abs]);
     }
     status
 }
@@ -1310,16 +1320,16 @@ fn cmd_open(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             }
         };
         if st.is_dir {
-            status |= launch_with(sh, io, &args[0], "/system/bin/files.exe", vec![abs]);
-        } else if let Some(app) = fsutil::default_app(&abs) {
-            status |= launch_with(sh, io, &args[0], app, vec![abs]);
-        } else if fsutil::file_kind(&abs) == FileKind::Program {
+            status |= launch_with(sh, io, &args[0], FILES.exe, vec![abs]);
+        } else if let Some(app) = default_app(&abs) {
+            status |= launch_with(sh, io, &args[0], app.exe, vec![abs]);
+        } else if file_kind(&abs) == FileKind::Program {
             match sh.launch(&abs, Vec::new()) {
                 Ok((name, koid)) => io.styled(&format!("Started {name} (PID {koid})\n"), Style::DIM),
                 Err(e) => status = io.error(&args[0], &e),
             }
         } else {
-            let ext = fsutil::extension(&abs);
+            let ext = extension(&abs);
             let what =
                 if ext.is_empty() { "files without an extension".to_string() } else { format!("'.{ext}' files") };
             status = io.error(&args[0], &format!("{p}: no app is set up to open {what}"));
@@ -1336,6 +1346,51 @@ fn cmd_sync(sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
         }
         Err(e) => io.error("sync", &e.to_string()),
     }
+}
+
+fn cmd_df(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
+    let targets: Vec<String> = if args.len() > 1 {
+        args[1..].iter().map(|a| sh.resolve(a)).collect()
+    } else {
+        vec![HOME.to_string(), "/tmp".to_string(), SYSTEM.to_string()]
+    };
+    let shown: Vec<String> = targets.iter().map(|p| display_path(p)).collect();
+    let w = shown.iter().map(|s| s.chars().count()).max().unwrap_or(6).max(6) + 2;
+    io.styled(
+        &format!("{}{:>11}{:>11}{:>11}{:>6}  {}\n", pad("FOLDER", w), "SIZE", "USED", "FREE", "USE", "KEPT ON"),
+        Style::BOLD,
+    );
+    let mut status = 0;
+    for (path, name) in targets.iter().zip(&shown) {
+        let s = match sh.fs.space(path) {
+            Ok(s) => s,
+            Err(e) => {
+                status = io.fs_error("df", name, &e);
+                continue;
+            }
+        };
+        let free = s.total.saturating_sub(s.used);
+        let pct = if s.total > 0 { (s.used.min(s.total) as u128 * 100 / s.total as u128) as u64 } else { 0 };
+        let kept = if is_read_only(path) {
+            "system image (read-only)"
+        } else if s.persistent {
+            "home disk"
+        } else {
+            "memory (lost at restart)"
+        };
+        io.print(&pad(name, w));
+        io.print(&format!("{:>11}{:>11}", human_size(s.total), human_size(s.used)));
+        let low = !is_read_only(path) && free < s.total / 10;
+        io.styled(&format!("{:>11}", human_size(free)), if low { Style::fg(color::BRIGHT_RED) } else { Style::PLAIN });
+        let pct_style = match pct {
+            90.. if !is_read_only(path) => Style::fg(color::BRIGHT_RED).bold(),
+            75.. if !is_read_only(path) => Style::fg(color::BRIGHT_YELLOW),
+            _ => Style::PLAIN,
+        };
+        io.styled(&format!("{:>5}%", pct), pct_style);
+        io.styled(&format!("  {kept}\n"), Style::DIM);
+    }
+    status
 }
 
 // ---- processes and system --------------------------------------------------
