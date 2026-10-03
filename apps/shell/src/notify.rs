@@ -74,10 +74,9 @@ impl View {
         let w = ui.width;
         let h = ui.height;
         crate::agent::draw_circle(ui, 38.0, 38.0, 13.0, &m.agent, 0.0);
-        let font = ui.ctx.font(Font::Bold);
-        let title = ui.ctx.text.ellipsize(font, 14.0, &self.title, (w - 90) as f32);
-        ui.label(Rect::new(68, 14, w - 86, 22), &title, Font::Bold, 14.0, t.text, Align::Left);
-        ui.paragraph(Rect::new(68, 38, w - 86, 44), &self.body, 12.5, t.text_dim);
+        let used = crate::agent::approval_title(ui, Rect::new(68, 14, w - 86, 22), &self.title);
+        let dy = used - 22;
+        ui.paragraph(Rect::new(68, 38 + dy, w - 86, 44 - dy), &self.body, 12.5, t.text_dim);
         let by = h - 44;
         if allow_always {
             ui.checkbox(Rect::new(14, by + 4, 130, 26), "Always allow", &mut self.always);

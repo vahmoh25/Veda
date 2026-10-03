@@ -272,7 +272,8 @@ pub fn definitions() -> Vec<Value> {
             "Running programs: list them with their memory and CPU use, or end one that misbehaves.",
             &[
                 choice("operation", "What to do", true, &["list", "end"]),
-                opt("name", "string", "For end: the program's name")
+                opt("name", "string", "For end: the program's name"),
+                opt("id", "integer", "For end: the program's id from list, when several have the name")
             ],
             true,
         ),
@@ -339,7 +340,12 @@ pub fn describe(name: &str, args: &Value) -> (String, String) {
             ("Shut down the computer".into(), "Unsaved work in open applications will be lost.".into())
         }
         (names::TASKS, "end") => (
-            alloc::format!("End {}", args.str("name").unwrap_or("a program")),
+            match (args.str("name"), args["id"].as_u64()) {
+                (Some(n), Some(id)) => alloc::format!("End {n} (id {id})"),
+                (Some(n), None) => alloc::format!("End {n}"),
+                (None, Some(id)) => alloc::format!("End program {id}"),
+                (None, None) => "End a program".into(),
+            },
             "The program stops at once; unsaved work in it is lost.".into(),
         ),
         _ => (name.replace('_', " "), args.to_string()),

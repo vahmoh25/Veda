@@ -1,0 +1,21 @@
+# Ending a program with the agent's own `tasks` function: the program is
+# named exactly (system services are refused) and the user's OK comes
+# through a notification.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "interface attached" 30
+agent-call open_app '{"app":"about"}' 60
+wait-serial "started about" 30
+agent-call tasks '{"operation":"list"}' 30
+agent-result '"name":"about","id":'
+agent-call tasks '{"operation":"end","name":"about"}' 30
+agent-result waiting_for_approval
+wait-serial "approval 1 requested: End about" 10
+wait 2
+agent-mark
+click 0.9438 0.8875
+wait-serial "approval 1 allowed" 10
+wait-serial "about exited" 10
+agent-expect "it was done" 20

@@ -876,13 +876,36 @@ impl Ctx {
             "list" => Ok(Value::Array(
                 tasks
                     .iter()
-                    .map(|t| object! { "name" => t.name.as_str(), "memory" => vfiles::format::human_size(t.memory), "app" => t.is_app })
+                    .map(|t| {
+                        object! {
+                            "name" => t.name.as_str(),
+                            "id" => t.koid,
+                            "memory" => vfiles::format::human_size(t.memory),
+                            "app" => t.is_app,
+                        }
+                    })
                     .collect(),
             )),
             "end" => {
-                let name = args.str("name").ok_or("which program?")?.to_lowercase();
-                // Only applications: system services are not the agent's to stop.
-                let t = tasks.iter().find(|t| t.is_app && t.name.to_lowercase() == name).ok_or_else(|| format!("no running application called {name}"))?;
+                // Only applications: system services are not the agent's to
+                // stop. The program is named exactly (and by its id when
+                // several share the name): the approval may come later.
+                let name = args.str("name").map(str::to_lowercase);
+                let id = args["id"].as_u64();
+                let matching: Vec<_> = tasks
+                    .iter()
+                    .filter(|t| t.is_app)
+                    .filter(|t| name.as_ref().is_none_or(|n| t.name.to_lowercase() == *n))
+                    .filter(|t| id.is_none_or(|i| t.koid == i))
+                    .collect();
+                let t = match matching.as_slice() {
+                    [] => return Err(format!("no running application called {}", name.as_deref().unwrap_or("that"))),
+                    [t] => *t,
+                    several => {
+                        let ids: Vec<String> = several.iter().map(|t| t.koid.to_string()).collect();
+                        return Err(format!("several are running (ids {}); say which by its id", ids.join(", ")));
+                    }
+                };
                 match launcher.kill(t.koid) {
                     Ok(Ok(())) => Ok(object! { "ended" => t.name.as_str() }),
                     _ => Err(format!("{} could not be ended", t.name)),
