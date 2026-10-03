@@ -1,0 +1,15 @@
+# Shutting down from the start menu (1280x800): open the menu with the Super
+# key, open the power menu and choose "Shut down" with the keyboard; the
+# machine must power off through ACPI.
+wait-serial "desktop ready" 90
+wait 2
+key meta_l
+wait 2
+# The power button at the bottom right of the start menu.
+click 0.6992 0.885
+wait 1
+shot target/vindows/shutdown-menu.png
+key down
+key down
+key ret
+wait-serial "power: shutting down" 20
