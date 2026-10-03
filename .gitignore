@@ -2,3 +2,5 @@
 *.pdb
 *.obj
 /out
+# Lock files of vendored crates' own test runs
+/third_party/*/Cargo.lock
