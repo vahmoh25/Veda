@@ -1,0 +1,24 @@
+[package]
+name = "v3d"
+description = "Vindows 3D: a multi-threaded software renderer with a C++ rasterizer core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# A game harness: window, input, frame pacing, presentation and HUD drawing.
+app = ["dep:vui", "dep:vgfx", "dep:vproto"]
+
+[dependencies]
+vmath = { workspace = true }
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+vui = { workspace = true, optional = true }
+vgfx = { workspace = true, optional = true }
+vproto = { workspace = true, optional = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

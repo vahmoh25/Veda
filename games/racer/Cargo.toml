@@ -1,0 +1,26 @@
+[package]
+name = "racer"
+description = "Velocity: a 3D arcade racing game"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "racer"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+v3d = { workspace = true, features = ["app"] }
+vmath = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vui = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true
