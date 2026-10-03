@@ -14,6 +14,7 @@ vgfx = { workspace = true }
 vmath = { workspace = true }
 vraster = { workspace = true }
 vfiles = { workspace = true }
+vjson = { workspace = true }
 
 [lints]
 workspace = true

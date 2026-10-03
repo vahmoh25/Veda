@@ -4,3 +4,5 @@
 /out
 # Lock files of vendored crates' own test runs
 /third_party/*/Cargo.lock
+# Tool working copies (git worktrees of parallel work)
+/.claude/

@@ -10,6 +10,7 @@ publish = false
 initrd = { workspace = true, features = ["std"] }
 vpe = { workspace = true }
 vbuild = { workspace = true }
+sha1 = { workspace = true }
 
 [lints]
 workspace = true

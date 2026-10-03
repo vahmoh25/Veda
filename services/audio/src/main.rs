@@ -8,6 +8,8 @@
 //! * Mixes every playing stream into the device format (see [`mixer`]).
 //!   Without a device, audio is consumed silently in real time so that
 //!   applications behave the same on machines without sound hardware.
+//! * Delivers the microphone to capture streams, with echo cancellation
+//!   for those that ask (see [`capture`]).
 //!
 //! The service runs on one high-priority thread: IPC requests are short,
 //! and mixing in the same loop avoids any locking.
@@ -17,6 +19,8 @@
 
 extern crate alloc;
 
+mod capture;
+mod echo;
 mod mixer;
 
 use alloc::collections::BTreeMap;
@@ -25,11 +29,13 @@ use alloc::vec::Vec;
 use vabi::signals;
 use vipc::WaitSet;
 use vproto::audio::{
-    AudioError, AudioStatus, DeviceFormat, DeviceLink, StreamHandle, StreamSpec, StreamStatus, audio, audiodev,
+    AudioError, AudioStatus, DeviceFormat, DeviceLink, InputHandle, InputLink, InputSpec, StreamHandle, StreamSpec,
+    StreamStatus, audio, audiodev,
 };
 use vrt::object::Channel;
 use vrt::println;
 
+use capture::Capture;
 use mixer::Mixer;
 
 vrt::entry!(main);
@@ -38,6 +44,7 @@ vrt::entry!(main);
 const KEY_AUDIO_LISTENER: u64 = 1;
 const KEY_DEV_LISTENER: u64 = 2;
 const KEY_SPACE: u64 = 3;
+const KEY_CAPTURE: u64 = 4;
 const FIRST_CONN: u64 = 16;
 /// Clients beyond this many are refused (their channel is closed).
 const MAX_CLIENTS: usize = 48;
@@ -51,14 +58,18 @@ enum Kind {
 
 struct Service {
     mixer: Mixer,
+    capture: Capture,
     conns: BTreeMap<u64, (Kind, Channel)>,
-    /// The driver connection whose device is attached.
+    /// The driver connection whose output device is attached.
     attached: Option<u64>,
+    /// The driver connection whose input device is attached.
+    input_attached: Option<u64>,
     next_key: u64,
 }
 
 struct ClientSession<'a> {
     mixer: &'a mut Mixer,
+    capture: &'a mut Capture,
     owner: u64,
 }
 
@@ -72,6 +83,11 @@ impl audio::Server for ClientSession<'_> {
     }
 
     fn close(&mut self, stream: u32) -> Result<(), AudioError> {
+        if stream & capture::ID_BIT != 0 {
+            let r = self.capture.close(self.owner, stream);
+            self.mixer.set_reference_wanted(self.capture.wants_reference());
+            return r;
+        }
         self.mixer.close(self.owner, stream)
     }
 
@@ -92,18 +108,49 @@ impl audio::Server for ClientSession<'_> {
     }
 
     fn status(&mut self) -> AudioStatus {
-        self.mixer.status()
+        let mut s = self.mixer.status();
+        s.input_device = self.capture.device_name().into();
+        s.input_rate = self.capture.device_rate();
+        s.input_channels = self.capture.device_channels();
+        s.input_muted = self.capture.muted;
+        s.input_streams = self.capture.stream_count() as u32;
+        s
     }
 
     fn set_master(&mut self, volume: f32, muted: bool) {
         self.mixer.master = if volume.is_finite() { volume.clamp(0.0, 1.0) } else { 1.0 };
         self.mixer.muted = muted;
     }
+
+    fn open_input(&mut self, spec: InputSpec) -> Result<InputHandle, AudioError> {
+        let r = self.capture.open(self.owner, &spec);
+        if let Ok(h) = &r {
+            println!(
+                "capture stream {} \"{}\" opened ({} Hz, {} ch{})",
+                h.id & !capture::ID_BIT,
+                spec.name,
+                spec.rate,
+                spec.channels,
+                if spec.echo_cancel { ", echo cancelled" } else { "" }
+            );
+        }
+        self.mixer.set_reference_wanted(self.capture.wants_reference());
+        r
+    }
+
+    fn set_input_muted(&mut self, muted: bool) {
+        if self.capture.muted != muted {
+            println!("microphone {}", if muted { "muted" } else { "unmuted" });
+        }
+        self.capture.muted = muted;
+    }
 }
 
 struct DriverSession<'a> {
     mixer: &'a mut Mixer,
+    capture: &'a mut Capture,
     attached: bool,
+    input_attached: bool,
 }
 
 impl audiodev::Server for DriverSession<'_> {
@@ -114,6 +161,16 @@ impl audiodev::Server for DriverSession<'_> {
             format.name, format.rate, format.channels, format.period_frames
         );
         self.attached = true;
+        Ok(link)
+    }
+
+    fn attach_input(&mut self, format: DeviceFormat) -> Result<InputLink, AudioError> {
+        let link = self.capture.attach(&format)?;
+        println!(
+            "audio: input device \"{}\" attached ({} Hz, {} ch, {} frames per period)",
+            format.name, format.rate, format.channels, format.period_frames
+        );
+        self.input_attached = true;
         Ok(link)
     }
 }
@@ -138,12 +195,23 @@ impl Service {
             let kind = *kind;
             let Ok(msg) = ch.read() else { return };
             let reply = match kind {
-                Kind::Client => audio::dispatch(&mut ClientSession { mixer: &mut self.mixer, owner: key }, msg),
+                Kind::Client => audio::dispatch(
+                    &mut ClientSession { mixer: &mut self.mixer, capture: &mut self.capture, owner: key },
+                    msg,
+                ),
                 Kind::Driver => {
-                    let mut s = DriverSession { mixer: &mut self.mixer, attached: false };
+                    let mut s = DriverSession {
+                        mixer: &mut self.mixer,
+                        capture: &mut self.capture,
+                        attached: false,
+                        input_attached: false,
+                    };
                     let r = audiodev::dispatch(&mut s, msg);
                     if s.attached {
                         self.attached = Some(key);
+                    }
+                    if s.input_attached {
+                        self.input_attached = Some(key);
                     }
                     r
                 }
@@ -162,12 +230,21 @@ impl Service {
     fn disconnect(&mut self, key: u64) {
         let Some((kind, _)) = self.conns.remove(&key) else { return };
         match kind {
-            Kind::Client => self.mixer.close_owner(key),
+            Kind::Client => {
+                self.mixer.close_owner(key);
+                self.capture.close_owner(key);
+                self.mixer.set_reference_wanted(self.capture.wants_reference());
+            }
             Kind::Driver => {
                 if self.attached == Some(key) {
                     self.attached = None;
                     self.mixer.detach();
                     println!("output device detached; continuing without sound");
+                }
+                if self.input_attached == Some(key) {
+                    self.input_attached = None;
+                    self.capture.detach();
+                    println!("input device detached");
                 }
             }
         }
@@ -181,6 +258,9 @@ impl Service {
             ws.add(dev_listener.raw(), signals::READABLE, KEY_DEV_LISTENER);
             if let Some(ev) = self.mixer.space_event() {
                 ws.add(ev.raw(), signals::SIGNALED, KEY_SPACE);
+            }
+            if let Some(ev) = self.capture.data_event() {
+                ws.add(ev.raw(), signals::SIGNALED, KEY_CAPTURE);
             }
             for (&k, (_, ch)) in &self.conns {
                 ws.add(ch.raw(), signals::READABLE | signals::PEER_CLOSED, k);
@@ -196,6 +276,8 @@ impl Service {
                             let _ = ev.clear();
                         }
                     }
+                    // Captured frames are taken after mixing, below.
+                    KEY_CAPTURE => {}
                     k => {
                         if observed & signals::READABLE != 0 {
                             self.serve(k);
@@ -209,7 +291,9 @@ impl Service {
             for k in closed {
                 self.disconnect(k);
             }
-            self.mixer.run(vrt::time::now_ns());
+            let now = vrt::time::now_ns();
+            self.mixer.run(now);
+            self.capture.run(&self.mixer, now);
         }
     }
 }
@@ -232,7 +316,14 @@ fn main() -> i32 {
     println!("ready (mixing at {} Hz until a device attaches)", mixer::NULL_RATE);
     // Mixing is time-critical: run above normal applications.
     let worker = vrt::thread::Builder::new().name("mixer").priority(vabi::priority::HIGH).spawn(move || -> () {
-        let mut svc = Service { mixer: Mixer::new(), conns: BTreeMap::new(), attached: None, next_key: FIRST_CONN };
+        let mut svc = Service {
+            mixer: Mixer::new(),
+            capture: Capture::new(),
+            conns: BTreeMap::new(),
+            attached: None,
+            input_attached: None,
+            next_key: FIRST_CONN,
+        };
         svc.run(audio_listener, dev_listener)
     });
     match worker {

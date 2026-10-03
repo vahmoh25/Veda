@@ -153,6 +153,15 @@ message! {
     }
 }
 
+/// Arrangements for [`display::Client::arrange_window`].
+pub mod arrangement {
+    pub const MAXIMIZE: u32 = 1;
+    /// Back to the normal size and place (from maximised or snapped).
+    pub const RESTORE: u32 = 2;
+    pub const SNAP_LEFT: u32 = 3;
+    pub const SNAP_RIGHT: u32 = 4;
+}
+
 /// Keyboard modifier bits in [`WindowEvent::Key`].
 pub mod modifiers {
     pub const SHIFT: u32 = 1;
@@ -223,5 +232,8 @@ protocol! {
         22 => fn minimize_window(id: u32) -> Result<(), DisplayError>;
         /// (Shell) closes a window as if its close button was pressed.
         23 => fn close_window(id: u32) -> Result<(), DisplayError>;
+        /// Shell only: maximises, restores or snaps any window (see
+        /// [`arrangement`]), bringing it to the front.
+        24 => fn arrange_window(id: u32, arrangement: u32) -> Result<(), DisplayError>;
     }
 }

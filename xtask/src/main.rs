@@ -2,10 +2,12 @@
 //!
 //! Run `cargo xtask help` for the list of commands.
 
+mod agentsim;
 mod airsim;
 mod automate;
 mod components;
 mod image;
+mod mic;
 mod qemu;
 mod qmp;
 mod util;
@@ -396,6 +398,15 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
         Hypervisor::VirtualBox => None,
     };
     let mut o = o.clone();
+    // The test microphone's address goes on the command line.
+    let mic = if automate::needs_mic(script) { Some(mic::MicServer::start()?) } else { None };
+    if let Some(m) = &mic {
+        o.cmdline = format!("{} {}", o.cmdline, m.boot_arg()).trim().to_string();
+    }
+    let agent = if automate::needs_agentsim(script) { Some(agentsim::AgentSim::start()?) } else { None };
+    if let Some(a) = &agent {
+        o.cmdline = format!("{} {}", o.cmdline, a.boot_arg()).trim().to_string();
+    }
     for extra in automate::boot_cmdline(script) {
         o.cmdline = format!("{} {extra}", o.cmdline).trim().to_string();
     }
@@ -431,7 +442,7 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
         Some(install) => automate::Hypervisor::Qemu(install),
         None => automate::Hypervisor::VirtualBox { resolution: &o.resolution },
     };
-    let log = automate::run_script(&hv, &disk, vm, script)?;
+    let log = automate::run_script(&hv, &disk, vm, script, mic, agent)?;
     println!("--- serial log (tail) ---\n{}", automate::tail(&log, 40));
     Ok(())
 }

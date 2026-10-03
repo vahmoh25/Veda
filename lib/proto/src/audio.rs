@@ -3,12 +3,15 @@
 //! * [`audio`] (service `"audio"`): applications open playback streams,
 //!   pause, flush and adjust them, and query or set the master volume.
 //!   The `audio` service mixes every stream (resampling as needed) into the
-//!   sound device's format.
+//!   sound device's format. Applications also open capture (microphone)
+//!   streams, optionally with the system's own playback removed (echo
+//!   cancellation), in the rate and channel count they want.
 //! * [`audiodev`] (service `"audiodev"`, also provided by the `audio`
-//!   service): a sound driver attaches its output device. The driver
-//!   connects to the audio service, never the other way round, so the
-//!   service keeps working (with a silent "null" device that consumes audio
-//!   in real time) on machines without sound hardware.
+//!   service): a sound driver attaches its output device and, separately,
+//!   its input device. The driver connects to the audio service, never the
+//!   other way round, so the service keeps working (with a silent "null"
+//!   device that consumes audio in real time) on machines without sound
+//!   hardware.
 //!
 //! # Shared rings
 //!
@@ -34,6 +37,18 @@
 //! ([`OutputStream::wait_writable`]). Between the service and the driver,
 //! `data_event` says "new data in the ring" and `space_event` says "the
 //! device consumed data".
+//!
+//! # Capture
+//!
+//! Capture runs the other way: the input driver produces frames into its
+//! link ring and signals `data_event`; the service distributes them to every
+//! input stream, whose rings it produces into and whose clients consume
+//! ([`InputStream`]). The service sets [`ring::flags::CAPTURE`] on the
+//! driver's ring while any input stream is open (and signals `wake_event`),
+//! so the device records only while someone listens. Producers of captured
+//! audio publish when their latest frame was recorded
+//! ([`Ring::set_capture_clock`]), which lets the service line the
+//! microphone up with what the speakers played for echo cancellation.
 
 use alloc::string::String;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -142,6 +157,59 @@ message! {
 }
 
 message! {
+    /// Parameters of a new capture (microphone) stream.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct InputSpec {
+        /// Sample rate the client wants (8 000 ..= 48 000 Hz).
+        pub rate: u32,
+        /// 1 (mono) or 2 (stereo, interleaved).
+        pub channels: u32,
+        /// Ring capacity in frames (rounded up to a power of two, clamped
+        /// to 1 024 ..= 262 144). Frames the client does not read in time
+        /// are dropped and counted as overruns.
+        pub buffer_frames: u32,
+        /// The stream event is signalled whenever at least this many frames
+        /// are waiting (0 = 20 ms worth).
+        pub notify_frames: u32,
+        /// A name for diagnostics ("Agent").
+        pub name: String,
+        /// Remove what the system itself plays from the signal (acoustic
+        /// echo cancellation), so a voice assistant can listen while it
+        /// talks. Needs a mono stream at 16 000 Hz.
+        pub echo_cancel: bool,
+    }
+}
+
+impl InputSpec {
+    /// A mono stream at `rate` with about `buffer_ms` of buffering.
+    pub fn mono(rate: u32, buffer_ms: u32, name: &str) -> InputSpec {
+        InputSpec {
+            rate,
+            channels: 1,
+            buffer_frames: (rate as u64 * buffer_ms as u64 / 1000) as u32,
+            notify_frames: 0,
+            name: name.into(),
+            echo_cancel: false,
+        }
+    }
+}
+
+message! {
+    /// A newly opened capture stream.
+    #[derive(Debug)]
+    pub struct InputHandle {
+        pub id: u32,
+        /// The shared ring (the service is the producer).
+        pub ring: Vmo,
+        /// Signalled when frames are waiting.
+        pub event: Event,
+        /// Rate of the input device (the service resamples from it), 0
+        /// while there is no input device.
+        pub device_rate: u32,
+    }
+}
+
+message! {
     /// State of the audio system.
     #[derive(Debug, Clone, PartialEq)]
     pub struct AudioStatus {
@@ -160,6 +228,14 @@ message! {
         pub streams: u32,
         /// Device underruns since boot.
         pub underruns: u64,
+        /// Input device ("none" without a microphone).
+        pub input_device: String,
+        pub input_rate: u32,
+        pub input_channels: u32,
+        /// The microphone is muted for everyone ([`audio::Client::set_input_muted`]).
+        pub input_muted: bool,
+        /// Open capture streams (someone is listening).
+        pub input_streams: u32,
     }
 }
 
@@ -169,6 +245,7 @@ protocol! {
         /// Opens a playback stream (closed with `close` or when the
         /// connection closes).
         1 => fn open_output(spec: StreamSpec) -> Result<StreamHandle, AudioError>;
+        /// Closes a playback or capture stream.
         2 => fn close(stream: u32) -> Result<(), AudioError>;
         /// Pauses or resumes a stream (a paused stream keeps its data).
         3 => fn set_paused(stream: u32, paused: bool) -> Result<(), AudioError>;
@@ -181,6 +258,12 @@ protocol! {
         7 => fn status() -> AudioStatus;
         /// Sets the master volume (linear 0..=1) and mute state.
         8 => fn set_master(volume: f32, muted: bool) -> ();
+        /// Opens a capture stream from the microphone (closed with `close`
+        /// or when the connection closes).
+        9 => fn open_input(spec: InputSpec) -> Result<InputHandle, AudioError>;
+        /// Mutes or unmutes the microphone for every capture stream (they
+        /// then receive silence).
+        10 => fn set_input_muted(muted: bool) -> ();
     }
 }
 
@@ -212,10 +295,28 @@ message! {
     }
 }
 
+message! {
+    /// The shared state between the audio service and an input driver.
+    #[derive(Debug)]
+    pub struct InputLink {
+        /// Captured audio in the device format (driver produces, service
+        /// consumes; the service sets [`ring::flags::CAPTURE`] while it
+        /// wants audio).
+        pub ring: Vmo,
+        /// Driver → service: new frames are in the ring.
+        pub data_event: Event,
+        /// Service → driver: the CAPTURE flag changed.
+        pub wake_event: Event,
+    }
+}
+
 protocol! {
     /// Sound drivers attach their output devices to the audio service.
     pub mod audiodev = "audiodev" {
         1 => fn attach(format: DeviceFormat) -> Result<DeviceLink, AudioError>;
+        /// Attaches an input (capture) device. `format.max_periods` is
+        /// unused.
+        2 => fn attach_input(format: DeviceFormat) -> Result<InputLink, AudioError>;
     }
 }
 
@@ -238,6 +339,13 @@ pub mod ring {
     pub const OFF_WRITE_POS: usize = 64;
     /// Producer: flags (u32, [`flags`]).
     pub const OFF_PRODUCER_FLAGS: usize = 72;
+    /// Producer of captured audio: frames dropped because the ring was
+    /// full (u32).
+    pub const OFF_OVERRUNS: usize = 76;
+    /// Producer of captured audio: the frame position (u64) and the
+    /// monotonic time in ns (u64) at which that frame was recorded.
+    pub const OFF_CAPTURE_POS: usize = 80;
+    pub const OFF_CAPTURE_NS: usize = 88;
     /// Consumer: frames consumed (u64).
     pub const OFF_READ_POS: usize = 128;
     /// Consumer: frames played (u64).
@@ -266,6 +374,8 @@ pub mod ring {
         /// Producer (device link): streams are playing, so running out of
         /// data is an underrun rather than the end of playback.
         pub const ACTIVE: u32 = 8;
+        /// Consumer (input device link): capture is wanted.
+        pub const CAPTURE: u32 = 16;
     }
 }
 
@@ -563,6 +673,29 @@ impl Ring {
     pub fn set_latency(&self, frames: u32) {
         self.u32_at(ring::OFF_LATENCY).store(frames, Ordering::Release);
     }
+
+    /// Producer of captured audio: frames dropped because the ring was full.
+    pub fn overruns(&self) -> u32 {
+        self.u32_at(ring::OFF_OVERRUNS).load(Ordering::Acquire)
+    }
+
+    pub fn set_overruns(&self, n: u32) {
+        self.u32_at(ring::OFF_OVERRUNS).store(n, Ordering::Release);
+    }
+
+    /// Producer of captured audio: publishes that frame `pos` (counted like
+    /// the write position) was recorded at monotonic time `ns`.
+    pub fn set_capture_clock(&self, pos: u64, ns: u64) {
+        self.u64_at(ring::OFF_CAPTURE_NS).store(ns, Ordering::Release);
+        self.u64_at(ring::OFF_CAPTURE_POS).store(pos, Ordering::Release);
+    }
+
+    /// `(frame position, monotonic ns)` as published by the producer
+    /// (`(0, 0)` if it never did).
+    pub fn capture_clock(&self) -> (u64, u64) {
+        let pos = self.u64_at(ring::OFF_CAPTURE_POS).load(Ordering::Acquire);
+        (pos, self.u64_at(ring::OFF_CAPTURE_NS).load(Ordering::Acquire))
+    }
 }
 
 /// The client side of a playback stream: a mapped ring plus its event.
@@ -671,6 +804,91 @@ impl OutputStream {
     /// Frames played right now (see [`OutputStream::played_at`]).
     pub fn played_now(&self) -> u64 {
         self.played_at(vrt::time::now_ns())
+    }
+}
+
+/// The client side of a capture stream: a mapped ring plus its event.
+///
+/// ```ignore
+/// let audio = vproto::audio::audio::Client::new(vproto::connect(vproto::audio::audio::NAME)?);
+/// let mic = InputStream::open(&audio, InputSpec::mono(16_000, 500, "Agent"))?;
+/// let mut frame = [0i16; 320];
+/// loop {
+///     mic.wait_readable(320, vabi::DEADLINE_INFINITE);
+///     let n = mic.read(&mut frame);
+///     // ... use frame[..n]
+/// }
+/// ```
+pub struct InputStream {
+    pub id: u32,
+    ring: Ring,
+    event: Event,
+    /// Rate of the input device (0 while there is none).
+    pub device_rate: u32,
+}
+
+impl InputStream {
+    /// Opens a capture stream on `client`'s connection.
+    pub fn open(client: &audio::Client, spec: InputSpec) -> Result<InputStream, OpenError> {
+        let h = client.open_input(spec).map_err(OpenError::Ipc)?.map_err(OpenError::Audio)?;
+        let ring = Ring::map(h.ring, Role::Consumer).map_err(OpenError::Ring)?;
+        Ok(InputStream { id: h.id, ring, event: h.event, device_rate: h.device_rate })
+    }
+
+    pub fn rate(&self) -> u32 {
+        self.ring.rate()
+    }
+
+    pub fn channels(&self) -> u32 {
+        self.ring.channels()
+    }
+
+    /// The stream event (for wait sets): signalled when frames are waiting.
+    pub fn event(&self) -> &Event {
+        &self.event
+    }
+
+    /// Frames waiting to be read.
+    pub fn available(&self) -> u32 {
+        self.ring.filled()
+    }
+
+    /// Reads up to `out.len() / channels` frames; returns how many.
+    pub fn read(&self, out: &mut [i16]) -> usize {
+        let _ = self.event.clear();
+        self.ring.read(out)
+    }
+
+    /// Discards everything waiting (e.g. audio recorded while the client
+    /// was not interested).
+    pub fn discard(&self) {
+        let _ = self.event.clear();
+        self.ring.discard_all();
+    }
+
+    /// Frames lost because the client did not read in time.
+    pub fn overruns(&self) -> u32 {
+        self.ring.overruns()
+    }
+
+    /// When the newest frame was recorded: `(frame position, monotonic ns)`.
+    pub fn capture_clock(&self) -> (u64, u64) {
+        self.ring.capture_clock()
+    }
+
+    /// Waits until at least `frames` frames are waiting (or the deadline
+    /// passes); returns how many are.
+    pub fn wait_readable(&self, frames: u32, deadline: u64) -> u32 {
+        loop {
+            let _ = self.event.clear();
+            let n = self.available();
+            if n >= frames.min(self.ring.capacity()) {
+                return n;
+            }
+            if self.event.wait(vabi::signals::SIGNALED, deadline).is_err() || vrt::time::now_ns() >= deadline {
+                return self.available();
+            }
+        }
     }
 }
 

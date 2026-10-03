@@ -1,0 +1,26 @@
+# The agent with a simulated Voice Agent service (no cost, deterministic):
+# the conversation's settings, functions that act on the system, the voice
+# and an interruption.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+# The test microphone (silence for now) feeds the agent.
+mic-silence 1
+agent-connected 120
+agent-expect Settings 10
+agent-expect "You are Vera" 5
+agent-expect open_app 5
+wait-serial "state: Listening" 30
+# A function call runs for real: the Text Editor opens.
+agent-call open_app '{"app":"editor"}' 60
+agent-result opened
+wait-serial "started editor" 30
+agent-call get_status '{}' 30
+agent-result "Text Editor"
+# The agent talks; the user interrupts and the voice stops at once.
+agent-speak 4
+wait-serial "state: Speaking" 10
+wait 1
+agent-interrupt
+wait-serial "interrupted: voice stopped" 10
+# The microphone streamed (silence) to the service all along.
+agent-audio 3200

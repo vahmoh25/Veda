@@ -1,5 +1,6 @@
 //! The desktop shell's service: lets applications (Settings, Photos, ...)
-//! change the wallpaper and post notifications.
+//! change the wallpaper and post notifications, and the agent arrange
+//! windows.
 //!
 //! [`ShellLink`] calls the service from a background thread, for
 //! applications that must not wait for it (setting a wallpaper decodes and
@@ -38,6 +39,10 @@ protocol! {
         3 => fn notify(title: String, body: String, icon: String) -> ();
         /// Wallpapers shipped with the system.
         4 => fn wallpapers() -> Vec<String>;
+        /// The agent service only: `"focus"`, `"minimize"`, `"maximize"`,
+        /// `"restore"`, `"close"`, `"snap_left"`, `"snap_right"` on a window,
+        /// or `"show_desktop"` (the window is ignored).
+        5 => fn window_action(window: u32, action: String) -> Result<(), ShellError>;
     }
 }
 

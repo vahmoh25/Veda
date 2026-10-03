@@ -39,7 +39,7 @@ use vabi::{WaitItem, signals};
 use vgfx::Rect;
 use vproto::audio::{AudioStatus, audio};
 use vproto::display::{WindowEvent, WindowInfo, WindowKind, WindowSpec, WindowState};
-use vproto::init::{AppInfo, TaskEvent, launcher};
+use vproto::init::{AppInfo, ClientIdentity, TaskEvent, launcher};
 use vproto::shell::{ShellError, shell};
 use vproto::vfs;
 use vrt::object::{Channel, Vmo};
@@ -168,7 +168,9 @@ struct Shell {
     tooltip: Option<tooltip::Tooltip>,
     notes: notify::Notifications,
     listener: Option<Channel>,
-    clients: Vec<Channel>,
+    clients: Vec<(Channel, ClientIdentity)>,
+    /// Who sent the request being answered.
+    caller: ClientIdentity,
     /// Crash reports from the launcher (`launcher::watch`).
     task_events: Option<Channel>,
     /// Windows minimised by "show desktop", restored by the next click.
@@ -715,11 +717,12 @@ impl Shell {
     /// Accepts connections and answers `shell` protocol requests.
     fn serve(&mut self) {
         if let Some(l) = &self.listener {
-            while let Some(ch) = vproto::accept(l) {
-                self.clients.push(ch);
+            while let Some(client) = vproto::accept_with_identity(l) {
+                self.clients.push(client);
             }
         }
-        for ch in core::mem::take(&mut self.clients) {
+        for (ch, who) in core::mem::take(&mut self.clients) {
+            self.caller = who.clone();
             let alive = loop {
                 match ch.read() {
                     Ok(msg) => match shell::dispatch(self, msg) {
@@ -733,7 +736,7 @@ impl Shell {
                 }
             };
             if alive {
-                self.clients.push(ch);
+                self.clients.push((ch, who));
             }
         }
     }
@@ -806,7 +809,7 @@ impl Shell {
         if let Some(l) = &self.listener {
             items.push(WaitItem { handle: l.raw(), signals: readable, ..Default::default() });
         }
-        for c in &self.clients {
+        for (c, _) in &self.clients {
             items.push(WaitItem { handle: c.raw(), signals: readable, ..Default::default() });
         }
         if let Some(c) = &self.task_events {
@@ -864,6 +867,31 @@ impl shell::Server for Shell {
 
     fn wallpapers(&mut self) -> Vec<String> {
         Shell::wallpapers(self)
+    }
+
+    fn window_action(&mut self, window: u32, action: String) -> Result<(), ShellError> {
+        if !(self.caller.service && self.caller.name == "agent") {
+            return Err(ShellError::Unavailable);
+        }
+        use vproto::display::arrangement;
+        let r = match action.as_str() {
+            "show_desktop" => {
+                self.show_desktop();
+                return Ok(());
+            }
+            "focus" => self.display.activate_window(window),
+            "minimize" => self.display.minimize_window(window),
+            "close" => self.display.close_window(window),
+            "maximize" => self.display.arrange_window(window, arrangement::MAXIMIZE),
+            "restore" => self.display.arrange_window(window, arrangement::RESTORE),
+            "snap_left" => self.display.arrange_window(window, arrangement::SNAP_LEFT),
+            "snap_right" => self.display.arrange_window(window, arrangement::SNAP_RIGHT),
+            _ => return Err(ShellError::NotFound),
+        };
+        match r {
+            Ok(Ok(())) => Ok(()),
+            _ => Err(ShellError::NotFound),
+        }
     }
 }
 
@@ -979,6 +1007,7 @@ fn main() -> i32 {
         notes: notify::Notifications::new(),
         listener,
         clients: Vec::new(),
+        caller: ClientIdentity::default(),
         task_events,
         hidden_by_show_desktop: Vec::new(),
     };

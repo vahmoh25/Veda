@@ -1,0 +1,12 @@
+[package]
+name = "vagent"
+description = "The voice agent's logic: the Deepgram Voice Agent protocol, tools, memory, configuration and the approval policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vjson = { workspace = true }
+
+[lints]
+workspace = true

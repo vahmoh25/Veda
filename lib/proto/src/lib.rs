@@ -8,6 +8,7 @@
 
 extern crate alloc;
 
+pub mod agent;
 pub mod audio;
 pub mod block;
 pub mod display;
@@ -70,9 +71,14 @@ pub fn register(name: &str) -> Result<Channel, ServiceError> {
 
 /// Reads one pending connection from a service listener.
 pub fn accept(listener: &Channel) -> Option<Channel> {
+    accept_with_identity(listener).map(|(ch, _)| ch)
+}
+
+/// Reads one pending connection and who opened it.
+pub fn accept_with_identity(listener: &Channel) -> Option<(Channel, init::ClientIdentity)> {
     let msg = listener.read().ok()?;
-    match vipc::decode_event::<Channel>(msg) {
-        Ok((init::LISTENER_CONNECT, ch)) => Some(ch),
+    match vipc::decode_event::<(Channel, init::ClientIdentity)>(msg) {
+        Ok((init::LISTENER_CONNECT, (ch, id))) => Some((ch, id)),
         _ => None,
     }
 }

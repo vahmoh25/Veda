@@ -5,6 +5,9 @@
 //! * Implements the service **registry**: every process gets a registry
 //!   channel; services register by name and clients connect by name.
 //!   Connections to a service that has not registered yet are queued.
+//!   Each connection carries the client's identity (its process, which
+//!   init knows from the registry channel it came through), and names
+//!   registered by system services are reserved for them.
 //! * Implements the **launcher** service: starting programs and installed
 //!   applications, listing and killing tasks, and power control.
 
@@ -16,7 +19,7 @@ extern crate alloc;
 mod apps;
 mod boot;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -24,7 +27,8 @@ use vabi::startup::role;
 use vabi::{resource_kind, signals};
 use vipc::WaitSet;
 use vproto::init::{
-    AppInfo, LISTENER_CONNECT, LaunchError, RegistryError, TASK_EVENT, TaskEvent, TaskInfo, launcher, registry,
+    AppInfo, ClientIdentity, LISTENER_CONNECT, LaunchError, RegistryError, TASK_EVENT, TaskEvent, TaskInfo, launcher,
+    registry,
 };
 use vrt::object::{Channel, Handle, Process, Resource, Vmo};
 use vrt::println;
@@ -60,7 +64,10 @@ pub struct Init {
     framebuffer: Option<Vmo>,
     boot_info: Option<Vmo>,
     services: BTreeMap<String, (Channel, u64)>,
-    pending: BTreeMap<String, Vec<Channel>>,
+    /// Names registered by system services: only system services may
+    /// register them again (after a restart).
+    reserved: BTreeSet<String>,
+    pending: BTreeMap<String, Vec<(Channel, ClientIdentity)>>,
     conns: BTreeMap<u64, Conn>,
     children: BTreeMap<u64, Child>,
     apps: Vec<AppInfo>,
@@ -79,11 +86,24 @@ impl Init {
         self.conns.insert(self.next_key, Conn { channel, kind });
     }
 
-    /// A fresh registry channel for a new process (we keep the server end).
-    fn new_registry_channel(&mut self) -> Option<Channel> {
+    /// A fresh registry channel (we keep the server end) belonging to
+    /// process `owner` (0 until a new process's koid is known).
+    fn new_registry_channel(&mut self, owner: u64) -> Option<Channel> {
         let (ours, theirs) = Channel::create().ok()?;
-        self.add_conn(ours, ConnKind::Registry { owner: 0 });
+        self.add_conn(ours, ConnKind::Registry { owner });
         Some(theirs)
+    }
+
+    /// The identity of the process that owns registry connection `key`.
+    fn identity(&self, key: u64) -> ClientIdentity {
+        let owner = match self.conns.get(&key) {
+            Some(Conn { kind: ConnKind::Registry { owner }, .. }) => *owner,
+            _ => 0,
+        };
+        match self.children.get(&owner) {
+            Some(c) => ClientIdentity { koid: owner, name: c.name.clone(), service: c.service, app: c.app },
+            None => ClientIdentity { koid: owner, ..Default::default() },
+        }
     }
 
     fn image(&self, path: &str) -> Option<&'static [u8]> {
@@ -102,7 +122,7 @@ impl Init {
         service: bool,
     ) -> Result<u64, LaunchError> {
         let image = self.image(path).ok_or(LaunchError::NotFound)?;
-        let registry = self.new_registry_channel().ok_or(LaunchError::NoMemory)?;
+        let registry = self.new_registry_channel(0).ok_or(LaunchError::NoMemory)?;
         let mut spawn = vrt::process::Spawn::new(name).handle(role::REGISTRY, registry.into_handle());
         for a in args {
             spawn = spawn.arg(a);
@@ -130,9 +150,9 @@ impl Init {
     }
 
     /// Hands a queued or new connection to a registered service.
-    fn deliver(&mut self, name: &str, server_end: Channel) {
+    fn deliver(&mut self, name: &str, server_end: Channel, client: ClientIdentity) {
         if let Some((listener, _)) = self.services.get(name) {
-            match vipc::send_event(listener, LISTENER_CONNECT, server_end) {
+            match vipc::send_event(listener, LISTENER_CONNECT, (server_end, client)) {
                 Ok(()) => return,
                 Err(_) => {
                     // The service went away; forget it. The connection is lost
@@ -143,7 +163,7 @@ impl Init {
                 }
             }
         }
-        self.pending.entry(name.to_string()).or_default().push(server_end);
+        self.pending.entry(name.to_string()).or_default().push((server_end, client));
     }
 
     fn handle_registry(&mut self, key: u64, msg: vrt::Message) {
@@ -156,7 +176,8 @@ impl Init {
                 if name == launcher::NAME {
                     self.init.add_conn(server_end, ConnKind::Launcher);
                 } else {
-                    self.init.deliver(&name, server_end);
+                    let client = self.init.identity(self.key);
+                    self.init.deliver(&name, server_end, client);
                 }
                 Ok(())
             }
@@ -165,14 +186,17 @@ impl Init {
                 if self.init.services.contains_key(&name) || name == launcher::NAME || name == registry::NAME {
                     return Err(RegistryError::AlreadyRegistered);
                 }
-                let owner = match self.init.conns.get(&self.key) {
-                    Some(Conn { kind: ConnKind::Registry { owner }, .. }) => *owner,
-                    _ => 0,
-                };
+                let client = self.init.identity(self.key);
+                if client.service {
+                    self.init.reserved.insert(name.clone());
+                } else if self.init.reserved.contains(&name) {
+                    println!("{} may not register the system service name '{}'", client.name, name);
+                    return Err(RegistryError::Denied);
+                }
                 println!("service '{}' registered", name);
-                self.init.services.insert(name.clone(), (listener, owner));
-                for ch in self.init.pending.remove(&name).unwrap_or_default() {
-                    self.init.deliver(&name, ch);
+                self.init.services.insert(name.clone(), (listener, client.koid));
+                for (ch, client) in self.init.pending.remove(&name).unwrap_or_default() {
+                    self.init.deliver(&name, ch, client);
                 }
                 Ok(())
             }
@@ -182,7 +206,9 @@ impl Init {
             }
 
             fn clone_registry(&mut self) -> Result<Channel, RegistryError> {
-                self.init.new_registry_channel().ok_or(RegistryError::Denied)
+                // Whoever receives the copy speaks for the same process.
+                let owner = self.init.identity(self.key).koid;
+                self.init.new_registry_channel(owner).ok_or(RegistryError::Denied)
             }
         }
         let mut reg = Reg { init: self, key };
@@ -362,6 +388,7 @@ fn main() -> i32 {
         framebuffer: vrt::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
         boot_info: vrt::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
         services: BTreeMap::new(),
+        reserved: BTreeSet::new(),
         pending: BTreeMap::new(),
         conns: BTreeMap::new(),
         children: BTreeMap::new(),

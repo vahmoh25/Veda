@@ -19,6 +19,11 @@
 //! consumed audio ends in output frames. As the driver reports output
 //! frames played, these marks turn into a per-stream "played" position
 //! that is published (with a timestamp) in the stream's ring.
+//!
+//! **Echo reference.** While an echo-cancelled capture stream is open, the
+//! mixer also keeps the last two seconds of what it sent to the device,
+//! as 16 kHz mono ([`Reference`]); [`Mixer::reference`] finds the part
+//! that was playing at a given moment from the device's played position.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
@@ -110,6 +115,66 @@ impl Stream {
     }
 }
 
+/// Rate of the echo reference.
+pub const REFERENCE_RATE: u32 = 16_000;
+/// Reference kept, in 16 kHz samples (two seconds).
+const REFERENCE_KEEP: usize = 32_000;
+
+/// The recent output as 16 kHz mono, for echo cancellation.
+pub struct Reference {
+    resampler: Resampler,
+    mono: Vec<i16>,
+    pulled: Vec<i16>,
+    history: VecDeque<i16>,
+    /// Reference sample index of `history[0]`.
+    start: u64,
+    /// Output frame at which reference sample 0 was produced.
+    origin: u64,
+    /// The output rate.
+    rate: u32,
+}
+
+impl Reference {
+    fn new(rate: u32, origin: u64) -> Reference {
+        Reference {
+            resampler: Resampler::new(rate, REFERENCE_RATE, 1),
+            mono: vec![0; MAX_BLOCK],
+            pulled: vec![0; MAX_BLOCK],
+            history: VecDeque::with_capacity(REFERENCE_KEEP + MAX_BLOCK),
+            start: 0,
+            origin,
+            rate,
+        }
+    }
+
+    /// Appends output frames (`channels` interleaved).
+    fn push(&mut self, frames: &[i16], channels: usize) {
+        let n = frames.len() / channels;
+        for chunk in (0..n).step_by(MAX_BLOCK) {
+            let m = (n - chunk).min(MAX_BLOCK);
+            let src = &frames[chunk * channels..(chunk + m) * channels];
+            if channels == 1 {
+                self.mono[..m].copy_from_slice(src);
+            } else {
+                mix::convert_channels(src, channels, &mut self.mono[..m], 1);
+            }
+            self.resampler.push(&self.mono[..m]);
+            loop {
+                let got = self.resampler.pull(&mut self.pulled);
+                if got == 0 {
+                    break;
+                }
+                self.history.extend(&self.pulled[..got]);
+            }
+        }
+        let excess = self.history.len().saturating_sub(REFERENCE_KEEP);
+        if excess > 0 {
+            self.history.drain(..excess);
+            self.start += excess as u64;
+        }
+    }
+}
+
 /// Where mixed audio goes.
 pub enum Output {
     /// A sound driver's ring.
@@ -127,6 +192,8 @@ pub struct Mixer {
     pub written: u64,
     pub master: f32,
     pub muted: bool,
+    /// The echo reference, while someone needs it.
+    reference: Option<Reference>,
     next_id: u32,
     acc: Vec<i32>,
     out: Vec<i16>,
@@ -153,6 +220,7 @@ impl Mixer {
             written: 0,
             master: 1.0,
             muted: false,
+            reference: None,
             next_id: 1,
             acc: vec![0; max],
             out: vec![0; max],
@@ -166,6 +234,9 @@ impl Mixer {
     fn set_format(&mut self, rate: u32, channels: usize) {
         self.rate = rate;
         self.channels = channels;
+        if self.reference.is_some() {
+            self.reference = Some(Reference::new(rate, self.written));
+        }
         for s in self.streams.values_mut() {
             s.resampler = Resampler::new(s.ring.rate(), rate, s.ring.channels() as usize);
             s.tail_flushed = false;
@@ -196,6 +267,9 @@ impl Mixer {
         for s in self.streams.values_mut() {
             s.reset_positions(0);
         }
+        if self.reference.is_some() {
+            self.reference = Some(Reference::new(f.rate, 0));
+        }
         self.output = Output::Device { ring, data_event, space_event, name: f.name.clone(), period: f.period_frames };
         Ok(link)
     }
@@ -210,6 +284,39 @@ impl Mixer {
         let w = self.written;
         for s in self.streams.values_mut() {
             s.reset_positions(w);
+        }
+    }
+
+    /// Keeps (or stops keeping) the echo reference.
+    pub fn set_reference_wanted(&mut self, wanted: bool) {
+        if wanted && self.reference.is_none() {
+            self.reference = Some(Reference::new(self.rate, self.written));
+        } else if !wanted {
+            self.reference = None;
+        }
+    }
+
+    /// Fills `out` with the 16 kHz mono reference that was playing up to
+    /// monotonic time `end_ns` (silence where nothing was playing or the
+    /// history does not reach).
+    pub fn reference(&self, end_ns: u64, out: &mut [i16]) {
+        out.fill(0);
+        let (Some(r), Output::Device { ring, .. }) = (&self.reference, &self.output) else { return };
+        let (played, played_ns) = ring.played();
+        if played_ns == 0 {
+            return;
+        }
+        // The output frame playing at `end_ns`, extrapolated from the
+        // driver's last report.
+        let dt = end_ns as i128 - played_ns as i128;
+        let frame = played as i128 + dt * r.rate as i128 / 1_000_000_000;
+        let end = (frame - r.origin as i128) * REFERENCE_RATE as i128 / r.rate as i128;
+        let start = end - out.len() as i128;
+        for (i, o) in out.iter_mut().enumerate() {
+            let idx = start + i as i128 - r.start as i128;
+            if idx >= 0 && (idx as usize) < r.history.len() {
+                *o = r.history[idx as usize];
+            }
         }
     }
 
@@ -370,6 +477,11 @@ impl Mixer {
             muted: self.muted,
             streams: self.streams.len() as u32,
             underruns,
+            input_device: String::new(),
+            input_rate: 0,
+            input_channels: 0,
+            input_muted: false,
+            input_streams: 0,
         }
     }
 
@@ -517,6 +629,9 @@ impl Mixer {
                         break;
                     }
                     ring.write(&self.out[..n * self.channels]);
+                    if let Some(r) = &mut self.reference {
+                        r.push(&self.out[..n * self.channels], self.channels);
+                    }
                     self.written += n as u64;
                     emitted = true;
                 }

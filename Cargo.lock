@@ -43,6 +43,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vagent",
+ "vaudio",
+ "vbuild",
+ "vfiles",
+ "vipc",
+ "vjson",
+ "vmath",
+ "vnet",
+ "vproto",
+ "vrt",
+ "vweb",
+]
+
+[[package]]
 name = "ahci"
 version = "0.1.0"
 dependencies = [
@@ -76,6 +94,17 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vaudio",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
+name = "audiotest"
+version = "0.1.0"
+dependencies = [
+ "vabi",
  "vbuild",
  "vipc",
  "vproto",
@@ -829,6 +858,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "testmic"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vnet",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -875,6 +916,13 @@ dependencies = [
 [[package]]
 name = "vabi"
 version = "0.1.0"
+
+[[package]]
+name = "vagent"
+version = "0.1.0"
+dependencies = [
+ "vjson",
+]
 
 [[package]]
 name = "vaudio"
@@ -1004,6 +1052,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vjson"
+version = "0.1.0"
+
+[[package]]
 name = "vkernel"
 version = "0.1.0"
 dependencies = [
@@ -1082,6 +1134,7 @@ dependencies = [
  "vfiles",
  "vgfx",
  "vipc",
+ "vjson",
  "vmath",
  "vproto",
  "vraster",
@@ -1094,6 +1147,17 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vproto",
+ "vrt",
+]
+
+[[package]]
+name = "vweb"
+version = "0.1.0"
+dependencies = [
+ "httparse",
+ "sha1",
+ "vabi",
+ "vnet",
  "vrt",
 ]
 
@@ -1158,6 +1222,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "initrd",
+ "sha1",
  "vbuild",
  "vpe",
 ]

@@ -10,6 +10,13 @@
 //! back shortly after every change (see [`persist`]).
 //!
 //! Each client connection has its own file descriptor table.
+//!
+//! **Private directories.** `/home/.private/<service>` belongs to the
+//! system service of that name (as the registry identifies the client):
+//! only it can see and change what is inside, and `.private` does not
+//! appear in listings of `/home` for anyone else. Services keep secrets and
+//! personal data there (the agent its Deepgram key and what it remembers
+//! about the user), on the home disk like everything in `/home`.
 
 #![no_std]
 #![no_main]
@@ -26,6 +33,7 @@ use alloc::vec::Vec;
 use vabi::signals;
 use vipc::{Bytes, WaitSet};
 use vproto::fs::{DirEntry, FsError, MAX_IO, Space, Stat, open_flags, vfs};
+use vproto::init::ClientIdentity;
 use vrt::object::{Channel, Vmo};
 use vrt::println;
 
@@ -155,10 +163,27 @@ fn path_len(comps: &[&str]) -> usize {
     comps.iter().map(|c| c.len() + 1).sum()
 }
 
+/// The directory holding the services' private directories.
+const PRIVATE: &str = ".private";
+
 /// One client connection.
 struct Session<'a> {
     fs: &'a mut Fs,
     fds: &'a mut BTreeMap<u32, OpenFile>,
+    /// Who the client is (decides access to private directories).
+    who: &'a ClientIdentity,
+}
+
+impl Session<'_> {
+    /// Refuses paths inside another service's private directory (and the
+    /// private directory itself to programs that are not services).
+    fn guard(&self, m: Mount, comps: &[&str]) -> Result<(), FsError> {
+        if m != Mount::Ram || comps.len() < 2 || comps[0] != "home" || comps[1] != PRIVATE {
+            return Ok(());
+        }
+        let allowed = self.who.service && comps.get(2).is_none_or(|owner| *owner == self.who.name);
+        if allowed { Ok(()) } else { Err(FsError::Denied) }
+    }
 }
 
 const MAX_FDS: usize = 256;
@@ -166,6 +191,7 @@ const MAX_FDS: usize = 256;
 impl vfs::Server for Session<'_> {
     fn open(&mut self, path: String, flags: u32) -> Result<u32, FsError> {
         let (m, comps) = self.fs.route(&path)?;
+        self.guard(m, &comps)?;
         let home = in_home(m, &comps);
         let writing = flags & (open_flags::WRITE | open_flags::CREATE | open_flags::TRUNCATE | open_flags::APPEND) != 0;
         if writing && self.fs.tree(m).read_only {
@@ -247,16 +273,25 @@ impl vfs::Server for Session<'_> {
 
     fn stat(&mut self, path: String) -> Result<Stat, FsError> {
         let (m, comps) = self.fs.route(&path)?;
+        self.guard(m, &comps)?;
         let t = self.fs.tree(m);
         Ok(t.stat(t.lookup(&comps)?))
     }
 
     fn read_dir(&mut self, path: String) -> Result<Vec<DirEntry>, FsError> {
         let (m, comps) = self.fs.route(&path)?;
+        self.guard(m, &comps)?;
         let t = self.fs.tree(m);
         let mut entries = t.list(t.lookup(&comps)?)?;
         if m == Mount::Ram && comps.is_empty() {
             entries.push(DirEntry { name: SYSTEM.into(), is_dir: true, size: 0, modified: 0 });
+        }
+        // Private directories are invisible to everyone but their owner.
+        if m == Mount::Ram && comps == ["home"] && !self.who.service {
+            entries.retain(|e| e.name != PRIVATE);
+        }
+        if m == Mount::Ram && comps == ["home", PRIVATE] {
+            entries.retain(|e| e.name == self.who.name);
         }
         // Directories first, then case-insensitive name order.
         entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
@@ -265,6 +300,7 @@ impl vfs::Server for Session<'_> {
 
     fn mkdir(&mut self, path: String) -> Result<(), FsError> {
         let (m, comps) = self.fs.route(&path)?;
+        self.guard(m, &comps)?;
         if in_home(m, &comps) {
             self.fs.reserve(RECORD_SLACK)?;
         }
@@ -275,6 +311,10 @@ impl vfs::Server for Session<'_> {
 
     fn remove(&mut self, path: String) -> Result<(), FsError> {
         let (m, comps) = self.fs.route(&path)?;
+        self.guard(m, &comps)?;
+        if m == Mount::Ram && comps == ["home", PRIVATE] {
+            return Err(FsError::Denied);
+        }
         self.fs.tree_mut(m).remove(&comps)?;
         self.fs.changed();
         Ok(())
@@ -283,6 +323,11 @@ impl vfs::Server for Session<'_> {
     fn rename(&mut self, from: String, to: String) -> Result<(), FsError> {
         let (m1, c1) = self.fs.route(&from)?;
         let (m2, c2) = self.fs.route(&to)?;
+        self.guard(m1, &c1)?;
+        self.guard(m2, &c2)?;
+        if m1 == Mount::Ram && c1 == ["home", PRIVATE] {
+            return Err(FsError::Denied);
+        }
         if m1 != m2 {
             return Err(FsError::Invalid);
         }
@@ -305,6 +350,7 @@ impl vfs::Server for Session<'_> {
 
     fn read_file(&mut self, path: String) -> Result<(Vmo, u64), FsError> {
         let (m, comps) = self.fs.route(&path)?;
+        self.guard(m, &comps)?;
         let t = self.fs.tree(m);
         let Some(tree::Node { kind, .. }) = t.node(t.lookup(&comps)?) else { return Err(FsError::NotFound) };
         let Kind::File(d) = kind else { return Err(FsError::IsDir) };
@@ -316,6 +362,7 @@ impl vfs::Server for Session<'_> {
 
     fn write_file(&mut self, path: String, data: Vmo, len: u64) -> Result<(), FsError> {
         let (m, comps) = self.fs.route(&path)?;
+        self.guard(m, &comps)?;
         if len > 1 << 30 {
             return Err(FsError::NoSpace);
         }
@@ -462,6 +509,7 @@ fn main() -> i32 {
     struct Client {
         channel: Channel,
         fds: BTreeMap<u32, OpenFile>,
+        who: ClientIdentity,
     }
     let mut clients: BTreeMap<u64, Client> = BTreeMap::new();
     let mut next_id = 1u64;
@@ -474,8 +522,8 @@ fn main() -> i32 {
         let Ok(ready) = ws.wait(fs.save_deadline()) else { continue };
         for (key, observed) in ready {
             if key == 0 {
-                while let Some(ch) = vproto::accept(&listener) {
-                    clients.insert(next_id, Client { channel: ch, fds: BTreeMap::new() });
+                while let Some((ch, who)) = vproto::accept_with_identity(&listener) {
+                    clients.insert(next_id, Client { channel: ch, fds: BTreeMap::new(), who });
                     next_id += 1;
                 }
                 continue;
@@ -483,7 +531,7 @@ fn main() -> i32 {
             let Some(client) = clients.get_mut(&key) else { continue };
             if observed & signals::READABLE != 0 {
                 while let Ok(msg) = client.channel.read() {
-                    let mut session = Session { fs: &mut fs, fds: &mut client.fds };
+                    let mut session = Session { fs: &mut fs, fds: &mut client.fds, who: &client.who };
                     match vfs::dispatch(&mut session, msg) {
                         Ok(reply) => {
                             let _ = reply.send(&client.channel);

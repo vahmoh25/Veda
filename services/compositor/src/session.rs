@@ -271,6 +271,31 @@ impl display::Server for Session<'_> {
         Ok(())
     }
 
+    fn arrange_window(&mut self, id: u32, arrangement: u32) -> Result<(), DisplayError> {
+        if !self.is_shell() {
+            return Err(DisplayError::Denied);
+        }
+        let st = self.comp.windows.get(&id).map(|w| w.state).ok_or(DisplayError::NoSuchWindow)?;
+        if st == WindowState::Minimized {
+            self.comp.set_state(id, WindowState::Normal);
+        }
+        self.comp.raise(id);
+        self.comp.focus(Some(id));
+        // The same arrangements as Super+arrow keys on the focused window.
+        let key = match arrangement {
+            vproto::display::arrangement::MAXIMIZE => vproto::input::keys::UP,
+            vproto::display::arrangement::RESTORE => vproto::input::keys::DOWN,
+            vproto::display::arrangement::SNAP_LEFT => vproto::input::keys::LEFT,
+            vproto::display::arrangement::SNAP_RIGHT => vproto::input::keys::RIGHT,
+            _ => return Err(DisplayError::Invalid),
+        };
+        if key == vproto::input::keys::DOWN && st == WindowState::Minimized {
+            return Ok(());
+        }
+        self.comp.arrange_focused(key);
+        Ok(())
+    }
+
     fn close_window(&mut self, id: u32) -> Result<(), DisplayError> {
         if !self.is_shell() {
             return Err(DisplayError::Denied);

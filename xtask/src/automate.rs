@@ -30,13 +30,32 @@
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
 //! air-expect "list" "1 joined"     # fail unless the simulator's answer contains the text
 //! air-wait "list" "1 joined" 60    # wait until it does (timeout in s)
+//! say "open the text editor"      # speak into the test microphone (Deepgram TTS, cached) and wait until said
+//! say-async "stop"                 # the same without waiting (to talk over the agent)
+//! mic-wav tests/audio/hello.wav    # play a WAV file into the microphone and wait
+//! mic-silence 2                    # queue seconds of silence
+//! mic-wait 30                      # wait until everything queued has been heard
+//! agent-connected 120              # wait until the agent opened a conversation with the simulator
+//! agent-call open_app '{"app":"editor"}'  # the simulated model calls a function; waits for the result
+//! agent-result "opened"            # fail unless the last function result contains the text
+//! agent-mark                       # later agent-expect looks only at messages from now on
+//! agent-expect "InjectUserMessage" 30  # wait until the agent sends a message containing the text
+//! agent-speak 3                    # the simulated agent talks for 3 s (a tone)
+//! agent-interrupt                  # the simulated recogniser hears the user start speaking
+//! agent-send '{"type":"..."}'       # any message from the simulated service
+//! agent-audio 3200                 # fail unless the agent streamed at least this many bytes of microphone audio
 //! ```
+//!
+//! Scripts that use the microphone commands boot with `testmic`, which
+//! connects back to the host (see `mic.rs`).
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::agentsim::AgentSim;
 use crate::airsim::AirSim;
+use crate::mic::{self, MicServer};
 use crate::qemu::{self, NetMode, QemuInstall, VmConfig};
 use crate::qmp::Qmp;
 use crate::util::{self, Result};
@@ -261,9 +280,16 @@ fn words(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut quoted = false;
+    // Single quotes keep double quotes inside (JSON arguments).
+    let mut single = false;
     let mut any = false;
     for c in line.chars() {
         match c {
+            '\'' if !quoted => {
+                single = !single;
+                any = true;
+            }
+            c if single => cur.push(c),
             '"' => {
                 quoted = !quoted;
                 any = true;
@@ -330,6 +356,18 @@ pub fn needs_qemu(script: &str) -> Option<&'static str> {
     None
 }
 
+/// Whether a script talks to the simulated Voice Agent service.
+pub fn needs_agentsim(script: &str) -> bool {
+    script.lines().map(words).any(|w| w.first().is_some_and(|c| c.starts_with("agent-")))
+}
+
+/// Whether a script uses the test microphone.
+pub fn needs_mic(script: &str) -> bool {
+    script.lines().map(words).any(|w| {
+        w.first().is_some_and(|c| matches!(c.as_str(), "say" | "say-async" | "mic-wav" | "mic-silence" | "mic-wait"))
+    })
+}
+
 /// Whether a script says `requires virtualbox`.
 pub fn needs_virtualbox(script: &str) -> bool {
     script.lines().map(words).any(|w| w.len() >= 2 && w[0] == "requires" && w[1] == "virtualbox")
@@ -347,8 +385,18 @@ impl Session {
 }
 
 /// Runs an automation script against a fresh VM booted from `disk`.
-pub fn run_script(hv: &Hypervisor, disk: &Path, vm: VmConfig, script: &str) -> Result<String> {
+pub fn run_script(
+    hv: &Hypervisor,
+    disk: &Path,
+    vm: VmConfig,
+    script: &str,
+    mic: Option<MicServer>,
+    mut agent: Option<AgentSim>,
+) -> Result<String> {
     let mut s = Session::start(hv, disk, vm)?;
+    let mic_ref = || mic.as_ref().ok_or_else(|| "this run has no test microphone".to_string());
+    let mut agent_result = String::new();
+    let mut agent_mark = 0usize;
     let result = (|| -> Result {
         for (lineno, line) in script.lines().enumerate() {
             let w = words(line);
@@ -493,6 +541,71 @@ pub fn run_script(hv: &Hypervisor, disk: &Path, vm: VmConfig, script: &str) -> R
                     if s.recent().contains(needle.as_str()) {
                         return Err(ctx(format!("serial log contains \"{needle}\"")));
                     }
+                }
+                "say" | "say-async" => {
+                    let text = w.get(1).ok_or("missing text")?;
+                    let m = mic_ref().map_err(ctx)?;
+                    let speech = mic::synthesize(text, mic::USER_VOICE).map_err(ctx)?;
+                    m.enqueue(&speech);
+                    m.silence(0.6);
+                    if cmd == "say" {
+                        let secs = speech.len() as f64 / mic::RATE as f64 + 30.0;
+                        m.wait_drained(Duration::from_secs_f64(secs)).map_err(ctx)?;
+                    }
+                }
+                "mic-wav" => {
+                    let path = w.get(1).ok_or("missing file")?;
+                    let m = mic_ref().map_err(ctx)?;
+                    let audio = mic::read_wav(&util::workspace_root().join(path)).map_err(ctx)?;
+                    m.enqueue(&audio);
+                    let secs = audio.len() as f64 / mic::RATE as f64 + 30.0;
+                    m.wait_drained(Duration::from_secs_f64(secs)).map_err(ctx)?;
+                }
+                "mic-silence" => mic_ref().map_err(ctx)?.silence(num(&w, 1).map_err(ctx)?),
+                c if c.starts_with("agent-") => {
+                    let a = agent.as_mut().ok_or_else(|| ctx("this run has no agent simulator".into()))?;
+                    match c {
+                        "agent-connected" => {
+                            a.wait_connected(Duration::from_secs_f64(num(&w, 1).unwrap_or(120.0))).map_err(ctx)?
+                        }
+                        "agent-call" => {
+                            let name = w.get(1).ok_or("missing function name")?;
+                            let args = w.get(2).map(String::as_str).unwrap_or("{}");
+                            let timeout = Duration::from_secs_f64(num(&w, 3).unwrap_or(60.0));
+                            agent_result = a.call(name, args, timeout).map_err(ctx)?;
+                            println!("agent-call {name}: {}", agent_result.chars().take(300).collect::<String>());
+                        }
+                        "agent-result" => {
+                            let needle = w.get(1).ok_or("missing text")?;
+                            if !agent_result.contains(needle.as_str()) {
+                                return Err(ctx(format!(
+                                    "the last result does not contain \"{needle}\": {agent_result}"
+                                )));
+                            }
+                        }
+                        "agent-mark" => agent_mark = a.texts().len(),
+                        "agent-expect" => {
+                            let needle = w.get(1).ok_or("missing text")?;
+                            let timeout = Duration::from_secs_f64(num(&w, 2).unwrap_or(60.0));
+                            let t = a.wait_text(needle, agent_mark, timeout).map_err(ctx)?;
+                            println!("agent-expect: {}", t.chars().take(300).collect::<String>());
+                        }
+                        "agent-speak" => a.speak(num(&w, 1).map_err(ctx)?).map_err(ctx)?,
+                        "agent-interrupt" => a.send_json(r#"{"type":"UserStartedSpeaking"}"#).map_err(ctx)?,
+                        "agent-send" => a.send_json(w.get(1).ok_or("missing message")?).map_err(ctx)?,
+                        "agent-audio" => {
+                            let want = num(&w, 1).map_err(ctx)? as usize;
+                            let got = a.audio_bytes();
+                            if got < want {
+                                return Err(ctx(format!("the agent streamed only {got} bytes of microphone audio")));
+                            }
+                        }
+                        other => return Err(ctx(format!("unknown command '{other}'"))),
+                    }
+                }
+                "mic-wait" => {
+                    let timeout = num(&w, 1).unwrap_or(60.0);
+                    mic_ref().map_err(ctx)?.wait_drained(Duration::from_secs_f64(timeout)).map_err(ctx)?;
                 }
                 other => return Err(ctx(format!("unknown command '{other}'"))),
             }

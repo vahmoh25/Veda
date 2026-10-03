@@ -22,7 +22,9 @@ protocol! {
         /// queued until the service registers, so clients may start first.
         1 => fn connect(name: String, server_end: Channel) -> Result<(), RegistryError>;
         /// Registers a service. New connections arrive on `listener` as
-        /// [`LISTENER_CONNECT`] events carrying the server end.
+        /// [`LISTENER_CONNECT`] events carrying the server end and the
+        /// client's [`ClientIdentity`]. Names a system service has
+        /// registered stay reserved for system services (`Denied`).
         2 => fn register(name: String, listener: Channel) -> Result<(), RegistryError>;
         /// Names of the registered services.
         3 => fn list() -> Vec<String>;
@@ -31,8 +33,28 @@ protocol! {
     }
 }
 
-/// Event ordinal on a service's listener channel: payload is a `Channel`.
+/// Event ordinal on a service's listener channel: the payload is
+/// `(Channel, ClientIdentity)`.
 pub const LISTENER_CONNECT: u32 = 1;
+
+message! {
+    /// Who opened a connection, as `init` knows it: every process's registry
+    /// channel belongs to that process, so the identity cannot be forged.
+    /// Services that care (the agent trusts only the shell to approve its
+    /// actions) read it with [`crate::accept_with_identity`].
+    #[derive(Debug, Clone, PartialEq, Eq, Default)]
+    pub struct ClientIdentity {
+        /// The client's process id (0 if unknown).
+        pub koid: u64,
+        /// The process name: a system service ("shell"), the id of an
+        /// installed application ("settings") or a program's file name.
+        pub name: String,
+        /// Started by init as a system service.
+        pub service: bool,
+        /// Started through the launcher (applications and test programs).
+        pub app: bool,
+    }
+}
 
 message! {
     /// An installed application (from `apps/*.app` in the system image).

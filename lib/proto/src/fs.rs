@@ -27,6 +27,8 @@ enumeration! {
         BadFd = 9,
         TooMany = 10,
         NotEmpty = 11,
+        /// The path is in another program's private directory.
+        Denied = 12,
     }
 }
 
@@ -44,6 +46,7 @@ impl core::fmt::Display for FsError {
             FsError::BadFd => "bad file descriptor",
             FsError::TooMany => "too many open files",
             FsError::NotEmpty => "directory not empty",
+            FsError::Denied => "permission denied",
         })
     }
 }

@@ -18,12 +18,16 @@
 //!   active streams counts as an underrun and deepens the queue. After a
 //!   while without any audio the stream is stopped, and it is started again
 //!   (after prefilling) as soon as data arrives.
+//! * **Recording.** If the device has an input stream (QEMU with
+//!   `streams=2`), it is attached as the audio service's input device and
+//!   records while the service wants audio (see [`capture`]).
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+mod capture;
 mod device;
 
 use alloc::collections::VecDeque;
@@ -32,6 +36,8 @@ use alloc::vec::Vec;
 
 use vabi::{WaitItem, signals};
 use vproto::audio::{DeviceFormat, Ring, Role, audiodev, ring::flags};
+
+use capture::Recorder;
 use vproto::pci::pcidev;
 use vrt::object::{Channel, Event, Interrupt};
 use vrt::println;
@@ -86,6 +92,8 @@ struct Player {
     events: Virtqueue,
     event_buf: DmaBuffer,
     event_slot_of_head: Vec<usize>,
+    /// The input stream, if the device has one.
+    rec: Option<Recorder>,
 }
 
 impl Player {
@@ -299,11 +307,49 @@ impl Player {
         if let Err(e) = self.snd.set_params(&self.cfg).and_then(|_| self.snd.prepare(self.cfg.stream)) {
             println!("cannot prepare the stream again: {}", e);
         }
+        if let Some(rec) = &mut self.rec {
+            rec.halt(&mut self.snd);
+        }
+    }
+}
+
+/// The input side of an attachment.
+struct InputSide {
+    ring: Ring,
+    data_event: Event,
+    wake_event: Event,
+}
+
+/// Attaches the input stream on the same connection.
+fn attach_input(client: &audiodev::Client, cfg: &PcmConfig) -> Option<InputSide> {
+    let format = DeviceFormat {
+        name: "virtio-snd".into(),
+        rate: cfg.rate,
+        channels: cfg.channels as u32,
+        period_frames: cfg.period_frames,
+        max_periods: 0,
+    };
+    match client.attach_input(format) {
+        Ok(Ok(link)) => match Ring::map(link.ring, Role::Producer) {
+            Ok(ring) => Some(InputSide { ring, data_event: link.data_event, wake_event: link.wake_event }),
+            Err(_) => {
+                println!("bad input ring");
+                None
+            }
+        },
+        Ok(Err(e)) => {
+            println!("the audio service refused the input device: {}", e);
+            None
+        }
+        Err(_) => None,
     }
 }
 
 /// Connects to the audio service and attaches the device.
-fn attach(cfg: &PcmConfig) -> Result<(Channel, Ring, Event, Event), &'static str> {
+fn attach(
+    cfg: &PcmConfig,
+    input: Option<&PcmConfig>,
+) -> Result<(Channel, Ring, Event, Event, Option<InputSide>), &'static str> {
     let ch = vproto::connect(audiodev::NAME).map_err(|_| "no registry")?;
     let client = audiodev::Client::new(ch);
     let format = DeviceFormat {
@@ -318,23 +364,48 @@ fn attach(cfg: &PcmConfig) -> Result<(Channel, Ring, Event, Event), &'static str
     if ring.rate() != cfg.rate || ring.channels() != cfg.channels as u32 {
         return Err("ring format does not match the device");
     }
-    Ok((client.into_channel(), ring, link.data_event, link.space_event))
+    let input = input.and_then(|icfg| attach_input(&client, icfg));
+    Ok((client.into_channel(), ring, link.data_event, link.space_event, input))
 }
 
-/// Plays from an attached ring until the audio service goes away.
-fn serve(p: &mut Player, link: &Channel, ring: &Ring, data_event: &Event, space_event: &Event) {
+/// Plays from an attached ring (and records into the input ring) until
+/// the audio service goes away.
+fn serve(
+    p: &mut Player,
+    link: &Channel,
+    ring: &Ring,
+    data_event: &Event,
+    space_event: &Event,
+    input: Option<&InputSide>,
+) {
     loop {
         let now = now_ns();
-        let deadline = match (p.running, p.irq.is_some()) {
+        let mut deadline = match (p.running, p.irq.is_some()) {
             (true, true) => now + 25_000_000,
             (true, false) => now + 2_000_000,
             (false, _) => now + 500_000_000,
         };
+        let recording = p.rec.as_ref().is_some_and(|r| r.running);
+        if recording {
+            let polled = p.rec.as_ref().is_some_and(|r| r.irq.is_none());
+            deadline = deadline.min(now + if polled { 5_000_000 } else { 25_000_000 });
+        }
+        let fallback = data_event.raw();
         let mut items = [
             WaitItem { handle: link.raw(), signals: signals::PEER_CLOSED, ..Default::default() },
             WaitItem { handle: data_event.raw(), signals: signals::SIGNALED, ..Default::default() },
             WaitItem {
-                handle: p.irq.as_ref().map(|i| i.raw()).unwrap_or(data_event.raw()),
+                handle: p.irq.as_ref().map(|i| i.raw()).unwrap_or(fallback),
+                signals: signals::SIGNALED,
+                ..Default::default()
+            },
+            WaitItem {
+                handle: input.map(|i| i.wake_event.raw()).unwrap_or(fallback),
+                signals: signals::SIGNALED,
+                ..Default::default()
+            },
+            WaitItem {
+                handle: p.rec.as_ref().and_then(|r| r.irq.as_ref()).map(|i| i.raw()).unwrap_or(fallback),
                 signals: signals::SIGNALED,
                 ..Default::default()
             },
@@ -349,6 +420,11 @@ fn serve(p: &mut Player, link: &Channel, ring: &Ring, data_event: &Event, space_
             // Re-arm before draining so no completion is lost.
             let _ = irq.ack();
         }
+        if let Some(irq) = p.rec.as_ref().and_then(|r| r.irq.as_ref())
+            && items[4].observed & signals::SIGNALED != 0
+        {
+            let _ = irq.ack();
+        }
         let _ = data_event.clear();
         let mut changed = p.reap();
         changed |= p.pump(ring);
@@ -356,6 +432,11 @@ fn serve(p: &mut Player, link: &Channel, ring: &Ring, data_event: &Event, space_
         p.poll_events();
         if changed {
             let _ = space_event.signal();
+        }
+        if let (Some(rec), Some(input)) = (&mut p.rec, input) {
+            let _ = input.wake_event.clear();
+            rec.follow(&mut p.snd, &input.ring);
+            rec.reap(&input.ring, &input.data_event);
         }
     }
 }
@@ -369,7 +450,11 @@ fn setup() -> Result<Player, DriverError> {
     println!("{} jack(s), {} stream(s), {} channel map(s)", snd.jacks, snd.streams, snd.chmaps);
     let tx = snd.dev.setup_queue(device::TXQ, (SLOTS * 2) as u16)?;
     let mut events = snd.dev.setup_queue(device::EVENTQ, EVENT_BUFFERS as u16)?;
+    // Queues must exist before DRIVER_OK; whether there is an input stream
+    // to use the receive queue for is known only afterwards.
+    let rx = snd.dev.setup_queue(device::RXQ, (capture::SLOTS * 3) as u16).ok();
     let irq = snd.dev.msix_vector(Some(device::TXQ)).ok();
+    let rx_irq = if rx.is_some() { snd.dev.msix_vector(Some(device::RXQ)).ok() } else { None };
     snd.dev.driver_ok();
 
     let event_buf = DmaBuffer::new(snd.dev.dma(), EVENT_BUFFERS * EVENT_SIZE)?;
@@ -429,6 +514,28 @@ fn setup() -> Result<Player, DriverError> {
         cfg.period_frames,
         if irq.is_some() { "MSI-X" } else { "polled, no" }
     );
+    let rec = match (rx, infos.iter().find_map(device::choose_input_config)) {
+        (Some(rx), Some(icfg)) => match snd.set_params(&icfg).and_then(|_| snd.prepare(icfg.stream)) {
+            Ok(()) => match Recorder::new(&mut snd, rx, icfg, rx_irq) {
+                Ok(r) => {
+                    println!(
+                        "virtio-snd: input stream {} ready: {} Hz, {} channel(s), S16, {} frames per period",
+                        icfg.stream, icfg.rate, icfg.channels, icfg.period_frames
+                    );
+                    Some(r)
+                }
+                Err(e) => {
+                    println!("no recording: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                println!("cannot configure the input stream: {}", e);
+                None
+            }
+        },
+        _ => None,
+    };
     let qsize = tx.size() as usize;
     Ok(Player {
         snd,
@@ -452,17 +559,19 @@ fn setup() -> Result<Player, DriverError> {
         events,
         event_buf,
         event_slot_of_head,
+        rec,
     })
 }
 
 /// Attaches to the audio service and plays until it goes away, forever.
 fn run(mut player: Player) {
     loop {
-        match attach(&player.cfg) {
-            Ok((link, ring, data_event, space_event)) => {
-                println!("attached to the audio service");
+        let input_cfg = player.rec.as_ref().map(|r| r.cfg);
+        match attach(&player.cfg, input_cfg.as_ref()) {
+            Ok((link, ring, data_event, space_event, input)) => {
+                println!("attached to the audio service{}", if input.is_some() { " (with recording)" } else { "" });
                 player.played = ring.read_pos();
-                serve(&mut player, &link, &ring, &data_event, &space_event);
+                serve(&mut player, &link, &ring, &data_event, &space_event, input.as_ref());
                 println!("the audio service went away");
                 player.halt();
             }

@@ -26,15 +26,15 @@ pub mod roles {
 /// System services in start order. File systems come first (everything
 /// else loads data through them), then the network and Wi-Fi services
 /// (drivers attach to them as they start), device management and drivers,
-/// the window system, audio and the desktop shell.
-const SERVICES: [&str; 8] = ["vfs", "netd", "wlan", "devmgr", "ps2", "compositor", "audio", "shell"];
+/// the window system, audio, the voice agent and the desktop shell.
+const SERVICES: [&str; 9] = ["vfs", "netd", "wlan", "devmgr", "ps2", "compositor", "audio", "agent", "shell"];
 
 /// Services that are started again if they exit. They hold no state other
 /// processes cannot recover: drivers reconnect to a restarted compositor,
 /// network or Wi-Fi service, and the shell rebuilds its windows. (The file
 /// system and the device manager are not restarted: one holds the user's
 /// files, the other owns the running drivers.)
-pub const RESTARTABLE: [&str; 6] = ["compositor", "shell", "audio", "ps2", "netd", "wlan"];
+pub const RESTARTABLE: [&str; 7] = ["compositor", "shell", "audio", "ps2", "netd", "wlan", "agent"];
 
 fn dup(h: &Option<vrt::Vmo>) -> Option<Handle> {
     h.as_ref().and_then(|v| v.0.duplicate(None).ok())
@@ -91,7 +91,14 @@ pub fn start_service(init: &mut Init, name: &str) {
         return;
     }
     let handles = handles_for(init, name);
-    if let Err(e) = init.spawn(name, &path, &[], handles, true) {
+    // The agent takes its test options (`agent.endpoint=...`) from the
+    // kernel command line.
+    let args: Vec<alloc::string::String> = if name == "agent" {
+        cmdline(init).split_whitespace().filter(|a| a.starts_with("agent.")).map(Into::into).collect()
+    } else {
+        Vec::new()
+    };
+    if let Err(e) = init.spawn(name, &path, &args, handles, true) {
         println!("could not start {}: {:?}", name, e);
     }
 }

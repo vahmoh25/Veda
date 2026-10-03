@@ -259,7 +259,11 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
             Some(wav) => cmd.args(["-audiodev", &format!("wav,id=audio0,path={}", wav.display())]),
             None => cmd.args(["-audiodev", if cfg!(windows) { "dsound,id=audio0" } else { "sdl,id=audio0" }]),
         };
-        cmd.args(["-device", "virtio-sound-pci,audiodev=audio0,streams=1"]);
+        // With the host's sound system the card also has an input stream:
+        // the host's microphone. Recorded runs (WAV) have none, so a test
+        // microphone can take its place.
+        let streams = if cfg.audio_wav.is_some() { 1 } else { 2 };
+        cmd.args(["-device", &format!("virtio-sound-pci,audiodev=audio0,streams={streams}")]);
     }
     if cfg.net.wired() {
         let model = cfg.nic_model.as_deref().unwrap_or("virtio-net-pci");

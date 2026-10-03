@@ -1,5 +1,7 @@
 //! Running UIs: [`Host`] drives one window (events, frame pacing, drawing);
-//! [`run`] is the event loop for the common one-window [`App`].
+//! [`run`] is the event loop for the common one-window [`App`], which also
+//! serves the voice agent for apps that offer it something (see
+//! [`crate::agent`]).
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -8,6 +10,7 @@ use vabi::{RawHandle, WaitItem, signals};
 use vgfx::Text;
 use vproto::display::{Cursor, WindowEvent, WindowSpec};
 
+use crate::agent::{AgentLink, AgentServer, AppAgentInfo};
 use crate::theme::Theme;
 use crate::ui::{Context, Input, Ui, UiState};
 use crate::window::{Display, Window, WindowError, connect};
@@ -32,6 +35,45 @@ pub trait App {
 
     /// Called once the window exists, before the first frame.
     fn init(&mut self, _window: &Window) {}
+
+    /// What the app offers the voice agent: a summary and its actions.
+    /// `None` (the default) keeps the app to itself.
+    fn agent_info(&self) -> Option<AppAgentInfo> {
+        None
+    }
+
+    /// What the app shows right now, for the agent (a JSON value).
+    fn agent_state(&self) -> vjson::Value {
+        vjson::Value::Null
+    }
+
+    /// Runs one of the actions from [`App::agent_info`] for the agent.
+    /// `args` is a JSON object; the result is a JSON value for the agent
+    /// (or a short explanation of what went wrong).
+    fn agent_invoke(&mut self, _action: &str, _args: &vjson::Value) -> Result<vjson::Value, alloc::string::String> {
+        Err("this app does not offer that".into())
+    }
+}
+
+/// Serves the agent through an [`App`]'s methods.
+struct AppAgent<'a, A: App>(&'a mut A);
+
+impl<A: App> AgentServer for AppAgent<'_, A> {
+    fn agent_info(&self) -> AppAgentInfo {
+        self.0.agent_info().unwrap_or(AppAgentInfo {
+            summary: alloc::string::String::new(),
+            actions: Vec::new(),
+            has_state: false,
+        })
+    }
+
+    fn agent_state(&self) -> vjson::Value {
+        self.0.agent_state()
+    }
+
+    fn agent_invoke(&mut self, action: &str, args: &vjson::Value) -> Result<vjson::Value, alloc::string::String> {
+        self.0.agent_invoke(action, args)
+    }
 }
 
 /// Font files, loaded once per process and shared by every window.
@@ -226,6 +268,7 @@ pub fn run<A: App>(spec: WindowSpec, mut app: A) -> i32 {
         }
     };
     app.init(&host.window);
+    let mut agent = if app.agent_info().is_some() { AgentLink::connect() } else { None };
     loop {
         let events = host.pump(|ui| app.update(ui));
         if host.window.closed {
@@ -240,17 +283,34 @@ pub fn run<A: App>(spec: WindowSpec, mut app: A) -> i32 {
             host.invalidate();
         }
         let extra = app.wait_handles();
-        let mut items = Vec::with_capacity(1 + extra.len());
+        let mut items = Vec::with_capacity(2 + extra.len());
         items.push(host.wait_item());
         for (h, s) in &extra {
             items.push(WaitItem { handle: *h, signals: *s, ..Default::default() });
         }
+        if let Some(link) = &agent {
+            items.push(WaitItem {
+                handle: link.handle(),
+                signals: signals::READABLE | signals::PEER_CLOSED,
+                ..Default::default()
+            });
+        }
         let _ = vrt::object::wait_many(&mut items, host.deadline());
-        for (i, it) in items.iter().enumerate().skip(1) {
+        for (i, it) in items.iter().enumerate().skip(1).take(extra.len()) {
             if it.observed & it.signals != 0 {
                 app.handle_signaled(i - 1, it.observed);
                 host.invalidate();
             }
+        }
+        if let Some(link) = &agent
+            && items.last().is_some_and(|it| it.observed != 0)
+        {
+            // The agent asked something (the answer may change what the
+            // window shows), or the agent service went away.
+            if !link.serve(&mut AppAgent(&mut app)) {
+                agent = None;
+            }
+            host.invalidate();
         }
     }
 }

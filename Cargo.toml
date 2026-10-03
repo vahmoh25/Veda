@@ -29,12 +29,16 @@ members = [
     "lib/net",
     "lib/wlan",
     "lib/radiolink",
+    "lib/json",
+    "lib/web",
+    "lib/agent",
     "services/init",
     "services/vfs",
     "services/devmgr",
     "services/compositor",
     "services/netd",
     "services/wlan",
+    "services/agent",
     "apps/about",
     "apps/shell",
     "apps/editor",
@@ -60,6 +64,8 @@ members = [
     "drivers/ahci",
     "tests/systest",
     "tests/nettest",
+    "tests/testmic",
+    "tests/audiotest",
 ]
 # Vendored third-party crates are path dependencies, not members (their own
 # tests and dev-dependencies stay out of this workspace). See third_party/.
@@ -102,6 +108,9 @@ vnetstack = { path = "lib/netstack" }
 vnet = { path = "lib/net" }
 vwlan = { path = "lib/wlan" }
 vradiolink = { path = "lib/radiolink" }
+vjson = { path = "lib/json" }
+vweb = { path = "lib/web" }
+vagent = { path = "lib/agent" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
 sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }

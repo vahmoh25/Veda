@@ -1,0 +1,30 @@
+[package]
+name = "agent"
+description = "The voice agent that lives in Vindows: conversations through Deepgram, actions on the system and its applications, memory and approvals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "agent"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+vjson = { workspace = true }
+vagent = { workspace = true }
+vweb = { workspace = true }
+vnet = { workspace = true }
+vfiles = { workspace = true }
+vaudio = { workspace = true }
+vmath = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

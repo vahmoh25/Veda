@@ -16,6 +16,7 @@ use vvirtio::{DmaBuffer, Segment, VirtioError, Virtqueue};
 pub const CONTROLQ: u16 = 0;
 pub const EVENTQ: u16 = 1;
 pub const TXQ: u16 = 2;
+pub const RXQ: u16 = 3;
 
 /// Request codes.
 pub const R_JACK_INFO: u32 = 1;
@@ -41,6 +42,7 @@ pub const S_IO_ERR: u32 = 0x8003;
 
 /// Stream directions.
 pub const D_OUTPUT: u8 = 0;
+pub const D_INPUT: u8 = 1;
 /// Sample format: signed 16-bit little-endian.
 pub const FMT_S16: u8 = 5;
 /// Frame rates by their index in the `rates` bitmap.
@@ -167,6 +169,28 @@ pub fn choose_config(info: &PcmInfo, periods: u32) -> Option<PcmConfig> {
     }
     let period_frames = (rate / 100).next_power_of_two().clamp(64, 4096);
     Some(PcmConfig { stream: info.id, rate, rate_index: rate_index as u8, channels, period_frames, periods })
+}
+
+/// Picks the configuration of an input (capture) stream: 48 kHz preferred
+/// (what host audio systems record natively), then 44.1 or 16 kHz, mono if
+/// possible, periods of about 10 ms.
+pub fn choose_input_config(info: &PcmInfo) -> Option<PcmConfig> {
+    if info.direction != D_INPUT || info.formats & (1 << FMT_S16) == 0 || info.rates == 0 {
+        return None;
+    }
+    let supported = |i: usize| info.rates & (1 << i) != 0;
+    let rate_index = [7usize, 6, 3]
+        .into_iter()
+        .find(|&i| supported(i))
+        .or_else(|| (0..RATES.len()).filter(|&i| supported(i) && RATES[i] <= 48_000).max_by_key(|&i| RATES[i]))?;
+    let rate = RATES[rate_index];
+    let (lo, hi) = (info.channels_min.max(1), info.channels_max.max(1));
+    if lo > 2 {
+        return None;
+    }
+    let channels = 1u8.clamp(lo, hi.max(lo));
+    let period_frames = (rate / 100).next_power_of_two().clamp(64, 4096);
+    Some(PcmConfig { stream: info.id, rate, rate_index: rate_index as u8, channels, period_frames, periods: 4 })
 }
 
 /// The device and its control queue.
