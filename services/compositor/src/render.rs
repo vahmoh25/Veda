@@ -90,7 +90,8 @@ impl Compositor {
             c.clip_to(r);
             // Drawing starts at the topmost window that hides all of `r`:
             // nothing below it (the desktop under a game, say) is visible.
-            let covering = order.iter().rposition(|id| self.windows.get(id).is_some_and(|w| w.opaque_rect().contains_rect(&r)));
+            let covering =
+                order.iter().rposition(|id| self.windows.get(id).is_some_and(|w| w.opaque_rect().contains_rect(&r)));
             if covering.is_none() {
                 decor::draw_background(&mut c, screen);
             }
