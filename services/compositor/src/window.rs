@@ -157,6 +157,28 @@ impl Window {
         self.state != WindowState::Minimized || self.anim.is_some()
     }
 
+    /// Whether the client's pixels are copied as they are (see
+    /// [`WindowKind`]: normal and desktop windows are opaque).
+    pub fn opaque(&self) -> bool {
+        matches!(self.kind, WindowKind::Normal | WindowKind::Desktop)
+    }
+
+    /// The screen area this window hides completely: the client area of an
+    /// opaque, settled window whose buffer fills it, without the rounded
+    /// bottom corners. Empty if it hides nothing.
+    pub fn opaque_rect(&self) -> Rect {
+        let filled = match (&self.buffers, self.current) {
+            (Some(b), Some(_)) => b.width >= self.client_rect.w && b.height >= self.client_rect.h,
+            _ => false,
+        };
+        if !self.opaque() || !filled || self.anim.is_some() || self.closing || self.state == WindowState::Minimized {
+            return Rect::default();
+        }
+        let c = self.client_rect;
+        let rounded = self.decorated() && self.state != WindowState::Maximized;
+        if rounded { Rect::new(c.x, c.y, c.w, c.h - CORNER_RADIUS) } else { c }
+    }
+
     /// Classifies a screen point; `None` if the point misses the window.
     pub fn hit(&self, x: i32, y: i32) -> Option<Part> {
         let f = self.frame();

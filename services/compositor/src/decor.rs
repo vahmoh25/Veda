@@ -217,14 +217,25 @@ impl Decor {
         let (pixels, stride) = c.pixels_mut();
         let rad = radius as f32;
         let corner_top = dst.bottom() - radius;
+        // Opaque windows (not fading) are copied row by row, except for
+        // the anti-aliased rounded corners.
+        let copy = w.opaque() && opacity == 255;
         for y in vis.y..vis.bottom() {
             let sy = y - dst.y;
             let srow = &src[(sy * buf.stride) as usize..];
             let drow = ((y - b.y) * stride - b.x) as isize;
             let in_corner_rows = radius > 0 && y >= corner_top;
+            if copy && !in_corner_rows {
+                let (from, to, n) = ((vis.x - dst.x) as usize, (drow + vis.x as isize) as usize, vis.w as usize);
+                pixels[to..to + n].copy_from_slice(&srow[from..from + n]);
+                continue;
+            }
             for x in vis.x..vis.right() {
                 let sx = x - dst.x;
                 let mut px = srow[sx as usize];
+                if copy {
+                    px |= 0xFF00_0000;
+                }
                 let mut cov = opacity;
                 if in_corner_rows {
                     let cx = if x < dst.x + radius {

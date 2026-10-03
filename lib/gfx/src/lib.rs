@@ -45,6 +45,17 @@ mod tests {
     }
 
     #[test]
+    fn rectangle_containment() {
+        let a = Rect::new(10, 10, 100, 50);
+        assert!(a.contains_rect(&a));
+        assert!(a.contains_rect(&Rect::new(20, 20, 10, 10)));
+        assert!(!a.contains_rect(&Rect::new(5, 20, 10, 10)), "sticks out on the left");
+        assert!(!a.contains_rect(&Rect::new(100, 50, 20, 20)), "sticks out at the bottom right");
+        assert!(a.contains_rect(&Rect::default()), "empty rectangles are inside");
+        assert!(!Rect::default().contains_rect(&Rect::default()), "nothing is inside an empty rectangle");
+    }
+
+    #[test]
     fn drawing_entirely_outside_the_canvas_is_a_no_op() {
         // Regression: a fill far right of the clip used to slice past a row.
         let mut b = Bitmap::new(16, 8);

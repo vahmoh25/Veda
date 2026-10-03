@@ -34,6 +34,13 @@ impl Rect {
         x >= self.x && y >= self.y && x < self.right() && y < self.bottom()
     }
 
+    /// Whether `o` lies entirely inside this rectangle (an empty `o` is
+    /// inside anything that is not empty itself).
+    pub fn contains_rect(&self, o: &Rect) -> bool {
+        !self.is_empty()
+            && (o.is_empty() || (o.x >= self.x && o.y >= self.y && o.right() <= self.right() && o.bottom() <= self.bottom()))
+    }
+
     /// The overlap of two rectangles. Disjoint rectangles give the empty
     /// rectangle at the origin, so that an empty result never carries
     /// coordinates outside both inputs.

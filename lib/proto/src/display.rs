@@ -34,6 +34,11 @@ impl Rect {
 
 enumeration! {
     /// What kind of surface a window is (determines layering and decoration).
+    ///
+    /// Normal and desktop windows are opaque: the compositor copies their
+    /// pixels and ignores alpha, and does not draw what they cover. The other
+    /// kinds are blended (premultiplied alpha), so they may be translucent or
+    /// have rounded corners.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum WindowKind {
         /// An ordinary application window with a title bar.

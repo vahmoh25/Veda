@@ -134,9 +134,13 @@ impl display::Server for Session<'_> {
         // Acknowledged with FrameDone after the next composite.
         w.frame_owed = Some(index);
         let c = w.client_rect;
-        if first || damage.is_empty() || w.anim.is_some() {
+        if first || w.anim.is_some() {
+            // The window appears or is animating: redraw it with its frame.
             let r = w.paint_bounds();
             self.comp.damage.add(r);
+        } else if damage.is_empty() {
+            // A whole new frame: the decorations around it are unchanged.
+            self.comp.damage.add(c);
         } else {
             for d in damage {
                 self.comp.damage.add(Rect::new(c.x + d.x, c.y + d.y, d.w as i32, d.h as i32).intersect(&c));

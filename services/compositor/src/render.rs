@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 
 use vgfx::{Bitmap, Canvas, Rect};
-use vproto::display::{WindowEvent, WindowKind};
+use vproto::display::WindowEvent;
 use vrt::vm::Mapping;
 
 use crate::decor;
@@ -88,16 +88,13 @@ impl Compositor {
             let (w, h) = (self.screen.back.width, self.screen.back.height);
             let mut c = Canvas::new(&mut self.screen.back.pixels, w, h, w);
             c.clip_to(r);
-            // Skip the background when an opaque desktop covers everything.
-            let desktop_covers = order.iter().any(|id| {
-                self.windows.get(id).is_some_and(|w| {
-                    w.kind == WindowKind::Desktop && w.current.is_some() && w.frame().intersect(&r) == r
-                })
-            });
-            if !desktop_covers {
+            // Drawing starts at the topmost window that hides all of `r`:
+            // nothing below it (the desktop under a game, say) is visible.
+            let covering = order.iter().rposition(|id| self.windows.get(id).is_some_and(|w| w.opaque_rect().contains_rect(&r)));
+            if covering.is_none() {
                 decor::draw_background(&mut c, screen);
             }
-            for id in &order {
+            for id in &order[covering.unwrap_or(0)..] {
                 // The snap preview goes just below the window being dragged.
                 if let (Some((_, preview)), Some(Drag::Move { id: dragged, .. })) = (self.snap, self.drag)
                     && *id == dragged
