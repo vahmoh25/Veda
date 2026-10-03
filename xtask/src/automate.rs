@@ -1,4 +1,4 @@
-//! Scripted, headless runs of Vindows in QEMU.
+﻿//! Scripted, headless runs of Vindows in QEMU.
 //!
 //! Automation scripts drive the virtual machine through QMP and inspect its
 //! serial console. They power `cargo xtask shot` and the integration tests.
@@ -15,6 +15,7 @@
 //! type "hello world"               # type ASCII text
 //! expect-serial "PASS"             # fail unless the log contains the text
 //! reject-serial "panic"            # fail if the log contains the text
+//! fail-on "PANIC"                  # abort later waits as soon as the text appears
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -30,6 +31,8 @@ pub struct Session {
     child: Child,
     pub qmp: Qmp,
     pub serial_log: PathBuf,
+    /// Serial log patterns that abort any wait immediately.
+    pub fail_patterns: Vec<String>,
 }
 
 impl Session {
@@ -50,7 +53,7 @@ impl Session {
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
         let child = cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?;
         let qmp = Qmp::connect(port, Duration::from_secs(20))?;
-        Ok(Session { child, qmp, serial_log })
+        Ok(Session { child, qmp, serial_log, fail_patterns: Vec::new() })
     }
 
     pub fn serial(&self) -> String {
@@ -61,8 +64,12 @@ impl Session {
     pub fn wait_serial(&mut self, needle: &str, timeout: Duration) -> Result {
         let start = Instant::now();
         loop {
-            if self.serial().contains(needle) {
+            let log = self.serial();
+            if log.contains(needle) {
                 return Ok(());
+            }
+            if let Some(p) = self.fail_patterns.iter().find(|p| log.contains(p.as_str())) {
+                return Err(format!("serial log contains failure pattern \"{p}\""));
             }
             if let Ok(Some(status)) = self.child.try_wait() {
                 return Err(format!("QEMU exited ({status}) before \"{needle}\" appeared"));
@@ -167,6 +174,7 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
                     }
                     s.qmp.mouse_button("left", false).map_err(ctx)?;
                 }
+                "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
                 "key" => s.qmp.send_keys(w.get(1).ok_or("missing key")?).map_err(ctx)?,
                 "type" => s.qmp.type_text(w.get(1).ok_or("missing text")?).map_err(ctx)?,
                 "expect-serial" => {

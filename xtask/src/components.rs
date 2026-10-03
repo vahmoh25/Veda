@@ -25,7 +25,11 @@ pub struct Program {
 
 /// Every user-space program that ships in the initrd, installed as
 /// `bin/<binary>.exe`.
-pub const PROGRAMS: &[Program] = &[Program { package: "init", binary: "init" }];
+pub const PROGRAMS: &[Program] = &[
+    Program { package: "init", binary: "init" },
+    Program { package: "vfs", binary: "vfs" },
+    Program { package: "systest", binary: "systest" },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {

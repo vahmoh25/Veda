@@ -1,0 +1,13 @@
+[package]
+name = "vipc"
+description = "Typed IPC for Vindows: message codec, protocol macros and wait sets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,21 +1,21 @@
-﻿[package]
-name = "init"
-description = "The first user-space process: starts and supervises system services"
+[package]
+name = "vfs"
+description = "The Vindows virtual file system service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "init"
+name = "vfs"
 test = false
 bench = false
 
 [dependencies]
 vrt = { workspace = true }
 vabi = { workspace = true }
-initrd = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
+initrd = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

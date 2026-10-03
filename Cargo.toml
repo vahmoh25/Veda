@@ -15,7 +15,11 @@ members = [
     "lib/heap",
     "lib/build",
     "lib/rt",
+    "lib/ipc",
+    "lib/proto",
     "services/init",
+    "services/vfs",
+    "tests/systest",
 ]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
 # inside Vindows is cross-built by `cargo xtask build`, which knows the correct
@@ -41,6 +45,8 @@ vimage = { path = "lib/image" }
 vheap = { path = "lib/heap" }
 vbuild = { path = "lib/build" }
 vrt = { path = "lib/rt" }
+vipc = { path = "lib/ipc" }
+vproto = { path = "lib/proto" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

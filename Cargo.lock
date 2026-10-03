@@ -13,12 +13,25 @@ dependencies = [
  "initrd",
  "vabi",
  "vbuild",
+ "vipc",
+ "vproto",
  "vrt",
 ]
 
 [[package]]
 name = "initrd"
 version = "0.1.0"
+
+[[package]]
+name = "systest"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+]
 
 [[package]]
 name = "vabi"
@@ -44,12 +57,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "vfs"
+version = "0.1.0"
+dependencies = [
+ "initrd",
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
 name = "vheap"
 version = "0.1.0"
 
 [[package]]
 name = "vimage"
 version = "0.1.0"
+
+[[package]]
+name = "vipc"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vrt",
+]
 
 [[package]]
 name = "vkernel"
@@ -68,6 +101,15 @@ version = "0.1.0"
 [[package]]
 name = "vpe"
 version = "0.1.0"
+
+[[package]]
+name = "vproto"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vipc",
+ "vrt",
+]
 
 [[package]]
 name = "vraster"

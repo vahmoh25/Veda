@@ -57,12 +57,6 @@ impl<'a> Reader<'a> {
         Reader { data, pos }
     }
 
-    /// The current position.
-    #[inline]
-    pub(crate) fn pos(&self) -> usize {
-        self.pos
-    }
-
     /// Advances by `n` bytes.
     #[inline]
     pub(crate) fn skip(&mut self, n: usize) -> Option<()> {
@@ -82,11 +76,6 @@ impl<'a> Reader<'a> {
     }
 
     #[inline]
-    pub(crate) fn i8(&mut self) -> Option<i8> {
-        self.u8().map(|v| v as i8)
-    }
-
-    #[inline]
     pub(crate) fn u16(&mut self) -> Option<u16> {
         let v = u16_at(self.data, self.pos)?;
         self.pos += 2;
@@ -96,13 +85,6 @@ impl<'a> Reader<'a> {
     #[inline]
     pub(crate) fn i16(&mut self) -> Option<i16> {
         self.u16().map(|v| v as i16)
-    }
-
-    #[inline]
-    pub(crate) fn u32(&mut self) -> Option<u32> {
-        let v = u32_at(self.data, self.pos)?;
-        self.pos += 4;
-        Some(v)
     }
 
     /// Reads an F2Dot14 fixed-point number.

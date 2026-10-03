@@ -1,4 +1,4 @@
-//! `cargo xtask` — the Vindows developer tool.
+﻿//! `cargo xtask` â€” the Vindows developer tool.
 //!
 //! Run `cargo xtask help` for the list of commands.
 
@@ -26,6 +26,7 @@ COMMANDS:
     run         Build, then boot Vindows in QEMU
     shot        Boot headless, wait, and save a screenshot (dev aid)
     script FILE Boot headless and run an automation script (see automate.rs)
+    test        Run host unit tests, then the in-system integration tests
     clean       Remove build outputs
     doctor      Check that the required tools are installed
     help        Show this message
@@ -51,6 +52,7 @@ SHOT OPTIONS:
 ";
 
 /// Options shared by the build-related commands.
+#[derive(Clone)]
 struct Options {
     profile: Profile,
     resolution: String,
@@ -166,6 +168,39 @@ fn shot(o: &Options) -> Result {
     script(o, &format!("{wait}\nshot \"{}\"\n", out.display()))
 }
 
+/// Library crates with host unit tests (features in parentheses).
+const HOST_TESTED: &[(&str, &[&str])] = &[
+    ("vabi", &[]),
+    ("vpe", &[]),
+    ("initrd", &["std"]),
+    ("vheap", &[]),
+    ("vipc", &[]),
+    ("vmath", &[]),
+    ("vraster", &[]),
+    ("vfont", &[]),
+    ("vimage", &[]),
+    ("xtask", &[]),
+];
+
+fn test(o: &Options) -> Result {
+    util::status("Testing", "library unit tests on the host");
+    for (package, features) in HOST_TESTED {
+        let mut cmd = util::cargo();
+        cmd.args(["test", "--quiet", "--package", package]);
+        if !features.is_empty() {
+            cmd.args(["--features", &features.join(",")]);
+        }
+        util::run(&mut cmd)?;
+    }
+    util::status("Testing", "integration tests inside Vindows (QEMU)");
+    let mut o = o.clone();
+    o.cmdline = format!("{} systest", o.cmdline).trim().to_string();
+    let checks = "fail-on \"PANIC\"\nfail-on \"systest: FAIL\"\nwait-serial \"systest: PASS\" 240\nshot target/vindows/test-desktop.png\n";
+    script(&o, checks)?;
+    util::status("Passed", "all tests");
+    Ok(())
+}
+
 fn doctor() -> Result {
     let mut ok = true;
     let mut check = |name: &str, r: std::result::Result<String, String>| match r {
@@ -210,6 +245,7 @@ fn main() -> ExitCode {
         "build" => parse_options(rest).and_then(|o| build(&o).map(|_| ())),
         "run" => parse_options(rest).and_then(|o| run(&o)),
         "shot" => parse_options(rest).and_then(|o| shot(&o)),
+        "test" => parse_options(rest).and_then(|o| test(&o)),
         "script" => match rest.split_first() {
             Some((file, opts)) => std::fs::read_to_string(file)
                 .map_err(|e| format!("reading {file}: {e}"))

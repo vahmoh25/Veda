@@ -1,4 +1,4 @@
-//! Threads.
+﻿//! Threads.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -103,7 +103,7 @@ impl Builder {
         });
         let arg = Box::into_raw(Box::new(body)) as usize;
         let rsp = stack.addr() + stack.len() - 72;
-        if let Err(e) = call(nr::THREAD_START, [thread.raw() as usize, thread_entry as usize, rsp, arg, 0, 0]) {
+        if let Err(e) = call(nr::THREAD_START, [thread.raw() as usize, thread_entry as *const () as usize, rsp, arg, 0, 0]) {
             // SAFETY: the thread never started, so we still own the box.
             drop(unsafe { Box::from_raw(arg as *mut Box<dyn FnOnce() + Send>) });
             return Err(e);

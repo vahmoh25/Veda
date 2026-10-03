@@ -709,7 +709,7 @@ const PIO2_3T: f64 = f64::from_bits(0x397b_839a_2520_49c1);
 
 /// Reduces `x` (|x| > ~π/4, finite or not) to `y0 + y1` in [-π/4, π/4] with
 /// `x = n * π/2 + y0 + y1`. Returns `(n mod 4, y0, y1)`; ∞ and NaN give NaN.
-const fn rem_pio2(x: f64) -> (i32, f64, f64) {
+pub(crate) const fn rem_pio2(x: f64) -> (i32, f64, f64) {
     let ix = high_word(x) & 0x7fff_ffff;
     if ix < 0x4139_21fb {
         // |x| ~< 2^20 * π/2: Cody-Waite with up to three 33-bit pieces of π/2.
@@ -1399,7 +1399,7 @@ pub const fn exp_m1(x: f64) -> f64 {
         }
         return 1.0 + 2.0 * (x - e);
     }
-    if !(0..=56).contains(&k) {
+    if k < 0 || k > 56 {
         // exp(x) - 1 rounds like exp(x)
         let mut y = x - e + 1.0;
         if k == 1024 {

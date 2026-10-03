@@ -1,0 +1,14 @@
+[package]
+name = "vproto"
+description = "Protocol definitions of the Vindows system services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vipc = { workspace = true }
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+
+[lints]
+workspace = true

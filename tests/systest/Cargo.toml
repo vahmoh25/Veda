@@ -1,19 +1,18 @@
-﻿[package]
-name = "init"
-description = "The first user-space process: starts and supervises system services"
+[package]
+name = "systest"
+description = "In-system integration tests for Vindows (run by `cargo xtask test`)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "init"
+name = "systest"
 test = false
 bench = false
 
 [dependencies]
 vrt = { workspace = true }
 vabi = { workspace = true }
-initrd = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
 

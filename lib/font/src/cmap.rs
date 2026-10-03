@@ -254,7 +254,7 @@ mod tests {
         sub.extend_from_slice(&40u32.to_be_bytes());
         sub.extend_from_slice(&0u32.to_be_bytes());
         sub.extend_from_slice(&2u32.to_be_bytes());
-        for (s, e, g) in [(0x20u32, 0x7E, 1u32), (0x1F600, 0x1F64F, 500)] {
+        for (s, e, g) in [(0x20u32, 0x7Eu32, 1u32), (0x1F600, 0x1F64F, 500)] {
             sub.extend_from_slice(&s.to_be_bytes());
             sub.extend_from_slice(&e.to_be_bytes());
             sub.extend_from_slice(&g.to_be_bytes());
