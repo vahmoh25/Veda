@@ -9,6 +9,7 @@ use vgfx::{Align, Color, Rect};
 use vproto::display::WindowState;
 use vui::{Font, Icon, Ui};
 
+use crate::tooltip::Tip;
 use crate::{Action, DISMISS_GRACE_NS, Model, apps, chrome, volume};
 
 /// Height of the taskbar in pixels.
@@ -19,6 +20,7 @@ const SLOT: i32 = 46;
 /// A window as listed under its taskbar button.
 struct Win {
     id: u32,
+    title: String,
     focused: bool,
     minimized: bool,
 }
@@ -28,8 +30,21 @@ struct Item {
     key: String,
     /// App id (selects the tile colour and what to launch).
     app: String,
+    /// Display name of the app.
+    name: String,
     icon: Icon,
     windows: Vec<Win>,
+}
+
+impl Item {
+    /// The button's tooltip: the window title, the app's name, or both.
+    fn tip(&self) -> String {
+        match self.windows.as_slice() {
+            [] => self.name.clone(),
+            [w] => w.title.clone(),
+            ws => format!("{} \u{2014} {} windows", self.name, ws.len()),
+        }
+    }
 }
 
 fn items(m: &Model) -> Vec<Item> {
@@ -37,16 +52,25 @@ fn items(m: &Model) -> Vec<Item> {
         .apps
         .iter()
         .filter(|a| a.pinned)
-        .map(|a| Item { key: a.id.clone(), app: a.id.clone(), icon: apps::icon_for(a), windows: Vec::new() })
+        .map(|a| Item {
+            key: a.id.clone(),
+            app: a.id.clone(),
+            name: a.name.clone(),
+            icon: apps::icon_for(a),
+            windows: Vec::new(),
+        })
         .collect();
     for w in &m.windows {
         let key = if w.app_id.is_empty() { format!("#{}", w.id) } else { w.app_id.clone() };
-        let win = Win { id: w.id, focused: w.focused, minimized: w.state == WindowState::Minimized };
+        let win =
+            Win { id: w.id, title: w.title.clone(), focused: w.focused, minimized: w.state == WindowState::Minimized };
         if let Some(it) = items.iter_mut().find(|i| i.key == key) {
             it.windows.push(win);
         } else {
-            let icon = m.app(&w.app_id).map(apps::icon_for).or_else(|| Icon::by_name(&w.app_id)).unwrap_or(Icon::Grid);
-            items.push(Item { key, app: w.app_id.clone(), icon, windows: alloc::vec![win] });
+            let app = m.app(&w.app_id);
+            let icon = app.map(apps::icon_for).or_else(|| Icon::by_name(&w.app_id)).unwrap_or(Icon::Grid);
+            let name = app.map_or_else(|| w.title.clone(), |a| a.name.clone());
+            items.push(Item { key, app: w.app_id.clone(), name, icon, windows: alloc::vec![win] });
         }
     }
     items
@@ -88,11 +112,16 @@ impl Taskbar {
         let items = items(m);
         let total = (items.len() as i32 + 1) * SLOT;
         let mut x = (w - total) / 2;
+        // The hovered button's tooltip and the centre of the button.
+        let mut tip: Option<(String, i32)> = None;
 
         // Start button.
         let r = Rect::new(x, 4, SLOT - 2, h - 8);
         let resp = ui.interact(ui.id("start"), r);
         Self::button_bg(ui, r, resp.hovered, resp.held, m.start_open);
+        if resp.hovered {
+            tip = Some(("Start".into(), r.center().0));
+        }
         let logo = if resp.held { 20 } else { 22 };
         vui::draw_logo(&mut ui.canvas, r.centered(logo, logo));
         if resp.pressed {
@@ -123,6 +152,7 @@ impl Taskbar {
             }
             if resp.hovered {
                 ui.set_cursor(vui::Cursor::Hand);
+                tip = Some((item.tip(), r.center().0));
             }
             if resp.clicked {
                 m.push(Self::click_action(item));
@@ -147,6 +177,10 @@ impl Taskbar {
         if resp.pressed {
             self.clock_pressed_at = ui.now();
         }
+        if resp.hovered {
+            let full = format!("{}, {} {} {}", now.weekday_name(), now.day, now.month_name(), now.year);
+            tip = Some((full, clock.center().0));
+        }
         if resp.clicked && m.calendar_dismissed_at + DISMISS_GRACE_NS < self.clock_pressed_at {
             m.push(Action::ToggleCalendar);
         }
@@ -170,15 +204,38 @@ impl Taskbar {
         if resp.hovered && ui.input.scroll.1 != 0 && m.audio.is_some() {
             m.push(Action::SetVolume(level + ui.input.scroll.1 as f32 * 0.05, false));
         }
+        if resp.hovered {
+            let label = match &m.audio {
+                None => "No sound device".into(),
+                Some(_) if muted => "Volume: muted".into(),
+                Some(_) => format!("Volume: {}%", (level * 100.0 + 0.5) as u32),
+            };
+            tip = Some((label, vol.center().0));
+        }
 
         // "Show desktop" sliver at the far right.
         let resp = ui.interact(ui.id("show-desktop"), show_desktop);
         if resp.hovered {
             ui.canvas.fill_rect(Rect::new(show_desktop.x, 10, 1, h - 20), Color::rgba(255, 255, 255, 90));
+            tip = Some(("Show desktop".into(), show_desktop.center().0));
         }
         if resp.clicked {
             m.push(Action::ShowDesktop);
         }
+
+        // A press hides the tooltip; it comes back after resting again.
+        if ui.input.pressed.iter().any(|&p| p) {
+            tip = None;
+        }
+        let now_ns = ui.now();
+        m.tip = tip.map(|(label, anchor_x)| {
+            let since = match &m.tip {
+                Some(old) if old.label == label => old.since,
+                _ => now_ns,
+            };
+            let text_width = ui.measure(&label, Font::Regular, 13.0) as i32;
+            Tip { label, anchor_x, text_width, since }
+        });
     }
 
     /// What clicking an app button does: launch it, focus or minimise its

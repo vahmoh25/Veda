@@ -26,6 +26,7 @@ mod desktop;
 mod notify;
 mod start;
 mod taskbar;
+mod tooltip;
 mod volume;
 mod wallpaper;
 
@@ -98,6 +99,8 @@ pub struct Model {
     pub start_dismissed_at: u64,
     pub calendar_dismissed_at: u64,
     pub volume_dismissed_at: u64,
+    /// The taskbar button under the pointer, for its tooltip.
+    pub tip: Option<tooltip::Tip>,
     pub actions: Vec<Action>,
 }
 
@@ -130,6 +133,7 @@ struct Shell {
     start: Option<Popup<start::StartMenu>>,
     calendar: Option<Popup<calendar::Calendar>>,
     volume: Option<Popup<volume::VolumeFlyout>>,
+    tooltip: Option<tooltip::Tooltip>,
     notes: notify::Notifications,
     listener: Option<Channel>,
     clients: Vec<Channel>,
@@ -363,6 +367,23 @@ impl Shell {
         }
     }
 
+    /// Shows, replaces or hides the taskbar tooltip.
+    fn update_tooltip(&mut self) {
+        let popup_open = self.start.is_some() || self.calendar.is_some() || self.volume.is_some();
+        let due = self.model.tip.as_ref().filter(|t| !popup_open && vrt::time::now_ns() >= t.since + tooltip::DELAY_NS);
+        match due {
+            Some(tip) => {
+                if self.tooltip.as_ref().map(|t| t.label()) != Some(tip.label.as_str()) {
+                    self.tooltip = tooltip::Tooltip::open(&self.display, self.model.screen, tip);
+                }
+            }
+            None => self.tooltip = None,
+        }
+        if let Some(t) = &mut self.tooltip {
+            t.pump();
+        }
+    }
+
     // ---- main loop ----------------------------------------------------------
 
     /// Lets every surface process its events and draw.
@@ -514,10 +535,16 @@ impl Shell {
         if let Some(p) = &self.volume {
             add_host(&p.host, &mut items);
         }
+        if let Some(t) = &self.tooltip {
+            add_host(t.host(), &mut items);
+        }
         for h in self.notes.hosts() {
             add_host(h, &mut items);
         }
         deadline = deadline.min(self.notes.deadline());
+        if let (Some(tip), None) = (&self.model.tip, &self.tooltip) {
+            deadline = deadline.min(tip.since + tooltip::DELAY_NS);
+        }
         let readable = signals::READABLE | signals::PEER_CLOSED;
         if let Some(l) = &self.listener {
             items.push(WaitItem { handle: l.raw(), signals: readable, ..Default::default() });
@@ -537,6 +564,7 @@ impl Shell {
     fn run(&mut self) -> i32 {
         loop {
             self.pump();
+            self.update_tooltip();
             if self.desktop_host.window.closed || self.taskbar_host.window.closed {
                 println!("lost the display; exiting");
                 return 2;
@@ -651,6 +679,7 @@ fn main() -> i32 {
         start_dismissed_at: 0,
         calendar_dismissed_at: 0,
         volume_dismissed_at: 0,
+        tip: None,
         actions: Vec::new(),
     };
     let mut desktop = desktop::Desktop::new();
@@ -668,6 +697,7 @@ fn main() -> i32 {
         start: None,
         calendar: None,
         volume: None,
+        tooltip: None,
         notes: notify::Notifications::new(),
         listener,
         clients: Vec::new(),
