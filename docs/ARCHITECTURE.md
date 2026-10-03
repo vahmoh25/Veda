@@ -12,8 +12,9 @@ that communicate over kernel channels.
  ├──────────────────────────────────────────────────────────────────────────┤
  │ Libraries      vui (widgets) · vgfx (2D) · v3d (3D) · vfont · vimage …   │
  ├──────────────────────────────────────────────────────────────────────────┤
- │ Services       init (registry, launcher) · vfs · compositor · audio      │
- │ Drivers        ps2 · virtio-input · virtio-snd · virtio-blk · pci        │
+ │ Services       init (registry, launcher) · vfs · compositor · audio ·    │
+ │                agent (the voice agent) · netd · wlan                     │
+ │ Drivers        ps2 · virtio-input · virtio-snd · ac97 · virtio-blk · pci │
  ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
  │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
  ├──────────────────────────────────────────────────────────────────────────┤
@@ -72,6 +73,11 @@ Bulk data (window buffers, audio rings, file contents) travels in shared
 VMOs. Threads wait on signals of several objects at once
 (`object_wait_many`).
 
+**Time.** The monotonic clock comes from the TSC, calibrated against the
+HPET. The wall clock starts from the firmware's RTC, which keeps UTC; the
+`tz=` boot option (xtask passes the host's offset) gives local time, which
+people see, while protocols and certificates use the UTC clock.
+
 **Scheduling.** 32 priorities, round-robin within a priority, 10 ms slices,
 preemption on wake-up of a higher-priority thread, tickless one-shot timers,
 eager FPU/SSE/AVX state switching with XSAVE.
@@ -89,7 +95,10 @@ eager FPU/SSE/AVX state switching with XSAVE.
   carrying the startup message (arguments, environment, role-tagged handles).
 * **Services** register with the registry in `init`; clients connect by name.
   Protocols are declared with the `vipc` macros, which generate typed client
-  stubs and server dispatch code.
+  stubs and server dispatch code. With every connection the registry hands
+  the service the client's identity (process, program name, whether it is
+  a system service or an application), so a service can decide who may do
+  what; system service names cannot be registered by other programs.
 
 ## Storage
 
@@ -237,9 +246,16 @@ the pool's workers on different CPUs at once.
 
 ## Audio
 
-* `virtio-snd` drives the sound card. It connects to the audio service's
-  private `audiodev` protocol, so the service also runs without sound
-  hardware (a null output then consumes audio in real time).
+* `virtio-snd` (QEMU) and `ac97` (VirtualBox's AC'97 card, also in QEMU)
+  drive the sound cards, for playback and the microphone. They connect to
+  the audio service's private `audiodev` protocol, so the service also
+  runs without sound hardware (a null output then consumes audio in real
+  time).
+* **Recording.** An input device produces into a ring with a capture
+  clock; the service converts it for each capture stream, and runs the
+  echo canceller for streams that ask for it (the agent's microphone) with
+  the mixed output as reference, aligned by the two clocks. The device
+  records only while a capture stream is open.
 * The `audio` service mixes every client stream: exact rational resampling
   (polyphase windowed sinc in integer arithmetic), ramped gains, click-free
   pause and seek, master volume and mute.
@@ -263,6 +279,25 @@ the pool's workers on different CPUs at once.
   noise floors, a likelihood ratio test, click rejection, hysteresis per
   utterance), and `level` meters RMS and peak levels in dBFS.
 
+## The voice agent (`services/agent`)
+
+The agent service holds the conversation with Deepgram's Voice Agent API
+(a WebSocket over TLS through `vweb` and `vtls`), the microphone and the
+voice (two audio streams), and listens for its name while asleep (a local
+voice detector, then Deepgram's streaming recognition). A worker thread
+runs the functions the language model calls: system functions (windows,
+files, volume, Wi-Fi, timers, memory, ...) and applications' actions,
+which every `vui` application offers over the `agentapp` protocol
+(describe, state, invoke) through `vui::App`. Actions that need the
+user's consent wait for an approval from the shell (the agent's window or
+a notification); only the shell may approve and only Settings may change
+the agent's settings, by identity. The agent's settings, Deepgram key,
+memory and permissions live in `/home/.private/agent`, which the file
+system service opens to the agent alone. The decisions that need no I/O
+(the protocol, tools and their risks, the prompt, memory, the approval
+policy, the wake word) are in `vagent`, tested on the host. See
+[The agent](AGENT.md).
+
 ## Testing
 
 * Host unit tests for the libraries with platform-independent logic (ABI,
@@ -279,6 +314,9 @@ the pool's workers on different CPUs at once.
   a rustls server and real certificate chains.
 * GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
   mouse, keyboard, waits on log lines, screenshots — and fail on panics.
+* The agent's scripts (`tests/agent/*.vts`) with a stand-in for Deepgram on
+  the host and a test microphone fed from the host; `tests/real/` talks to
+  the real Deepgram.
 
 `cargo xtask test --ui` runs all three.
 
@@ -300,6 +338,8 @@ the pool's workers on different CPUs at once.
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
 | `lib/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
+| `lib/web`, `lib/json` | HTTP/1.1 and WebSocket clients over TCP or TLS; JSON |
+| `lib/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `lib/wlan`, `lib/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
 | `third_party/` | vendored crates with documented patches (smoltcp) |
 | `services/`, `drivers/`, `apps/` | system services, drivers and applications (the games included) |

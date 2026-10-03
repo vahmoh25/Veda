@@ -21,6 +21,9 @@ cargo xtask run --vm virtualbox --net bridged   # ... on the host's real network
 cargo xtask run --vm virtualbox --resolution 1600x1000 --scale 2   # larger desktop, window at 2x
 cargo xtask test --ui --vm virtualbox      # the test suite in VirtualBox
 cargo xtask run --disk-bus ahci             # QEMU with SATA disks (as VirtualBox has)
+cargo xtask run --sound ac97   # QEMU with an AC'97 sound card (as VirtualBox has)
+cargo xtask script tests/agent/sim-basics.vts   # the agent, with a stand-in for Deepgram
+cargo xtask script tests/real/agent-wake.vts    # ... with the real Deepgram ($DEEPGRAM_API_KEY)
 cargo xtask run --net wifi     # boot with the virtual Wi-Fi radio and airsim
 cargo xtask run --net both     # ... plus the wired card (or --net none)
 cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
@@ -31,6 +34,13 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
 * Headless runs record audio to `target/vindows/audio.wav`.
+* The agent's scripts (`tests/agent/`) talk to a stand-in for Deepgram
+  that xtask starts on the host, and feed the agent's microphone from the
+  host (`testmic`). The scripts in `tests/real/` talk to the real Deepgram
+  with the key in `DEEPGRAM_API_KEY` (in PowerShell
+  `$env:DEEPGRAM_API_KEY = "..."`); they type it into Settings with
+  `type-env`, so it is in neither the script nor the logs. See
+  [The agent](AGENT.md#testing).
 * With `--vm virtualbox`, xtask creates the VirtualBox machine "Vindows"
   (files in `target/vindows/vbox`) on first use and updates it from the
   options on every run. Its disks are VMDK descriptors (`vindows.vmdk`,
@@ -130,6 +140,13 @@ pinned=false
 ```
 
 `icon` names are mapped to vector icons by `vui::Icon::by_name`.
+
+5. Make it agent-compatible: implement `App::agent_info` (a summary and
+   the actions it offers, with their risk), `App::agent_state` (what the
+   window shows, as JSON) and `App::agent_invoke` (run an action through
+   the same code as the keyboard and mouse). `vui::run` registers the
+   application with the agent; see
+   [The agent](AGENT.md#making-an-application-agent-compatible).
 
 ### The `vui` toolkit in brief
 

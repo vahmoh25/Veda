@@ -1,0 +1,286 @@
+# The voice agent
+
+Vindows has a voice that lives in it. The agent — Vera, until you rename
+it — is not an application you open: it is always there, a small circle in
+the taskbar, asleep until you call it. You talk to it as you would to a
+person in the room; it answers in its own voice and does things on the
+computer for you — opens and arranges applications, writes in the Text
+Editor, works with files, plays music, changes settings, sets timers —
+through the same operations the keyboard and mouse use. It remembers what
+you tell it about yourself, and it asks before doing anything that is hard
+to undo.
+
+Speech recognition, the language model and the voice all come from
+[Deepgram](https://deepgram.com): its Voice Agent API for conversations and
+its streaming speech recognition for hearing the agent's name. The API key,
+the models and the voice are system settings (Settings → Agent).
+
+```
+            ┌───────────── shell ─────────────┐      ┌──── Settings ────┐
+            │ tray circle · agent window ·    │      │ Agent page: key, │
+            │ approval cards / notifications  │      │ voice, models,   │
+            └──────────────┬──────────────────┘      │ memory, consent  │
+               ui link     │  (events + live levels)  └────────┬─────────┘
+                           ▼                                   │ admin
+  ┌──────────────────────── services/agent ───────────────────▼─────────┐
+  │ conversation (Voice Agent WebSocket) · name listener (Nova-3)       │
+  │ worker: system functions · applications · approvals · memory       │
+  └──────┬───────────────────────┬────────────────────────┬────────────┘
+         │ audio (mic 16 kHz,    │ agentapp protocol      │ wss / https
+         │ echo-cancelled;       │ (describe · state ·    │ (vweb + vtls)
+         │ voice 24 kHz)         │  invoke)               ▼
+   ┌─────▼─────┐        ┌────────▼─────────┐       Deepgram
+   │ audio     │        │ applications     │
+   │ service   │        │ (vui::App, games)│
+   └───────────┘        └──────────────────┘
+```
+
+## Talking to it
+
+* **Say its name**: "Hey Vera, open my shopping list", "Vera, play some
+  music", "what time is it, Vera?". Whatever you said with its name is the
+  first thing it hears.
+* **Click the circle** in the taskbar, or press **Win+Space**: the agent's
+  window opens and it listens.
+* Talk naturally. Interrupt it whenever you like — it stops speaking at
+  once and listens. Change your mind, ask follow-up questions, or ask it to
+  do several things in a row.
+* Say goodbye ("thanks, that's all") and it goes back to sleep after its
+  goodbye; it also falls asleep after a quiet spell (40 seconds by
+  default, Settings → Agent → Listening).
+
+The window is deliberately plain: the taskbar's colour and a white circle
+that breathes while the agent listens and moves with its voice while it
+speaks. A microphone button mutes it. Requests for your consent appear in
+the window while it is open, and as notifications above the tray while it
+is closed.
+
+## How a conversation works
+
+* **Asleep** (`services/agent/src/listen.rs`). With "Answer when someone
+  says its name" on, the microphone stays open and a voice detector
+  (`vaudio::vad`) runs on the computer; nothing is sent anywhere while
+  nobody speaks. When someone does, the speech — with 0.6 s from before,
+  so the first word is not cut — is streamed to Deepgram's Nova-3
+  recogniser, with the agent's name as a key term, until three seconds of
+  quiet (or a minute). `vagent::wake::addressed` decides whether a final
+  transcript calls the agent ("Hey Vera, …", "… Vera?") or only mentions it
+  ("I told Anna about Vera"). Recognition is capped at ten minutes an hour,
+  so a television or music playing all day cannot run up the bill.
+* **Waking** opens a Voice Agent conversation
+  (`wss://agent.deepgram.com/v1/agent/converse`) and sends its `Settings`:
+  16 kHz microphone audio in, 24 kHz voice out, Flux speech recognition
+  (which decides when you have finished a turn), the language model and
+  voice from Settings, the agent's instructions (`vagent::prompt`: its
+  character, how it talks, what it can do, what it remembers about you,
+  the time and what is on the screen, and every application's actions),
+  its functions, and the last few turns of earlier conversations.
+  `mip_opt_out` keeps the audio out of Deepgram's model improvement.
+* **Listening and speaking.** The microphone streams in 20 ms packets.
+  Deepgram's voice arrives faster than real time and queues behind what is
+  playing; when you start talking (`UserStartedSpeaking`) the queue and the
+  stream are flushed at once. The microphone is echo-cancelled in the
+  audio service (`vaudio::aec`, with the mixed speaker output as the
+  reference), so the agent does not hear itself.
+* **Doing.** The language model calls functions (below); the agent service
+  runs them on a worker thread and answers with JSON results. A function
+  that needs your consent answers "waiting for approval", and the outcome
+  comes back later as a notice (`[Vindows] The user allowed …`).
+* **Ending.** `end_conversation` (after a goodbye) closes the conversation
+  once the goodbye has been played — unless you talk over it or ask for
+  something else — and the agent falls asleep and listens for its name
+  again.
+
+## What it can do
+
+The agent's own functions (`vagent::tools`):
+
+| Function | What it does |
+|---|---|
+| `get_status` | Time, open windows, volume, network |
+| `list_apps`, `open_app` | Installed applications; open one (with a file) |
+| `app_actions`, `use_app`, `read_app` | An application's actions; run one; what it shows |
+| `window` | List, focus, minimise, maximise, restore, snap or close windows; show the desktop |
+| `files` | List, find, read, write, copy, move, rename and delete files and folders in your home |
+| `volume`, `wifi`, `wallpaper` | Sound, Wi-Fi networks, the wallpaper |
+| `notify`, `timer` | A notification; timers and reminders (they wake the agent) |
+| `memory` | Remember, search and forget what it knows about you |
+| `system`, `tasks` | System details, restart and shut down; running programs |
+| `end_conversation` | Go back to sleep after a goodbye |
+
+Every application adds its own actions (see below), so "open the shopping
+list and add milk" becomes `use_app(editor, open_file …)` then
+`use_app(editor, write …)`. The prompt lists each application's actions
+in one line; `app_actions` gives the details.
+
+## Consent and safety
+
+* Every action has a **risk**: *routine* (looking, navigating, writing a
+  new file, playing music…), *sensitive* (hard to undo or reaching beyond
+  the computer: replacing a file, renaming the agent, changing its
+  language model, running a terminal command…) or *destructive* (deleting,
+  discarding unsaved work, ending programs, shutting down). Routine actions
+  just happen. Sensitive and destructive ones wait for your OK.
+* **The agent service enforces this**, not the language model: a function
+  call that needs consent is held and only runs after you click Allow.
+  Only the desktop shell may answer an approval, and only Settings may
+  change the agent's settings — both are recognised by their process
+  identity, which init attaches to every connection (system service names
+  cannot be taken by other programs).
+* Requests appear in the agent's window or as a notification, with what
+  will happen and on what. *Always allow* is offered for sensitive actions
+  only (Settings → Agent lists them, and can take them back); destructive
+  ones are asked every time. A request expires after three minutes.
+* An approved action may run long after it was asked for, so actions name
+  their targets explicitly (a document by its name, files by their paths)
+  and look them up again when they run. If it fails by then (the file is
+  gone), the agent is told that it failed.
+* What the agent reads from applications and files is information, never
+  instructions: the prompt says so, and nothing in a document can approve
+  anything.
+* The Deepgram key is stored in the agent's private directory
+  (`/home/.private/agent`, which the file system service lets only the
+  agent open), is never shown again (Settings shows its last characters),
+  and is never offered to the language model.
+
+## Memory
+
+The agent remembers what you tell it about yourself — your name, people in
+your life, plans, how you like things done — when you say it plainly or
+ask it to, never its own guesses. It also notes which applications you use
+at what times of day, and keeps the last turns of recent conversations so
+it can pick up where you left off. All of it lives in
+`/home/.private/agent/memory.json`, on your computer; the prompt carries
+what is relevant. Settings → Agent → Memory shows everything it remembers
+and forgets any item, or everything; you can also just ask it ("what do you
+know about me?", "forget where I work").
+
+## Settings → Agent
+
+* **Deepgram**: the API key (checked with Deepgram when saved).
+* **Voice**: the agent's name (which it answers to), its voice — Deepgram's
+  Aura-2 voices, with a spoken preview — and its speaking rate.
+* **Intelligence**: the language model (Deepgram's catalogue, marked with
+  Deepgram's price tier: Standard models cost less per minute than
+  Advanced ones) and the speech recognition model.
+* **Listening**: answering to its name, and how long a quiet conversation
+  lasts.
+* **Memory** and **Always allowed**.
+
+The agent can change its own voice and speaking rate through Settings' own
+agent interface ("talk a bit slower"); its name and language model only
+with your OK, and the key not at all.
+
+Defaults: Vera, Aura-2 Helena, Flux, OpenAI's gpt-4.1-mini (Standard tier).
+
+## Making an application agent-compatible
+
+Agent compatibility is part of the application platform: any `vui`
+application describes what it can do, reports what it shows and performs
+actions, and `vui::run` registers it with the agent service (again after
+the service restarts) and answers the agent between frames.
+
+```rust
+use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_path, arg_str, object, show_path};
+
+impl vui::App for Notes {
+    fn update(&mut self, ui: &mut vui::Ui) { /* ... */ }
+
+    fn agent_info(&self) -> Option<AppAgentInfo> {
+        Some(agent::info(
+            "A notes app: one note per file in ~/Notes.",
+            vec![
+                Action::new("open_note", "Shows a note").param("name", "string", "Its title", true).build(),
+                Action::new("add_line", "Adds a line at the end of the note shown")
+                    .param("text", "string", "The line", true)
+                    .build(),
+                Action::new("delete_note", "Deletes a note for good")
+                    .param("path", "string", "The note's file, such as ~/Notes/Ideas.txt", true)
+                    .risk(Risk::Destructive)
+                    .build(),
+            ],
+        ))
+    }
+
+    fn agent_state(&self) -> Value {
+        object! { "note" => self.title.as_str(), "lines" => self.lines.len() }
+    }
+
+    fn agent_invoke(&mut self, action: &str, args: &Value) -> Result<Value, String> {
+        match action {
+            "open_note" => { /* the same code as clicking it */ Ok(object! { "showing" => self.title.as_str() }) }
+            "add_line" => { self.append(arg_str(args, "text")?); Ok(object! { "lines" => self.lines.len() }) }
+            "delete_note" => {
+                let path = arg_path(args, "path")?;
+                self.delete(&path).map_err(|e| format!("{} could not be deleted: {e}", show_path(&path)))?;
+                Ok(object! { "deleted" => show_path(&path) })
+            }
+            other => Err(format!("Notes has no action called {other}")),
+        }
+    }
+}
+```
+
+Conventions (the built-in applications follow them; `apps/editor/src/agent.rs`
+is a compact example):
+
+* **Actions** are snake_case verbs with short imperative descriptions
+  written for a language model: say the units, the formats and what the
+  default is. Use `choice` for enumerations and `"array"` parameters
+  (`arg_list`) for lists. Offer what people actually ask for, not every
+  menu item.
+* **Risk**: routine for looking, navigating and what is easily undone;
+  sensitive for what is hard to undo or reaches outside; destructive for
+  deleting or discarding. A sensitive or destructive action may run
+  minutes after it was asked for: name its target in the arguments (a file
+  path, a document's name — never "the selected one"), look it up again
+  when it runs, refuse if it is gone, and match destructive targets
+  exactly.
+* **State** is compact JSON of what the window shows: the current
+  document, folder or track, the selection, open dialogs; lists capped
+  (about 60 items, with a total), long text cut with `clip`. No secrets.
+* **Invoke** goes through the same code as the keyboard and mouse, so the
+  window shows the result exactly as if the user had done it. Results are
+  small JSON objects saying what happened; failures are a sentence the
+  agent can say ("there is no folder called Holidays in ~/Pictures"). An
+  action runs on the application's main thread and may take up to 30
+  seconds.
+* **Paths**: accept `~/…`, absolute paths and paths relative to the home
+  folder (`arg_path`), and show them with `show_path`.
+
+Programs with their own loop (the games) keep a
+`vui::agent::Registration`, call `serve` with their `AgentServer` once per
+frame (it never waits), and include `wait_items` in their wait set if they
+sleep between events.
+
+## Testing
+
+* `xtask/src/agentsim.rs` is a stand-in for Deepgram on the host: it
+  speaks the Voice Agent protocol (answers `Settings`, records what the
+  agent sends, sends function calls, voice, interruptions) and the
+  streaming recognition protocol (`agent-hear` makes it "hear" a sentence).
+  Scripts in `tests/agent/` use it — no network, no cost, deterministic:
+  `agent-connected`, `agent-call FUNCTION 'ARGS'`, `agent-result TEXT` (in
+  the function's result), `agent-mark` and `agent-expect TEXT` (in what the
+  agent sent), `agent-speak SECONDS`, `agent-interrupt`, `agent-hear TEXT`,
+  `agent-listens N`, `agent-asleep` (start asleep). The test microphone
+  (`mic-silence`, `mic-tone`, `say TEXT`, `mic-wav FILE`) feeds the agent's
+  microphone through `testmic`.
+* `tests/real/agent-deepgram.vts` and `tests/real/agent-wake.vts` talk to
+  the real Deepgram with the key in `$DEEPGRAM_API_KEY` (typed into
+  Settings by `type-env`, so it appears in neither scripts nor logs); `say`
+  synthesises the user's sentences with Deepgram's text to speech on the
+  host. They are billed, so they are not part of `cargo xtask test`.
+* `vagent` (protocol, tools, prompt, memory, policy, wake word) has host
+  unit tests, and so has `vaudio`'s echo canceller and voice detector.
+
+## Limitations
+
+* English only (Flux and the name detector's key term are English).
+* Speech recognition can mishear; the agent is told so and asks when a
+  word seems out of place, but a misheard name can wake it, or not.
+* The echo canceller is tuned on synthetic rooms; with loud speakers close
+  to the microphone, use headphones if the agent hears itself.
+* The agent needs the Internet and a Deepgram account; asleep, only the
+  name listener's short recognitions are billed, but every conversation
+  minute is.

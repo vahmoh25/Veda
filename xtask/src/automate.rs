@@ -16,6 +16,7 @@
 //! key ctrl-alt-t                   # press a key combination (QEMU qcodes)
 //! key-down alt / key-up alt         # hold or release a single key
 //! type "hello world"               # type ASCII text
+//! type-env DEEPGRAM_API_KEY        # type an environment variable (a secret: in neither script nor log)
 //! expect-serial "PASS"             # fail unless the log contains the text
 //! reject-serial "panic"            # fail if the log contains the text
 //! fail-on "PANIC"                  # abort later waits as soon as the text appears
@@ -26,6 +27,8 @@
 //! double-click 0.05 0.44           # two quick clicks
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
 //! nic e1000                        # QEMU model of the wired card for this run, applied before boot
+//! sound ac97                       # QEMU's sound card for this run (virtio or ac97), applied before boot
+//! expect-audio                     # fail unless the recorded sound output holds more than silence
 //! requires qemu                    # only for QEMU (or `virtualbox`); `test` skips it elsewhere
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
 //! air-expect "list" "1 joined"     # fail unless the simulator's answer contains the text
@@ -34,6 +37,7 @@
 //! say-async "stop"                 # the same without waiting (to talk over the agent)
 //! mic-wav tests/audio/hello.wav    # play a WAV file into the microphone and wait
 //! mic-silence 2                    # queue seconds of silence
+//! mic-tone 1.5                     # queue seconds of a voice-like buzz (for voice detection)
 //! mic-wait 30                      # wait until everything queued has been heard
 //! agent-connected 120              # wait until the agent opened a conversation with the simulator
 //! agent-call open_app '{"app":"editor"}'  # the simulated model calls a function; waits for the result
@@ -44,6 +48,9 @@
 //! agent-interrupt                  # the simulated recogniser hears the user start speaking
 //! agent-send '{"type":"..."}'       # any message from the simulated service
 //! agent-audio 3200                 # fail unless the agent streamed at least this many bytes of microphone audio
+//! agent-asleep                     # boot with the agent asleep (no conversation at start)
+//! agent-hear "Hey Vera, hello" 30  # the simulated recogniser hears this, once the agent streams speech to it
+//! agent-listens 1                  # fail unless the agent opened exactly this many recognition streams
 //! ```
 //!
 //! Scripts that use the microphone commands boot with `testmic`, which

@@ -3,7 +3,9 @@
 Vindows is a modern x86-64 operating system written from scratch,
 entirely in Rust. It is built around a capability-based microkernel and
 ships a polished graphical desktop and everyday applications, and reaches
-the Internet over Ethernet and Wi-Fi. Everything — bootloader, kernel,
+the Internet over Ethernet and Wi-Fi. And it has a voice: an agent that
+lives in the computer, which you talk to like a person and which can do
+on the computer almost anything you can. Everything — bootloader, kernel,
 drivers, services, toolkit, applications — is in this repository; the
 TCP/IP engine, the TLS protocol and the cryptographic primitives come from
 a few mature Rust crates (smoltcp, rustls, RustCrypto).
@@ -12,6 +14,16 @@ a few mature Rust crates (smoltcp, rustls, RustCrypto).
 
 ## Highlights
 
+* **A voice that lives in it.** Say "Hey Vera" (or click the circle in the
+  taskbar) and talk: the agent answers in its own voice, can be
+  interrupted at any moment, and acts on the whole system — it opens and
+  arranges applications, writes in the Text Editor, works with files,
+  plays music, changes settings, sets timers. Every application offers
+  the agent native actions and reports what it shows (no screen
+  scraping); anything hard to undo waits for your OK, in the agent's
+  window or a notification. It remembers what you tell it about yourself,
+  and you can see and erase all of it. Speech, language model and voice
+  come from Deepgram, set up in Settings. See [The agent](docs/AGENT.md).
 * **Microkernel.** `vkernel` only does isolation, scheduling, memory and
   IPC: capability handles with rights, channels that carry handles, VMOs,
   events, futexes, interrupt objects. SMP with x2APIC, tickless timers and
@@ -120,7 +132,9 @@ xtask creates (and on every run updates) a VirtualBox machine named
 conversion and the home directory is shared between the two. VirtualBox
 uses the CPU's hardware virtualization (QEMU on Windows emulates the CPU
 in software). The machine is closer to a real
-PC: SATA disks, an Intel PRO/1000 network card, PS/2 keyboard and mouse.
+PC: SATA disks, an Intel PRO/1000 network card, PS/2 keyboard and mouse,
+AC'97 sound with the host's speakers and microphone (Windows must allow
+VirtualBox to use the microphone, in Settings → Privacy).
 Click into the window to use the mouse; the right **Ctrl** key releases it.
 
 On a high-DPI display the window enlarges the screen as QEMU's does, by the
@@ -145,6 +159,10 @@ need QEMU (the simulated Wi-Fi) are skipped.
 
 ### Using the desktop
 
+* Talk to the agent: add your Deepgram API key in **Settings → Agent**
+  (also its voice, language model and memory), then say "Hey Vera", click
+  the circle on the taskbar or press **Super+Space**. Talk naturally and
+  interrupt whenever you like; say goodbye when you are done.
 * Click the logo on the taskbar or tap the **Super** key for the start
   menu; type to search for an application.
 * Click a taskbar button to open, focus or minimise an application;
@@ -167,17 +185,18 @@ restarts and rebuilds (`--fresh-home` starts over).
 | Application | What it does |
 |-------------|--------------|
 | **Text Editor** | Tabs, syntax highlighting (Rust, C, TOML, Markdown), find and replace, word wrap, line numbers, zoom, unlimited undo, open/save dialogs. |
-| **Photos** | A thumbnail library of `~/Pictures` and a viewer with zoom, pan, rotation, full screen, details and "set as wallpaper"; PNG, JPEG (including progressive), BMP and QOI. |
+| **Photos** | A thumbnail library of `~/Pictures` and a viewer with zoom, pan, rotation, full screen, slideshows, details and "set as wallpaper"; PNG, JPEG (including progressive), BMP and QOI. |
 | **Music** | A library of `~/Music`, now playing with cover art and a live spectrum visualiser, seeking, shuffle and repeat; plays QOA and WAV through the audio service. |
 | **Files** | Places sidebar, breadcrumbs, list and icon views with thumbnails, search, copy/cut/paste, rename, delete, new folders and documents, properties, free space. |
 | **Terminal** | A command shell with about fifty built-in commands for files, processes, the network (`wifi`, `ifconfig`, `ping`, `nslookup`, `curl`, ...) and the system, history and tab completion. |
 | **Task Manager** | Processes with CPU and memory use, "end task", and live performance graphs. |
-| **Settings** | Wallpaper gallery, network and Wi-Fi (connection, networks in range, saved networks, interfaces, diagnostics), display information and system details. |
+| **Settings** | Wallpaper gallery, the agent (Deepgram key, name, voice, language and speech models, listening, memory, permissions), network and Wi-Fi (connection, networks in range, saved networks, interfaces, diagnostics), display information and system details. |
 | **Velocity** | An arcade 3D racing game against computer opponents on a procedurally generated circuit. |
 | **Starfall** | A 3D space shooter through asteroid fields and enemy waves. |
 
 The games are drawn by `v3d`, a multi-threaded fixed-point software 3D
-renderer; there is no GPU.
+renderer; there is no GPU. Every application, the games included, can be
+used by the agent.
 
 ## Testing
 
@@ -196,6 +215,12 @@ against published test vectors, station against access point, TCP/IP stacks
 over a simulated cable, the Wi-Fi simulator, TLS handshakes against a
 rustls server and real certificate chains), and `nettest` checks DNS,
 TCP, HTTP, HTTPS and ping from inside Vindows.
+
+The agent is tested against a stand-in for Deepgram that runs on the host
+(`tests/agent/`: conversations, functions, interruptions, approvals in the
+window and in notifications, waking by name, every application's actions,
+restarts), deterministic and free; `tests/real/agent-*.vts` talk to the
+real Deepgram with the key in `DEEPGRAM_API_KEY`.
 
 GUI automation scripts in `tests/ui/` click through the desktop and
 applications, check the log and save screenshots. The Wi-Fi scripts join
@@ -227,11 +252,11 @@ The serial console (kernel log plus every program's output) is saved to
 |------|----------|
 | `boot/` | `vboot`, the UEFI bootloader |
 | `kernel/` | `vkernel`, the microkernel |
-| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit), `v3d` (3D engine), `net` and `tls` (networking and TLS for applications), `audio`, `text`, `math`, ... |
-| `services/` | `init` (service registry, launcher), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `netd` (network), `wlan` (Wi-Fi) |
-| `drivers/` | `ps2`, `virtio-input`, `virtio-blk`, `ahci` (SATA), `virtio-snd`, `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
+| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit), `v3d` (3D engine), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `agent` (the agent's logic), `audio`, `text`, `math`, ... |
+| `services/` | `init` (service registry, launcher), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent` (the voice agent), `netd` (network), `wlan` (Wi-Fi) |
+| `drivers/` | `ps2`, `virtio-input`, `virtio-blk`, `ahci` (SATA), `virtio-snd`, `ac97` (AC'97 sound), `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
 | `apps/` | the desktop `shell` and the applications, including `racer` (*Velocity*) and `starfall` |
-| `tests/` | `systest` and `nettest` (in-system tests) and GUI automation scripts |
+| `tests/` | `systest` and `nettest` (in-system tests), GUI automation scripts, the agent's scripts (`agent/`, and `real/` for the real services) |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
 | `third_party/` | vendored crates with Vindows patches (smoltcp) |
 | `xtask/` | the build system: cross-compilation, disk image, QEMU, automation |
@@ -240,6 +265,8 @@ The serial console (kernel log plus every program's output) is saved to
 ## Documentation
 
 * [Architecture](docs/ARCHITECTURE.md): how the system fits together.
+* [The agent](docs/AGENT.md): the voice agent, consent and memory, and
+  how applications become agent-compatible.
 * [Networking](docs/NETWORKING.md): the network and Wi-Fi services, the
   simulated Wi-Fi environment, security and tests.
 * [Developing](docs/DEVELOPING.md): build commands, the system image,
