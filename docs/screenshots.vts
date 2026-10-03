@@ -2,16 +2,37 @@
 #
 #   cargo xtask script docs/screenshots.vts
 #
-# which writes docs/images/*.png. Applications are started from the
-# Terminal and the start menu's search, so only Music's play button is
-# clicked by position.
-boot-cmdline "run=terminal"
+# which writes docs/images/*.png. Applications are started from the start
+# menu's search and the Terminal, so only Music's play button is clicked
+# by position.
 fail-on "PANIC"
 wait-serial "desktop ready" 90
-wait-serial "started terminal" 30
 wait 4
 
+# The desktop on its own: the README's main picture.
+move 0.97 0.08
+wait 2
+shot docs/images/desktop.png
+
+# The start menu, searching, over the empty desktop.
+key meta_l
+wait 2
+type "mu"
+wait 2
+shot docs/images/start.png
+# Esc clears the search, then closes the menu.
+key esc
+wait 1
+key esc
+wait 3
+
 # The Terminal.
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 30
+wait 4
 type "ls Pictures"
 key ret
 wait 2
@@ -24,8 +45,8 @@ move 0.97 0.08
 wait 3
 shot docs/images/terminal.png
 
-# The desktop: a Rust program in the Text Editor next to the picture
-# library, each snapped to half of the screen.
+# A Rust program in the Text Editor next to the picture library, each
+# snapped to half of the screen.
 type "edit Documents/primes.rs && run photos && exit"
 key ret
 wait-serial "started photos" 30
@@ -39,19 +60,7 @@ wait 2
 key meta_l-left
 move 0.75 0.06
 wait 4
-shot docs/images/desktop.png
-
-# The start menu, searching.
-key meta_l
-wait 2
-type "mu"
-wait 2
-shot docs/images/start.png
-# Esc clears the search, then closes the menu.
-key esc
-wait 1
-key esc
-wait 3
+shot docs/images/editor-photos.png
 key alt-f4
 wait-serial "editor exited" 20
 wait 2

@@ -36,6 +36,8 @@ repository, with no external crates.
 
 ## Screenshots
 
+![The Text Editor and Photos, each snapped to half of the screen](docs/images/editor-photos.png)
+
 | ![The start menu](docs/images/start.png) | ![Music](docs/images/music.png) |
 |:---:|:---:|
 | The start menu | Music |
