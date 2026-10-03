@@ -1,0 +1,35 @@
+# A game registers again when the agent service restarts (init starts it
+# again after it failed), with a simulated Voice Agent service: the new
+# agent reaches the race in progress rather than starting a second
+# Velocity.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+agent-call use_app '{"app":"racer","action":"start_race","arguments":{"laps":1}}' 60
+agent-result '"started":true'
+wait-serial "racer offers 6 action(s)" 10
+agent-call open_app '{"app":"terminal"}' 60
+agent-result opened
+wait-serial "started terminal" 30
+wait 4
+checkpoint
+# The agent service ends; init starts it again and it reconnects.
+type "kill -f agent"
+key ret
+wait-serial "restarting agent" 30
+wait-serial "state: Listening" 60
+# Velocity registers with the new agent service, which finds the race
+# (paused: the Terminal has the keyboard).
+wait-serial "racer offers 6 action(s)" 30
+agent-call read_app '{"app":"racer"}' 30
+agent-result '"screen":"paused","track":"Valley Ring","laps":1'
+agent-call window '{"operation":"focus","window":"racer"}' 30
+agent-result '"ok":true'
+wait 1
+agent-call use_app '{"app":"racer","action":"resume"}' 30
+agent-result '"paused":false'
+wait 2
+shot target/vindows/agent-games-restart.png
+reject-serial "started racer"

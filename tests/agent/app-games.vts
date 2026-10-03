@@ -1,0 +1,120 @@
+# Velocity, Starfall and About for the voice agent, with a simulated Voice
+# Agent service. The games start, pause, resume, restart and leave races
+# and games through the paths of their keyboard and menus, and say what
+# they show (the computer drives and flies, F8, so there is a race and a
+# score to tell); a game whose window is not in front waits, paused. About
+# shows its licences.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+# Velocity starts for the agent and describes itself.
+agent-call app_actions '{"app":"racer"}' 60
+agent-result change_settings
+wait-serial "racer offers 6 action(s)" 10
+agent-call read_app '{"app":"racer"}' 30
+agent-result '"screen":"menu","track":"Valley Ring","laps":3,"opponents":3'
+# The next race: another circuit (generated first), two laps, two
+# opponents; impossible settings are refused with the reason.
+agent-call use_app '{"app":"racer","action":"change_settings","arguments":{"track":"highland loop","laps":2,"opponents":2}}' 30
+agent-result '"track":"Highland Loop","laps":2,"opponents":2,"generating_track":true'
+wait-serial "racer: track Highland Loop" 30
+agent-call use_app '{"app":"racer","action":"change_settings","arguments":{"laps":20}}' 30
+agent-result "1 to 9 laps"
+wait 2
+shot target/vindows/agent-games-1-settings.png
+# A race, driven by the computer.
+agent-call use_app '{"app":"racer","action":"start_race"}' 30
+agent-result '"started":true,"track":"Highland Loop","laps":2,"opponents":2'
+key f8
+wait-serial "autopilot on" 10
+wait 10
+agent-call read_app '{"app":"racer"}' 30
+agent-result '"screen":"racing"'
+agent-result '"race":{"position":'
+agent-result '"cars":3,"lap":1'
+shot target/vindows/agent-games-2-race.png
+# start_race does not abandon the race in progress.
+agent-call use_app '{"app":"racer","action":"start_race"}' 30
+agent-result "A race is in progress (lap 1 of 2"
+# Paused by the agent, the pause menu shows; resumed, the race goes on.
+agent-call use_app '{"app":"racer","action":"pause"}' 30
+agent-result '"paused":true'
+wait 2
+shot target/vindows/agent-games-3-paused.png
+agent-call read_app '{"app":"racer"}' 30
+agent-result '"screen":"paused"'
+agent-call use_app '{"app":"racer","action":"resume"}' 30
+agent-result '"paused":false'
+agent-call read_app '{"app":"racer"}' 30
+agent-result '"screen":"racing"'
+# Restarted: back on the grid, counting down.
+agent-call use_app '{"app":"racer","action":"restart_race"}' 30
+agent-result '"started":true'
+agent-call read_app '{"app":"racer"}' 30
+agent-result '"screen":"countdown"'
+shot target/vindows/agent-games-4-restarted.png
+agent-call use_app '{"app":"racer","action":"quit_to_menu"}' 30
+agent-result '"abandoned_race":true'
+agent-call use_app '{"app":"racer","action":"pause"}' 30
+agent-result "There is no race to pause: Velocity is on the main menu"
+# Starfall opens for the agent and a game starts; the computer flies.
+agent-call use_app '{"app":"starfall","action":"new_game"}' 60
+agent-result '"started":true'
+wait-serial "starfall offers 5 action(s)" 10
+key f8
+wait-serial-count "autopilot on" 2 10
+wait-serial "starfall: level 1 wave 1" 20
+wait 6
+agent-call read_app '{"app":"starfall"}' 30
+agent-result '"screen":"playing","score":'
+agent-result '"window_in_front":true'
+agent-call use_app '{"app":"starfall","action":"new_game"}' 30
+agent-result "A game is in progress (level 1"
+agent-call use_app '{"app":"starfall","action":"pause"}' 30
+agent-result '"paused":true'
+wait 2
+shot target/vindows/agent-games-5-starfall-paused.png
+agent-call read_app '{"app":"starfall"}' 30
+agent-result '"screen":"paused"'
+agent-call use_app '{"app":"starfall","action":"restart_game"}' 30
+agent-result '"abandoned_score":'
+agent-call read_app '{"app":"starfall"}' 30
+agent-result '"screen":"playing"'
+agent-result '"level":1,"wave":1'
+# Velocity is behind Starfall now: its race waits, paused, until its window
+# is in front (games pause when they lose the keyboard).
+agent-call use_app '{"app":"racer","action":"start_race"}' 30
+agent-result "window is not in front"
+wait 1
+agent-call read_app '{"app":"racer"}' 30
+agent-result '"screen":"paused"'
+agent-result '"window_in_front":false'
+agent-call use_app '{"app":"racer","action":"resume"}' 30
+agent-result "bring the window to the front first"
+agent-call window '{"operation":"focus","window":"racer"}' 30
+agent-result '"ok":true'
+wait 1
+agent-call use_app '{"app":"racer","action":"resume"}' 30
+agent-result '"paused":false'
+wait 3
+shot target/vindows/agent-games-6-racer-in-front.png
+# Starfall lost the keyboard in turn and paused itself.
+agent-call read_app '{"app":"starfall"}' 30
+agent-result '"screen":"paused"'
+agent-call use_app '{"app":"starfall","action":"quit_to_title"}' 30
+agent-result '"screen":"title","abandoned_score":'
+agent-call read_app '{"app":"starfall"}' 30
+agent-result '"screen":"title","high_score":'
+agent-call use_app '{"app":"racer","action":"quit_to_menu"}' 30
+agent-result '"screen":"menu"'
+# About Vindows shows its licences for the agent and says what it shows.
+agent-call use_app '{"app":"about","action":"show_licences"}' 60
+agent-result "MIT license"
+wait-serial "about offers 1 action(s)" 10
+agent-call read_app '{"app":"about"}' 30
+agent-result '"version":"Vindows 0.1.0"'
+agent-result '"licences_shown":true'
+wait 2
+shot target/vindows/agent-games-7-about.png
