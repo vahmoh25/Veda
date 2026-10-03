@@ -342,7 +342,7 @@ impl Starfall {
             g.spawn_rock(z, 0.0);
         }
         // Ready to answer the agent from the first frame on.
-        g.agent = Some(agent::Link::new());
+        g.agent = agent::Link::start();
         g
     }
 

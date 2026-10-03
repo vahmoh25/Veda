@@ -276,12 +276,17 @@ impl Ctx {
             return Ok(());
         }
         self.apps.remove(&app.id);
-        let launcher = connect(launcher::NAME, launcher::Client::new).ok_or("the launcher is not available")?;
-        match launcher.launch_app(app.id.clone(), Vec::new()) {
-            Ok(Ok(_)) => {}
-            _ => return Err(format!("{} could not be started", app.name)),
+        // An open application that has not registered yet (the agent
+        // restarted) registers again on its own: wait for it rather than
+        // starting a second copy.
+        if self.find_window(&app.id).is_none() {
+            let launcher = connect(launcher::NAME, launcher::Client::new).ok_or("the launcher is not available")?;
+            match launcher.launch_app(app.id.clone(), Vec::new()) {
+                Ok(Ok(_)) => {}
+                _ => return Err(format!("{} could not be started", app.name)),
+            }
+            self.note_use(&app.id);
         }
-        self.note_use(&app.id);
         let end = vrt::time::deadline_after(START_TIMEOUT);
         while vrt::time::now_ns() < end {
             vrt::time::sleep(Duration::from_millis(50));

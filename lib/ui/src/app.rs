@@ -10,7 +10,7 @@ use vabi::{RawHandle, WaitItem, signals};
 use vgfx::Text;
 use vproto::display::{Cursor, WindowEvent, WindowSpec};
 
-use crate::agent::{AgentLink, AgentServer, AppAgentInfo};
+use crate::agent::{AgentServer, AppAgentInfo, Registration};
 use crate::theme::Theme;
 use crate::ui::{Context, Input, Ui, UiState};
 use crate::window::{Display, Window, WindowError, connect};
@@ -269,7 +269,8 @@ pub fn run<A: App>(spec: WindowSpec, mut app: A) -> i32 {
         }
     };
     app.init(&host.window);
-    let mut agent = if app.agent_info().is_some() { AgentLink::connect() } else { None };
+    // Registered in the background, and again whenever the agent restarts.
+    let mut agent = if app.agent_info().is_some() { Registration::start() } else { None };
     loop {
         let events = host.pump(|ui| app.update(ui));
         if host.window.closed {
@@ -289,12 +290,9 @@ pub fn run<A: App>(spec: WindowSpec, mut app: A) -> i32 {
         for (h, s) in &extra {
             items.push(WaitItem { handle: *h, signals: *s, ..Default::default() });
         }
-        if let Some(link) = &agent {
-            items.push(WaitItem {
-                handle: link.handle(),
-                signals: signals::READABLE | signals::PEER_CLOSED,
-                ..Default::default()
-            });
+        if let Some(reg) = &agent {
+            let (handle, signals) = reg.wait_items();
+            items.push(WaitItem { handle, signals, ..Default::default() });
         }
         let _ = vrt::object::wait_many(&mut items, host.deadline());
         for (i, it) in items.iter().enumerate().skip(1).take(extra.len()) {
@@ -303,14 +301,12 @@ pub fn run<A: App>(spec: WindowSpec, mut app: A) -> i32 {
                 host.invalidate();
             }
         }
-        if let Some(link) = &agent
+        if let Some(reg) = &mut agent
             && items.last().is_some_and(|it| it.observed != 0)
         {
-            // The agent asked something (the answer may change what the
-            // window shows), or the agent service went away.
-            if !link.serve(&mut AppAgent(&mut app)) {
-                agent = None;
-            }
+            // Registered, the agent asked something (the answer may change
+            // what the window shows), or the agent service went away.
+            reg.serve(&mut AppAgent(&mut app));
             host.invalidate();
         }
     }

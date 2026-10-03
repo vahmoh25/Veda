@@ -5,7 +5,8 @@
 //! ([`App::agent_state`]) and runs actions ([`App::agent_invoke`]); [`run`]
 //! registers it with the agent service and answers the agent's requests on
 //! the main thread, between frames, then redraws. Applications with their
-//! own event loop use [`AgentLink`] and [`AgentServer`] directly.
+//! own event loop (games) keep a [`Registration`] and call
+//! [`Registration::serve`] with their [`AgentServer`] between frames.
 //!
 //! ```ignore
 //! impl vui::App for Editor {
@@ -32,18 +33,23 @@
 //! [`run`]: crate::run
 
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vabi::RawHandle;
+use vabi::{RawHandle, signals};
 use vproto::agent::{ActionResult, agent, agentapp};
 pub use vproto::agent::{ActionSpec, AppAgentInfo, ParamSpec, Risk};
-use vrt::object::Channel;
+use vrt::object::{Channel, Event};
+use vrt::sync::{Condvar, Mutex};
+use vrt::time::Duration;
 
 pub use vjson::{Map, Value, object};
 
 /// How long registering with the agent service may take before the
 /// application gives up and runs without it.
 const REGISTER_TIMEOUT_NS: u64 = 500_000_000;
+/// The pause before trying to register again.
+const REGISTER_RETRY: Duration = Duration::from_secs(2);
 
 /// Builds an [`ActionSpec`].
 pub struct Action(ActionSpec);
@@ -257,6 +263,102 @@ impl AgentLink {
                 Err(vabi::Error::ShouldWait) => return true,
                 Err(_) => return false,
             }
+        }
+    }
+}
+
+/// An application's registration with the agent service, kept up in the
+/// background.
+///
+/// Registering waits for the service's answer, and a frame must not wait:
+/// a helper thread registers, retries every few seconds while the service
+/// is not there, and registers again when it went away (init restarts it).
+/// The application takes the link between frames ([`Registration::serve`])
+/// and never waits itself; an event-driven loop also waits on
+/// [`Registration::wait_items`] so it wakes for the agent's requests.
+pub struct Registration {
+    link: Option<AgentLink>,
+    shared: Arc<RegistrationSlot>,
+    /// Signalled by the helper when it registered.
+    ready: Event,
+}
+
+struct RegistrationSlot {
+    state: Mutex<Pending>,
+    wake: Condvar,
+}
+
+struct Pending {
+    /// A registration the helper made, for the application to take.
+    link: Option<AgentLink>,
+    /// The application needs a registration.
+    wanted: bool,
+}
+
+impl Registration {
+    /// Starts registering in the background.
+    pub fn start() -> Option<Registration> {
+        let ready = Event::create().ok()?;
+        let signal = Event::from_handle(ready.0.duplicate(None).ok()?);
+        let shared = Arc::new(RegistrationSlot {
+            state: Mutex::new(Pending { link: None, wanted: true }),
+            wake: Condvar::new(),
+        });
+        let helper = shared.clone();
+        vrt::thread::Builder::new()
+            .name("agent-link")
+            .stack_size(64 * 1024)
+            .spawn(move || register_in_background(&helper, &signal))
+            .ok()?;
+        Some(Registration { link: None, shared, ready })
+    }
+
+    /// What to wait on: the link once registered (a request, or the service
+    /// went away), otherwise the helper's signal that it registered.
+    pub fn wait_items(&self) -> (RawHandle, u32) {
+        match &self.link {
+            Some(l) => (l.handle(), signals::READABLE | signals::PEER_CLOSED),
+            None => (self.ready.raw(), signals::SIGNALED),
+        }
+    }
+
+    /// Takes a new registration and answers the requests waiting on it,
+    /// without waiting.
+    pub fn serve<S: AgentServer + ?Sized>(&mut self, server: &mut S) {
+        if self.link.is_none()
+            && let Some(mut p) = self.shared.state.try_lock()
+        {
+            self.link = p.link.take();
+            let _ = self.ready.clear();
+        }
+        if let Some(link) = &self.link
+            && !link.serve(server)
+        {
+            // The agent service went away: register with the next one.
+            self.link = None;
+            self.shared.state.lock().wanted = true;
+            self.shared.wake.notify_one();
+        }
+    }
+}
+
+/// The helper thread: registers whenever the application needs it.
+fn register_in_background(shared: &RegistrationSlot, ready: &Event) {
+    loop {
+        let mut p = shared.state.lock();
+        while !p.wanted {
+            p = shared.wake.wait(p);
+        }
+        drop(p);
+        match AgentLink::connect() {
+            Some(link) => {
+                let mut p = shared.state.lock();
+                p.link = Some(link);
+                p.wanted = false;
+                drop(p);
+                let _ = ready.signal();
+            }
+            None => vrt::time::sleep(REGISTER_RETRY),
         }
     }
 }

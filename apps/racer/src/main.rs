@@ -259,7 +259,7 @@ impl Racer {
         }
         g.snap_camera();
         // Ready to answer the agent from the first frame on.
-        g.agent = Some(agent::Link::new());
+        g.agent = agent::Link::start();
         g
     }
 

@@ -1,0 +1,28 @@
+# Applications register again when the agent service restarts (init starts
+# it again after it failed), with a simulated Voice Agent service: the new
+# agent reaches the Text Editor that is open, with its unsaved text,
+# rather than starting a second one.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+agent-call use_app '{"app":"editor","action":"write","arguments":{"text":"still here"}}' 60
+agent-result written
+wait-serial "editor offers" 10
+agent-call open_app '{"app":"terminal"}' 60
+agent-result opened
+wait-serial "started terminal" 30
+wait 4
+checkpoint
+# The agent service ends; init starts it again and it reconnects.
+type "kill -f agent"
+key ret
+wait-serial "restarting agent" 30
+wait-serial "state: Listening" 60
+wait-serial "editor offers" 30
+agent-call read_app '{"app":"editor"}' 30
+agent-result "still here"
+agent-call use_app '{"app":"editor","action":"write","arguments":{"text":" and again","where":"end"}}' 30
+agent-result written
+reject-serial "started editor"

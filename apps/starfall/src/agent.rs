@@ -8,8 +8,6 @@
 //! [`serve`] answers the agent between frames; [`Link`] registers the game
 //! with the agent service.
 
-mod link;
-
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -17,7 +15,7 @@ use alloc::vec;
 use v3d::app::AppState;
 use vui::agent::{self, Action, AgentServer, AppAgentInfo, Value, object};
 
-pub use link::Link;
+pub use vui::agent::Registration as Link;
 
 use crate::{Phase, Starfall};
 
