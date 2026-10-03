@@ -73,7 +73,7 @@ impl Fft {
             im.swap(i as usize, j as usize);
         }
         // Pairs: the twiddle is 1.
-        for (r, i) in re.chunks_exact_mut(2).zip(im.chunks_exact_mut(2)) {
+        for (r, i) in re.as_chunks_mut::<2>().0.iter_mut().zip(im.as_chunks_mut::<2>().0) {
             let (ar, ai, br, bi) = (r[0], i[0], r[1], i[1]);
             r[0] = ar + br;
             i[0] = ai + bi;
@@ -82,7 +82,7 @@ impl Fft {
         }
         // Quads: the twiddles are 1 and -i.
         if n >= 4 {
-            for (r, i) in re.chunks_exact_mut(4).zip(im.chunks_exact_mut(4)) {
+            for (r, i) in re.as_chunks_mut::<4>().0.iter_mut().zip(im.as_chunks_mut::<4>().0) {
                 let (ar, ai, br, bi) = (r[0], i[0], r[2], i[2]);
                 r[0] = ar + br;
                 i[0] = ai + bi;
@@ -162,7 +162,7 @@ impl RealFft {
     pub fn forward(&mut self, input: &[f32], re: &mut [f32], im: &mut [f32]) {
         let (n, h) = (self.n, self.n / 2);
         assert!(input.len() >= n && re.len() > h && im.len() > h);
-        for ((zr, zi), pair) in self.zr.iter_mut().zip(self.zi.iter_mut()).zip(input[..n].chunks_exact(2)) {
+        for ((zr, zi), pair) in self.zr.iter_mut().zip(self.zi.iter_mut()).zip(input[..n].as_chunks::<2>().0) {
             *zr = pair[0];
             *zi = pair[1];
         }
@@ -209,7 +209,7 @@ impl RealFft {
         }
         self.half.transform(&mut self.zr, &mut self.zi);
         let s = 1.0 / h as f32;
-        for ((pair, &zr), &zi) in out[..n].chunks_exact_mut(2).zip(&self.zr).zip(&self.zi) {
+        for ((pair, &zr), &zi) in out[..n].as_chunks_mut::<2>().0.iter_mut().zip(&self.zr).zip(&self.zi) {
             pair[0] = zr * s;
             pair[1] = -zi * s;
         }

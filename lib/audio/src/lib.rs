@@ -26,6 +26,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod aec;
 pub mod fft;
 pub mod mix;
 pub mod qoa;
@@ -33,6 +34,8 @@ pub mod resample;
 pub mod source;
 pub mod synth;
 pub mod tags;
+#[cfg(test)]
+mod testsig;
 pub mod wav;
 
 pub use source::Source;
