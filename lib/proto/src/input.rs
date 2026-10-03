@@ -33,10 +33,41 @@ pub fn report(ch: &vrt::object::Channel, events: Vec<InputEvent>) -> Result<(), 
     vipc::send_event(ch, REPORT, events)
 }
 
+/// A driver's connection to the input service that survives restarts of
+/// the window system: when the service goes away, the sink connects again
+/// (the registry holds the new connection until a successor registers).
+pub struct InputSink {
+    channel: vrt::object::Channel,
+}
+
+impl InputSink {
+    pub fn connect() -> Result<InputSink, crate::ServiceError> {
+        Ok(InputSink { channel: crate::connect(NAME)? })
+    }
+
+    /// Sends a batch of events. Events that cannot be delivered (the service
+    /// is restarting, or is too far behind to queue more) are dropped.
+    pub fn report(&mut self, events: Vec<InputEvent>) {
+        if let Err(vipc::IpcError::PeerClosed) = report(&self.channel, events)
+            && let Ok(ch) = crate::connect(NAME)
+        {
+            self.channel = ch;
+        }
+    }
+}
+
 /// Linux evdev key codes used throughout Vindows.
 pub mod keys {
     pub const ESC: u16 = 1;
     pub const KEY_1: u16 = 2;
+    pub const KEY_2: u16 = 3;
+    pub const KEY_3: u16 = 4;
+    pub const KEY_4: u16 = 5;
+    pub const KEY_5: u16 = 6;
+    pub const KEY_6: u16 = 7;
+    pub const KEY_7: u16 = 8;
+    pub const KEY_8: u16 = 9;
+    pub const KEY_9: u16 = 10;
     pub const KEY_0: u16 = 11;
     pub const MINUS: u16 = 12;
     pub const EQUAL: u16 = 13;

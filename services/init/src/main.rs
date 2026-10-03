@@ -63,6 +63,8 @@ pub struct Init {
     children: BTreeMap<u64, Child>,
     apps: Vec<AppInfo>,
     next_key: u64,
+    /// Recent restart times of each supervised service.
+    restarts: BTreeMap<String, Vec<u64>>,
 }
 
 const CHILD_KEY: u64 = 1 << 48;
@@ -87,7 +89,14 @@ impl Init {
 
     /// Starts `path` from the system image with a registry channel plus
     /// `extra` handles.
-    pub fn spawn(&mut self, name: &str, path: &str, args: &[String], extra: Vec<(u32, Handle)>, service: bool) -> Result<u64, LaunchError> {
+    pub fn spawn(
+        &mut self,
+        name: &str,
+        path: &str,
+        args: &[String],
+        extra: Vec<(u32, Handle)>,
+        service: bool,
+    ) -> Result<u64, LaunchError> {
         let image = self.image(path).ok_or(LaunchError::NotFound)?;
         let registry = self.new_registry_channel().ok_or(LaunchError::NoMemory)?;
         let mut spawn = vrt::process::Spawn::new(name).handle(role::REGISTRY, registry.into_handle());
@@ -99,7 +108,7 @@ impl Init {
             spawn = spawn.handle(r, h);
         }
         let process = spawn.start(image).map_err(|e| {
-            println!("init: failed to start {}: {}", path, e);
+            println!("failed to start {}: {}", path, e);
             match e {
                 vrt::process::SpawnError::BadImage(_) => LaunchError::BadImage,
                 vrt::process::SpawnError::Kernel(vabi::Error::NoMemory) => LaunchError::NoMemory,
@@ -107,6 +116,7 @@ impl Init {
             }
         })?;
         let koid = process.0.koid();
+        println!("started {} (process {})", name, koid);
         // Attribute the registry channel we just created to this process.
         if let Some(c) = self.conns.get_mut(&self.next_key) {
             c.kind = ConnKind::Registry { owner: koid };
@@ -123,7 +133,7 @@ impl Init {
                 Err(_) => {
                     // The service went away; forget it. The connection is lost
                     // (the client will see PEER_CLOSED).
-                    println!("init: service '{}' is gone", name);
+                    println!("service '{}' is gone", name);
                     self.services.remove(name);
                     return;
                 }
@@ -155,7 +165,7 @@ impl Init {
                     Some(Conn { kind: ConnKind::Registry { owner }, .. }) => *owner,
                     _ => 0,
                 };
-                println!("init: service '{}' registered", name);
+                println!("service '{}' registered", name);
                 self.init.services.insert(name.clone(), (listener, owner));
                 for ch in self.init.pending.remove(&name).unwrap_or_default() {
                     self.init.deliver(&name, ch);
@@ -223,7 +233,7 @@ impl Init {
             }
 
             fn power(&mut self, action: u32) -> Result<(), LaunchError> {
-                println!("init: power action {}", action);
+                println!("power action {}", action);
                 let res = self.0.root.create(resource_kind::POWER, 0, 0).map_err(|_| LaunchError::Denied)?;
                 vrt::object::power(&res, action as usize).map_err(|_| LaunchError::Failed)
             }
@@ -238,22 +248,42 @@ impl Init {
         let Some(child) = self.children.remove(&koid) else { return };
         let code = child.process.info().map(|i| i.exit_code).unwrap_or(0);
         if code == vabi::EXIT_CODE_CRASHED {
-            println!("init: {} crashed", child.name);
+            println!("{} crashed", child.name);
         } else {
-            println!("init: {} exited with code {}", child.name, code);
+            println!("{} exited with code {}", child.name, code);
         }
         // Drop the services it provided.
         self.services.retain(|name, (_, owner)| {
             let keep = *owner != koid;
             if !keep {
-                println!("init: service '{}' unregistered", name);
+                println!("service '{}' unregistered", name);
             }
             keep
         });
         if child.service {
-            // Services are expected to run forever; a restart policy could go here.
-            println!("init: warning: system service {} is no longer running", child.name);
+            self.supervise(&child.name);
         }
+    }
+
+    /// Restarts a system service that exited, unless it is not restartable
+    /// or keeps failing.
+    fn supervise(&mut self, name: &str) {
+        const WINDOW_NS: u64 = 60_000_000_000;
+        const MAX_RESTARTS: usize = 3;
+        if !boot::RESTARTABLE.contains(&name) {
+            println!("warning: system service {} is no longer running", name);
+            return;
+        }
+        let now = vrt::time::now_ns();
+        let history = self.restarts.entry(name.to_string()).or_default();
+        history.retain(|&t| now - t < WINDOW_NS);
+        if history.len() >= MAX_RESTARTS {
+            println!("{} failed {} times within a minute; giving up on it", name, MAX_RESTARTS + 1);
+            return;
+        }
+        history.push(now);
+        println!("restarting {}", name);
+        boot::start_service(self, name);
     }
 
     fn run(&mut self) -> ! {
@@ -268,7 +298,7 @@ impl Init {
             let ready = match ws.wait(vabi::DEADLINE_INFINITE) {
                 Ok(r) => r,
                 Err(e) => {
-                    println!("init: wait failed: {}", e);
+                    println!("wait failed: {}", e);
                     continue;
                 }
             };
@@ -295,7 +325,7 @@ impl Init {
 }
 
 fn main() -> i32 {
-    println!("init: starting Vindows {}", env!("CARGO_PKG_VERSION"));
+    println!("starting Vindows {}", env!("CARGO_PKG_VERSION"));
     let root = Resource::from_handle(vrt::env::take_handle(role::ROOT_RESOURCE).expect("init: no root resource"));
     let initrd_vmo = Vmo::from_handle(vrt::env::take_handle(role::INITRD).expect("init: no initrd"));
     let size = initrd_vmo.size().expect("init: initrd size");
@@ -316,9 +346,10 @@ fn main() -> i32 {
         children: BTreeMap::new(),
         apps: Vec::new(),
         next_key: 0,
+        restarts: BTreeMap::new(),
     };
     init.apps = apps::load(&init.initrd);
-    println!("init: {} application(s) installed", init.apps.len());
+    println!("{} application(s) installed", init.apps.len());
     boot::start_system(&mut init);
     boot::start_requested(&mut init);
     init.run()

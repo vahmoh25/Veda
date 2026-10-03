@@ -1,8 +1,9 @@
 //! `systest` — integration tests that run inside Vindows.
 //!
-//! Each test prints `systest: <name> ... ok|FAILED: reason`; the final line is
-//! `systest: PASS` or `systest: FAIL (n failed)`. `cargo xtask test` boots the
-//! system with `init.systest` on the kernel command line and checks the log.
+//! Each test prints `<name> ... ok|FAILED: reason` and the final line is `PASS`
+//! or `FAIL (n failed)`; the kernel log prefixes every line with the program
+//! name, so the serial log reads `systest: PASS`. `cargo xtask test` boots the
+//! system with `systest` on the kernel command line and checks the log.
 
 #![no_std]
 #![no_main]
@@ -39,7 +40,8 @@ fn test_vfs_system_image() -> TestResult {
     check(entries.iter().any(|e| e.name == "init.exe"), "init.exe listed in /system/bin")?;
     let st = fs.stat("/system/etc/version".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     check(!st.is_dir && st.size > 0 && st.read_only, "version file stat")?;
-    let (vmo, len) = fs.read_file("/system/etc/version".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    let (vmo, len) =
+        fs.read_file("/system/etc/version".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     let mut buf = alloc::vec![0u8; len as usize];
     vmo.read(0, &mut buf).map_err(|e| e.to_string())?;
     check(buf.starts_with(b"Vindows"), "version file contents")?;
@@ -61,7 +63,9 @@ fn test_vfs_read_write() -> TestResult {
     let fd = fs.open(path.clone(), open_flags::READ).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     let back = fs.read(fd, 0, 20_000).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     check(back.0 == data, "read back what was written")?;
-    fs.rename(path.clone(), "/home/user/Documents/renamed.txt".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    fs.rename(path.clone(), "/home/user/Documents/renamed.txt".into())
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     check(fs.stat(path).map_err(|e| e.to_string())? == Err(FsError::NotFound), "old name gone after rename")?;
     fs.remove("/home/user/Documents/renamed.txt".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }
@@ -72,6 +76,48 @@ fn test_launcher() -> TestResult {
     let tasks = l.tasks().map_err(|e| e.to_string())?;
     check(tasks.iter().any(|t| t.name == "init"), "init is running")?;
     check(tasks.iter().any(|t| t.name == "vfs"), "vfs is running")
+}
+
+/// The supervisor in `init` restarts crashed system services: kill the
+/// compositor, then wait for a new one to answer display requests and for the
+/// desktop shell (which loses its windows with it) to come back.
+fn test_service_restart() -> TestResult {
+    use vproto::display::display;
+    let l = launcher::Client::new(vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    let koid_of = |l: &launcher::Client, name: &str| -> Result<Option<u64>, String> {
+        Ok(l.tasks().map_err(|e| e.to_string())?.iter().find(|t| t.name == name).map(|t| t.koid))
+    };
+    let shell_before = koid_of(&l, "shell")?;
+    let old = koid_of(&l, "compositor")?.ok_or("the compositor is not running")?;
+    l.kill(old).map_err(|e| e.to_string())?.map_err(|e| alloc::format!("kill: {e:?}"))?;
+    let start = vrt::time::Instant::now();
+    let wait = || vrt::time::sleep(vrt::time::Duration::from_millis(200));
+    loop {
+        if start.elapsed().as_millis() > 20_000 {
+            return Err("the compositor was not restarted".into());
+        }
+        wait();
+        if koid_of(&l, "compositor")?.is_some_and(|k| k != old) {
+            break;
+        }
+    }
+    // The registry queues this connection until the new compositor
+    // registers, so the call waits for it to come up.
+    let d = display::Client::new(vproto::connect(display::NAME).map_err(|e| alloc::format!("{e:?}"))?);
+    let info = d.screen_info().map_err(|e| e.to_string())?;
+    check(info.width > 0 && info.height > 0, "restarted compositor reports the screen")?;
+    // A shell registers its service after creating its windows.
+    loop {
+        if start.elapsed().as_millis() > 40_000 {
+            return Err("the desktop shell did not come back".into());
+        }
+        let shell = koid_of(&l, "shell")?;
+        let names = vproto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
+        if shell.is_some() && shell != shell_before && names.iter().any(|n| n == "shell") {
+            return Ok(());
+        }
+        wait();
+    }
 }
 
 fn test_threads_and_locks() -> TestResult {
@@ -141,30 +187,34 @@ fn test_ipc_primitives() -> TestResult {
     check(r == Err(vabi::Error::TimedOut) && start.elapsed().as_millis() >= 25, "wait timeout")
 }
 
+/// A named test.
+type Test = (&'static str, fn() -> TestResult);
+
 fn main() -> i32 {
-    println!("systest: starting");
-    let tests: [(&str, fn() -> TestResult); 5] = [
+    println!("starting");
+    let tests: [Test; 6] = [
         ("ipc primitives", test_ipc_primitives),
         ("threads and locks", test_threads_and_locks),
         ("vfs system image", test_vfs_system_image),
         ("vfs read/write", test_vfs_read_write),
         ("launcher", test_launcher),
+        ("service restart", test_service_restart),
     ];
     let mut failed = 0;
     for (name, f) in tests {
         match f() {
-            Ok(()) => println!("systest: {} ... ok", name),
+            Ok(()) => println!("{} ... ok", name),
             Err(e) => {
                 failed += 1;
-                println!("systest: {} ... FAILED: {}", name, e);
+                println!("{} ... FAILED: {}", name, e);
             }
         }
     }
     if failed == 0 {
-        println!("systest: PASS");
+        println!("PASS");
         0
     } else {
-        println!("systest: FAIL ({} failed)", failed);
+        println!("FAIL ({} failed)", failed);
         1
     }
 }

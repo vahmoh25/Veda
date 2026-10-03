@@ -1,7 +1,6 @@
 //! The system start-up sequence: which services run, with which
-//! capabilities.
+//! capabilities, and which of them are restarted if they fail.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use vabi::resource_kind;
@@ -24,66 +23,75 @@ pub mod roles {
     pub const DMA_RESOURCE: u32 = USER + 4;
 }
 
+/// System services in start order. File systems come first (everything
+/// else loads data through them), then device management and drivers, the
+/// window system, audio and the desktop shell.
+const SERVICES: [&str; 6] = ["vfs", "devmgr", "ps2", "compositor", "audio", "shell"];
+
+/// Services that are started again if they exit. They hold no state other
+/// processes cannot recover: drivers reconnect to a restarted compositor,
+/// and the shell rebuilds its windows. (The file system and the device
+/// manager are not restarted: one holds the user's files, the other owns
+/// the running drivers.)
+pub const RESTARTABLE: [&str; 4] = ["compositor", "shell", "audio", "ps2"];
+
 fn dup(h: &Option<vrt::Vmo>) -> Option<Handle> {
     h.as_ref().and_then(|v| v.0.duplicate(None).ok())
-}
-
-pub fn start_system(init: &mut Init) {
-    // File systems first: everything else loads data through them.
-    let initrd = init.initrd_vmo.0.duplicate(None).ok();
-    start(init, "vfs", initrd.map(|h| vec![(role::INITRD, h)]).unwrap_or_default());
-
-    // Device manager: enumerates PCI and starts device drivers. It gets
-    // hardware resources to delegate, but not the root resource.
-    let mut dev = Vec::new();
-    for (r, kind, base, size) in [
-        (roles::IOPORT_RESOURCE, resource_kind::IOPORT, 0u64, 0x1_0000u64),
-        (roles::IRQ_RESOURCE, resource_kind::IRQ, 0, 256),
-        (roles::MMIO_RESOURCE, resource_kind::MMIO, 0, 1 << 46),
-        (roles::DMA_RESOURCE, resource_kind::DMA, 0, 0),
-    ] {
-        if let Some(h) = init_resource(init, kind, base, size) {
-            dev.push((r, h));
-        }
-    }
-    start(init, "devmgr", dev);
-
-    // Legacy PS/2 keyboard and mouse.
-    let mut ps2 = Vec::new();
-    if let Some(h) = init_resource(init, resource_kind::IOPORT, 0x60, 5) {
-        ps2.push((roles::IOPORT_RESOURCE, h));
-    }
-    if let Some(h) = init_resource(init, resource_kind::IRQ, 0, 24) {
-        ps2.push((roles::IRQ_RESOURCE, h));
-    }
-    start(init, "ps2", ps2);
-
-    // Window system.
-    let mut display = Vec::new();
-    if let Some(h) = dup(&init.framebuffer) {
-        display.push((role::FRAMEBUFFER, h));
-    }
-    if let Some(h) = dup(&init.boot_info) {
-        display.push((role::BOOT_INFO, h));
-    }
-    start(init, "compositor", display);
-    start(init, "audio", Vec::new());
-    start(init, "shell", Vec::new());
 }
 
 fn init_resource(init: &Init, kind: usize, base: u64, size: u64) -> Option<Handle> {
     init.root.create(kind, base, size).ok().map(|r| r.into_handle())
 }
 
-fn start(init: &mut Init, name: &str, handles: Vec<(u32, Handle)>) {
+/// The capabilities a system service is started with.
+fn handles_for(init: &Init, name: &str) -> Vec<(u32, Handle)> {
+    let mut out = Vec::new();
+    match name {
+        "vfs" => out.extend(init.initrd_vmo.0.duplicate(None).ok().map(|h| (role::INITRD, h))),
+        // Hardware resources to delegate to drivers (but not the root
+        // resource), and the system image to load the drivers from.
+        "devmgr" => {
+            out.extend(init.initrd_vmo.0.duplicate(None).ok().map(|h| (role::INITRD, h)));
+            for (r, kind, base, size) in [
+                (roles::IOPORT_RESOURCE, resource_kind::IOPORT, 0u64, 0x1_0000u64),
+                (roles::IRQ_RESOURCE, resource_kind::IRQ, 0, 256),
+                (roles::MMIO_RESOURCE, resource_kind::MMIO, 0, 1 << 46),
+                (roles::DMA_RESOURCE, resource_kind::DMA, 0, 0),
+            ] {
+                out.extend(init_resource(init, kind, base, size).map(|h| (r, h)));
+            }
+        }
+        // The legacy keyboard controller's ports and IRQ lines.
+        "ps2" => {
+            out.extend(init_resource(init, resource_kind::IOPORT, 0x60, 5).map(|h| (roles::IOPORT_RESOURCE, h)));
+            out.extend(init_resource(init, resource_kind::IRQ, 0, 24).map(|h| (roles::IRQ_RESOURCE, h)));
+        }
+        "compositor" => {
+            out.extend(dup(&init.framebuffer).map(|h| (role::FRAMEBUFFER, h)));
+            out.extend(dup(&init.boot_info).map(|h| (role::BOOT_INFO, h)));
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Starts all system services.
+pub fn start_system(init: &mut Init) {
+    for name in SERVICES {
+        start_service(init, name);
+    }
+}
+
+/// Starts (or restarts) one system service.
+pub fn start_service(init: &mut Init, name: &str) {
     let path = alloc::format!("bin/{name}.exe");
     if init.initrd.find(&path).is_none() {
-        println!("init: {} is not installed; skipping", name);
+        println!("{} is not installed; skipping", name);
         return;
     }
-    match init.spawn(name, &path, &[], handles, true) {
-        Ok(koid) => println!("init: started {} (process {})", name, koid),
-        Err(e) => println!("init: could not start {}: {:?}", name, e),
+    let handles = handles_for(init, name);
+    if let Err(e) = init.spawn(name, &path, &[], handles, true) {
+        println!("could not start {}: {:?}", name, e);
     }
 }
 
@@ -107,14 +115,14 @@ pub fn start_requested(init: &mut Init) {
         if let Some(name) = arg.strip_prefix("run=") {
             let path = alloc::format!("bin/{name}.exe");
             match init.spawn(name, &path, &[], Vec::new(), false) {
-                Ok(_) => println!("init: started {}", name),
-                Err(e) => println!("init: cannot start {}: {:?}", name, e),
+                Ok(_) => {}
+                Err(e) => println!("cannot start {}: {:?}", name, e),
             }
         }
     }
     if cmdline.split_whitespace().any(|a| a == "systest") {
         match init.spawn("systest", "bin/systest.exe", &[], Vec::new(), false) {
-            Ok(_) => println!("init: started systest"),
+            Ok(_) => {}
             Err(e) => println!("systest: FAIL (cannot start: {:?})", e),
         }
     }

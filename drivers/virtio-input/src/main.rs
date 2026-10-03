@@ -149,7 +149,8 @@ fn main() -> i32 {
     // Each descriptor maps to one 8-byte event slot; remember which.
     let mut slot_of_head = alloc::vec![0usize; queue.size() as usize];
     for i in 0..queue.size() as usize {
-        let seg = Segment { phys: buffers.phys() + (i * EVENT_SIZE) as u64, len: EVENT_SIZE as u32, device_writes: true };
+        let seg =
+            Segment { phys: buffers.phys() + (i * EVENT_SIZE) as u64, len: EVENT_SIZE as u32, device_writes: true };
         if let Some(head) = queue.push(&[seg]) {
             slot_of_head[head as usize] = i;
         }
@@ -158,23 +159,15 @@ fn main() -> i32 {
     queue.notify();
     println!("{} ready ({}, abs range {}x{})", name, if irq.is_some() { "MSI-X" } else { "polled" }, max_x, max_y);
 
-    let input = match vproto::connect(input::NAME) {
-        Ok(ch) => ch,
+    let mut input = match input::InputSink::connect() {
+        Ok(sink) => sink,
         Err(e) => {
             println!("cannot reach the input service: {:?}", e);
             return 1;
         }
     };
-    let mut t = Translator {
-        pending: Vec::new(),
-        abs_x: 0,
-        abs_y: 0,
-        abs_dirty: false,
-        max_x,
-        max_y,
-        rel_x: 0,
-        rel_y: 0,
-    };
+    let mut t =
+        Translator { pending: Vec::new(), abs_x: 0, abs_y: 0, abs_dirty: false, max_x, max_y, rel_x: 0, rel_y: 0 };
     loop {
         match &irq {
             Some(irq) => {
@@ -194,12 +187,13 @@ fn main() -> i32 {
             let (ty, code) = (u16::from_le_bytes([e[0], e[1]]), u16::from_le_bytes([e[2], e[3]]));
             let value = u32::from_le_bytes([e[4], e[5], e[6], e[7]]);
             if let Some(batch) = t.feed(ty, code, value) {
-                if input::report(&input, batch).is_err() {
-                    println!("input service went away");
-                    return 1;
-                }
+                input.report(batch);
             }
-            let seg = Segment { phys: buffers.phys() + (slot * EVENT_SIZE) as u64, len: EVENT_SIZE as u32, device_writes: true };
+            let seg = Segment {
+                phys: buffers.phys() + (slot * EVENT_SIZE) as u64,
+                len: EVENT_SIZE as u32,
+                device_writes: true,
+            };
             if let Some(h) = queue.push(&[seg]) {
                 slot_of_head[h as usize] = slot;
             }

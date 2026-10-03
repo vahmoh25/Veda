@@ -152,8 +152,8 @@ fn main() -> i32 {
         return 1;
     };
     println!("keyboard and mouse ready{}", if wheel { " (wheel)" } else { "" });
-    let input = match vproto::connect(input::NAME) {
-        Ok(ch) => ch,
+    let mut input = match input::InputSink::connect() {
+        Ok(sink) => sink,
         Err(e) => {
             println!("cannot reach the input service: {:?}", e);
             return 1;
@@ -227,9 +227,8 @@ fn main() -> i32 {
                 extended = false;
             }
         }
-        if !events.is_empty() && input::report(&input, events).is_err() {
-            println!("input service went away");
-            return 1;
+        if !events.is_empty() {
+            input.report(events);
         }
     }
 }
