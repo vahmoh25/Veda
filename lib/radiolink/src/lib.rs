@@ -121,15 +121,21 @@ impl Message {
     pub fn decode(ty: u8, b: &[u8]) -> Result<Message, LinkError> {
         let mac = |s: &[u8]| -> [u8; 6] { s.try_into().unwrap() };
         Ok(match ty {
-            msg::HELLO if b.len() == 8 => Message::Hello { version: u16::from_le_bytes([b[0], b[1]]), mac: mac(&b[2..8]) },
-            msg::TX if b.len() >= 5 => {
-                Message::Tx { id: u32::from_le_bytes([b[0], b[1], b[2], b[3]]), no_ack: b[4] != 0, frame: b[5..].to_vec() }
+            msg::HELLO if b.len() == 8 => {
+                Message::Hello { version: u16::from_le_bytes([b[0], b[1]]), mac: mac(&b[2..8]) }
             }
+            msg::TX if b.len() >= 5 => Message::Tx {
+                id: u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+                no_ack: b[4] != 0,
+                frame: b[5..].to_vec(),
+            },
             msg::SET_CHANNEL if b.len() == 1 => Message::SetChannel { channel: b[0] },
             msg::SET_POWER if b.len() == 1 => Message::SetPower { on: b[0] != 0 },
-            msg::HELLO_ACK if b.len() >= 8 => {
-                Message::HelloAck { version: u16::from_le_bytes([b[0], b[1]]), mac: mac(&b[2..8]), channels: b[8..].to_vec() }
-            }
+            msg::HELLO_ACK if b.len() >= 8 => Message::HelloAck {
+                version: u16::from_le_bytes([b[0], b[1]]),
+                mac: mac(&b[2..8]),
+                channels: b[8..].to_vec(),
+            },
             msg::RX if b.len() >= 2 => Message::Rx { channel: b[0], signal_dbm: b[1] as i8, frame: b[2..].to_vec() },
             msg::TX_STATUS if b.len() == 5 => {
                 Message::TxStatus { id: u32::from_le_bytes([b[0], b[1], b[2], b[3]]), acked: b[4] != 0 }
@@ -140,10 +146,19 @@ impl Message {
 }
 
 /// Reassembles messages from a byte stream.
+///
+/// After a bad length the reader is out of step with the stream. Rather
+/// than giving up on the connection, the reader can be told to
+/// [`Reader::resync`]: it then discards bytes until it finds the start of a
+/// hello (guest side: a hello acknowledgement) of the current version, which
+/// the peer sends in answer to our own hello. This also handles a guest
+/// driver that restarts and begins reading in the middle of a message.
 #[derive(Debug, Default)]
 pub struct Reader {
     buf: Vec<u8>,
     broken: bool,
+    /// Discarding bytes until a message of this type starts.
+    hunting: Option<u8>,
 }
 
 impl Reader {
@@ -158,12 +173,37 @@ impl Reader {
         }
     }
 
+    /// Whether `b` starts a hello-type message (`ty` is [`msg::HELLO`] or
+    /// [`msg::HELLO_ACK`]) of this protocol version.
+    fn hello_starts(b: &[u8], ty: u8) -> bool {
+        // type (1) + version (2) + MAC (6) + up to 64 channels.
+        let len = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize;
+        let len_ok = if ty == msg::HELLO { len == 9 } else { (9..=9 + 64).contains(&len) };
+        len_ok && b[4] == ty && b[5..7] == VERSION.to_le_bytes()
+    }
+
     /// The next complete message, `Ok(None)` if more bytes are needed.
-    /// After `Err(BadLength)` the reader stays broken until [`Reader::reset`].
-    pub fn next(&mut self) -> Result<Option<Message>, LinkError> {
+    /// After `Err(BadLength)` the reader stays broken until
+    /// [`Reader::reset`] or [`Reader::resync`].
+    pub fn next_message(&mut self) -> Result<Option<Message>, LinkError> {
         loop {
             if self.broken {
                 return Err(LinkError::BadLength);
+            }
+            if let Some(ty) = self.hunting {
+                let found = (0..self.buf.len().saturating_sub(6)).find(|&i| Self::hello_starts(&self.buf[i..], ty));
+                match found {
+                    Some(i) => {
+                        self.buf.drain(..i);
+                        self.hunting = None;
+                    }
+                    None => {
+                        // Keep the last bytes: a header may be split.
+                        let keep = self.buf.len().min(6);
+                        self.buf.drain(..self.buf.len() - keep);
+                        return Ok(None);
+                    }
+                }
             }
             if self.buf.len() < 4 {
                 return Ok(None);
@@ -193,6 +233,21 @@ impl Reader {
     pub fn reset(&mut self) {
         self.buf.clear();
         self.broken = false;
+        self.hunting = None;
+    }
+
+    /// Gets back in step with the stream: discards bytes until a message of
+    /// type `ty` ([`msg::HELLO`] on the host, [`msg::HELLO_ACK`] in the
+    /// guest) begins. The caller sends its own hello so that the peer
+    /// answers with one.
+    pub fn resync(&mut self, ty: u8) {
+        self.broken = false;
+        self.hunting = Some(ty);
+    }
+
+    /// Whether the reader is discarding bytes until a hello.
+    pub fn resyncing(&self) -> bool {
+        self.hunting.is_some()
     }
 
     /// Bytes waiting for the rest of their message.
@@ -226,7 +281,7 @@ mod tests {
             let mut got = Vec::new();
             for c in all.chunks(chunk) {
                 r.push(c);
-                while let Some(m) = r.next().unwrap() {
+                while let Some(m) = r.next_message().unwrap() {
                     got.push(m);
                 }
             }
@@ -239,19 +294,19 @@ mod tests {
     fn bad_lengths_break_the_stream_and_bad_bodies_are_skipped() {
         let mut r = Reader::new();
         r.push(&0u32.to_le_bytes());
-        assert_eq!(r.next(), Err(LinkError::BadLength));
+        assert_eq!(r.next_message(), Err(LinkError::BadLength));
         r.push(&Message::SetChannel { channel: 1 }.encode());
-        assert_eq!(r.next(), Err(LinkError::BadLength));
+        assert_eq!(r.next_message(), Err(LinkError::BadLength));
         r.reset();
         r.push(&((MAX_MESSAGE + 1) as u32).to_le_bytes());
-        assert_eq!(r.next(), Err(LinkError::BadLength));
+        assert_eq!(r.next_message(), Err(LinkError::BadLength));
         r.reset();
         // Unknown type, then a wrong-size body, then a good message.
         r.push(&[2, 0, 0, 0, 0x7F, 0]);
         r.push(&[3, 0, 0, 0, msg::SET_CHANNEL, 1, 2]);
         r.push(&Message::SetPower { on: true }.encode());
-        assert_eq!(r.next(), Ok(Some(Message::SetPower { on: true })));
-        assert_eq!(r.next(), Ok(None));
+        assert_eq!(r.next_message(), Ok(Some(Message::SetPower { on: true })));
+        assert_eq!(r.next_message(), Ok(None));
     }
 
     #[test]
@@ -268,8 +323,48 @@ mod tests {
                     *b = (s % 9) as u8;
                 }
                 r.push(&chunk);
-                while let Ok(Some(_)) = r.next() {}
+                while let Ok(Some(_)) = r.next_message() {}
             }
         }
+    }
+
+    #[test]
+    fn resync_finds_the_next_hello() {
+        let ack = Message::HelloAck { version: VERSION, mac: [2, 0x56, 0x57, 0xAA, 0, 1], channels: vec![1, 6, 11] };
+        // The tail of a message, garbage that looks like a huge length, then
+        // a receive message and the acknowledgement split across pushes.
+        let mut stream = vec![0x33, 0x44, 0xFF, 0xFF, 0xFF, 0x7F, 0x81];
+        stream.extend_from_slice(&Message::Rx { channel: 1, signal_dbm: -50, frame: vec![0x81; 40] }.encode());
+        stream.extend_from_slice(&ack.encode());
+        stream.extend_from_slice(&Message::TxStatus { id: 3, acked: false }.encode());
+        for chunk in [1usize, 3, 5, 64] {
+            let mut r = Reader::new();
+            r.resync(msg::HELLO_ACK);
+            assert!(r.resyncing());
+            let mut got = Vec::new();
+            for c in stream.chunks(chunk) {
+                r.push(c);
+                while let Some(m) = r.next_message().unwrap() {
+                    got.push(m);
+                }
+            }
+            assert_eq!(got, vec![ack.clone(), Message::TxStatus { id: 3, acked: false }], "chunk size {chunk}");
+            assert!(!r.resyncing());
+        }
+        // A broken reader recovers through resync, on the host side too.
+        let mut r = Reader::new();
+        r.push(&[0xFF; 8]);
+        assert_eq!(r.next_message(), Err(LinkError::BadLength));
+        r.resync(msg::HELLO);
+        r.push(&[1, 2, 3]);
+        let hello = Message::Hello { version: VERSION, mac: [0; 6] };
+        r.push(&hello.encode());
+        assert_eq!(r.next_message(), Ok(Some(hello)));
+        // A hello of another version is not taken for the start of a message.
+        let mut r = Reader::new();
+        r.resync(msg::HELLO);
+        r.push(&Message::Hello { version: VERSION + 1, mac: [0; 6] }.encode());
+        assert_eq!(r.next_message(), Ok(None));
+        assert!(r.pending() <= 6);
     }
 }

@@ -43,6 +43,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "airsim"
+version = "0.1.0"
+dependencies = [
+ "ventropy",
+ "vradiolink",
+ "vwlan",
+]
+
+[[package]]
 name = "assetgen"
 version = "0.1.0"
 dependencies = [
@@ -1016,6 +1025,10 @@ dependencies = [
  "vipc",
  "vrt",
 ]
+
+[[package]]
+name = "vradiolink"
+version = "0.1.0"
 
 [[package]]
 name = "vraster"

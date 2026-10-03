@@ -554,11 +554,10 @@ impl AccessPoint {
     fn sta_left(&mut self, h: &Header, f: &[u8]) -> Vec<ApAction> {
         let sta = h.addr2;
         let Some(s) = self.stations.get_mut(&sta) else { return Vec::new() };
-        let body = if s.pmf && s.tk.is_some() {
+        let body = if let Some(tk) = s.tk.filter(|_| s.pmf) {
             if !h.fc.protected() {
                 return Vec::new();
             }
-            let tk = s.tk.unwrap();
             match ccmp::ccmp_decrypt(&tk, f) {
                 Ok((plain, _)) => plain[h.len..].to_vec(),
                 Err(_) => return Vec::new(),
@@ -573,11 +572,11 @@ impl AccessPoint {
     fn action(&mut self, h: &Header, f: &[u8]) -> Vec<ApAction> {
         let sta = h.addr2;
         let Some(s) = self.stations.get(&sta) else { return Vec::new() };
-        let plain = if s.pmf && s.tk.is_some() {
+        let plain = if let Some(tk) = s.tk.filter(|_| s.pmf) {
             if !h.fc.protected() {
                 return Vec::new();
             }
-            match ccmp::ccmp_decrypt(s.tk.as_ref().unwrap(), f) {
+            match ccmp::ccmp_decrypt(&tk, f) {
                 Ok((p, _)) => p,
                 Err(_) => return Vec::new(),
             }

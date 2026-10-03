@@ -1,0 +1,14 @@
+[package]
+name = "airsim"
+description = "Simulated Wi-Fi environment for Vindows under QEMU: access points, the radio medium and the uplink to QEMU's network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vwlan = { workspace = true }
+vradiolink = { workspace = true }
+ventropy = { workspace = true }
+
+[lints]
+workspace = true

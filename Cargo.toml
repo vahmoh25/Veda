@@ -28,6 +28,7 @@ members = [
     "lib/netstack",
     "lib/net",
     "lib/wlan",
+    "lib/radiolink",
     "services/init",
     "services/vfs",
     "services/devmgr",
@@ -48,6 +49,7 @@ members = [
     "services/audio",
     "tools/assetgen",
     "tools/musicgen",
+    "tools/airsim",
     "drivers/virtio-input",
     "drivers/ps2",
     "drivers/virtio-blk",
@@ -95,6 +97,7 @@ ventropy = { path = "lib/entropy" }
 vnetstack = { path = "lib/netstack" }
 vnet = { path = "lib/net" }
 vwlan = { path = "lib/wlan" }
+vradiolink = { path = "lib/radiolink" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
 sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }
