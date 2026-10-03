@@ -211,7 +211,8 @@ protocol! {
         12 => fn set_position(id: u32, x: i32, y: i32) -> Result<(), DisplayError>;
         /// (Shell) all top-level windows.
         20 => fn list_windows() -> Vec<WindowInfo>;
-        /// (Shell) raises, restores and focuses a window.
+        /// Raises, restores and focuses a window. The shell may activate
+        /// any window, other clients only their own.
         21 => fn activate_window(id: u32) -> Result<(), DisplayError>;
         /// (Shell) minimises a window.
         22 => fn minimize_window(id: u32) -> Result<(), DisplayError>;

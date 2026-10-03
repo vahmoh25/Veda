@@ -240,8 +240,10 @@ impl display::Server for Session<'_> {
     }
 
     fn activate_window(&mut self, id: u32) -> Result<(), DisplayError> {
+        // The shell activates any window; an application only its own (a
+        // single-instance application handed a file, for example).
         if !self.is_shell() {
-            return Err(DisplayError::Denied);
+            self.own(id)?;
         }
         let st = self.comp.windows.get(&id).map(|w| w.state).ok_or(DisplayError::NoSuchWindow)?;
         if st == WindowState::Minimized {

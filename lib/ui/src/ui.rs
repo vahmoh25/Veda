@@ -348,6 +348,12 @@ impl<'a> Ui<'a> {
         let _ = self.ctx.display.set_state(self.ctx.window_id, state);
     }
 
+    /// Raises, restores and focuses the window — for example when a second
+    /// instance of a single-instance application hands it a file.
+    pub fn activate(&mut self) {
+        let _ = self.ctx.display.activate_window(self.ctx.window_id);
+    }
+
     /// Sets the window's title (a no-op when it is unchanged).
     pub fn set_title(&mut self, title: &str) {
         if self.state.title != title {

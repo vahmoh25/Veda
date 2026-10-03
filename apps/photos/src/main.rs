@@ -29,7 +29,6 @@ use alloc::vec::Vec;
 
 use vabi::RawHandle;
 use vgfx::{Align, Color, Rect, ShadowTemplate};
-use vproto::display::ScreenInfo;
 use vproto::vfs;
 use vui::{App, Font, Icon, Ui, WindowSpec, WindowState};
 
@@ -97,11 +96,8 @@ pub(crate) struct Photos {
     pub pointer_moved_at: u64,
     pub wallpaper_busy: bool,
     toast: Option<Toast>,
-    title: String,
     /// Shadow under hovered cards.
     pub card_shadow: ShadowTemplate,
-    /// The rotate icon turned to point clockwise (drawn once).
-    pub rotate_icon: Option<vgfx::Bitmap>,
 }
 
 impl Photos {
@@ -128,9 +124,7 @@ impl Photos {
             pointer_moved_at: 0,
             wallpaper_busy: false,
             toast: None,
-            title: String::new(),
             card_shadow: ShadowTemplate::new(10, 16),
-            rotate_icon: None,
         }
     }
 
@@ -364,28 +358,16 @@ impl Photos {
         self.toast = Some(Toast { text: text.to_string(), icon, shown_at: now, until: now + 2_800_000_000 });
     }
 
-    /// The screen size and work area, asked for when needed: the work area changes when the
-    /// taskbar appears, which can be after this window does.
-    fn screen_info(&mut self, ui: &mut Ui) -> Option<ScreenInfo> {
-        ui.ctx.display.screen_info().ok()
-    }
-
     /// Enters or leaves full screen.
     pub fn set_fullscreen(&mut self, ui: &mut Ui, on: bool) {
         if on == self.fullscreen {
             return;
         }
         if on {
-            // Remember a maximised window (its client area spans the work area's width).
-            let (w, h) = (ui.width, ui.height);
-            self.restore_maximized = self.screen_info(ui).is_some_and(|s| {
-                let (aw, ah) = (s.work_area.w as i32, s.work_area.h as i32);
-                w == aw && h < ah && h > ah - 64
-            });
-            let _ = ui.ctx.display.set_state(ui.ctx.window_id, WindowState::Fullscreen);
+            self.restore_maximized = ui.window_state() == WindowState::Maximized;
+            ui.set_window_state(WindowState::Fullscreen);
         } else {
-            let state = if self.restore_maximized { WindowState::Maximized } else { WindowState::Normal };
-            let _ = ui.ctx.display.set_state(ui.ctx.window_id, state);
+            ui.set_window_state(if self.restore_maximized { WindowState::Maximized } else { WindowState::Normal });
         }
         self.fullscreen = on;
         self.pointer_moved_at = ui.now();
@@ -403,12 +385,7 @@ impl Photos {
         if !first {
             // Drafts while the window is being resized.
             self.view.moved_at = ui.now();
-        }
-        if let Some(s) = self.screen_info(ui) {
-            let covers_screen = size == (s.width as i32, s.height as i32);
-            if self.fullscreen && !covers_screen && !first {
-                self.fullscreen = false;
-            }
+            self.fullscreen = ui.window_state() == WindowState::Fullscreen;
         }
     }
 
@@ -424,10 +401,7 @@ impl Photos {
             (Mode::Viewer, Some(e)) => format!("{} – Photos", e.name),
             _ => "Photos".to_string(),
         };
-        if title != self.title {
-            let _ = ui.ctx.display.set_title(ui.ctx.window_id, title.clone());
-            self.title = title;
-        }
+        ui.set_title(&title);
     }
 
     fn draw_toast(&mut self, ui: &mut Ui) {

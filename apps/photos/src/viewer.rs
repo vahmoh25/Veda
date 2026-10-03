@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use vgfx::{Align, Bitmap, Canvas, Color, Rect};
+use vgfx::{Align, Bitmap, Color, Rect};
 use vimage::Orientation;
 use vproto::display::modifiers;
 use vproto::input::keys;
@@ -412,7 +412,7 @@ impl Photos {
         ui.canvas.fill_rect(Rect::new(x, y + 8, 1, 20), t.border_strong);
         x -= 12;
         let r = take_left(&mut x, 36, y, 36);
-        if rotate_button(ui, r, &mut self.rotate_icon) {
+        if ui.icon_button(r, Icon::RotateRight, "Rotate (R)") {
             actions.push(Action::Rotate(1));
         }
         x -= 8;
@@ -720,29 +720,4 @@ struct Source<'a> {
     /// Full size of the picture.
     dims: (u32, u32),
     alpha: bool,
-}
-
-/// A toolbar button showing the rotate icon turned to point clockwise (the stock icon turns
-/// the other way); returns `true` when clicked.
-fn rotate_button(ui: &mut Ui, r: Rect, icon: &mut Option<Bitmap>) -> bool {
-    let clicked = ui.button_full(r, None, "", ButtonKind::Ghost);
-    let color = ui.theme().text;
-    let bitmap = icon.get_or_insert_with(|| {
-        let mut b = Bitmap::new(r.w, r.h);
-        {
-            let mut c = Canvas::for_bitmap(&mut b);
-            let size = (r.w.min(r.h) as f32 * 0.55).clamp(14.0, 22.0);
-            Icon::Rotate.draw(&mut c, Rect::new(0, 0, r.w, r.h), size, color);
-        }
-        for row in b.pixels.chunks_exact_mut(r.w.max(1) as usize) {
-            row.reverse();
-        }
-        b
-    });
-    ui.canvas.draw_bitmap(bitmap, r.x, r.y, 255);
-    if ui.hovered(r) {
-        let id = ui.id("rotate-tooltip") ^ ((r.x as u64) << 32) ^ r.y as u64;
-        ui.tooltip(id, r, "Rotate (R)");
-    }
-    clicked
 }

@@ -173,7 +173,8 @@ struct Player {
     requested: Option<u32>,
     load_seq: u32,
     rng: vmath::Rng,
-    title_shown: String,
+    /// Another Music process handed us a file: come to the front.
+    activate: bool,
     perf_frames: u32,
     perf_ns: u64,
     perf_start: u64,
@@ -230,7 +231,7 @@ impl Player {
             requested: None,
             load_seq: 0,
             rng: vmath::Rng::new(seed),
-            title_shown: String::new(),
+            activate: false,
             perf_frames: 0,
             perf_ns: 0,
             perf_start: 0,
@@ -919,6 +920,7 @@ impl App for Player {
             for path in files {
                 vrt::println!("opening {}", path);
                 self.shared.send(Command::AddFile { path, play: true });
+                self.activate = true;
             }
             return;
         }
@@ -930,6 +932,9 @@ impl App for Player {
     fn update(&mut self, ui: &mut Ui) {
         let started = vrt::time::now_ns();
         let now = ui.now();
+        if core::mem::take(&mut self.activate) {
+            ui.activate();
+        }
         // Coming back to the window picks up files added in the meantime.
         if ui.input.focused && !self.was_focused {
             self.shared.send(Command::Rescan);
@@ -952,10 +957,7 @@ impl App for Player {
             Some(t) => format!("{} — {}", t.title, t.artist),
             None => String::from("Music"),
         };
-        if title != self.title_shown {
-            let _ = ui.ctx.display.set_title(ui.ctx.window_id, title.clone());
-            self.title_shown = title;
-        }
+        ui.set_title(&title);
         if self.animating() {
             ui.repaint_at(now + 33_000_000);
         }
