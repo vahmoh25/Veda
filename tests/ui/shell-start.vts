@@ -1,0 +1,17 @@
+# Start menu smoke test (1280x800 screen): open the menu with the taskbar
+# button, search for an app and launch it with Enter.
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait 3
+# The start button is the first slot of the centred taskbar group.
+click 0.3555 0.97
+wait 2
+shot target/vindows/shell-1-start.png
+type "term"
+wait 2
+shot target/vindows/shell-2-search.png
+key ret
+wait 5
+shot target/vindows/shell-3-launched.png
+expect-serial "started terminal"
+reject-serial "shell: bad request"
