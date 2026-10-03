@@ -15,6 +15,7 @@ cargo xtask shot --cmdline "run=about"   # also start bin/about.exe at boot
 cargo xtask script tests/ui/about-interaction.vts   # scripted GUI test
 cargo xtask test               # host unit tests + in-system integration tests
 cargo xtask test --ui          # ... plus every GUI script in tests/ui
+cargo xtask script docs/screenshots.vts   # retake the README screenshots
 ```
 
 * The serial console (kernel log plus every program's `println!`) is saved

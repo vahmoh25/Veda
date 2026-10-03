@@ -145,6 +145,7 @@ fn test_service_restart() -> TestResult {
 fn test_crash_report() -> TestResult {
     let l = launcher::Client::new(vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let events = l.watch().map_err(|e| e.to_string())?.map_err(|e| alloc::format!("watch: {e:?}"))?;
+    println!("crash report: starting a copy of systest that faults on purpose (invalid opcode)");
     let koid = l
         .launch("/system/bin/systest.exe".into(), alloc::vec!["crash".into()])
         .map_err(|e| e.to_string())?

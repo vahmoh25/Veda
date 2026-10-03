@@ -73,7 +73,8 @@ cargo xtask run
 
 This builds every component, writes the disk image
 `target/vindows/vindows.img` and boots it in a QEMU window. The first build
-takes a few minutes; later builds are incremental. Useful options:
+takes one to two minutes on a recent PC (it also renders the sample pictures
+and music); later builds are incremental. Useful options:
 
 ```bash
 cargo xtask run --resolution 1920x1080 --smp 4 --memory 2048
