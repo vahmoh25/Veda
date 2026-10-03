@@ -41,15 +41,31 @@ fn joining(s: &WlanStatus) -> bool {
     matches!(s.state, ConnState::Authenticating | ConnState::Associating | ConnState::Securing)
 }
 
-/// The taskbar icon, and whether to draw it dimmed.
-pub fn icon(m: &Model) -> (Icon, bool) {
+/// Draws a Wi-Fi signal as bright bars over the faint full fan (so a weak
+/// signal still reads as a Wi-Fi icon).
+pub fn draw_signal(ui: &mut Ui, r: Rect, bars: u8, size: f32, color: vgfx::Color) {
+    let faint = ui.theme().text_faint;
+    if bars < 3 {
+        ui.icon(r, Icon::Wifi, size, faint);
+    }
+    ui.icon(r, bars_icon(bars), size, color);
+}
+
+/// Draws the taskbar's network icon: the Wi-Fi signal when connected, a
+/// faint Wi-Fi fan when not, the crossed fan when Wi-Fi is off, and the
+/// wired icon on machines without Wi-Fi.
+pub fn draw_icon(ui: &mut Ui, r: Rect, m: &Model) {
+    let t = ui.theme().clone();
     match &m.wifi {
         Some(s) if has_adapter(&m.wifi) => match s.state {
-            ConnState::RadioOff => (Icon::WifiOff, false),
-            ConnState::Connected => (bars_icon(signal_bars(s.signal_dbm)), false),
-            _ => (Icon::WifiNone, !m.wired_up),
+            ConnState::RadioOff => ui.icon(r, Icon::WifiOff, 18.0, t.text),
+            ConnState::Connected => draw_signal(ui, r, signal_bars(s.signal_dbm), 18.0, t.text),
+            // Not connected: with a wired connection the wired icon says
+            // more, otherwise a faint Wi-Fi fan invites a click.
+            _ if m.wired_up => ui.icon(r, Icon::Network, 18.0, t.text),
+            _ => ui.icon(r, Icon::Wifi, 18.0, t.text_faint),
         },
-        _ => (Icon::Network, !m.wired_up),
+        _ => ui.icon(r, Icon::Network, 18.0, if m.wired_up { t.text } else { t.text_faint }),
     }
 }
 
@@ -237,7 +253,7 @@ impl WifiFlyout {
             ui.repaint();
         }
         let color = if n.security.supported() { t.text } else { t.text_faint };
-        ui.icon(Rect::new(head.x + 8, head.y + 13, 28, 28), bars_icon(n.bars), 22.0, color);
+        draw_signal(ui, Rect::new(head.x + 8, head.y + 13, 28, 28), n.bars, 22.0, color);
         if n.security.needs_password() {
             ui.icon(Rect::new(head.x + 26, head.y + 30, 14, 14), Icon::Lock, 11.0, color);
         }

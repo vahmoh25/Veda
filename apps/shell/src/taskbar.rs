@@ -218,8 +218,7 @@ impl Taskbar {
         let net = Rect::new(vol.x - 44, 4, 40, h - 8);
         let resp = ui.interact(ui.id("network"), net);
         Self::button_bg(ui, net, resp.hovered, resp.held, m.wifi_open);
-        let (icon, dim) = wifi::icon(m);
-        ui.icon(net, icon, 18.0, if dim { t.text_faint } else { t.text });
+        wifi::draw_icon(ui, net, m);
         if resp.pressed {
             self.network_pressed_at = ui.now();
         }

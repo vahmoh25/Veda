@@ -22,6 +22,15 @@ fn bars_icon(bars: u8) -> Icon {
     }
 }
 
+/// Draws a Wi-Fi signal as bright bars over the faint full fan.
+fn draw_signal(ui: &mut Ui, r: Rect, bars: u8, size: f32, color: Color) {
+    let faint = ui.theme().text_faint;
+    if bars < 3 {
+        ui.icon(r, Icon::Wifi, size, faint);
+    }
+    ui.icon(r, bars_icon(bars), size, color);
+}
+
 fn joining(s: &WlanStatus) -> bool {
     matches!(s.state, ConnState::Authenticating | ConnState::Associating | ConnState::Securing)
 }
@@ -219,9 +228,9 @@ impl NetworkPage {
                 ConnState::NoAdapter => (Icon::WifiOff, String::from("No Wi-Fi adapter")),
                 ConnState::RadioOff => (Icon::WifiOff, String::from("Off")),
                 ConnState::Connected => (bars_icon(signal_bars(s.signal_dbm)), format!("Connected to {}", s.name)),
-                _ if joining(s) => (Icon::WifiNone, format!("Connecting to {}\u{2026}", s.name)),
+                _ if joining(s) => (Icon::Wifi, format!("Connecting to {}\u{2026}", s.name)),
                 _ => (
-                    Icon::WifiNone,
+                    Icon::Wifi,
                     match s.last_failure {
                         Some(f) => format!("Not connected \u{2014} {f}"),
                         None => String::from("Not connected"),
@@ -314,7 +323,7 @@ impl NetworkPage {
                 ui.canvas.fill_rounded_rect(head, t.radius, Color::rgba(255, 255, 255, 8));
             }
             let color = if n.security.supported() { t.text } else { t.text_faint };
-            ui.icon(Rect::new(ix, ry + 10, 28, 32), bars_icon(n.bars), 20.0, color);
+            draw_signal(ui, Rect::new(ix, ry + 10, 28, 32), n.bars, 20.0, color);
             ui.label(Rect::new(ix + 40, ry + 6, iw - 260, 22), &n.name, Font::Regular, t.font_size, color, Align::Left);
             let sub = format!(
                 "{}{}{}",

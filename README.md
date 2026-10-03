@@ -51,6 +51,8 @@ crates (smoltcp, RustCrypto).
 | The start menu | Music |
 | ![Files](docs/images/files.png) | ![Terminal](docs/images/terminal.png) |
 | Files | Terminal |
+| ![The network flyout with the Wi-Fi networks in range](docs/images/wifi.png) | ![Settings: Network & Internet](docs/images/settings-network.png) |
+| Wi-Fi networks | Settings: Network & Internet |
 | ![Velocity](docs/images/velocity.png) | ![Starfall](docs/images/starfall.png) |
 | *Velocity* | *Starfall* |
 
