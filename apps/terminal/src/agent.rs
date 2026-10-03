@@ -15,12 +15,12 @@ use vui::agent::{self, Action, AppAgentInfo, Risk, Value, arg_f64, arg_opt_int, 
 
 use crate::{DEFAULT_FONT_SIZE, Terminal};
 
-/// The longest command line the agent may run: the user's approval shows
-/// 80 characters of it, so all of it.
+/// The longest command line the agent may run: short enough for the
+/// approval card to show all of it.
 const MAX_COMMAND: usize = 80;
-/// How long `run_command` waits for the command (the agent gives an
-/// application three seconds to answer).
-const RUN_WAIT_NS: u64 = 2_000_000_000;
+/// How long `run_command` waits for the command (an application has 30
+/// seconds to answer the agent; most commands finish well within this).
+const RUN_WAIT_NS: u64 = 10_000_000_000;
 /// How long `interrupt` waits for the command to stop.
 const STOP_WAIT_NS: u64 = 1_000_000_000;
 /// The most output the agent gets at once (bytes).
@@ -43,7 +43,7 @@ pub fn info() -> AppAgentInfo {
                     "string",
                     "The command line exactly as the user would type it: one line of at most 80 characters, such as \
                      ls ~/Documents. It runs in the terminal's current folder (cd changes it). Returns what it \
-                     printed, waiting up to 2 seconds; a longer command keeps running.",
+                     printed, waiting up to 10 seconds; a longer command keeps running.",
                     true,
                 )
                 .risk(Risk::Sensitive)
