@@ -93,13 +93,17 @@ pub(crate) struct Compositor {
     pub(crate) desktop_shown: Vec<u32>,
 }
 
-pub(crate) fn layer(kind: WindowKind) -> u8 {
-    match kind {
+/// The stacking layer of a window (higher layers are drawn on top). The
+/// focused full-screen window covers the panels; when another window takes
+/// the focus it drops back among the normal windows.
+pub(crate) fn layer(w: &Window, focused: bool) -> u8 {
+    match w.kind {
         WindowKind::Desktop => 0,
+        WindowKind::Normal | WindowKind::Borderless if focused && w.state == WindowState::Fullscreen => 3,
         WindowKind::Normal | WindowKind::Borderless => 1,
         WindowKind::Panel => 2,
-        WindowKind::Popup => 3,
-        WindowKind::Notification => 4,
+        WindowKind::Popup => 4,
+        WindowKind::Notification => 5,
     }
 }
 
@@ -113,7 +117,7 @@ impl Compositor {
     /// Windows in paint order (bottom to top).
     pub(crate) fn paint_order(&self) -> Vec<u32> {
         let mut v: Vec<u32> = self.order.clone();
-        v.sort_by_key(|id| self.windows.get(id).map(|w| layer(w.kind)).unwrap_or(0));
+        v.sort_by_key(|id| self.windows.get(id).map(|w| layer(w, self.focused == Some(*id))).unwrap_or(0));
         v
     }
 

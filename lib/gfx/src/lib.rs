@@ -61,6 +61,23 @@ mod tests {
     }
 
     #[test]
+    fn scaled_drawing_samples_pixel_centres() {
+        let src = Bitmap::from_straight(2, 1, alloc::vec![0xFF00_0000, 0xFFFF_FFFF]);
+        let scaled = |filter| {
+            let mut b = Bitmap::new(4, 1);
+            Canvas::for_bitmap(&mut b).draw_bitmap_scaled(&src, Rect::new(0, 0, 4, 1), filter, 255);
+            b.pixels
+        };
+        assert_eq!(scaled(Filter::Nearest), [0xFF00_0000, 0xFF00_0000, 0xFFFF_FFFF, 0xFFFF_FFFF]);
+        // Bilinear: edges clamp; inner pixels are a quarter and three
+        // quarters of the way from black to white (255 × ¼ and 255 × ¾,
+        // truncated by the 8-bit blend).
+        let p = scaled(Filter::Bilinear);
+        assert_eq!((p[0], p[3]), (0xFF00_0000, 0xFFFF_FFFF));
+        assert_eq!((p[1] & 0xFF, p[2] & 0xFF), (63, 191));
+    }
+
+    #[test]
     fn fill_and_clip() {
         let mut b = Bitmap::new(20, 10);
         let mut c = Canvas::for_bitmap(&mut b);

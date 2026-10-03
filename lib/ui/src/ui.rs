@@ -11,7 +11,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use vgfx::{Align, Canvas, Color, Rect, Text};
-use vproto::display::{Cursor, WindowEvent, modifiers};
+use vproto::display::{Cursor, WindowEvent, WindowState, modifiers};
 
 use crate::theme::{Font, Theme};
 use crate::window::Display;
@@ -185,6 +185,8 @@ pub struct UiState {
     /// A modal dialog was shown last frame.
     pub modal: bool,
     pub tooltip: Option<(Id, u64)>,
+    /// The title last set with `Ui::set_title`.
+    pub title: String,
 }
 
 /// Fonts and other per-window resources shared by all frames.
@@ -232,6 +234,7 @@ pub struct Ui<'a> {
     pub(crate) salt: u64,
     pub(crate) close_requested: bool,
     pub(crate) skip_present: bool,
+    pub(crate) window_state: WindowState,
 }
 
 /// Result of interacting with a widget area.
@@ -274,6 +277,7 @@ impl<'a> Ui<'a> {
             salt: 0,
             close_requested: false,
             skip_present: false,
+            window_state: WindowState::Normal,
         }
     }
 
@@ -331,6 +335,25 @@ impl<'a> Ui<'a> {
     /// nothing visible changed since the last presented frame.
     pub fn skip_present(&mut self) {
         self.skip_present = true;
+    }
+
+    /// The window's state (normal, maximised, minimised or full screen).
+    pub fn window_state(&self) -> WindowState {
+        self.window_state
+    }
+
+    /// Asks the window system to maximise, restore, minimise or show the
+    /// window full screen; the change arrives as a new frame size.
+    pub fn set_window_state(&mut self, state: WindowState) {
+        let _ = self.ctx.display.set_state(self.ctx.window_id, state);
+    }
+
+    /// Sets the window's title (a no-op when it is unchanged).
+    pub fn set_title(&mut self, title: &str) {
+        if self.state.title != title {
+            self.state.title = title.into();
+            let _ = self.ctx.display.set_title(self.ctx.window_id, title.into());
+        }
     }
 
     /// Asks the application loop to close the window after this frame.

@@ -139,6 +139,7 @@ impl Host {
     fn frame(&mut self, draw: &mut impl FnMut(&mut Ui)) {
         self.input.now = vrt::time::now_ns();
         let bg = self.ctx.theme.bg;
+        let window_state = self.window.state;
         let Ok(mut canvas) = self.window.begin_frame() else { return };
         canvas.clear(bg);
         // While a menu is open it has the keyboard: widgets see no keys.
@@ -152,6 +153,7 @@ impl Host {
         };
         let mut ui = Ui::new(canvas, &mut self.ctx, &mut self.state, input);
         ui.menu_input = &self.input;
+        ui.window_state = window_state;
         draw(&mut ui);
         ui.finish();
         let (repaint, close, cursor, skip) = (ui.repaint_at, ui.close_requested, ui.cursor, ui.skip_present);

@@ -50,7 +50,10 @@ pub enum Icon {
     Refresh,
     ZoomIn,
     ZoomOut,
+    /// Rotate anticlockwise.
     Rotate,
+    /// Rotate clockwise.
+    RotateRight,
     Fullscreen,
     List,
     User,
@@ -335,6 +338,10 @@ fn build(icon: Icon) -> Builder {
             b.arc(12.0, 13.0, 7.0, 200.0, 270.0);
             b.poly(&[(3.0, 6.5), (4.6, 11.0), (9.0, 9.4)], false);
         }
+        Icon::RotateRight => {
+            b.arc(12.0, 13.0, 7.0, -20.0, -270.0);
+            b.poly(&[(21.0, 6.5), (19.4, 11.0), (15.0, 9.4)], false);
+        }
         Icon::Fullscreen => {
             b.poly(&[(4.0, 9.0), (4.0, 4.0), (9.0, 4.0)], false);
             b.poly(&[(15.0, 4.0), (20.0, 4.0), (20.0, 9.0)], false);
@@ -496,7 +503,7 @@ impl Icon {
     }
 
     /// Every icon (for galleries and tests).
-    pub const ALL: [Icon; 67] = [
+    pub const ALL: [Icon; 68] = [
         Icon::Folder,
         Icon::File,
         Icon::Document,
@@ -543,6 +550,7 @@ impl Icon {
         Icon::ZoomIn,
         Icon::ZoomOut,
         Icon::Rotate,
+        Icon::RotateRight,
         Icon::Fullscreen,
         Icon::List,
         Icon::User,

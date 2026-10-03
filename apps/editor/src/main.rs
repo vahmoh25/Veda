@@ -160,7 +160,6 @@ struct Editor {
     untitled: u32,
     quitting: bool,
     toast: Option<(String, u64)>,
-    title: String,
     first_frame: bool,
 }
 
@@ -198,7 +197,6 @@ impl Editor {
             untitled: 1,
             quitting: false,
             toast: None,
-            title: String::new(),
             first_frame: true,
         };
         for path in args {
@@ -911,10 +909,7 @@ impl App for Editor {
         let tab = &self.tabs[self.active];
         let dot = if tab.doc.is_modified() { "\u{2022} " } else { "" };
         let title = format!("{dot}{} \u{2014} Text Editor", tab.title);
-        if title != self.title {
-            let _ = ui.ctx.display.set_title(ui.ctx.window_id, title.clone());
-            self.title = title;
-        }
+        ui.set_title(&title);
     }
 
     fn close_requested(&mut self) -> bool {

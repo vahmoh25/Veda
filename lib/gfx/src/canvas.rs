@@ -12,7 +12,7 @@ use vmath::FloatExt;
 use vraster::{FillRule, Path, Rasterizer, Span, StrokeStyle, Transform};
 
 use crate::bitmap::Bitmap;
-use crate::color::{Color, over, scale};
+use crate::color::{Color, lerp_px, over, scale};
 use crate::geom::Rect;
 
 /// Image sampling filter for scaled drawing.
@@ -400,27 +400,49 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Draws a bitmap scaled into `dst`.
+    /// Draws a bitmap scaled into `dst`. Sampling positions are computed in
+    /// 16.16 fixed point once per column and per row (floating point per
+    /// pixel is slow under CPU emulation).
     pub fn draw_bitmap_scaled(&mut self, b: &Bitmap, dst: Rect, filter: Filter, opacity: u8) {
         if b.width == 0 || b.height == 0 || dst.is_empty() {
             return;
         }
         let d = self.device(dst);
+        if d.is_empty() {
+            return;
+        }
         let (dx0, dy0) = (dst.x + self.ox, dst.y + self.oy);
-        let sx = b.width as f32 / dst.w as f32;
-        let sy = b.height as f32 / dst.h as f32;
+        let bilinear = filter == Filter::Bilinear;
+        // For output index `i` (relative to the destination origin): the two
+        // source indices to blend and the weight (0..=255) of the second.
+        let taps = |i: i32, src_len: i32, dst_len: i32| -> (usize, usize, u32) {
+            let step = ((src_len as i64) << 16) / dst_len as i64;
+            let centre = i as i64 * step + step / 2;
+            if !bilinear {
+                let s = (centre >> 16).clamp(0, src_len as i64 - 1) as usize;
+                return (s, s, 0);
+            }
+            let p = centre - (1 << 15);
+            let s0 = p >> 16;
+            let weight = if p < 0 { 0 } else { ((p & 0xFFFF) >> 8) as u32 };
+            let clamp = |v: i64| v.clamp(0, src_len as i64 - 1) as usize;
+            (clamp(s0), clamp(s0 + 1), weight)
+        };
+        let cols: Vec<(usize, usize, u32)> = (d.x..d.right()).map(|x| taps(x - dx0, b.width, dst.w)).collect();
+        let w = b.width as usize;
         let op = opacity as u32;
         for y in d.y..d.bottom() {
-            let fy = (y - dy0) as f32 + 0.5;
-            let start = (y * self.stride) as usize;
-            for x in d.x..d.right() {
-                let fx = (x - dx0) as f32 + 0.5;
-                let s = match filter {
-                    Filter::Nearest => b.get((fx * sx) as i32, (fy * sy) as i32),
-                    Filter::Bilinear => b.sample_bilinear(fx * sx, fy * sy),
+            let (r0, r1, wy) = taps(y - dy0, b.height, dst.h);
+            let (row0, row1) = (&b.pixels[r0 * w..r0 * w + w], &b.pixels[r1 * w..r1 * w + w]);
+            let start = (y * self.stride + d.x) as usize;
+            let out = &mut self.pixels[start..start + cols.len()];
+            for (p, &(c0, c1, wx)) in out.iter_mut().zip(&cols) {
+                let s = if bilinear {
+                    lerp_px(lerp_px(row0[c0], row0[c1], wx), lerp_px(row1[c0], row1[c1], wx), wy)
+                } else {
+                    row0[c0]
                 };
                 let s = if op == 255 { s } else { scale(s, op) };
-                let p = &mut self.pixels[start + x as usize];
                 *p = over(s, *p);
             }
         }
