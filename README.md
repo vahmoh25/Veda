@@ -47,10 +47,8 @@ crates (smoltcp, RustCrypto).
 | ![The Text Editor with a Rust program](docs/images/editor.png) | ![Photos with the picture library](docs/images/photos.png) |
 |:---:|:---:|
 | Text Editor | Photos |
-| ![The start menu](docs/images/start.png) | ![Music](docs/images/music.png) |
-| The start menu | Music |
-| ![Files](docs/images/files.png) | ![Terminal](docs/images/terminal.png) |
-| Files | Terminal |
+| ![Music](docs/images/music.png) | ![Files](docs/images/files.png) |
+| Music | Files |
 | ![Velocity](docs/images/velocity.png) | ![Starfall](docs/images/starfall.png) |
 | *Velocity* | *Starfall* |
 
