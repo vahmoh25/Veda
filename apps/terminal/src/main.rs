@@ -8,6 +8,7 @@
 //! `commands.rs`), each on a thread of its own (`job.rs`): the window stays
 //! responsive while one runs, keys typed meanwhile wait for it, and Ctrl+C
 //! stops it. Programs and applications are started through the launcher.
+//! [`agent`] lets the voice agent run commands and read what they print.
 //!
 //! Usage: `terminal [DIR]` starts in DIR; `terminal -c COMMAND` runs a
 //! command first.
@@ -17,6 +18,7 @@
 
 extern crate alloc;
 
+mod agent;
 mod commands;
 mod job;
 mod netcmds;
@@ -80,6 +82,8 @@ const PAGE: usize = 10;
 /// draws again: most commands are done by then, and the window looks as if
 /// it had run them itself.
 const QUICK_NS: u64 = 50_000_000;
+/// How many command lines are remembered as the agent may read them.
+const MAX_ECHOES: usize = 1000;
 
 /// An incremental search backwards through the history (Ctrl+R).
 struct HistorySearch {
@@ -135,6 +139,11 @@ struct Terminal {
     pending: VecDeque<Pending>,
     /// The working directory as of the last command (also while one runs).
     cwd: String,
+    /// The exit status of the last command.
+    last_status: i32,
+    /// Command lines as the agent may read them (Wi-Fi passwords hidden), by
+    /// their line on the screen.
+    echoes: VecDeque<(u64, String)>,
     /// The command being typed and the cursor (byte offset) in it.
     input: String,
     cursor: usize,
@@ -269,6 +278,8 @@ impl Terminal {
             job: None,
             output,
             pending: VecDeque::new(),
+            last_status: 0,
+            echoes: VecDeque::new(),
             input: String::new(),
             cursor: 0,
             history_pos: None,
@@ -448,23 +459,31 @@ impl Terminal {
         let Some(shell) = &mut self.shell else { return };
         let line = core::mem::take(&mut self.input);
         self.cursor = 0;
-        let mut echoed = shell.prompt();
+        let prompt = shell.prompt();
+        let redacted = shell.redact(&line);
+        let shown = format!("{}{redacted}", prompt.iter().map(|c| c.ch).collect::<String>());
+        let mut echoed = prompt;
         echoed.extend(screen::cells(&line, Style::PLAIN));
         shell.remember(&line);
         self.screen.push_cells(echoed);
+        self.echoes.push_back((self.screen.end() - 1, shown));
+        if self.echoes.len() > MAX_ECHOES {
+            self.echoes.pop_front();
+        }
         self.history_pos = None;
         self.saved_input.clear();
         self.selection = None;
         self.scroll = 0;
         if !line.trim().is_empty() {
-            self.start(&line);
+            self.start(&line, redacted);
         }
     }
 
     /// Starts `line` on a thread of its own and waits a moment for it.
-    fn start(&mut self, line: &str) {
+    /// `shown` is the line as it may be shown (Wi-Fi passwords hidden).
+    fn start(&mut self, line: &str, shown: String) {
         self.interrupt.store(false, Ordering::Relaxed);
-        match Job::start(&mut self.shell, line.into(), &self.output) {
+        match Job::start(&mut self.shell, line.into(), shown, &self.output) {
             Some(job) => {
                 self.job = Some(job);
                 self.wait_for_job(QUICK_NS);
@@ -473,6 +492,7 @@ impl Terminal {
                 // No thread for it: it runs here, the window waiting.
                 if let Some(shell) = &mut self.shell {
                     shell.execute(line, &self.output);
+                    self.last_status = shell.status;
                     self.cwd = shell.cwd.clone();
                 }
                 self.output.drain_into(&mut self.screen);
@@ -500,6 +520,7 @@ impl Terminal {
             }
         };
         self.output.drain_into(&mut self.screen);
+        self.last_status = shell.status;
         self.cwd = shell.cwd.clone();
         self.shell = Some(shell);
         self.screen.finish_line();
@@ -1220,6 +1241,18 @@ impl Terminal {
 }
 
 impl App for Terminal {
+    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+        Some(agent::info())
+    }
+
+    fn agent_state(&self) -> vui::agent::Value {
+        agent::state(self)
+    }
+
+    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+        Terminal::agent_invoke(self, action, args)
+    }
+
     fn wait_handles(&self) -> Vec<(RawHandle, u32)> {
         alloc::vec![(self.output.handle(), signals::SIGNALED)]
     }

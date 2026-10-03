@@ -260,9 +260,10 @@ impl Shell {
         let _ = self.fs.append(HISTORY_FILE, format!("{line}\n").as_bytes());
     }
 
-    /// A command line as it may be kept in the history: Wi-Fi passwords
-    /// (`wifi connect SSID PASSWORD`) are replaced by stars.
-    fn redact(&self, line: &str) -> String {
+    /// A command line as it may be kept in the history (or read by the
+    /// agent): Wi-Fi passwords (`wifi connect SSID PASSWORD`) are replaced by
+    /// stars.
+    pub fn redact(&self, line: &str) -> String {
         if let Ok(toks) = self.tokenize(line) {
             let words: Vec<&str> = toks
                 .iter()

@@ -127,6 +127,10 @@ impl Output {
 
 /// A command running on a thread of its own.
 pub struct Job {
+    /// The command line as it may be shown (Wi-Fi passwords hidden).
+    pub shown: String,
+    /// When it started (monotonic nanoseconds).
+    pub started: u64,
     thread: JoinHandle<()>,
     /// The shell, while the command does not have it.
     shell: Arc<Mutex<Option<Shell>>>,
@@ -137,7 +141,7 @@ impl Job {
     /// Runs `line` with the shell from `shell`, writing to `out`. Without a
     /// thread for it (no memory), the shell stays in `shell` and nothing
     /// runs.
-    pub fn start(shell: &mut Option<Shell>, line: String, out: &Arc<Output>) -> Option<Job> {
+    pub fn start(shell: &mut Option<Shell>, line: String, shown: String, out: &Arc<Output>) -> Option<Job> {
         let slot = Arc::new(Mutex::new(shell.take()));
         let done = Arc::new(AtomicBool::new(false));
         let (slot2, done2, out2) = (slot.clone(), done.clone(), out.clone());
@@ -151,7 +155,7 @@ impl Job {
             out2.wake();
         });
         match thread {
-            Ok(thread) => Some(Job { thread, shell: slot, done }),
+            Ok(thread) => Some(Job { shown, started: vrt::time::now_ns(), thread, shell: slot, done }),
             Err(_) => {
                 *shell = slot.lock().take();
                 None
