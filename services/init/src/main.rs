@@ -270,9 +270,8 @@ impl Init {
             // Tell the watchers (the shell shows a notification). Watchers
             // that went away are dropped; a full channel just misses this.
             let event = TaskEvent::Crashed { koid, name: child.name.clone() };
-            self.watchers.retain(|w| {
-                !matches!(vipc::send_event(w, TASK_EVENT, event.clone()), Err(vipc::IpcError::PeerClosed))
-            });
+            self.watchers
+                .retain(|w| !matches!(vipc::send_event(w, TASK_EVENT, event.clone()), Err(vipc::IpcError::PeerClosed)));
         }
         // Drop the services it provided.
         self.services.retain(|name, (_, owner)| {

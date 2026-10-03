@@ -17,8 +17,8 @@ pub mod input;
 pub mod pci;
 pub mod shell;
 
-pub use init::{launcher, registry};
 pub use fs::vfs;
+pub use init::{launcher, registry};
 
 use vrt::object::Channel;
 
