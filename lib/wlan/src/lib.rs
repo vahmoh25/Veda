@@ -22,6 +22,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod ap;
 pub mod ccmp;
 pub mod crypto;
 pub mod eapol;
@@ -30,3 +31,7 @@ pub mod handshake;
 pub mod ie;
 pub mod rsn;
 pub mod sae;
+pub mod scan;
+pub mod station;
+#[cfg(test)]
+mod tests;
