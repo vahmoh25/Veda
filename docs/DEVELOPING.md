@@ -51,7 +51,7 @@ home directory at boot (`/system/samples/Pictures/x.png` →
 
 ## Writing an application
 
-1. Create a crate under `apps/<name>` (or `games/<name>`), add it to the
+1. Create a crate under `apps/<name>`, add it to the
    workspace `members` in `Cargo.toml` and to `PROGRAMS` in
    `xtask/src/components.rs`.
 2. `Cargo.toml` depends on `vrt`, `vabi`, `vui` (and others as needed) and has

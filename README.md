@@ -2,9 +2,9 @@
 
 Vindows is a modern x86-64 operating system written from scratch,
 entirely in Rust. It is built around a capability-based microkernel and
-ships a polished graphical desktop, everyday applications and two 3D
-games. Everything — bootloader, kernel, drivers, services, toolkit,
-applications — is in this repository, with no external crates.
+ships a polished graphical desktop and everyday applications. Everything —
+bootloader, kernel, drivers, services, toolkit, applications — is in this
+repository, with no external crates.
 
 ![The Vindows desktop](docs/images/desktop.png)
 
@@ -162,8 +162,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit), `v3d` (3D engine), `audio`, `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher), `vfs`, `devmgr` (PCI), `compositor`, `audio` |
 | `drivers/` | `ps2`, `virtio-input`, `virtio-blk`, `virtio-snd` |
-| `apps/` | the desktop `shell` and the applications |
-| `games/` | `racer` (*Velocity*) and `starfall` |
+| `apps/` | the desktop `shell` and the applications, including `racer` (*Velocity*) and `starfall` |
 | `tests/` | `systest` (in-system tests) and GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time |
 | `xtask/` | the build system: cross-compilation, disk image, QEMU, automation |

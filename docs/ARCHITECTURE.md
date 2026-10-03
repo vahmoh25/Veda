@@ -248,7 +248,7 @@ the pool's workers on different CPUs at once.
 | `lib/v3d` | the fixed-point software 3D renderer and the game harness |
 | `lib/audio` | audio formats, resampling, mixing, FFT and the synthesiser |
 | `lib/virtio` | virtio device access shared by the drivers |
-| `services/`, `drivers/`, `apps/`, `games/` | system services, drivers, applications and games |
+| `services/`, `drivers/`, `apps/` | system services, drivers and applications (the games included) |
 | `tests/` | in-system tests and GUI automation scripts |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |
 | `assets/` | fonts and other data shipped in the initrd |
