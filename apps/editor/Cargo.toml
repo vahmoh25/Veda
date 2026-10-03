@@ -1,0 +1,26 @@
+[package]
+name = "editor"
+description = "Text Editor: tabbed editor with syntax highlighting, find and replace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "editor"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vmath = { workspace = true }
+vtext = { workspace = true }
+vui = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

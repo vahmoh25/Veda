@@ -1,0 +1,11 @@
+[package]
+name = "vtext"
+description = "Vindows text editing model: line buffer, selections, undo, search, soft wrap and syntax highlighting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
