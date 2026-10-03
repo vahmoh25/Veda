@@ -475,6 +475,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("ventropy", &[]),
     ("vnetstack", &[]),
     ("vnet", &[]),
+    ("vtls", &[]),
     ("vwlan", &[]),
     ("vradiolink", &[]),
     ("airsim", &[]),

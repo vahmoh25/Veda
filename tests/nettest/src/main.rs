@@ -11,6 +11,10 @@
 //!   from a real network rather than a hypervisor's NAT (VirtualBox
 //!   `--net bridged`), plus TCP over IPv6 when there is a global address.
 //! * `nettest ipv6`: TCP over IPv6 to example.com.
+//! * `nettest https`: HTTPS requests with `vtls`: `GET /` from example.com
+//!   (expects 200 and the page) and `GET /v1/projects` from
+//!   api.deepgram.com without a key (expects 401), reporting the TLS
+//!   version, cipher suite, key exchange and the handshake time.
 //! * `nettest wifi [SSID [PASSWORD]]`: joins a Wi-Fi network through the
 //!   Wi-Fi service (by default the simulated "Vindows Home" network of
 //!   `cargo xtask run --net wifi`), then runs the online checks over it.
@@ -252,6 +256,77 @@ fn check_http(url: &str, expect: &str) -> Check {
     Ok(format!("{} bytes in {} ms", r.body.len(), ms))
 }
 
+/// How [`check_https`] connects.
+#[derive(Clone, Copy)]
+enum Connect {
+    /// `vtls::connect`: name lookup, TCP and the TLS handshake in one call.
+    Together,
+    /// TCP first, then the handshake (`TlsStream::connect`), timed alone.
+    Separately,
+}
+
+fn ms_since(t0: u64) -> u64 {
+    (vrt::time::now_ns() - t0) / 1_000_000
+}
+
+/// `GET path` from `host` over HTTPS: expects HTTP status `status` and, if
+/// given, `text` in the response.
+fn check_https(host: &str, path: &str, status: u16, text: Option<&str>, how: Connect) -> Check {
+    let config = vtls::ClientConfig::with_alpn(&[b"http/1.1"]);
+    let t0 = vrt::time::now_ns();
+    let (mut tls, timing) = match how {
+        Connect::Together => {
+            let tls = vtls::connect(host, 443, Duration::from_secs(60), &config).map_err(|e| format!("{e}"))?;
+            (tls, format!("connected in {} ms (lookup, TCP, handshake)", ms_since(t0)))
+        }
+        Connect::Separately => {
+            let mut tcp = TcpStream::connect_host(host, 443, Duration::from_secs(20)).map_err(net)?;
+            let tcp_ms = ms_since(t0);
+            tcp.set_read_timeout(Some(Duration::from_secs(60)));
+            let t1 = vrt::time::now_ns();
+            let tls = vtls::TlsStream::connect(tcp, host, &config).map_err(|e| format!("{e}"))?;
+            (tls, format!("TCP {tcp_ms} ms, TLS handshake {} ms", ms_since(t1)))
+        }
+    };
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Vindows-nettest\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+    );
+    tls.write_all(request.as_bytes()).map_err(|e| format!("sending the request: {e}"))?;
+    tls.transport_mut().set_read_timeout(Some(Duration::from_secs(30)));
+    let mut response = Vec::new();
+    let mut buf = alloc::vec![0u8; 16 * 1024];
+    loop {
+        let n = tls.read(&mut buf).map_err(|e| format!("reading the response: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        response.extend_from_slice(&buf[..n]);
+        if response.len() > 4 << 20 {
+            return Err(String::from("response larger than 4 MiB"));
+        }
+    }
+    tls.close();
+    let total_ms = ms_since(t0);
+    let text_of = String::from_utf8_lossy(&response);
+    let status_line = text_of.lines().next().unwrap_or_default();
+    let code: Option<u16> = status_line.strip_prefix("HTTP/1.1 ").and_then(|rest| rest.get(..3)?.parse().ok());
+    if code != Some(status) {
+        return Err(format!("expected HTTP {status}, got {status_line:?}"));
+    }
+    if let Some(text) = text
+        && !text_of.contains(text)
+    {
+        return Err(format!("the response ({} bytes) does not contain {text:?}", response.len()));
+    }
+    Ok(format!(
+        "{status_line}, {} bytes; {}, {}, {}; {timing}, total {total_ms} ms",
+        response.len(),
+        tls.protocol_version(),
+        tls.cipher_suite(),
+        tls.key_exchange_group()
+    ))
+}
+
 fn check_tcp(host: &str, port: u16) -> Check {
     let s = TcpStream::connect_host(host, port, Duration::from_secs(20)).map_err(net)?;
     Ok(format!("connected to {} from {:?}", s.peer_addr(), s.local_addr()))
@@ -466,6 +541,15 @@ fn main() -> i32 {
             ])
         }
         "ipv6" => run(&[("link", &|| wait_online(Duration::from_secs(60))), ("tcp over ipv6", &|| ipv6_tcp(false))]),
+        "https" => run(&[
+            ("link", &|| wait_online(Duration::from_secs(60))),
+            ("https example.com", &|| {
+                check_https("example.com", "/", 200, Some("Example Domain"), Connect::Separately)
+            }),
+            ("https api.deepgram.com", &|| {
+                check_https("api.deepgram.com", "/v1/projects", 401, None, Connect::Together)
+            }),
+        ]),
         "local" => {
             let host = args.get(2).cloned().unwrap_or_else(|| String::from("10.0.2.2"));
             let port: u16 = args.get(3).and_then(|p| p.parse().ok()).unwrap_or(8080);

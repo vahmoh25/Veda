@@ -1,6 +1,6 @@
 [package]
 name = "nettest"
-description = "In-system network checks: name resolution, TCP, HTTP, UDP and ping against real servers"
+description = "In-system network checks: name resolution, TCP, HTTP, HTTPS, UDP and ping against real servers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,7 @@ bench = false
 vrt = { workspace = true }
 vabi = { workspace = true }
 vnet = { workspace = true }
+vtls = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }
