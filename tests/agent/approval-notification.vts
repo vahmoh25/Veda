@@ -1,0 +1,35 @@
+# Consent while the agent's window is closed: the request appears as a
+# notification with Deny and Allow above the tray, and stays until it is
+# answered. Denied, nothing happens; allowed, the action runs and the
+# agent is told.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "interface attached" 30
+agent-call files '{"operation":"write","path":"~/Documents/keep.txt","text":"hello"}' 30
+agent-result saved
+agent-call files '{"operation":"delete","path":"~/Documents/keep.txt"}' 30
+agent-result waiting_for_approval
+wait-serial "approval 1 requested" 10
+wait 2
+shot target/vindows/agent-notification-1.png
+# Deny (the notification is 360x136 at the bottom right, above the tray).
+agent-mark
+click 0.8719 0.8875
+wait-serial "approval 1 declined" 10
+agent-expect declined 20
+agent-call files '{"operation":"info","path":"~/Documents/keep.txt"}' 30
+agent-result keep.txt
+# Asked again and allowed.
+agent-call files '{"operation":"delete","path":"~/Documents/keep.txt"}' 30
+wait-serial "approval 2 requested" 10
+wait 2
+agent-mark
+click 0.9438 0.8875
+wait-serial "approval 2 allowed" 10
+agent-expect "it was done" 20
+agent-call files '{"operation":"info","path":"~/Documents/keep.txt"}' 30
+agent-result "no such file"
+wait 1
+shot target/vindows/agent-notification-2.png
