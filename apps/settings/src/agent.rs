@@ -169,9 +169,24 @@ fn serve(c: &agent::Client, req: Request, q: &Queue) -> bool {
             }
             Err(_) => return false,
         },
-        Request::ForgetOne(id) => c.forget(id).is_ok() || return false,
-        Request::ForgetAll => c.forget_all().is_ok() || return false,
-        Request::Revoke(k) => c.revoke(k).is_ok() || return false,
+        Request::ForgetOne(id) => {
+            if c.forget(id).is_err() {
+                return false;
+            }
+            true
+        }
+        Request::ForgetAll => {
+            if c.forget_all().is_err() {
+                return false;
+            }
+            true
+        }
+        Request::Revoke(k) => {
+            if c.revoke(k).is_err() {
+                return false;
+            }
+            true
+        }
     };
     if reload {
         let config = match c.config() {
@@ -281,6 +296,12 @@ impl AgentPage {
             reset_name: false,
             now: 0,
         }
+    }
+
+    /// Shows the agent's settings again (they were changed elsewhere).
+    pub fn reload(&mut self) {
+        self.reset_name = true;
+        self.send(Request::Load);
     }
 
     pub fn wait_handle(&self) -> Option<vabi::RawHandle> {
@@ -409,15 +430,15 @@ impl AgentPage {
             String::from("The agent is not running.")
         } else {
             match (&self.status, &self.config) {
-                (Some(s), Some(c)) if !c.enabled => format!("{} is switched off.", s.name),
-                (Some(s), Some(c)) if !c.has_key => format!("{} needs a Deepgram API key to talk.", s.name),
+                (Some(_), Some(c)) if !c.enabled => format!("{} is switched off.", c.name),
+                (Some(_), Some(c)) if !c.has_key => format!("{} needs a Deepgram API key to talk.", c.name),
                 (Some(s), _) if !s.detail.is_empty() && matches!(s.state, vproto::agent::AgentState::Error) => {
                     s.detail.clone()
                 }
-                (Some(s), Some(c)) if c.listen_for_name => {
+                (Some(_), Some(c)) if c.listen_for_name => {
                     format!(
                         "Say \u{201c}{}\u{201d}, click the circle on the taskbar or press Win+Space to talk.",
-                        s.name
+                        c.name
                     )
                 }
                 (Some(_), _) => String::from("Click the circle on the taskbar or press Win+Space to talk."),

@@ -125,6 +125,23 @@ impl Worker {
     pub fn handle(&self) -> RawHandle {
         self.event.raw()
     }
+
+    /// For registering applications from another thread.
+    pub fn registrar(&self) -> Registrar {
+        Registrar(self.q.clone())
+    }
+}
+
+/// Hands applications' registrations to the worker (Settings is served on
+/// its own thread, and is an application the agent can use too).
+#[derive(Clone)]
+pub struct Registrar(Arc<Queue>);
+
+impl Registrar {
+    pub fn register(&self, name: String, channel: Channel) {
+        self.0.jobs.lock().push_back(Job::App { name, channel });
+        self.0.wake.notify_one();
+    }
 }
 
 /// A registered application.

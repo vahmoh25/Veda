@@ -595,7 +595,7 @@ impl Agent {
     fn accept(&mut self, listener: &Channel) {
         while let Some((channel, who)) = vproto::accept_with_identity(listener) {
             if who.app && who.name == "settings" {
-                admin::spawn(channel, self.shared.clone(), self.published.clone());
+                admin::spawn(channel, self.shared.clone(), self.published.clone(), self.worker.registrar());
                 continue;
             }
             self.next_key += 1;
@@ -699,8 +699,12 @@ impl Agent {
                 self.send(&deepgram::update_prompt(&p));
             }
         }
-        if gc != self.seen_config && self.session.is_none() {
-            self.rest();
+        if gc != self.seen_config {
+            if self.session.is_none() {
+                self.rest();
+            }
+            // The interface shows the agent's name.
+            self.publish();
         }
         self.seen_config = gc;
         self.seen_apps = ga;

@@ -41,9 +41,12 @@ pub enum Incoming {
     },
 }
 
+/// The outcome of opening a conversation, once there is one.
+type Opened = Arc<Mutex<Option<Result<WebSocket<Conn>, WebError>>>>;
+
 /// Opens a conversation's WebSocket on a helper thread.
 pub struct Connector {
-    result: Arc<Mutex<Option<Result<WebSocket<Conn>, WebError>>>>,
+    result: Opened,
     event: Event,
 }
 
@@ -227,9 +230,8 @@ impl Session {
                         pcm.push(i16::from_le_bytes([lo, hi]));
                         bytes = rest;
                     }
-                    for p in bytes.chunks_exact(2) {
-                        pcm.push(i16::from_le_bytes([p[0], p[1]]));
-                    }
+                    let (pairs, _) = bytes.as_chunks::<2>();
+                    pcm.extend(pairs.iter().map(|p| i16::from_le_bytes(*p)));
                     if bytes.len() % 2 == 1 {
                         self.carry = bytes.last().copied();
                     }

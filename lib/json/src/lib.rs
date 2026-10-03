@@ -408,8 +408,10 @@ impl From<f64> for Value {
 }
 
 impl From<f32> for Value {
+    /// The shortest decimal that reads back as the same `f32` (0.85, not
+    /// 0.8500000238418579).
     fn from(f: f32) -> Value {
-        Value::from(f as f64)
+        alloc::format!("{f}").parse::<f64>().map_or(Value::Null, Value::from)
     }
 }
 
@@ -532,6 +534,9 @@ mod tests {
         assert_eq!(v.to_string(), "[9007199254740993,18446744073709551615,-9223372036854775808,0.1,2.0]");
         assert_eq!(Value::from(f64::NAN), Value::Null);
         assert_eq!(Value::from(1.5f32).to_string(), "1.5");
+        assert_eq!(Value::from(0.85f32).to_string(), "0.85");
+        assert_eq!(Value::from(1.1f32).as_f64(), Some(1.1));
+        assert_eq!(Value::from(f32::INFINITY), Value::Null);
         assert_eq!(Value::from(-0.0).to_string(), "-0.0");
     }
 

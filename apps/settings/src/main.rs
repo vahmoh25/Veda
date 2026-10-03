@@ -11,6 +11,9 @@
 //! * **System**: version, processor, memory and uptime, refreshed live.
 //! * **About**: version information and licences.
 //!
+//! [`control`] lets the voice agent show pages and change its own voice,
+//! name and language model.
+//!
 //! Usage: `settings [personalization|agent|network|display|system|about]`.
 
 #![no_std]
@@ -19,6 +22,7 @@
 extern crate alloc;
 
 mod agent;
+mod control;
 mod network;
 
 use alloc::format;
@@ -998,6 +1002,18 @@ impl App for Settings {
         } else if self.error.is_some() {
             ui.repaint();
         }
+    }
+
+    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+        Some(control::info())
+    }
+
+    fn agent_state(&self) -> vui::agent::Value {
+        control::state(self)
+    }
+
+    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+        Settings::agent_invoke(self, action, args)
     }
 
     fn wait_handles(&self) -> Vec<(vabi::RawHandle, u32)> {

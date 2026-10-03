@@ -1,0 +1,36 @@
+# Settings' agent interface, with a simulated Voice Agent service: the
+# agent shows a page and changes its own speaking rate and, with the user's
+# OK, its name; the conversation picks the changes up at once.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+agent-call use_app '{"app":"settings","action":"show_page","arguments":{"page":"agent"}}' 60
+agent-result '"showing":"agent"'
+agent-call use_app '{"app":"settings","action":"show_page","arguments":{"page":"wallpapers"}}' 30
+agent-result "no page called wallpapers"
+# "Talk a little slower": the voice changes in the same conversation.
+agent-mark
+agent-call use_app '{"app":"settings","action":"set_agent_voice","arguments":{"speed":0.85}}' 30
+agent-result '"speaking_rate":0.85'
+agent-expect UpdateSpeak 10
+agent-expect '"speed":0.85' 5
+agent-call read_app '{"app":"settings"}' 30
+agent-result '"speaking_rate":0.85'
+agent-call use_app '{"app":"settings","action":"set_agent_voice","arguments":{"speed":3}}' 30
+agent-result "0.7 to 1.5"
+# A new name needs the user's OK; then the agent knows itself by it.
+agent-call use_app '{"app":"settings","action":"rename_agent","arguments":{"name":"Sam"}}' 30
+agent-result waiting_for_approval
+wait-serial "approval 1 requested" 10
+click 0.825 0.97
+wait 2
+agent-mark
+click 0.9375 0.8275
+wait-serial "approval 1 allowed" 10
+agent-expect "You are Sam" 20
+wait 2
+shot target/vindows/agent-app-settings.png
+agent-call read_app '{"app":"settings"}' 30
+agent-result '"name":"Sam"'

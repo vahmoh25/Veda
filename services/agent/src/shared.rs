@@ -126,7 +126,7 @@ impl Shared {
         let store = Store::open();
         let config = store.read(store::CONFIG).map(|t| Config::from_json(&t)).unwrap_or_default();
         let key = store.read(store::KEY).map(|k| k.trim().to_string()).filter(|k| vagent::config::valid_key(k));
-        let memory = store.read(store::MEMORY).map(|t| Memory::from_json(&t)).unwrap_or_else(Memory::new);
+        let memory = store.read(store::MEMORY).map(|t| Memory::from_json(&t)).unwrap_or_default();
         let permissions = store.read(store::PERMISSIONS).map(|t| Permissions::from_json(&t)).unwrap_or_default();
         let mut apps = BTreeMap::new();
         if let Some(v) = store.read(APPS).and_then(|t| vjson::parse(&t).ok())

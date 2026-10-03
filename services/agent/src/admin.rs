@@ -23,15 +23,16 @@ use vrt::time::Duration;
 use vweb::WebError;
 
 use crate::shared::Shared;
+use crate::worker::Registrar;
 
 const NET_TIMEOUT: Duration = Duration::from_secs(15);
 /// What a voice preview says.
 const PREVIEW: &str = "Hi, this is how I sound. I'm here whenever you need me.";
 
 /// Serves one Settings connection until it closes.
-pub fn spawn(channel: Channel, shared: Arc<Mutex<Shared>>, status: Arc<Mutex<AgentStatus>>) {
+pub fn spawn(channel: Channel, shared: Arc<Mutex<Shared>>, status: Arc<Mutex<AgentStatus>>, apps: Registrar) {
     let r = vrt::thread::Builder::new().name("settings").spawn(move || {
-        let mut s = Admin { shared, status };
+        let mut s = Admin { shared, status, apps };
         loop {
             match channel.read() {
                 Ok(msg) => {
@@ -61,6 +62,7 @@ pub fn spawn(channel: Channel, shared: Arc<Mutex<Shared>>, status: Arc<Mutex<Age
 struct Admin {
     shared: Arc<Mutex<Shared>>,
     status: Arc<Mutex<AgentStatus>>,
+    apps: Registrar,
 }
 
 /// The configuration as Settings sees it (never the key itself).
@@ -108,8 +110,10 @@ impl agent::Server for Admin {
         self.status.lock().clone()
     }
 
-    fn register_app(&mut self, _app: Channel) -> Result<(), AgentError> {
-        Err(AgentError::Denied)
+    /// Settings offers the agent its own actions like any application.
+    fn register_app(&mut self, app: Channel) -> Result<(), AgentError> {
+        self.apps.register("settings".into(), app);
+        Ok(())
     }
 
     fn attach_ui(&mut self) -> Result<UiLink, AgentError> {
@@ -246,7 +250,7 @@ impl agent::Server for Admin {
             401 | 403 => return Err(AgentError::BadKey),
             _ => return Err(AgentError::Network),
         }
-        let pcm: Vec<i16> = r.body.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+        let pcm: Vec<i16> = r.body.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect();
         play(&pcm);
         Ok(())
     }
