@@ -1520,6 +1520,7 @@ dependencies = [
  "vabi",
  "vnet",
  "vrt",
+ "vtls",
 ]
 
 [[package]]

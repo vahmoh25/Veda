@@ -24,3 +24,8 @@ agent-interrupt
 wait-serial "interrupted: voice stopped" 10
 # The microphone streamed (silence) to the service all along.
 agent-audio 3200
+# Asked to end, the agent says goodbye, and the conversation ends when the
+# goodbye has been played.
+agent-call end_conversation '{}' 30
+agent-speak 2
+wait-serial "conversation ended" 30

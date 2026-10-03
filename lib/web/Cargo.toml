@@ -9,6 +9,7 @@ license.workspace = true
 vrt = { workspace = true, default-features = false }
 vabi = { workspace = true }
 vnet = { workspace = true }
+vtls = { workspace = true }
 httparse = { workspace = true }
 sha1 = { workspace = true }
 

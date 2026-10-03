@@ -1,0 +1,49 @@
+# The voice agent with the real Deepgram Voice Agent API, on the real
+# Internet: the API key is typed into Settings → Agent and checked with
+# Deepgram, Deepgram's voices are listed, then a spoken conversation (the
+# user's voice is synthesised by Deepgram on the host and fed to the test
+# microphone): a question, opening an application, and saying goodbye.
+# Uses (and is billed to) the key in $DEEPGRAM_API_KEY, so it is not part
+# of `cargo xtask test`:
+#
+#   cargo xtask script tests/real/agent-deepgram.vts
+fail-on "PANIC"
+boot-cmdline "run=settings:agent"
+mic-silence 1
+wait-serial "desktop ready" 120
+wait-serial "started settings" 60
+wait 4
+key meta_l-up
+wait 4
+# The key goes in the key field; Settings checks it with Deepgram.
+click 0.38 0.29
+type-env DEEPGRAM_API_KEY
+key ret
+wait-serial "Deepgram key stored" 20
+wait 10
+shot target/vindows/real-agent-1-key.png
+reject-serial "cannot reach Deepgram"
+# Deepgram's voices.
+click 0.917 0.566
+wait 12
+shot target/vindows/real-agent-2-voices.png
+# The circle in the tray starts a conversation.
+click 0.825 0.97
+wait-serial "state: Listening" 60
+wait 2
+shot target/vindows/real-agent-3-listening.png
+say "Hi! What's your name, and what can you do for me?"
+wait-serial "agent: agent: " 60
+wait 8
+shot target/vindows/real-agent-4-answer.png
+say "Please open the text editor."
+wait-serial "started editor" 60
+wait 6
+shot target/vindows/real-agent-5-editor.png
+say "Okay, that's all for now. Goodbye!"
+wait-serial "call end_conversation" 60
+# It ends once the goodbye has been said, not when it times out.
+wait-serial "conversation ended" 20
+reject-serial "quiet for a while"
+reject-serial "connection to Deepgram lost"
+reject-serial "malformed message"

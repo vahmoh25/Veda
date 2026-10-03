@@ -358,11 +358,23 @@ impl Agent {
                 if let Some(s) = &mut self.session {
                     s.last_activity_ns = now;
                     s.agent_turn = false;
+                    // Talking over the goodbye: the conversation goes on.
+                    // (Before it, the user may just be finishing the
+                    // sentence the agent answered early.)
+                    if s.goodbye_started {
+                        s.cancel_end();
+                    }
                 }
                 self.set_state(AgentState::Listening, "");
             }
             ServerMessage::AgentThinking { .. } => self.set_state(AgentState::Thinking, ""),
             ServerMessage::FunctionCallRequest { calls } => {
+                // More work after asking to end: the conversation goes on.
+                if calls.iter().any(|c| c.name != tools::names::END_CONVERSATION)
+                    && let Some(s) = &mut self.session
+                {
+                    s.cancel_end();
+                }
                 for c in calls.into_iter().filter(|c| c.client_side) {
                     println!("call {} {}", c.name, c.arguments.chars().take(200).collect::<String>());
                     self.calls_in_flight += 1;
@@ -379,19 +391,22 @@ impl Agent {
                 if let Some(l) = latency {
                     println!("speaking (latency {:.2} s)", l);
                 }
-                if let Some(s) = &mut self.session {
-                    s.agent_turn = true;
-                    s.audio_done = false;
-                    s.last_activity_ns = now;
-                }
-                self.set_state(AgentState::Speaking, "");
+                self.agent_speaks();
             }
             ServerMessage::AgentAudioDone => {
                 if let Some(s) = &mut self.session {
                     s.audio_done = true;
                     s.last_activity_ns = now;
+                    if s.goodbye_started {
+                        s.goodbye_sent = true;
+                    }
                 }
             }
+            ServerMessage::LatencyReport { total, think } => match (total, think) {
+                (Some(t), Some(m)) if m > 0.0 => println!("answered in {:.2} s (language model {:.2} s)", t, m),
+                (Some(t), _) => println!("answered in {:.2} s", t),
+                _ => {}
+            },
             ServerMessage::Updated { what } => println!("{what}"),
             ServerMessage::InjectionRefused { message } => println!("notice refused: {message}"),
             ServerMessage::Error { code, description } => {
@@ -402,17 +417,43 @@ impl Agent {
                 }
             }
             ServerMessage::Warning { code, description } => println!("Deepgram warning {code}: {description}"),
-            ServerMessage::Other { .. } => {}
+            // Echoes of what this side sent, kept by Deepgram's history.
+            ServerMessage::Other { kind } if kind == "FunctionCallResponse" || kind == "History" => {}
+            ServerMessage::Other { kind } => {
+                if let Some(s) = &mut self.session
+                    && s.unknown.insert(kind.clone())
+                {
+                    println!("(Deepgram sent a {kind} message, not handled)");
+                }
+            }
         }
     }
 
-    fn poll_session(&mut self) {
+    /// The agent's voice is coming: its turn starts (once per turn).
+    fn agent_speaks(&mut self) {
+        let Some(s) = &mut self.session else { return };
+        s.last_activity_ns = vrt::time::now_ns();
+        if s.end_requested_at.is_some() {
+            s.goodbye_started = true;
+        }
+        if s.agent_turn && !s.audio_done {
+            return;
+        }
+        s.agent_turn = true;
+        s.audio_done = false;
+        self.set_state(AgentState::Speaking, "");
+    }
+
+    /// Handles what Deepgram sent. Returns false if more may be waiting
+    /// (it stops after a while, so the rest of the loop keeps running).
+    fn poll_session(&mut self) -> bool {
         for _ in 0..200 {
-            let Some(s) = &mut self.session else { return };
+            let Some(s) = &mut self.session else { return true };
             match s.poll() {
-                Ok(None) => return,
+                Ok(None) => return true,
                 Ok(Some(Incoming::Message(m))) => self.handle_message(m),
                 Ok(Some(Incoming::Audio(pcm))) => {
+                    self.agent_speaks();
                     if let Some(v) = &mut self.voice {
                         v.speak(&pcm);
                     }
@@ -422,15 +463,16 @@ impl Agent {
                     let error =
                         if code == 1000 || code == 1005 { None } else { Some("Deepgram ended the conversation.") };
                     self.end_conversation(error);
-                    return;
+                    return true;
                 }
                 Err(e) => {
                     println!("connection to Deepgram lost: {}", e);
                     self.end_conversation(Some("The connection to Deepgram was lost."));
-                    return;
+                    return true;
                 }
             }
         }
+        false
     }
 
     // ---- actions and approvals -------------------------------------------
@@ -454,7 +496,7 @@ impl Agent {
             Outcome::Result(r) => r,
             Outcome::End => {
                 if let Some(s) = &mut self.session {
-                    s.end_requested = true;
+                    s.request_end(vrt::time::now_ns());
                 }
                 tools::ok(vjson::Value::Null)
             }
@@ -598,6 +640,10 @@ impl Agent {
 
     /// Ends quiet conversations; finishes the agent's turns.
     fn housekeeping(&mut self, now: u64) {
+        /// How long to wait for a goodbye after the agent asked to end.
+        const END_GRACE_NS: u64 = 5_000_000_000;
+        /// The longest goodbye.
+        const END_LIMIT_NS: u64 = 30_000_000_000;
         let idle_ns = self.config().idle_timeout_s as u64 * 1_000_000_000;
         let speaking = self.voice.as_ref().is_some_and(Voice::speaking);
         let mut end = false;
@@ -605,7 +651,13 @@ impl Agent {
             if s.agent_turn && s.audio_done && !speaking {
                 s.agent_turn = false;
                 s.last_activity_ns = now;
-                if s.end_requested {
+            }
+            // Asked to end: once the goodbye has been said, or if none
+            // comes (it was said before the call) while all is quiet.
+            if let Some(at) = s.end_requested_at {
+                let quiet = !s.agent_turn && !speaking;
+                let none_coming = !s.goodbye_started && now - at.max(s.last_activity_ns) > END_GRACE_NS;
+                if (quiet && (s.goodbye_sent || none_coming)) || now - at > END_LIMIT_NS {
                     end = true;
                 }
             }
@@ -707,6 +759,8 @@ impl Agent {
         if self.wake_at_start {
             self.wake("start-up option");
         }
+        // Deepgram's messages are waiting beyond what one pass handled.
+        let mut backlog = false;
         loop {
             let now = vrt::time::now_ns();
             let mut items: Vec<WaitItem> = Vec::new();
@@ -739,6 +793,9 @@ impl Agent {
             if !self.approvals.is_empty() {
                 deadline = deadline.min(now + 1_000_000_000);
             }
+            if backlog {
+                deadline = now;
+            }
             let _ = vrt::object::wait_many(&mut items, deadline);
             let mut closed = Vec::new();
             for (it, &k) in items.iter().zip(&keys) {
@@ -770,7 +827,9 @@ impl Agent {
                             }
                         }
                     }
-                    SESSION => self.poll_session(),
+                    // Polled below on every pass: TLS may hold decrypted
+                    // data the socket no longer signals.
+                    SESSION => {}
                     VOICE => {}
                     k => {
                         let key = k - CONN;
@@ -782,6 +841,7 @@ impl Agent {
                     }
                 }
             }
+            backlog = self.session.is_some() && !self.poll_session();
             for k in closed {
                 if let Some(c) = self.conns.remove(&k)
                     && c.who.name == "shell"

@@ -10,7 +10,8 @@
 //!   closing handshake, and a non-blocking [`ws::WebSocket::poll`] for
 //!   event loops.
 //! * [`Connection`]: the byte stream underneath — a plain
-//!   [`vnet::TcpStream`] or a TLS stream ([`connect`] picks by scheme).
+//!   [`vnet::TcpStream`] or a TLS stream (`vtls`, certificates checked
+//!   against the Mozilla roots); [`connect`] picks by scheme.
 //!
 //! Nothing here panics on what a server sends: malformed responses and
 //! frames become [`WebError`]s.
@@ -24,12 +25,15 @@ pub mod http;
 pub mod url;
 pub mod ws;
 
-use alloc::string::String;
+use alloc::boxed::Box;
+use alloc::string::{String, ToString};
 use core::fmt;
 
 use vabi::RawHandle;
 use vnet::{NetError, TcpStream};
+use vrt::sync::Mutex;
 use vrt::time::Duration;
+use vtls::{ClientConfig, TlsError, TlsStream};
 
 pub use url::Url;
 
@@ -69,7 +73,7 @@ impl fmt::Display for WebError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WebError::Net(e) => write!(f, "{e}"),
-            WebError::Tls(e) => write!(f, "secure connection failed: {e}"),
+            WebError::Tls(e) => f.write_str(e),
             WebError::BadUrl => f.write_str("invalid web address"),
             WebError::Protocol(what) => write!(f, "the server sent an invalid response ({what})"),
             WebError::Status { code, body } => {
@@ -123,52 +127,101 @@ impl Connection for TcpStream {
     }
 }
 
+fn tls_error(e: TlsError) -> WebError {
+    match e {
+        TlsError::TimedOut => WebError::TimedOut,
+        TlsError::Closed => WebError::Closed,
+        e => WebError::Tls(e.to_string()),
+    }
+}
+
+impl Connection for TlsStream<TcpStream> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, WebError> {
+        TlsStream::read(self, buf).map_err(tls_error)
+    }
+
+    fn try_read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, WebError> {
+        TlsStream::try_read(self, buf).map_err(tls_error)
+    }
+
+    fn write_all(&mut self, data: &[u8]) -> Result<(), WebError> {
+        TlsStream::write_all(self, data).map_err(tls_error)
+    }
+
+    fn set_read_timeout(&mut self, timeout: Option<Duration>) {
+        self.transport_mut().set_read_timeout(timeout);
+    }
+
+    fn handle(&self) -> RawHandle {
+        self.transport().handle()
+    }
+}
+
 /// A connection to a web server, plain or encrypted.
 pub enum Conn {
     Plain(TcpStream),
+    Tls(Box<TlsStream<TcpStream>>),
+}
+
+impl Conn {
+    fn stream(&mut self) -> &mut dyn Connection {
+        match self {
+            Conn::Plain(s) => s,
+            Conn::Tls(s) => &mut **s,
+        }
+    }
 }
 
 impl Connection for Conn {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, WebError> {
-        match self {
-            Conn::Plain(s) => Connection::read(s, buf),
-        }
+        self.stream().read(buf)
     }
 
     fn try_read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, WebError> {
-        match self {
-            Conn::Plain(s) => Connection::try_read(s, buf),
-        }
+        self.stream().try_read(buf)
     }
 
     fn write_all(&mut self, data: &[u8]) -> Result<(), WebError> {
-        match self {
-            Conn::Plain(s) => Connection::write_all(s, data),
-        }
+        self.stream().write_all(data)
     }
 
     fn set_read_timeout(&mut self, timeout: Option<Duration>) {
-        match self {
-            Conn::Plain(s) => Connection::set_read_timeout(s, timeout),
-        }
+        self.stream().set_read_timeout(timeout);
     }
 
     fn handle(&self) -> RawHandle {
         match self {
             Conn::Plain(s) => Connection::handle(s),
+            Conn::Tls(s) => Connection::handle(&**s),
         }
     }
 }
 
-/// Connects to the server of `url` (TCP, then TLS for `https`/`wss`).
+/// What HTTPS and secure WebSocket connections trust and offer, built once.
+static TLS_CONFIG: Mutex<Option<ClientConfig>> = Mutex::new(None);
+
+fn tls_config() -> ClientConfig {
+    TLS_CONFIG.lock().get_or_insert_with(|| ClientConfig::with_alpn(&[b"http/1.1"])).clone()
+}
+
+/// Connects to the server of `url` (TCP, then TLS for `https`/`wss`), all
+/// within about `timeout`.
 pub fn connect(url: &Url, timeout: Duration) -> Result<Conn, WebError> {
-    if url.secure() {
-        return Err(WebError::Tls("TLS is not available".into()));
-    }
+    let start = vrt::time::Instant::now();
     let mut tcp = TcpStream::connect_host(&url.host, url.port, timeout)?;
     // Requests and WebSocket messages are small and latency matters.
     let _ = tcp.set_nodelay(true);
-    Ok(Conn::Plain(tcp))
+    if !url.secure() {
+        return Ok(Conn::Plain(tcp));
+    }
+    // The handshake gets what is left of the time (at least a second).
+    let left = timeout.saturating_sub(start.elapsed()).max(Duration::from_secs(1));
+    tcp.set_read_timeout(Some(left));
+    tcp.set_write_timeout(Some(left));
+    let mut tls = TlsStream::connect(tcp, &url.host, &tls_config()).map_err(tls_error)?;
+    tls.transport_mut().set_read_timeout(None);
+    tls.transport_mut().set_write_timeout(None);
+    Ok(Conn::Tls(Box::new(tls)))
 }
 
 /// Random bytes for WebSocket keys and masks.

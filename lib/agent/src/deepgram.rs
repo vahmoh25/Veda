@@ -220,12 +220,20 @@ pub enum ServerMessage {
     FunctionCallCancelled {
         ids: Vec<String>,
     },
-    /// `total_latency` in seconds, when given.
+    /// `total_latency` in seconds, when given. Deepgram no longer sends
+    /// this (the agent's voice itself starts its turn); simulators may.
     AgentStartedSpeaking {
         latency: Option<f64>,
     },
     /// All audio of the agent's turn has been sent.
     AgentAudioDone,
+    /// After each turn: from the end of the user's speech to the agent's
+    /// voice (`total_latency`), and the language model's share
+    /// (`ttt_text_latency`), in seconds.
+    LatencyReport {
+        total: Option<f64>,
+        think: Option<f64>,
+    },
     /// A turn of the conversation, for keeping its history.
     History {
         role: Role,
@@ -246,7 +254,7 @@ pub enum ServerMessage {
         code: String,
         description: String,
     },
-    /// Anything else (latency reports and future additions).
+    /// Anything else (future additions).
     Other {
         kind: String,
     },
@@ -254,6 +262,15 @@ pub enum ServerMessage {
 
 fn text(v: &Value, key: &str) -> String {
     v.str(key).unwrap_or("").to_string()
+}
+
+/// A duration in seconds (a number, or a number in a string).
+fn seconds(v: &Value, key: &str) -> Option<f64> {
+    match v.get(key) {
+        Some(Value::String(s)) => s.parse().ok(),
+        Some(n) => n.as_f64(),
+        None => None,
+    }
 }
 
 /// Parses a JSON message from the Voice Agent API.
@@ -292,15 +309,11 @@ pub fn parse_server_message(json: &str) -> Result<ServerMessage, String> {
         "FunctionCallCancelled" => ServerMessage::FunctionCallCancelled {
             ids: v["functions"].as_array().map(|fs| fs.iter().map(|f| text(f, "id")).collect()).unwrap_or_default(),
         },
-        "AgentStartedSpeaking" => {
-            let latency = match v.get("total_latency") {
-                Some(Value::String(s)) => s.parse().ok(),
-                Some(n) => n.as_f64(),
-                None => None,
-            };
-            ServerMessage::AgentStartedSpeaking { latency }
-        }
+        "AgentStartedSpeaking" => ServerMessage::AgentStartedSpeaking { latency: seconds(&v, "total_latency") },
         "AgentAudioDone" => ServerMessage::AgentAudioDone,
+        "LatencyReport" => {
+            ServerMessage::LatencyReport { total: seconds(&v, "total_latency"), think: seconds(&v, "ttt_text_latency") }
+        }
         "History" => match v.str("role").and_then(Role::parse) {
             Some(role) => ServerMessage::History { role, content: text(&v, "content") },
             None => ServerMessage::Other { kind: "History".into() },
@@ -593,8 +606,19 @@ mod tests {
             ServerMessage::Error { code: "INVALID_AUTH".into(), description: "Bad key".into() }
         );
         assert_eq!(
+            parse_server_message(
+                r#"{"type":"LatencyReport","stt_latency":0.12,"ttt_text_latency":0.36,"tts_latency":0.18,"total_latency":0.64}"#
+            )
+            .unwrap(),
+            ServerMessage::LatencyReport { total: Some(0.64), think: Some(0.36) }
+        );
+        assert_eq!(
             parse_server_message(r#"{"type":"LatencyReport"}"#).unwrap(),
-            ServerMessage::Other { kind: "LatencyReport".into() }
+            ServerMessage::LatencyReport { total: None, think: None }
+        );
+        assert_eq!(
+            parse_server_message(r#"{"type":"SomethingNew","x":1}"#).unwrap(),
+            ServerMessage::Other { kind: "SomethingNew".into() }
         );
         assert!(parse_server_message("not json").is_err());
         assert!(parse_server_message(r#"{"no":"type"}"#).is_err());

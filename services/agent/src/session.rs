@@ -84,13 +84,19 @@ pub struct Session {
     pub started_ns: u64,
     /// The last time someone spoke (for ending quiet conversations).
     pub last_activity_ns: u64,
-    /// The agent is in its turn: from `AgentStartedSpeaking` until its
-    /// audio is done and played.
+    /// The agent is in its turn: from its first audio until all of it has
+    /// been sent (`AgentAudioDone`) and played.
     pub agent_turn: bool,
     /// `AgentAudioDone` arrived for the current turn.
     pub audio_done: bool,
-    /// The agent asked to end the conversation after its reply.
-    pub end_requested: bool,
+    /// When the agent asked to end the conversation (after its goodbye).
+    pub end_requested_at: Option<u64>,
+    /// Its goodbye started (voice after that request) ...
+    pub goodbye_started: bool,
+    /// ... and was completely sent.
+    pub goodbye_sent: bool,
+    /// Message types not understood, each reported once.
+    pub unknown: BTreeSet<String>,
     /// Function calls the user cancelled by speaking again.
     pub cancelled: BTreeSet<String>,
     pending_mic: VecDeque<i16>,
@@ -101,6 +107,22 @@ pub struct Session {
 }
 
 impl Session {
+    /// The agent asked to end the conversation.
+    pub fn request_end(&mut self, now: u64) {
+        self.end_requested_at = Some(now);
+        self.goodbye_started = false;
+        self.goodbye_sent = false;
+    }
+
+    /// The conversation goes on after all.
+    pub fn cancel_end(&mut self) {
+        if self.end_requested_at.take().is_some() {
+            vrt::println!("the conversation goes on");
+        }
+        self.goodbye_started = false;
+        self.goodbye_sent = false;
+    }
+
     pub fn new(ws: WebSocket<Conn>, now: u64) -> Session {
         Session {
             ws,
@@ -109,7 +131,10 @@ impl Session {
             last_activity_ns: now,
             agent_turn: false,
             audio_done: false,
-            end_requested: false,
+            end_requested_at: None,
+            goodbye_started: false,
+            goodbye_sent: false,
+            unknown: BTreeSet::new(),
             cancelled: BTreeSet::new(),
             pending_mic: VecDeque::new(),
             pending_inject: Vec::new(),

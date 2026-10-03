@@ -530,6 +530,13 @@ pub fn run_script(
                 "key-down" => s.m.key_event(w.get(1).ok_or("missing key")?, true).map_err(ctx)?,
                 "key-up" => s.m.key_event(w.get(1).ok_or("missing key")?, false).map_err(ctx)?,
                 "type" => s.m.type_text(w.get(1).ok_or("missing text")?).map_err(ctx)?,
+                // Types a secret (an API key) from the environment, so it
+                // appears in neither the script nor the logs.
+                "type-env" => {
+                    let name = w.get(1).ok_or("missing variable name")?;
+                    let value = std::env::var(name).map_err(|_| ctx(format!("${name} is not set")))?;
+                    s.m.type_text(value.trim()).map_err(|_| ctx(format!("cannot type ${name}")))?;
+                }
                 "expect-serial" => {
                     let needle = w.get(1).ok_or("missing text")?;
                     if !s.recent().contains(needle.as_str()) {

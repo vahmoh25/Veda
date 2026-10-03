@@ -418,7 +418,9 @@ impl Shell {
         self.close_wifi();
         let r = agent::placement(self.model.screen);
         let mut spec = WindowSpec::new(self.model.agent.name(), r.w as u32, r.h as u32);
-        spec.kind = WindowKind::Borderless;
+        // A panel: it stays above the windows the agent opens or the user
+        // works in, without taking the keyboard from them.
+        spec.kind = WindowKind::Panel;
         spec.x = r.x;
         spec.y = r.y;
         spec.resizable = false;
