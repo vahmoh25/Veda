@@ -32,7 +32,8 @@ COMMANDS:
     shot        Boot headless, wait, and save a screenshot (dev aid)
     script FILE Boot headless and run an automation script (see automate.rs)
     test        Run host unit tests, then the in-system integration tests
-                (--ui also runs the GUI automation scripts in tests/ui)
+                (--ui also runs the GUI automation scripts in tests/ui
+                and the agent's in tests/agent)
     clean       Remove build outputs
     doctor      Check that the required tools are installed
     help        Show this message
@@ -82,7 +83,7 @@ struct Options {
     wait: f64,
     until: Option<String>,
     out: Option<PathBuf>,
-    /// `test`: also run the GUI scripts in `tests/ui`.
+    /// `test`: also run the GUI scripts in `tests/ui` and `tests/agent`.
     ui: bool,
     /// Run the media generators (off: reuse what `target/generated` has).
     generate: bool,
@@ -495,6 +496,9 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vnetstack", &[]),
     ("vnet", &[]),
     ("vtls", &[]),
+    ("vjson", &[]),
+    ("vweb", &[]),
+    ("vagent", &[]),
     ("vwlan", &[]),
     ("vradiolink", &[]),
     ("airsim", &[]),
@@ -525,14 +529,20 @@ fn test(o: &Options) -> Result {
         "fail-on \"systest: FAIL\"\nwait-serial \"systest: PASS\" 240\nwait 3\nshot target/vindows/test-desktop.png\n";
     script_on(&o, checks, Some(&system))?;
     if o.ui {
-        let dir = util::workspace_root().join("tests").join("ui");
-        let mut scripts: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .map_err(|e| format!("reading {}: {e}", dir.display()))?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "vts"))
-            .collect();
-        scripts.sort();
+        // The GUI scripts, then the agent's (with the stand-in for Deepgram;
+        // tests/real, which talks to the real one, is left out).
+        let mut scripts: Vec<PathBuf> = Vec::new();
+        for group in ["ui", "agent"] {
+            let dir = util::workspace_root().join("tests").join(group);
+            let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
+                .map_err(|e| format!("reading {}: {e}", dir.display()))?
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "vts"))
+                .collect();
+            found.sort();
+            scripts.extend(found);
+        }
         for path in scripts {
             let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
             let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
