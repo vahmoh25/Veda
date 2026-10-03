@@ -1,0 +1,20 @@
+[package]
+name = "vkernel"
+description = "The Vindows microkernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vkernel"
+test = false
+bench = false
+
+[dependencies]
+bootinfo = { workspace = true }
+vabi = { workspace = true }
+vpe = { workspace = true }
+initrd = { workspace = true }
+
+[lints]
+workspace = true

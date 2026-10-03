@@ -1,0 +1,559 @@
+﻿//! `vboot` â€” the Vindows UEFI boot loader.
+//!
+//! Responsibilities, in order:
+//!
+//! 1. read `\VINDOWS\BOOT.CFG`, `VKERNEL.EXE`, `INITRD.IMG` (and the optional
+//!    `VKERNEL.SYM`) from the boot volume,
+//! 2. pick and set a graphics mode and paint the boot splash,
+//! 3. load the kernel's PE sections into fresh physical pages,
+//! 4. build the initial page tables (identity map, direct map, kernel image),
+//! 5. exit boot services, translate the firmware memory map into the
+//!    [`bootinfo`] format, and
+//! 6. switch to the new address space and jump to the kernel.
+
+#![no_std]
+#![no_main]
+
+mod config;
+mod paging;
+mod serial;
+mod splash;
+mod uefi;
+
+use core::ffi::c_void;
+use core::ptr;
+
+use bootinfo::{
+    BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, BootTime, Framebuffer, HHDM_BASE, KernelImage, MemoryKind, MemoryMap,
+    MemoryRegion, PhysRegion, PixelFormat,
+};
+use uefi::{memory_type as mt, *};
+
+const PAGE: u64 = 4096;
+const BOOT_STACK_SIZE: u64 = 128 * 1024;
+
+type Result<T> = core::result::Result<T, &'static str>;
+
+/// Thin safe-ish wrapper around the firmware tables.
+struct Firmware {
+    image: Handle,
+    st: &'static SystemTable,
+    bs: &'static BootServices,
+}
+
+impl Firmware {
+    fn print(&self, msg: &str) {
+        let mut buf = [0u16; 128];
+        let mut n = 0;
+        let out = self.st.con_out;
+        let mut flush = |buf: &mut [u16; 128], n: &mut usize| {
+            buf[*n] = 0;
+            // SAFETY: ConOut is valid while boot services are active and
+            // `buf` is NUL terminated.
+            unsafe { ((*out).output_string)(out, buf.as_ptr()) };
+            *n = 0;
+        };
+        for c in msg.chars() {
+            if c == '\n' {
+                buf[n] = '\r' as u16;
+                n += 1;
+            }
+            buf[n] = if (c as u32) < 0x10000 { c as u16 } else { '?' as u16 };
+            n += 1;
+            if n >= 120 {
+                flush(&mut buf, &mut n);
+            }
+        }
+        flush(&mut buf, &mut n);
+    }
+
+    fn alloc_pages(&self, pages: u64, mem_type: u32) -> Result<u64> {
+        let mut addr = 0u64;
+        // SAFETY: plain firmware call with valid out-pointer.
+        let s = unsafe { (self.bs.allocate_pages)(AllocateType::AnyPages, mem_type, pages as usize, &mut addr) };
+        if is_error(s) { Err("out of memory") } else { Ok(addr) }
+    }
+
+    fn alloc_zeroed(&self, bytes: u64, mem_type: u32) -> Result<u64> {
+        let pages = bytes.div_ceil(PAGE);
+        let addr = self.alloc_pages(pages, mem_type)?;
+        // SAFETY: freshly allocated, identity-mapped pages.
+        unsafe { ptr::write_bytes(addr as *mut u8, 0, (pages * PAGE) as usize) };
+        Ok(addr)
+    }
+
+    fn protocol<T>(&self, handle: Handle, guid: &Guid) -> Result<*mut T> {
+        let mut iface: *mut c_void = ptr::null_mut();
+        // SAFETY: valid handle and GUID; the firmware fills `iface`.
+        let s = unsafe { (self.bs.handle_protocol)(handle, guid, &mut iface) };
+        if is_error(s) || iface.is_null() { Err("protocol not supported") } else { Ok(iface.cast()) }
+    }
+
+    fn locate<T>(&self, guid: &Guid) -> Result<*mut T> {
+        let mut iface: *mut c_void = ptr::null_mut();
+        // SAFETY: as above.
+        let s = unsafe { (self.bs.locate_protocol)(guid, ptr::null_mut(), &mut iface) };
+        if is_error(s) || iface.is_null() { Err("protocol not found") } else { Ok(iface.cast()) }
+    }
+
+    /// Opens the root directory of the volume this loader was started from.
+    fn boot_volume(&self) -> Result<*mut FileProtocol> {
+        let loaded: *mut LoadedImage = self.protocol(self.image, &LOADED_IMAGE_PROTOCOL)?;
+        // SAFETY: the firmware returned a valid LoadedImage protocol.
+        let device = unsafe { (*loaded).device_handle };
+        let fs: *mut SimpleFileSystem = self.protocol(device, &SIMPLE_FILE_SYSTEM_PROTOCOL)?;
+        let mut root = ptr::null_mut();
+        // SAFETY: valid protocol pointer.
+        let s = unsafe { ((*fs).open_volume)(fs, &mut root) };
+        if is_error(s) { Err("cannot open boot volume") } else { Ok(root) }
+    }
+
+    /// Reads a whole file into newly allocated pages of `mem_type`.
+    /// Returns `None` if the file does not exist.
+    fn read_file(&self, root: *mut FileProtocol, path: &str, mem_type: u32) -> Result<Option<PhysRegion>> {
+        let mut name = [0u16; 64];
+        for (i, c) in path.encode_utf16().enumerate().take(63) {
+            name[i] = c;
+        }
+        let mut file = ptr::null_mut();
+        // SAFETY: `root` is an open directory and `name` is NUL terminated.
+        let s = unsafe { ((*root).open)(root, &mut file, name.as_ptr(), FILE_MODE_READ, 0) };
+        if s == NOT_FOUND {
+            return Ok(None);
+        }
+        if is_error(s) {
+            return Err("cannot open file");
+        }
+        #[repr(C, align(8))]
+        struct InfoBuf([u8; 512]);
+        let mut info = InfoBuf([0; 512]);
+        let mut info_size = info.0.len();
+        // SAFETY: `file` is open; the buffer is large enough for a short name.
+        let s = unsafe { ((*file).get_info)(file, &FILE_INFO, &mut info_size, info.0.as_mut_ptr()) };
+        if is_error(s) {
+            return Err("cannot stat file");
+        }
+        // SAFETY: the firmware wrote an EFI_FILE_INFO into the aligned buffer.
+        let size = unsafe { (*(info.0.as_ptr() as *const FileInfo)).file_size };
+        let base = self.alloc_zeroed(size.max(1), mem_type)?;
+        let mut done = 0u64;
+        while done < size {
+            let mut chunk = (size - done).min(16 << 20) as usize;
+            // SAFETY: reading into our freshly allocated buffer.
+            let s = unsafe { ((*file).read)(file, &mut chunk, (base + done) as *mut u8) };
+            if is_error(s) || chunk == 0 {
+                return Err("file read failed");
+            }
+            done += chunk as u64;
+        }
+        // SAFETY: closing an open file handle.
+        unsafe { ((*file).close)(file) };
+        Ok(Some(PhysRegion { base, size }))
+    }
+
+    fn config_table(&self, guid: &Guid) -> Option<u64> {
+        // SAFETY: the configuration table has `number_of_table_entries` entries.
+        let tables =
+            unsafe { core::slice::from_raw_parts(self.st.configuration_table, self.st.number_of_table_entries) };
+        tables.iter().find(|t| t.vendor_guid == *guid).map(|t| t.vendor_table as u64)
+    }
+
+    fn boot_time(&self) -> BootTime {
+        let mut t = Time::default();
+        // SAFETY: runtime services are valid during boot.
+        let s = unsafe { ((*self.st.runtime_services).get_time)(&mut t, ptr::null_mut()) };
+        if is_error(s) {
+            return BootTime::default();
+        }
+        BootTime {
+            year: t.year,
+            month: t.month,
+            day: t.day,
+            hour: t.hour,
+            minute: t.minute,
+            second: t.second,
+            valid: 1,
+            utc_offset_minutes: if t.time_zone == UNSPECIFIED_TIMEZONE { i16::MAX } else { -t.time_zone },
+            _pad: [0; 6],
+        }
+    }
+}
+
+/// Selects and activates the graphics mode closest to the preferred one.
+fn setup_graphics(fw: &Firmware, preferred: Option<(u32, u32)>) -> Result<Framebuffer> {
+    let gop: *mut GraphicsOutput = fw.locate(&GRAPHICS_OUTPUT_PROTOCOL)?;
+    // SAFETY: valid GOP instance from the firmware.
+    let gop_ref = unsafe { &mut *gop };
+    let max_mode = unsafe { (*gop_ref.mode).max_mode };
+    let (pw, ph) = preferred.unwrap_or((1280, 800));
+    let mut best: Option<(u32, u64)> = None;
+    for m in 0..max_mode {
+        let mut size = 0usize;
+        let mut info: *mut GraphicsModeInfo = ptr::null_mut();
+        // SAFETY: querying a mode index below max_mode.
+        if is_error(unsafe { (gop_ref.query_mode)(gop, m, &mut size, &mut info) }) || info.is_null() {
+            continue;
+        }
+        let info = unsafe { &*info };
+        if info.pixel_format != PIXEL_BGR_RESERVED_8BIT && info.pixel_format != PIXEL_RGB_RESERVED_8BIT {
+            continue;
+        }
+        let (w, h) = (info.horizontal_resolution, info.vertical_resolution);
+        // Exact match wins; otherwise prefer the closest size not exceeding
+        // the preferred one.
+        let score = if (w, h) == (pw, ph) {
+            0
+        } else if w <= pw && h <= ph {
+            1 + ((pw - w) as u64 * ph as u64 + (ph - h) as u64 * pw as u64)
+        } else {
+            u64::MAX / 2 + (w as u64 * h as u64)
+        };
+        if best.is_none_or(|(_, s)| score < s) {
+            best = Some((m, score));
+        }
+    }
+    if let Some((mode, _)) = best {
+        // SAFETY: valid mode number.
+        unsafe { (gop_ref.set_mode)(gop, mode) };
+    }
+    // SAFETY: the mode structure is valid after SetMode.
+    let mode = unsafe { &*gop_ref.mode };
+    let info = unsafe { &*mode.info };
+    Ok(Framebuffer {
+        phys_base: mode.frame_buffer_base,
+        size: mode.frame_buffer_size as u64,
+        width: info.horizontal_resolution,
+        height: info.vertical_resolution,
+        stride: info.pixels_per_scan_line,
+        format: if info.pixel_format == PIXEL_RGB_RESERVED_8BIT { PixelFormat::Rgbx } else { PixelFormat::Bgrx },
+    })
+}
+
+/// Page allocator for the page-table builder (boot data pages).
+struct TableFrames<'a>(&'a Firmware);
+
+impl paging::FrameSource for TableFrames<'_> {
+    fn alloc_zeroed_page(&mut self) -> Result<u64> {
+        self.0.alloc_zeroed(PAGE, mt::VINDOWS_BOOT_DATA)
+    }
+}
+
+/// Loads the kernel's sections into physically contiguous pages.
+fn load_kernel(fw: &Firmware, file: &[u8]) -> Result<(vpe::PeImage<'static>, KernelImage)> {
+    // SAFETY: `file` lives in pages that are never freed.
+    let file: &'static [u8] = unsafe { core::slice::from_raw_parts(file.as_ptr(), file.len()) };
+    let pe = vpe::PeImage::parse(file).map_err(|_| "kernel is not a valid PE32+ image")?;
+    pe.check_no_imports().map_err(|_| "kernel has DLL imports")?;
+    if pe.image_base() != bootinfo::KERNEL_BASE {
+        return Err("kernel is not linked at KERNEL_BASE");
+    }
+    let size = (pe.size_of_image() as u64).next_multiple_of(PAGE);
+    let phys = fw.alloc_zeroed(size, mt::VINDOWS_KERNEL)?;
+    // SAFETY: the destination was just allocated with `size` bytes and the
+    // parser verified every section lies inside `size_of_image`.
+    unsafe {
+        let hdr = pe.header_bytes();
+        ptr::copy_nonoverlapping(hdr.as_ptr(), phys as *mut u8, hdr.len());
+        for s in pe.sections() {
+            ptr::copy_nonoverlapping(s.data.as_ptr(), (phys + s.virtual_address as u64) as *mut u8, s.data.len());
+        }
+    }
+    Ok((pe, KernelImage { phys_base: phys, virt_base: pe.image_base(), size }))
+}
+
+/// Maps the kernel image with per-section permissions (W^X).
+fn map_kernel<F: paging::FrameSource>(
+    pt: &mut paging::PageTables<F>,
+    pe: &vpe::PeImage,
+    k: &KernelImage,
+) -> Result<()> {
+    use paging::{GLOBAL, NO_EXECUTE, WRITABLE};
+    let mut off = 0;
+    while off < k.size {
+        let rva = off as u32;
+        let mut flags = GLOBAL | NO_EXECUTE;
+        for s in pe.sections() {
+            let end = s.virtual_address + s.virtual_size.next_multiple_of(PAGE as u32);
+            if rva >= s.virtual_address && rva < end {
+                if s.writable() {
+                    flags |= WRITABLE;
+                }
+                if s.executable() {
+                    flags &= !NO_EXECUTE;
+                }
+            }
+        }
+        pt.map_4k(k.virt_base + off, k.phys_base + off, flags)?;
+        off += PAGE;
+    }
+    Ok(())
+}
+
+fn convert_type(ty: u32) -> MemoryKind {
+    match ty {
+        mt::CONVENTIONAL | mt::BOOT_SERVICES_CODE | mt::BOOT_SERVICES_DATA => MemoryKind::Usable,
+        mt::LOADER_CODE | mt::LOADER_DATA => MemoryKind::LoaderReclaimable,
+        mt::ACPI_RECLAIM => MemoryKind::AcpiReclaimable,
+        mt::ACPI_NVS => MemoryKind::AcpiNvs,
+        mt::MMIO | mt::MMIO_PORT_SPACE => MemoryKind::Mmio,
+        mt::UNUSABLE => MemoryKind::Unusable,
+        mt::VINDOWS_KERNEL => MemoryKind::Kernel,
+        mt::VINDOWS_INITRD => MemoryKind::Initrd,
+        mt::VINDOWS_BOOT_DATA => MemoryKind::BootData,
+        mt::VINDOWS_SYMBOLS => MemoryKind::Symbols,
+        _ => MemoryKind::Reserved,
+    }
+}
+
+/// Size information for the firmware memory map.
+fn memory_map_size(fw: &Firmware) -> (usize, usize) {
+    let (mut size, mut key, mut desc_size, mut ver) = (0usize, 0usize, 0usize, 0u32);
+    // SAFETY: a size query with a null buffer is explicitly allowed.
+    unsafe { (fw.bs.get_memory_map)(&mut size, ptr::null_mut(), &mut key, &mut desc_size, &mut ver) };
+    (size, desc_size.max(core::mem::size_of::<MemoryDescriptor>()))
+}
+
+fn read_msr(msr: u32) -> u64 {
+    let (lo, hi): (u32, u32);
+    // SAFETY: reading an architectural MSR.
+    unsafe { core::arch::asm!("rdmsr", in("ecx") msr, out("eax") lo, out("edx") hi, options(nomem, nostack)) };
+    (hi as u64) << 32 | lo as u64
+}
+
+fn write_msr(msr: u32, value: u64) {
+    // SAFETY: writing an architectural MSR with a valid value.
+    unsafe {
+        core::arch::asm!("wrmsr", in("ecx") msr, in("eax") value as u32, in("edx") (value >> 32) as u32, options(nomem, nostack))
+    };
+}
+
+fn supports_1g_pages() -> bool {
+    let edx: u32;
+    // SAFETY: CPUID is always available on x86-64. rbx is reserved by LLVM,
+    // so it is saved manually.
+    unsafe {
+        core::arch::asm!("mov {tmp}, rbx", "cpuid", "mov rbx, {tmp}", tmp = out(reg) _,
+            inout("eax") 0x8000_0001u32 => _, inout("ecx") 0 => _, out("edx") edx, options(nostack));
+    }
+    edx & (1 << 26) != 0
+}
+
+fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
+    // SAFETY: disabling the 5 minute firmware watchdog.
+    unsafe { (fw.bs.set_watchdog_timer)(0, 0, 0, ptr::null()) };
+
+    let root = fw.boot_volume()?;
+    let cfg = match fw.read_file(root, "\\VINDOWS\\BOOT.CFG", mt::LOADER_DATA)? {
+        Some(r) => {
+            // SAFETY: the file was read into r.base with r.size bytes.
+            let bytes = unsafe { core::slice::from_raw_parts(r.base as *const u8, r.size as usize) };
+            config::Config::parse(core::str::from_utf8(bytes).unwrap_or(""))
+        }
+        None => config::Config::default(),
+    };
+
+    let framebuffer = setup_graphics(fw, cfg.resolution)?;
+    log!("framebuffer {}x{} stride {} at {:#x}", framebuffer.width, framebuffer.height, framebuffer.stride, framebuffer.phys_base);
+    splash::draw(&splash::Surface {
+        base: framebuffer.phys_base as *mut u32,
+        width: framebuffer.width,
+        height: framebuffer.height,
+        stride: framebuffer.stride,
+        rgb: framebuffer.format == PixelFormat::Rgbx,
+    });
+
+    let kernel_file =
+        fw.read_file(root, "\\VINDOWS\\VKERNEL.EXE", mt::LOADER_DATA)?.ok_or("\\VINDOWS\\VKERNEL.EXE not found")?;
+    // SAFETY: the kernel file was read into kernel_file.base.
+    let kernel_bytes = unsafe { core::slice::from_raw_parts(kernel_file.base as *const u8, kernel_file.size as usize) };
+    let (pe, kernel) = load_kernel(fw, kernel_bytes)?;
+    log!("kernel: {} KiB at phys {:#x}, entry {:#x}", kernel.size / 1024, kernel.phys_base, pe.entry_point());
+
+    let initrd =
+        fw.read_file(root, "\\VINDOWS\\INITRD.IMG", mt::VINDOWS_INITRD)?.ok_or("\\VINDOWS\\INITRD.IMG not found")?;
+    log!("initrd: {} KiB at {:#x}", initrd.size / 1024, initrd.base);
+    let symbols = fw.read_file(root, "\\VINDOWS\\VKERNEL.SYM", mt::VINDOWS_SYMBOLS)?.unwrap_or(PhysRegion::EMPTY);
+
+    let rsdp_phys = fw.config_table(&ACPI_20_TABLE).or_else(|| fw.config_table(&ACPI_10_TABLE)).unwrap_or(0);
+    let boot_time = fw.boot_time();
+
+    // Allocate everything the kernel will receive before taking the final
+    // memory map.
+    let boot_info_phys = fw.alloc_zeroed(PAGE, mt::VINDOWS_BOOT_DATA)?;
+    let stack = fw.alloc_zeroed(BOOT_STACK_SIZE, mt::VINDOWS_BOOT_DATA)?;
+    let (map_bytes, desc_size) = memory_map_size(fw);
+    // Head-room for the descriptors created by the allocations below.
+    let map_capacity = map_bytes + 16 * desc_size;
+    let raw_map = fw.alloc_zeroed(map_capacity as u64, mt::LOADER_DATA)?;
+    let max_entries = map_capacity / desc_size;
+    let regions = fw.alloc_zeroed((max_entries * core::mem::size_of::<MemoryRegion>()) as u64, mt::VINDOWS_BOOT_DATA)?;
+
+    // The direct map covers all RAM and at least the low 4 GiB (MMIO hole).
+    let mut phys_limit = 4u64 << 30;
+    {
+        let (mut size, mut key, mut ds, mut ver) = (map_capacity, 0usize, 0usize, 0u32);
+        // SAFETY: buffer of `map_capacity` bytes.
+        let s = unsafe {
+            (fw.bs.get_memory_map)(&mut size, raw_map as *mut MemoryDescriptor, &mut key, &mut ds, &mut ver)
+        };
+        if is_error(s) {
+            return Err("GetMemoryMap failed");
+        }
+        for i in 0..size / ds {
+            // SAFETY: within the returned map.
+            let d = unsafe { &*((raw_map as usize + i * ds) as *const MemoryDescriptor) };
+            let end = d.physical_start + d.number_of_pages * PAGE;
+            if d.ty != mt::MMIO && d.ty != mt::RESERVED {
+                phys_limit = phys_limit.max(end);
+            }
+        }
+    }
+    phys_limit = phys_limit.next_multiple_of(1 << 30);
+
+    let mut frames = TableFrames(fw);
+    let mut pt = paging::PageTables::new(&mut frames, supports_1g_pages())?;
+    // Identity map (slot 0) and direct map (slot 256) share the same tables;
+    // the direct map is additionally non-executable.
+    pt.map_linear(0, phys_limit, paging::WRITABLE)?;
+    pt.alias_pml4_slot(256, 0, paging::NO_EXECUTE);
+    // The identity map must not be global: the kernel will drop it.
+    map_kernel(&mut pt, &pe, &kernel)?;
+    let cr3 = pt.pml4;
+    log!("page tables at {:#x}, direct map limit {:#x}", cr3, phys_limit);
+
+    // ExitBootServices: no firmware calls (including printing) after this.
+    let mut map_size;
+    let mut desc_size_out = 0usize;
+    let mut attempts = 0;
+    loop {
+        map_size = map_capacity;
+        let (mut key, mut ver) = (0usize, 0u32);
+        // SAFETY: valid buffer; see above.
+        let s = unsafe {
+            (fw.bs.get_memory_map)(&mut map_size, raw_map as *mut MemoryDescriptor, &mut key, &mut desc_size_out, &mut ver)
+        };
+        if is_error(s) {
+            return Err("GetMemoryMap failed");
+        }
+        // SAFETY: the map key is current.
+        let s = unsafe { (fw.bs.exit_boot_services)(fw.image, key) };
+        if s == SUCCESS {
+            break;
+        }
+        attempts += 1;
+        if attempts > 4 {
+            return Err("ExitBootServices failed");
+        }
+    }
+
+    // Translate, sort and merge the firmware map.
+    let out = regions as *mut MemoryRegion;
+    let mut count = 0usize;
+    for i in 0..map_size / desc_size_out {
+        // SAFETY: within the returned map.
+        let d = unsafe { &*((raw_map as usize + i * desc_size_out) as *const MemoryDescriptor) };
+        if d.number_of_pages == 0 {
+            continue;
+        }
+        let r = MemoryRegion { base: d.physical_start, pages: d.number_of_pages, kind: convert_type(d.ty), _pad: 0 };
+        // SAFETY: `count < max_entries` because each descriptor yields at
+        // most one region.
+        unsafe { out.add(count).write(r) };
+        count += 1;
+    }
+    // SAFETY: `count` regions were initialised above.
+    let slice = unsafe { core::slice::from_raw_parts_mut(out, count) };
+    slice.sort_unstable_by_key(|r| r.base);
+    let mut merged = 0usize;
+    for i in 0..count {
+        let r = slice[i];
+        if merged > 0 && slice[merged - 1].kind == r.kind && slice[merged - 1].end() == r.base {
+            slice[merged - 1].pages += r.pages;
+        } else {
+            slice[merged] = r;
+            merged += 1;
+        }
+    }
+
+    let info = boot_info_phys as *mut BootInfo;
+    let mut cmdline = [0u8; bootinfo::CMDLINE_MAX];
+    cmdline[..cfg.cmdline_len].copy_from_slice(&cfg.cmdline[..cfg.cmdline_len]);
+    // SAFETY: the BootInfo page was allocated and zeroed above.
+    unsafe {
+        info.write(BootInfo {
+            magic: BOOTINFO_MAGIC,
+            version: BOOTINFO_VERSION,
+            size: core::mem::size_of::<BootInfo>() as u32,
+            hhdm_base: HHDM_BASE,
+            hhdm_limit: phys_limit,
+            memory_map: MemoryMap { entries: (HHDM_BASE + regions) as *const MemoryRegion, len: merged as u64 },
+            kernel,
+            framebuffer,
+            initrd,
+            symbols,
+            rsdp_phys,
+            boot_time,
+            boot_stack: PhysRegion { base: stack, size: BOOT_STACK_SIZE },
+            cmdline,
+            cmdline_len: cfg.cmdline_len as u32,
+            _reserved: 0,
+        });
+    }
+    log!("handing over to the kernel ({} memory regions)", merged);
+
+    // Enable no-execute support (required by the NX bits in our tables) and
+    // supervisor write protection, then switch address space and jump.
+    const IA32_EFER: u32 = 0xC000_0080;
+    write_msr(IA32_EFER, read_msr(IA32_EFER) | (1 << 11));
+    let entry = pe.entry_point();
+    let stack_top = HHDM_BASE + stack + BOOT_STACK_SIZE;
+    let info_virt = HHDM_BASE + boot_info_phys;
+    // SAFETY: enabling supervisor write protection (CR0.WP) with interrupts
+    // masked; the firmware's page tables are still active and writable.
+    unsafe {
+        core::arch::asm!("cli", "mov {tmp}, cr0", "or {tmp}, 0x10000", "mov cr0, {tmp}", tmp = out(reg) _, options(nostack));
+    }
+    // SAFETY: the new tables identity-map this code, map the stack and the
+    // kernel, and the kernel entry follows the documented contract.
+    unsafe {
+        core::arch::asm!(
+            "mov cr3, {cr3}",
+            "mov rsp, {stack}",
+            "xor ebp, ebp",
+            "push 0",               // fake return address keeps the ABI alignment
+            "jmp {entry}",
+            cr3 = in(reg) cr3,
+            stack = in(reg) stack_top,
+            entry = in(reg) entry,
+            in("rdi") info_virt,
+            options(noreturn)
+        );
+    }
+}
+
+#[unsafe(export_name = "efi_main")]
+extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
+    serial::init();
+    log!("Vindows boot loader {}", env!("CARGO_PKG_VERSION"));
+    // SAFETY: the firmware passes a valid system table.
+    let st: &'static SystemTable = unsafe { &*st };
+    // SAFETY: boot services are valid until ExitBootServices.
+    let fw = Firmware { image, st, bs: unsafe { &*st.boot_services } };
+    let Err(err) = boot(&fw);
+    log!("fatal: {err}");
+    fw.print("\nVindows could not start: ");
+    fw.print(err);
+    fw.print("\n");
+    loop {
+        // SAFETY: stall is always safe to call during boot services.
+        unsafe { (fw.bs.stall)(1_000_000) };
+    }
+}
+
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    log!("panic: {info}");
+    loop {
+        core::hint::spin_loop();
+    }
+}

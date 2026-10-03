@@ -1,0 +1,6 @@
+# Vindows builds on stable Rust (tested with 1.99). rustup installs the extra
+# bare-metal target automatically on first use.
+[toolchain]
+channel = "stable"
+targets = ["x86_64-unknown-uefi"]
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,18 @@
+[package]
+name = "vboot"
+description = "The Vindows UEFI boot loader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vboot"
+test = false
+bench = false
+
+[dependencies]
+bootinfo = { workspace = true }
+vpe = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "initrd"
+description = "The VINITRD archive format: the Vindows initial ramdisk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Enables the archive builder, used by the host-side build tool.
+std = []
+
+[lints]
+workspace = true

@@ -1,0 +1,49 @@
+[workspace]
+resolver = "3"
+members = [
+    "xtask",
+    "boot",
+    "kernel",
+    "lib/abi",
+    "lib/bootinfo",
+    "lib/initrd",
+    "lib/pe",
+]
+# Plain `cargo build` only builds the host-side build tool. Everything that runs
+# inside Vindows is cross-built by `cargo xtask build`, which knows the correct
+# target for every component.
+default-members = ["xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Vahid Mohammadi"]
+repository = "https://example.invalid/vindows"
+
+[workspace.dependencies]
+vabi = { path = "lib/abi" }
+bootinfo = { path = "lib/bootinfo" }
+initrd = { path = "lib/initrd" }
+vpe = { path = "lib/pe" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "allow"
+
+[workspace.lints.clippy]
+missing_safety_doc = "allow"
+new_without_default = "allow"
+
+# The OS is always built with `panic = "abort"`: there is no unwinder in
+# Vindows. (Cargo ignores this for `cargo test`, which needs unwinding.)
+[profile.dev]
+panic = "abort"
+# Unoptimised code is unusably slow under QEMU's TCG emulation.
+opt-level = 1
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+debug = false
+codegen-units = 16
