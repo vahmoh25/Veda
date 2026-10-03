@@ -113,17 +113,33 @@ pub fn busy_wait_ms(ms: u64) {
     }
 }
 
+/// One measurement of the TSC frequency over about `ms` milliseconds. With
+/// an HPET the TSC ticks are divided by the time that really passed, which
+/// can exceed `ms` when the (virtual) CPU is descheduled during the wait.
+fn measure_tsc_hz(ms: u64) -> u64 {
+    let period_fs = HPET_PERIOD_FS.load(Ordering::Relaxed);
+    if HPET_BASE.load(Ordering::Relaxed) != 0 && period_fs != 0 {
+        let (h0, t0) = (hpet_counter(), rdtsc());
+        busy_wait_ms(ms);
+        let (t1, h1) = (rdtsc(), hpet_counter());
+        let elapsed_fs = (h1.wrapping_sub(h0) as u128 * period_fs as u128).max(1);
+        return ((t1 - t0) as u128 * 1_000_000_000_000_000 / elapsed_fs) as u64;
+    }
+    // The PIT fallback cannot tell how long the wait really took.
+    let t0 = rdtsc();
+    busy_wait_ms(ms);
+    (rdtsc() - t0) * 1000 / ms
+}
+
 /// Measures the TSC frequency and starts the monotonic clock.
 pub fn calibrate_tsc() {
-    // Take the best of three 10 ms samples to reduce emulator jitter.
-    let mut best = 0u64;
-    for _ in 0..3 {
-        let t0 = rdtsc();
-        busy_wait_ms(10);
-        let hz = (rdtsc() - t0) * 100;
-        best = best.max(hz);
+    // The median of five samples ignores outliers from emulator jitter.
+    let mut samples = [0u64; 5];
+    for s in &mut samples {
+        *s = measure_tsc_hz(10);
     }
-    let hz = best.max(1_000_000);
+    samples.sort_unstable();
+    let hz = samples[samples.len() / 2].max(1_000_000);
     TSC_HZ.store(hz, Ordering::Relaxed);
     TSC_BOOT.store(rdtsc(), Ordering::Relaxed);
     NS_PER_TICK_FP.store(((1_000_000_000u128 << 32) / hz as u128) as u64, Ordering::Relaxed);

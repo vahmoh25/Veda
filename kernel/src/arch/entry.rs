@@ -53,7 +53,7 @@ pub struct TrapFrame {
 const _: () = assert!(core::mem::size_of::<TrapFrame>() == 176);
 
 impl TrapFrame {
-    pub fn from_user(&self) -> bool {
+    pub fn is_user(&self) -> bool {
         self.cs & 3 == 3
     }
 
@@ -78,7 +78,6 @@ unsafe extern "sysv64" {
     /// Start of the 256 interrupt stubs (16 bytes each).
     pub static vk_isr_stubs: [u8; 4096];
     pub fn vk_syscall_entry();
-    pub fn vk_return_from_trap() -> !;
     pub fn vk_thread_trampoline();
     pub fn vk_kernel_thread_trampoline();
     pub fn vk_context_switch(old_rsp: *mut u64, new_rsp: u64);

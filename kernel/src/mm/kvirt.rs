@@ -85,10 +85,6 @@ impl KernelStack {
     pub fn top(&self) -> u64 {
         self.base + self.pages * PAGE_SIZE
     }
-
-    pub fn bottom(&self) -> u64 {
-        self.base
-    }
 }
 
 impl Drop for KernelStack {
@@ -108,5 +104,5 @@ impl Drop for KernelStack {
 
 /// Returns `true` if `addr` lies in a kernel stack guard page.
 pub fn is_stack_guard(addr: u64) -> bool {
-    addr >= STACK_BASE && addr < STACK_BASE + (1 << 39) && (addr - STACK_BASE) % STACK_SLOT < PAGE_SIZE
+    (STACK_BASE..STACK_BASE + (1 << 39)).contains(&addr) && (addr - STACK_BASE) % STACK_SLOT < PAGE_SIZE
 }

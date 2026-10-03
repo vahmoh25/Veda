@@ -176,9 +176,9 @@ pub fn kernel_pml4() -> u64 {
 pub fn init_kernel_space(boot: &bootinfo::BootInfo) {
     let pml4 = phys::alloc_zeroed().expect("out of memory for the kernel PML4");
     let pml4_t = table(pml4);
-    for slot in 256..512 {
+    for entry in &mut pml4_t[256..512] {
         let pdpt = phys::alloc_zeroed().expect("out of memory for kernel PDPTs");
-        pml4_t[slot] = pdpt | PRESENT | WRITABLE;
+        *entry = pdpt | PRESENT | WRITABLE;
     }
 
     // Direct map with 1 GiB pages when available, otherwise 2 MiB pages.
@@ -210,7 +210,8 @@ pub fn init_kernel_space(boot: &bootinfo::BootInfo) {
     let mut off = 0;
     while off < k.size {
         let rva = off as u32;
-        let mut flags = Flags { writable: false, executable: false, user: false, global: true, cache: Cache::WriteBack };
+        let mut flags =
+            Flags { writable: false, executable: false, user: false, global: true, cache: Cache::WriteBack };
         for s in pe.sections() {
             let end = s.virtual_address + s.virtual_size.next_multiple_of(PAGE_SIZE as u32);
             if rva >= s.virtual_address && rva < end {

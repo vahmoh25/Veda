@@ -13,7 +13,6 @@ pub mod thread;
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::{Arc, Weak};
-use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 pub use thread::{State, Thread, WakeReason};
@@ -106,10 +105,6 @@ pub fn init_cpu(idle: Arc<Thread>) {
     cs.switched_in_at = time::now_ns();
 }
 
-pub fn ready_count() -> usize {
-    RUNQ.lock().len
-}
-
 /// Makes a new or blocked thread runnable.
 pub fn make_ready(t: &Arc<Thread>) {
     let prio = {
@@ -125,10 +120,10 @@ pub fn make_ready(t: &Arc<Thread>) {
 /// Preemption and idle-CPU wake-up after `prio` became runnable.
 fn after_wakeup(prio: u8) {
     let me = percpu::cpu_id_or_boot();
-    if let Some(cur) = try_current() {
-        if cur.is_idle || prio > cur.priority() {
-            cpu_sched().need_resched = true;
-        }
+    if let Some(cur) = try_current()
+        && (cur.is_idle || prio > cur.priority())
+    {
+        cpu_sched().need_resched = true;
     }
     // Wake one idle CPU (other than us) to pick up the work.
     for p in percpu::online() {
@@ -170,10 +165,10 @@ pub fn block(deadline: Option<u64>) -> WakeReason {
     if cur.kill_pending.load(Ordering::Acquire) {
         return WakeReason::Killed;
     }
-    if let Some(d) = deadline {
-        if d <= time::now_ns() {
-            return WakeReason::TimedOut;
-        }
+    if let Some(d) = deadline
+        && d <= time::now_ns()
+    {
+        return WakeReason::TimedOut;
     }
     {
         let mut s = cur.sched.lock();
@@ -297,12 +292,12 @@ fn switch_to(prev: Arc<Thread>, next: Arc<Thread>) {
     if !prev.is_idle {
         prev.save_fpu();
         // SAFETY: the scheduler owns the contexts under the BKL.
-        unsafe { prev.ctx().fs_base = cpu::rdmsr(cpu::MSR_FS_BASE) };
+        unsafe { (*prev.ctx_ptr()).fs_base = cpu::rdmsr(cpu::MSR_FS_BASE) };
     }
     if !next.is_idle {
         next.restore_fpu();
         // SAFETY: as above.
-        unsafe { cpu::wrmsr(cpu::MSR_FS_BASE, next.ctx().fs_base) };
+        unsafe { cpu::wrmsr(cpu::MSR_FS_BASE, (*next.ctx_ptr()).fs_base) };
     }
     match &next.aspace {
         Some(a) => a.activate(),
@@ -326,9 +321,9 @@ fn switch_to(prev: Arc<Thread>, next: Arc<Thread>) {
     arm_timer(next.is_idle);
 
     // SAFETY: contexts are only touched here, under the BKL.
-    let prev_rsp: *mut u64 = unsafe { &mut prev.ctx().rsp };
+    let prev_rsp: *mut u64 = unsafe { &raw mut (*prev.ctx_ptr()).rsp };
     // SAFETY: as above.
-    let next_rsp = unsafe { next.ctx().rsp };
+    let next_rsp = unsafe { (*next.ctx_ptr()).rsp };
     if next_rsp == 0 {
         panic!(
             "switching to thread {} ({} of {}, idle={}, state={:?}) with no saved context; prev {} ({})",
@@ -440,17 +435,23 @@ pub fn user_exception(frame: &mut TrapFrame) {
         let addr = cpu::read_cr2();
         let write = frame.error_code & 2 != 0;
         let exec = frame.error_code & 16 != 0;
-        if let Some(a) = &cur.aspace {
-            if a.handle_fault(addr, write, exec) {
-                return;
-            }
+        if let Some(a) = &cur.aspace
+            && a.handle_fault(addr, write, exec)
+        {
+            return;
         }
         crate::kerror!(
             "{} (thread {}): page fault at {:#x} ({} {}), rip {:#x}",
             cur.process_name(),
             cur.koid,
             addr,
-            if exec { "execute" } else if write { "write" } else { "read" },
+            if exec {
+                "execute"
+            } else if write {
+                "write"
+            } else {
+                "read"
+            },
             if frame.error_code & 1 != 0 { "protection violation" } else { "not mapped" },
             frame.rip
         );
@@ -492,10 +493,4 @@ pub extern "sysv64" fn ap_idle_entry(_arg: u64) -> ! {
 /// Snapshot used by `system_info`.
 pub fn total_idle_ns() -> u64 {
     percpu::online().map(|p| p.idle_ns.load(Ordering::Relaxed)).sum()
-}
-
-/// Threads currently queued (for diagnostics).
-pub fn queued_threads() -> Vec<u64> {
-    let rq = RUNQ.lock();
-    rq.levels.iter().flat_map(|l| l.iter().map(|t| t.koid)).collect()
 }

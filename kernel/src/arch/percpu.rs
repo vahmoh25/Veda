@@ -14,7 +14,6 @@ pub const MAX_CPUS: usize = 32;
 /// Offsets used by assembly.
 pub const OFF_USER_RSP: usize = 8;
 pub const OFF_KERNEL_RSP: usize = 16;
-pub const OFF_CPU_ID: usize = 24;
 
 #[repr(C, align(64))]
 pub struct PerCpu {

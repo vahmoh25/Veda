@@ -75,5 +75,5 @@ pub fn read_vec(src: u64, len: usize, max: usize) -> Result<Vec<u8>, Error> {
 /// Reads an array of `u32` values (e.g. handle lists).
 pub fn read_u32s(src: u64, count: usize, max: usize) -> Result<Vec<u32>, Error> {
     let bytes = read_vec(src, count.checked_mul(4).ok_or(Error::InvalidArgs)?, max * 4)?;
-    Ok(bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    Ok(bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
 }

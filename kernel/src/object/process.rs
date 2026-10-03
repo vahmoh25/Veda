@@ -18,7 +18,9 @@ pub enum ProcessState {
     Created,
     Running,
     /// All threads have exited.
-    Terminated { code: i64 },
+    Terminated {
+        code: i64,
+    },
 }
 
 pub struct Process {
@@ -149,7 +151,10 @@ impl Process {
         let aspace = self.aspace.lock().take();
         drop(aspace);
         let level = if code == vabi::EXIT_CODE_CRASHED { crate::log::Level::Warn } else { crate::log::Level::Debug };
-        crate::log::write(level, format_args!("process {} ({}) exited with code {}", self.name.as_str(), self.koid, code));
+        crate::log::write(
+            level,
+            format_args!("process {} ({}) exited with code {}", self.name.as_str(), self.koid, code),
+        );
         self.signals.update(0, vabi::signals::TERMINATED);
     }
 

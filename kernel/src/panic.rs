@@ -116,7 +116,7 @@ fn dump_frame(frame: &TrapFrame) {
     emergency(format_args!("  backtrace:"));
     let mut rbp = frame.rbp;
     for _ in 0..16 {
-        if rbp < 0xFFFF_8000_0000_0000 || rbp % 8 != 0 {
+        if rbp < 0xFFFF_8000_0000_0000 || !rbp.is_multiple_of(8) {
             break;
         }
         // SAFETY: best effort on a kernel stack; a bad chain only ends the walk

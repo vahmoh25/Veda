@@ -73,11 +73,12 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
     let opts = parse_cmdline(boot.cmdline());
     kinfo!("Vindows kernel {} starting", env!("CARGO_PKG_VERSION"));
     kinfo!(
-        "cpu: xsave={} avx={} x2apic={} tsc-deadline={} smep={} smap={} 1g-pages={}",
+        "cpu: xsave={} avx={} x2apic={} tsc-deadline={} invariant-tsc={} smep={} smap={} 1g-pages={}",
         features.xsave,
         features.avx,
         features.x2apic,
         features.tsc_deadline,
+        features.invariant_tsc,
         features.smep,
         features.smap,
         features.page_1g
@@ -90,7 +91,12 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
     mm::paging::init_kernel_space(boot);
     let reclaimed = mm::phys::reclaim(memmap, MemoryKind::LoaderReclaimable);
     let (total, free) = mm::phys::stats();
-    kinfo!("memory: {} MiB usable, {} MiB free ({} KiB reclaimed from the loader)", total >> 20, free >> 20, reclaimed >> 10);
+    kinfo!(
+        "memory: {} MiB usable, {} MiB free ({} KiB reclaimed from the loader)",
+        total >> 20,
+        free >> 20,
+        reclaimed >> 10
+    );
     smp::init_this_cpu(0);
     panic::set_framebuffer(&boot.framebuffer);
 

@@ -13,7 +13,7 @@ const PROCESS_RIGHTS: Rights = Rights(Rights::BASIC.0 | Rights::MANAGE.0 | Right
 const THREAD_RIGHTS: Rights = Rights(Rights::BASIC.0 | Rights::MANAGE.0 | Rights::GET_INFO.0);
 
 fn is_user_address(a: usize) -> bool {
-    a >= vabi::USER_SPACE_START && a < vabi::USER_SPACE_END
+    (vabi::USER_SPACE_START..vabi::USER_SPACE_END).contains(&a)
 }
 
 pub fn process_create(name: usize, len: usize) -> SysResult {
@@ -34,7 +34,14 @@ fn start_thread(t: &Thread, entry: usize, stack: usize, arg0: u64, arg1: u64) ->
     Ok(())
 }
 
-pub fn process_start(proc: RawHandle, thread: RawHandle, entry: usize, stack: usize, arg: RawHandle, arg1: usize) -> SysResult {
+pub fn process_start(
+    proc: RawHandle,
+    thread: RawHandle,
+    entry: usize,
+    stack: usize,
+    arg: RawHandle,
+    arg1: usize,
+) -> SysResult {
     let p = get_process(proc, Rights::MANAGE)?;
     let t = get_thread(thread, Rights::MANAGE)?;
     if !t.process.as_ref().is_some_and(|tp| tp.koid == p.koid) {
@@ -106,7 +113,7 @@ pub fn thread_set_fs_base(value: usize) -> SysResult {
     }
     let cur = sched::current();
     // SAFETY: the current thread's context, under the BKL.
-    unsafe { cur.ctx().fs_base = value as u64 };
+    unsafe { (*cur.ctx_ptr()).fs_base = value as u64 };
     // SAFETY: loading a user-space address into FS.base.
     unsafe { crate::arch::cpu::wrmsr(crate::arch::cpu::MSR_FS_BASE, value as u64) };
     ok(0)

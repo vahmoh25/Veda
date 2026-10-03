@@ -157,7 +157,11 @@ impl Vmo {
             let Some(f) = self.page(pos, true) else { return false };
             // SAFETY: as in `read`.
             unsafe {
-                core::ptr::copy_nonoverlapping(data.as_ptr().add(done), (phys_to_virt(f) + in_page as u64) as *mut u8, n)
+                core::ptr::copy_nonoverlapping(
+                    data.as_ptr().add(done),
+                    (phys_to_virt(f) + in_page as u64) as *mut u8,
+                    n,
+                )
             };
             done += n;
         }

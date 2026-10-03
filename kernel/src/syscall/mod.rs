@@ -80,7 +80,9 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::VM_PROTECT => vm::vm_protect(a[0] as RawHandle, a[1], a[2], a[3]),
 
         nr::PROCESS_CREATE => task::process_create(a[0], a[1]),
-        nr::PROCESS_START => task::process_start(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4] as RawHandle, a[5]),
+        nr::PROCESS_START => {
+            task::process_start(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4] as RawHandle, a[5])
+        }
         nr::PROCESS_EXIT => task::process_exit(a[0] as i64),
         nr::PROCESS_KILL => task::process_kill(a[0] as RawHandle),
         nr::THREAD_CREATE => task::thread_create(a[0] as RawHandle, a[1], a[2]),

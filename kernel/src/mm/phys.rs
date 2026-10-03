@@ -63,7 +63,7 @@ impl Bitmap {
         let limit = self.frames.min(max_frame);
         let mut start = 0u64;
         while start + count <= limit {
-            if start % align != 0 {
+            if !start.is_multiple_of(align) {
                 start = start.next_multiple_of(align);
                 continue;
             }

@@ -89,12 +89,4 @@ impl<'a, F: FrameSource> PageTables<'a, F> {
         let t = table(self.pml4);
         t[dst] = t[src] | extra_flags;
     }
-
-    pub fn pml4_entry(&self, slot: usize) -> u64 {
-        table(self.pml4)[slot]
-    }
-
-    pub fn set_pml4_entry(&mut self, slot: usize, value: u64) {
-        table(self.pml4)[slot] = value;
-    }
 }

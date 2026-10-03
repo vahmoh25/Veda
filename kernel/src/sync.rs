@@ -59,29 +59,6 @@ impl<T: ?Sized> SpinLock<T> {
             core::hint::spin_loop();
         }
     }
-
-    pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
-        if self.locked.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {
-            self.owner.store(percpu::cpu_id_or_boot() + 1, Ordering::Relaxed);
-            Some(SpinLockGuard { lock: self })
-        } else {
-            None
-        }
-    }
-
-    pub fn is_locked(&self) -> bool {
-        self.locked.load(Ordering::Relaxed)
-    }
-
-    /// Releases the lock without a guard.
-    ///
-    /// # Safety
-    /// Only for the panic path, where a lock may be held by an interrupted
-    /// context that will never resume.
-    pub unsafe fn force_unlock(&self) {
-        self.owner.store(NO_OWNER, Ordering::Relaxed);
-        self.locked.store(false, Ordering::Release);
-    }
 }
 
 pub struct SpinLockGuard<'a, T: ?Sized> {
@@ -120,6 +97,7 @@ pub mod bkl {
     /// Acquires the BKL. While spinning, this CPU keeps servicing TLB
     /// shootdown requests so that the holder can safely wait for them.
     pub fn acquire() {
+        debug_assert!(!crate::arch::cpu::interrupts_enabled(), "the BKL is taken with interrupts disabled");
         let me = percpu::cpu_id_or_boot() + 1;
         loop {
             if LOCKED.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_ok() {
@@ -142,12 +120,6 @@ pub mod bkl {
 
     pub fn held_by_me() -> bool {
         LOCKED.load(Ordering::Relaxed) && OWNER.load(Ordering::Relaxed) == percpu::cpu_id_or_boot() + 1
-    }
-
-    /// Hands the BKL over to the current CPU unconditionally (panic path).
-    pub fn force_take() {
-        LOCKED.store(true, Ordering::Release);
-        OWNER.store(percpu::cpu_id_or_boot() + 1, Ordering::Relaxed);
     }
 }
 

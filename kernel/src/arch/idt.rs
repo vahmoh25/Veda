@@ -61,8 +61,8 @@ struct IdtPointer {
 
 /// Builds the shared IDT (once, on the BSP).
 pub fn init() {
-    // SAFETY: the stubs are 16 bytes apart starting at `vk_isr_stubs`.
-    let base = unsafe { core::ptr::addr_of!(vk_isr_stubs) as u64 };
+    // The stubs are 16 bytes apart starting at `vk_isr_stubs`.
+    let base = core::ptr::addr_of!(vk_isr_stubs) as u64;
     // SAFETY: single-threaded early boot; nothing reads the IDT yet.
     let idt = unsafe { &mut *core::ptr::addr_of_mut!(IDT) };
     for (v, entry) in idt.0.iter_mut().enumerate() {
@@ -78,11 +78,7 @@ pub fn init() {
 
 /// Loads the IDT on the current CPU.
 pub fn load() {
-    let ptr = IdtPointer {
-        limit: (core::mem::size_of::<Idt>() - 1) as u16,
-        // SAFETY: taking the address of a static.
-        base: unsafe { core::ptr::addr_of!(IDT) as u64 },
-    };
+    let ptr = IdtPointer { limit: (core::mem::size_of::<Idt>() - 1) as u16, base: core::ptr::addr_of!(IDT) as u64 };
     // SAFETY: the IDT is fully initialised and lives forever.
     unsafe { asm!("lidt [{}]", in(reg) &ptr, options(nostack)) };
 }
@@ -138,7 +134,7 @@ pub extern "sysv64" fn trap_dispatch(frame: &mut TrapFrame) {
         _ => {}
     }
 
-    if !frame.from_user() && vector < 32 {
+    if !frame.is_user() && vector < 32 {
         // A CPU exception in kernel mode is always a kernel bug.
         crate::panic::kernel_exception(frame);
     }
@@ -165,7 +161,7 @@ pub extern "sysv64" fn trap_dispatch(frame: &mut TrapFrame) {
             super::apic::eoi();
         }
     }
-    if frame.from_user() {
+    if frame.is_user() {
         crate::sched::return_to_user_hook(frame);
     }
     bkl::release();

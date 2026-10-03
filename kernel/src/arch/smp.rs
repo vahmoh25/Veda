@@ -90,7 +90,8 @@ unsafe extern "C" {
 }
 
 /// Idle threads created by the BSP for each AP.
-static IDLE_THREADS: SpinLock<[Option<Arc<Thread>>; percpu::MAX_CPUS]> = SpinLock::new([const { None }; percpu::MAX_CPUS]);
+static IDLE_THREADS: SpinLock<[Option<Arc<Thread>>; percpu::MAX_CPUS]> =
+    SpinLock::new([const { None }; percpu::MAX_CPUS]);
 static STARTED: AtomicU32 = AtomicU32::new(0);
 
 /// Programs the syscall MSRs on the current CPU.
@@ -99,7 +100,7 @@ pub fn init_syscall_msrs() {
     // the GDT layout in `gdt`.
     unsafe {
         cpu::wrmsr(cpu::MSR_STAR, ((gdt::KERNEL_CS as u64) << 32) | (0x10u64 << 48));
-        cpu::wrmsr(cpu::MSR_LSTAR, super::entry::vk_syscall_entry as usize as u64);
+        cpu::wrmsr(cpu::MSR_LSTAR, super::entry::vk_syscall_entry as *const () as u64);
         // Mask IF, TF, DF, AC and NT on entry.
         cpu::wrmsr(cpu::MSR_SFMASK, 0x0004_4700);
     }
@@ -170,10 +171,9 @@ pub fn start_aps(max_cpus: usize) -> usize {
     }
 
     // Copy the trampoline to 0x8000 (below 1 MiB, reserved from the allocator).
-    // SAFETY: linker symbols delimiting the trampoline code.
-    let (start, end) = unsafe {
-        (core::ptr::addr_of!(vk_ap_trampoline_start) as usize, core::ptr::addr_of!(vk_ap_trampoline_end) as usize)
-    };
+    // Linker symbols delimiting the trampoline code.
+    let (start, end) =
+        (core::ptr::addr_of!(vk_ap_trampoline_start) as usize, core::ptr::addr_of!(vk_ap_trampoline_end) as usize);
     let len = end - start;
     let dst = phys_to_virt(TRAMPOLINE_PHYS) as *mut u8;
     // SAFETY: 0x8000 is conventional memory below the allocator's floor.
@@ -195,7 +195,7 @@ pub fn start_aps(max_cpus: usize) -> usize {
         unsafe {
             slot(slots_base).write_volatile(pml4);
             slot(slots_base + 8).write_volatile(stack_top - 8);
-            slot(slots_base + 16).write_volatile(ap_entry as usize as u64);
+            slot(slots_base + 16).write_volatile(ap_entry as *const () as u64);
             slot(slots_base + 24).write_volatile(id as u64);
         }
         let before = STARTED.load(Ordering::Acquire);

@@ -188,7 +188,8 @@ pub struct SimpleTextOutput {
 
 #[repr(C)]
 pub struct GraphicsOutput {
-    pub query_mode: unsafe extern "efiapi" fn(*mut GraphicsOutput, u32, *mut usize, *mut *mut GraphicsModeInfo) -> Status,
+    pub query_mode:
+        unsafe extern "efiapi" fn(*mut GraphicsOutput, u32, *mut usize, *mut *mut GraphicsModeInfo) -> Status,
     pub set_mode: unsafe extern "efiapi" fn(*mut GraphicsOutput, u32) -> Status,
     pub blt: usize,
     pub mode: *mut GraphicsMode,

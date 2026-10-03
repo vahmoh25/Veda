@@ -69,9 +69,9 @@ pub fn write(level: Level, args: fmt::Arguments) {
         Level::Error => "ERROR",
     };
     let mut ring = RING.lock();
-    let _ = write!(
+    let _ = writeln!(
         Sink(&mut ring),
-        "[{:5}.{:06}] cpu{} {:5} {}\n",
+        "[{:5}.{:06}] cpu{} {:5} {}",
         ns / 1_000_000_000,
         (ns / 1000) % 1_000_000,
         cpu,
@@ -87,7 +87,7 @@ pub fn write_user(process: &str, text: &[u8]) {
     let mut sink = Sink(&mut ring);
     for line in text.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
         let line = core::str::from_utf8(line).unwrap_or("<invalid utf-8>");
-        let _ = write!(sink, "[{:5}.{:06}] {:>10}: {}\n", ns / 1_000_000_000, (ns / 1000) % 1_000_000, process, line);
+        let _ = writeln!(sink, "[{:5}.{:06}] {:>10}: {}", ns / 1_000_000_000, (ns / 1000) % 1_000_000, process, line);
     }
 }
 

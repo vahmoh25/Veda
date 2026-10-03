@@ -46,7 +46,7 @@ impl Firmware {
         let mut buf = [0u16; 128];
         let mut n = 0;
         let out = self.st.con_out;
-        let mut flush = |buf: &mut [u16; 128], n: &mut usize| {
+        let flush = |buf: &mut [u16; 128], n: &mut usize| {
             buf[*n] = 0;
             // SAFETY: ConOut is valid while boot services are active and
             // `buf` is NUL terminated.
@@ -353,7 +353,13 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     };
 
     let framebuffer = setup_graphics(fw, cfg.resolution)?;
-    log!("framebuffer {}x{} stride {} at {:#x}", framebuffer.width, framebuffer.height, framebuffer.stride, framebuffer.phys_base);
+    log!(
+        "framebuffer {}x{} stride {} at {:#x}",
+        framebuffer.width,
+        framebuffer.height,
+        framebuffer.stride,
+        framebuffer.phys_base
+    );
     splash::draw(&splash::Surface {
         base: framebuffer.phys_base as *mut u32,
         width: framebuffer.width,
@@ -386,16 +392,16 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     let map_capacity = map_bytes + 16 * desc_size;
     let raw_map = fw.alloc_zeroed(map_capacity as u64, mt::LOADER_DATA)?;
     let max_entries = map_capacity / desc_size;
-    let regions = fw.alloc_zeroed((max_entries * core::mem::size_of::<MemoryRegion>()) as u64, mt::VINDOWS_BOOT_DATA)?;
+    let regions =
+        fw.alloc_zeroed((max_entries * core::mem::size_of::<MemoryRegion>()) as u64, mt::VINDOWS_BOOT_DATA)?;
 
     // The direct map covers all RAM and at least the low 4 GiB (MMIO hole).
     let mut phys_limit = 4u64 << 30;
     {
         let (mut size, mut key, mut ds, mut ver) = (map_capacity, 0usize, 0usize, 0u32);
         // SAFETY: buffer of `map_capacity` bytes.
-        let s = unsafe {
-            (fw.bs.get_memory_map)(&mut size, raw_map as *mut MemoryDescriptor, &mut key, &mut ds, &mut ver)
-        };
+        let s =
+            unsafe { (fw.bs.get_memory_map)(&mut size, raw_map as *mut MemoryDescriptor, &mut key, &mut ds, &mut ver) };
         if is_error(s) {
             return Err("GetMemoryMap failed");
         }
@@ -430,7 +436,13 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
         let (mut key, mut ver) = (0usize, 0u32);
         // SAFETY: valid buffer; see above.
         let s = unsafe {
-            (fw.bs.get_memory_map)(&mut map_size, raw_map as *mut MemoryDescriptor, &mut key, &mut desc_size_out, &mut ver)
+            (fw.bs.get_memory_map)(
+                &mut map_size,
+                raw_map as *mut MemoryDescriptor,
+                &mut key,
+                &mut desc_size_out,
+                &mut ver,
+            )
         };
         if is_error(s) {
             return Err("GetMemoryMap failed");

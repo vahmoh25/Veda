@@ -13,8 +13,9 @@ use crate::object::handle::Handle;
 use crate::object::{KObject, new_koid};
 use crate::sched::{self, WakeReason};
 
-const CHANNEL_RIGHTS: Rights =
-    Rights(Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::WAIT.0 | Rights::SIGNAL.0 | Rights::GET_INFO.0);
+const CHANNEL_RIGHTS: Rights = Rights(
+    Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::WAIT.0 | Rights::SIGNAL.0 | Rights::GET_INFO.0,
+);
 
 pub fn handle_close(raw: RawHandle) -> SysResult {
     let h = current_process()?.handles.lock().remove(raw)?;
@@ -63,8 +64,11 @@ pub fn object_info(raw: RawHandle, topic: usize, buf: usize, len: usize) -> SysR
     }
     match topic {
         info_topic::HANDLE_BASIC => {
-            let info =
-                HandleBasicInfo { koid: h.object.koid(), object_type: h.object.object_type() as u32, rights: h.rights.0 };
+            let info = HandleBasicInfo {
+                koid: h.object.koid(),
+                object_type: h.object.object_type() as u32,
+                rights: h.rights.0,
+            };
             write(as_bytes(&info))
         }
         info_topic::PROCESS => match &h.object {
@@ -73,7 +77,8 @@ pub fn object_info(raw: RawHandle, topic: usize, buf: usize, len: usize) -> SysR
         },
         info_topic::VMO => match &h.object {
             KObject::Vmo(v) => {
-                let info = vabi::VmoInfo { size: v.size(), committed_bytes: v.committed_bytes(), flags: 0, _reserved: 0 };
+                let info =
+                    vabi::VmoInfo { size: v.size(), committed_bytes: v.committed_bytes(), flags: 0, _reserved: 0 };
                 write(as_bytes(&info))
             }
             _ => Err(Error::WrongType),
@@ -265,7 +270,10 @@ pub fn channel_read(
     // lost to a bad pointer.
     let aspace = p.aspace().ok_or(Error::BadState)?;
     let check = |ptr: usize, len: usize| aspace.ensure_range(ptr as u64, len as u64, true);
-    if !check(actual, 8) || !check(bytes, bytes_cap.min(vabi::CHANNEL_MAX_BYTES)) || !check(handles_ptr, handles_cap * 4) {
+    if !check(actual, 8)
+        || !check(bytes, bytes_cap.min(vabi::CHANNEL_MAX_BYTES))
+        || !check(handles_ptr, handles_cap * 4)
+    {
         return Err(Error::Fault);
     }
     let msg = match ch.read(bytes_cap, handles_cap) {

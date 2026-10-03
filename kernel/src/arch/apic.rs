@@ -135,27 +135,19 @@ pub fn arm_timer(deadline_tsc: u64, delta_ns: u64) {
         // SAFETY: TSC_DEADLINE is supported in this mode.
         unsafe { wrmsr(cpu::MSR_TSC_DEADLINE, deadline_tsc.max(1)) };
     } else {
-        let ticks = (delta_ns.saturating_mul(TICKS_PER_MS.load(Ordering::Relaxed)) / 1_000_000).clamp(1, u32::MAX as u64);
+        let ticks =
+            (delta_ns.saturating_mul(TICKS_PER_MS.load(Ordering::Relaxed)) / 1_000_000).clamp(1, u32::MAX as u64);
         write(REG_TIMER_DIVIDE, 0b0011);
         write(REG_LVT_TIMER, TIMER_VECTOR as u32);
         write(REG_TIMER_INIT, ticks as u32);
     }
 }
 
-pub fn disarm_timer() {
-    write(REG_LVT_TIMER, 1 << 16);
-    write(REG_TIMER_INIT, 0);
-}
-
 /// ICR delivery modes.
-pub const ICR_FIXED: u32 = 0;
 pub const ICR_INIT: u32 = 0b101 << 8;
 pub const ICR_STARTUP: u32 = 0b110 << 8;
 const ICR_ASSERT: u32 = 1 << 14;
 const ICR_DELIVERY_PENDING: u32 = 1 << 12;
-/// Shorthand: all CPUs excluding self.
-pub const ICR_ALL_BUT_SELF: u32 = 0b11 << 18;
-
 /// Sends an inter-processor interrupt.
 pub fn send_ipi(dest_apic: u32, low: u32) {
     if is_x2apic() {

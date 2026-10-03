@@ -46,7 +46,13 @@ impl Mapping {
     }
 
     fn pte_flags(&self) -> Flags {
-        Flags { writable: self.perms.write, executable: self.perms.exec, user: true, global: false, cache: self.vmo.cache() }
+        Flags {
+            writable: self.perms.write,
+            executable: self.perms.exec,
+            user: true,
+            global: false,
+            cache: self.vmo.cache(),
+        }
     }
 }
 
@@ -58,10 +64,6 @@ pub struct AddressSpace {
 impl AddressSpace {
     pub fn new() -> Option<Arc<AddressSpace>> {
         Some(Arc::new(AddressSpace { pml4: paging::new_user_pml4()?, mappings: SpinLock::new(BTreeMap::new()) }))
-    }
-
-    pub fn pml4(&self) -> u64 {
-        self.pml4
     }
 
     /// Finds a free, page-aligned range of `len` bytes at or above `hint`.
@@ -87,6 +89,7 @@ impl AddressSpace {
 
     /// Maps `len` bytes of `vmo` starting at `vmo_offset`. Returns the
     /// address. `addr` is a hint unless `fixed` is set.
+    #[allow(clippy::too_many_arguments)] // mirrors the VM_MAP system call
     pub fn map(
         &self,
         vmo: Arc<Vmo>,
@@ -97,7 +100,7 @@ impl AddressSpace {
         perms: Perms,
         commit: bool,
     ) -> Result<u64, Error> {
-        if len == 0 || vmo_offset % PAGE_SIZE != 0 || addr % PAGE_SIZE != 0 {
+        if len == 0 || !vmo_offset.is_multiple_of(PAGE_SIZE) || !addr.is_multiple_of(PAGE_SIZE) {
             return Err(Error::InvalidArgs);
         }
         let len = super::page_align_up(len);
@@ -135,7 +138,7 @@ impl AddressSpace {
 
     /// Removes all mappings (or parts of mappings) inside `[addr, addr+len)`.
     pub fn unmap(&self, addr: u64, len: u64) -> Result<(), Error> {
-        if addr % PAGE_SIZE != 0 || len == 0 {
+        if !addr.is_multiple_of(PAGE_SIZE) || len == 0 {
             return Err(Error::InvalidArgs);
         }
         let end = addr.checked_add(super::page_align_up(len)).ok_or(Error::InvalidArgs)?;

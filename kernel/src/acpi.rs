@@ -36,13 +36,6 @@ pub struct McfgEntry {
     pub bus_end: u8,
 }
 
-/// Generic address structure (register location).
-#[derive(Debug, Clone, Copy)]
-pub struct GenericAddress {
-    pub space: u8,
-    pub address: u64,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PowerInfo {
     pub pm1a_cnt: u16,
@@ -101,8 +94,11 @@ fn checksum_ok(addr: u64, len: u32) -> bool {
 fn tables(rsdp: u64) -> Vec<([u8; 4], u64)> {
     let mut out = Vec::new();
     let revision = read_u8(rsdp + 15);
-    let (root, entry_size) =
-        if revision >= 2 && read_u64(rsdp + 24) != 0 { (read_u64(rsdp + 24), 8) } else { (read_u32(rsdp + 16) as u64, 4) };
+    let (root, entry_size) = if revision >= 2 && read_u64(rsdp + 24) != 0 {
+        (read_u64(rsdp + 24), 8)
+    } else {
+        (read_u32(rsdp + 16) as u64, 4)
+    };
     let len = read_u32(root + 4);
     if !checksum_ok(root, len) {
         crate::kwarn!("acpi: root table checksum mismatch");
@@ -190,7 +186,7 @@ fn find_s5(dsdt: u64) -> Option<(u16, u16)> {
             let lead = read_u8(p);
             p += 1 + ((lead >> 6) as u64); // skip PkgLength bytes
             p += 1; // NumElements
-            let mut value = |p: &mut u64| -> u16 {
+            let value = |p: &mut u64| -> u16 {
                 match read_u8(*p) {
                     0x0A => {
                         let v = read_u8(*p + 1) as u16;
@@ -234,12 +230,13 @@ fn parse_fadt(addr: u64, info: &mut AcpiInfo) {
         let reg = GenericAddressRaw { space: read_u8(addr + 116), address: read_u64(addr + 120) };
         info.power.reset = Some((reg, read_u8(addr + 128)));
     }
-    if dsdt != 0 && signature(dsdt) == *b"DSDT" {
-        if let Some((a, b)) = find_s5(dsdt) {
-            info.power.slp_typ_a = a;
-            info.power.slp_typ_b = b;
-            info.power.s5_found = true;
-        }
+    if dsdt != 0
+        && signature(dsdt) == *b"DSDT"
+        && let Some((a, b)) = find_s5(dsdt)
+    {
+        info.power.slp_typ_a = a;
+        info.power.slp_typ_b = b;
+        info.power.s5_found = true;
     }
 }
 
@@ -271,15 +268,18 @@ pub fn init(rsdp: u64) {
         info.mcfg.len(),
         info.power.s5_found
     );
+    for m in &info.mcfg {
+        crate::kdebug!("acpi: PCIe ECAM at {:#x} (segment {}, buses {}-{})", m.base, m.segment, m.bus_start, m.bus_end);
+    }
     ACPI.set(info);
 }
 
 /// Translates a legacy ISA IRQ into (GSI, level, active_low).
 pub fn isa_irq_to_gsi(irq: u8) -> (u32, bool, bool) {
-    if let Some(info) = ACPI.get() {
-        if let Some(o) = info.overrides.iter().find(|o| o.isa_irq == irq) {
-            return (o.gsi, o.level, o.active_low);
-        }
+    if let Some(info) = ACPI.get()
+        && let Some(o) = info.overrides.iter().find(|o| o.isa_irq == irq)
+    {
+        return (o.gsi, o.level, o.active_low);
     }
     (irq as u32, false, false)
 }
@@ -301,11 +301,11 @@ pub fn power_off() {
 
 /// Resets the machine (FADT reset register, then the keyboard controller).
 pub fn reboot() {
-    if let Some((reg, value)) = ACPI.get().and_then(|i| i.power.reset) {
-        if reg.space == 1 {
-            // SAFETY: firmware-described reset port.
-            unsafe { crate::arch::port::outb(reg.address as u16, value) };
-        }
+    if let Some((reg, value)) = ACPI.get().and_then(|i| i.power.reset)
+        && reg.space == 1
+    {
+        // SAFETY: firmware-described reset port.
+        unsafe { crate::arch::port::outb(reg.address as u16, value) };
     }
     // SAFETY: 8042 "pulse reset line" command.
     unsafe { crate::arch::port::outb(0x64, 0xFE) };

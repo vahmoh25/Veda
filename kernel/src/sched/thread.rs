@@ -115,7 +115,8 @@ pub struct Thread {
     pub name: Name,
     pub process: Option<Arc<Process>>,
     pub aspace: Option<Arc<AddressSpace>>,
-    kstack: Option<KernelStack>,
+    /// Owns the kernel stack, which is freed with the thread.
+    _kstack: Option<KernelStack>,
     pub kernel_stack_top: u64,
     pub sched: SpinLock<SchedData>,
     ctx: UnsafeCell<Context>,
@@ -145,7 +146,7 @@ impl Thread {
             name: Name::new(name),
             process,
             aspace,
-            kstack,
+            _kstack: kstack,
             kernel_stack_top: top,
             sched: SpinLock::new(SchedData {
                 state: State::New,
@@ -154,7 +155,11 @@ impl Thread {
                 timeout_key: None,
                 cpu: 0,
             }),
-            ctx: UnsafeCell::new(Context { rsp: 0, fs_base: 0, fpu: if is_idle { None } else { Some(FpuArea::new()?) } }),
+            ctx: UnsafeCell::new(Context {
+                rsp: 0,
+                fs_base: 0,
+                fpu: if is_idle { None } else { Some(FpuArea::new()?) },
+            }),
             signals: Signals::new(0),
             cpu_time_ns: AtomicU64::new(0),
             kill_pending: AtomicBool::new(false),
@@ -188,7 +193,7 @@ impl Thread {
         let t = Thread::build(name, None, None, Some(stack), idle)?;
         // Initial frame popped by vk_context_switch: r15 r14 r13 r12 rbx rbp ret.
         let top = t.kernel_stack_top;
-        let frame = [0u64, 0, arg, entry as usize as u64, 0, 0, vk_kernel_thread_trampoline as usize as u64, 0];
+        let frame = [0u64, 0, arg, entry as *const () as u64, 0, 0, vk_kernel_thread_trampoline as *const () as u64, 0];
         let rsp = top - 16 - 7 * 8; // keeps rsp 16-aligned after `ret`
         // SAFETY: writing the initial frame into our own fresh stack.
         unsafe {
@@ -208,7 +213,7 @@ impl Thread {
         let tf_addr = top - core::mem::size_of::<TrapFrame>() as u64;
         let tf = TrapFrame::new_user(entry, user_stack, arg0, arg1);
         let rsp = tf_addr - 7 * 8;
-        let regs = [0u64, 0, 0, 0, 0, 0, vk_thread_trampoline as usize as u64];
+        let regs = [0u64, 0, 0, 0, 0, 0, vk_thread_trampoline as *const () as u64];
         // SAFETY: the thread has not run yet; we own its stack.
         unsafe {
             (tf_addr as *mut TrapFrame).write(tf);
@@ -225,11 +230,10 @@ impl Thread {
         self.sched.lock().priority
     }
 
-    /// # Safety
-    /// Only the scheduler may call this, under the BKL.
-    pub unsafe fn ctx(&self) -> &mut Context {
-        // SAFETY: forwarded to the caller.
-        unsafe { &mut *self.ctx.get() }
+    /// The saved register context. Only the scheduler (under the BKL) and
+    /// the thread itself may dereference it.
+    pub fn ctx_ptr(&self) -> *mut Context {
+        self.ctx.get()
     }
 
     pub fn save_fpu(&self) {

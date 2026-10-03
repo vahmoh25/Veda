@@ -11,9 +11,8 @@ use crate::mm::user;
 use crate::mm::vmo::Vmo;
 use crate::object::KObject;
 
-const VMO_RIGHTS: Rights = Rights(
-    Rights::BASIC.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::EXECUTE.0 | Rights::GET_INFO.0,
-);
+const VMO_RIGHTS: Rights =
+    Rights(Rights::BASIC.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::EXECUTE.0 | Rights::GET_INFO.0);
 
 pub fn vmo_create(size: usize, flags: usize) -> SysResult {
     let vmo = Vmo::new_anonymous(size as u64).ok_or(Error::InvalidArgs)?;

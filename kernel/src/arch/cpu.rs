@@ -44,8 +44,7 @@ pub struct CpuidResult {
 
 #[inline]
 pub fn cpuid(leaf: u32, subleaf: u32) -> CpuidResult {
-    // SAFETY: CPUID is always available on x86-64.
-    let r = unsafe { core::arch::x86_64::__cpuid_count(leaf, subleaf) };
+    let r = core::arch::x86_64::__cpuid_count(leaf, subleaf);
     CpuidResult { eax: r.eax, ebx: r.ebx, ecx: r.ecx, edx: r.edx }
 }
 
@@ -314,7 +313,9 @@ pub fn hardware_random(buf: &mut [u8]) {
             let mut ok: u8;
             for _ in 0..10 {
                 // SAFETY: RDRAND is supported (checked above).
-                unsafe { asm!("rdrand {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok, options(nomem, nostack)) };
+                unsafe {
+                    asm!("rdrand {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok, options(nomem, nostack))
+                };
                 if ok != 0 {
                     break;
                 }

@@ -53,10 +53,6 @@ impl KernelHeap {
         }
         true
     }
-
-    pub fn bytes_in_use(&self) -> usize {
-        self.slabs.lock().in_use
-    }
 }
 
 // SAFETY: blocks handed out are disjoint and properly aligned (class sizes

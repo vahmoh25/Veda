@@ -13,10 +13,13 @@ use crate::mm::user;
 use crate::sched::{self, Thread, WakeReason};
 use crate::sync::SpinLock;
 
-static QUEUES: SpinLock<BTreeMap<(u64, u64), VecDeque<Arc<Thread>>>> = SpinLock::new(BTreeMap::new());
+/// Waiters per futex, keyed by (address space, user address).
+type WaitQueues = BTreeMap<(u64, u64), VecDeque<Arc<Thread>>>;
+
+static QUEUES: SpinLock<WaitQueues> = SpinLock::new(BTreeMap::new());
 
 fn key(addr: u64) -> Result<(u64, u64), Error> {
-    if addr % 4 != 0 {
+    if !addr.is_multiple_of(4) {
         return Err(Error::InvalidArgs);
     }
     let cur = sched::current();

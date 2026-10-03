@@ -68,10 +68,6 @@ impl ChannelEnd {
         self.pair.koids[self.side]
     }
 
-    pub fn peer_koid(&self) -> u64 {
-        self.pair.koids[1 - self.side]
-    }
-
     pub fn signals(&self) -> &Signals {
         &self.pair.signals[self.side]
     }

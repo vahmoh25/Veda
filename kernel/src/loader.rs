@@ -15,11 +15,11 @@ use crate::mm::aspace::Perms;
 use crate::mm::paging::Cache;
 use crate::mm::vmo::Vmo;
 use crate::mm::{page_align_up, phys_to_virt};
+use crate::object::KObject;
 use crate::object::channel::{self, Message};
 use crate::object::handle::Handle;
 use crate::object::process::Process;
 use crate::object::resource::Resource;
-use crate::object::KObject;
 use crate::sched::{self, Thread};
 
 const INIT_PATH: &str = "bin/init.exe";
@@ -32,9 +32,8 @@ fn perms_of(s: &vpe::Section) -> Perms {
 pub fn spawn_init(boot: &BootInfo) {
     // SAFETY: the initrd lies in RAM covered by the direct map and is never
     // freed.
-    let initrd = unsafe {
-        core::slice::from_raw_parts(phys_to_virt(boot.initrd.base) as *const u8, boot.initrd.size as usize)
-    };
+    let initrd =
+        unsafe { core::slice::from_raw_parts(phys_to_virt(boot.initrd.base) as *const u8, boot.initrd.size as usize) };
     let archive = initrd::Archive::open(initrd).expect("the initrd is corrupt");
     crate::kinfo!("initrd: {} files, {} KiB", archive.len(), initrd.len() / 1024);
     let file = archive.find(INIT_PATH).expect("bin/init.exe is missing from the initrd");
