@@ -38,18 +38,6 @@ that communicate over kernel channels.
    restarted compositor through the registry, which queues connections
    until a service registers again.
 
-## Storage
-
-* `virtio-blk` serves each disk through the `block` protocol under the name
-  `block/<serial>`, so clients find a disk by its serial number.
-* `vfs` serves `/system` straight from the initrd and keeps `/home` and
-  `/tmp` in memory. If a disk with serial `vindows-home` is attached, `/home`
-  is restored from it at boot and written back half a second after changes
-  stop (and before a shutdown from the start menu). The disk holds two
-  snapshot slots with checksums; saves alternate between them, so an
-  interrupted save never damages the previous one. Unchanged sample files
-  are stored as references to the system image.
-
 ## The kernel (`kernel/`)
 
 | Module | Responsibility |
@@ -102,6 +90,18 @@ eager FPU/SSE/AVX state switching with XSAVE.
 * **Services** register with the registry in `init`; clients connect by name.
   Protocols are declared with the `vipc` macros, which generate typed client
   stubs and server dispatch code.
+
+## Storage
+
+* `virtio-blk` serves each disk through the `block` protocol under the name
+  `block/<serial>`, so clients find a disk by its serial number.
+* `vfs` serves `/system` straight from the initrd and keeps `/home` and
+  `/tmp` in memory. If a disk with serial `vindows-home` is attached, `/home`
+  is restored from it at boot and written back half a second after changes
+  stop (and before a shutdown from the start menu). The disk holds two
+  snapshot slots with checksums; saves alternate between them, so an
+  interrupted save never damages the previous one. Unchanged sample files
+  are stored as references to the system image.
 
 ## The window system (`services/compositor`)
 
@@ -157,11 +157,29 @@ State that must survive between frames (focus, scroll offsets, text cursors,
 open menus, animations) lives in a per-window `UiState` keyed by widget ids.
 Frames are drawn only when input arrives or an animation asks for one.
 
+## Audio
+
+* `virtio-snd` drives the sound card. It connects to the audio service's
+  private `audiodev` protocol, so the service also runs without sound
+  hardware (a null output then consumes audio in real time).
+* The `audio` service mixes every client stream: exact rational resampling
+  (polyphase windowed sinc in integer arithmetic), ramped gains, click-free
+  pause and seek, master volume and mute.
+* PCM never travels in messages. Each stream, and the device link, is a
+  single-producer/single-consumer ring of 16-bit frames in a shared VMO,
+  with an event for back-pressure and a time-stamped play position, so
+  players get accurate, smoothly extrapolated progress. Each side keeps
+  its own counter and clamps the peer's: a misbehaving client can only
+  garble its own audio.
+* `vaudio` holds the formats (WAV, QOA), the resampler, mixing, an FFT for
+  visualisers, and a synthesiser and sequencer that `tools/musicgen` uses
+  to render the bundled album at build time.
+
 ## Testing
 
 * Host unit tests for the libraries with platform-independent logic (ABI,
-  heap, IPC codec, math, rasteriser, fonts, image codecs, 2D graphics, text
-  editing, build tool).
+  heap, IPC codec, service protocols, math, rasteriser, fonts, image
+  codecs, 2D graphics, text editing, audio, build tool).
 * `systest`, a program that runs inside Vindows and exercises kernel objects,
   threads, the file system and the launcher.
 * GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —

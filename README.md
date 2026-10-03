@@ -111,10 +111,11 @@ fixed-point core is written in C++; there is no GPU.
 cargo xtask test
 ```
 
-runs the host unit tests of the libraries (kernel ABI, heap, IPC, math,
-rasterizer, fonts, image codecs, 2D graphics, text editing, build tool) and
-then boots Vindows headless with the `systest` integration tests (IPC,
-threads, file system, launcher), failing on any kernel panic.
+runs the host unit tests of the libraries (kernel ABI, heap, IPC, service
+protocols, math, rasterizer, fonts, image codecs, 2D graphics, text editing,
+audio, build tool) and then boots Vindows headless with the `systest`
+integration tests (IPC, threads, file system, launcher, and recovery of the
+window system after it is killed), failing on any panic.
 
 GUI automation scripts in `tests/ui/` click through the desktop and
 applications, check the log and save screenshots. Run them all with the
