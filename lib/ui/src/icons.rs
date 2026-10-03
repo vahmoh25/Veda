@@ -87,6 +87,11 @@ pub enum Icon {
     WifiOff,
     /// A wired network connection.
     Network,
+    /// A microphone (on, and switched off).
+    Mic,
+    MicOff,
+    /// The voice agent: a circle in a ring.
+    Agent,
 }
 
 /// Stroke-based icon geometry on a 24x24 grid; `filled` parts are filled.
@@ -462,6 +467,19 @@ fn build(icon: Icon) -> Builder {
                 b.line(x - 0.5, 12.0, x - 0.5, 15.5);
             }
         }
+        Icon::Mic | Icon::MicOff => {
+            b.rrect(9.0, 3.0, 6.0, 11.0, 3.0);
+            b.arc(12.0, 11.0, 6.0, 0.0, 180.0);
+            b.line(12.0, 17.0, 12.0, 21.0);
+            b.line(8.5, 21.0, 15.5, 21.0);
+            if icon == Icon::MicOff {
+                b.line(4.0, 4.0, 20.0, 20.0);
+            }
+        }
+        Icon::Agent => {
+            b.circle(12.0, 12.0, 8.5);
+            b.circle(12.0, 12.0, 4.0);
+        }
         Icon::Lock => {
             b.rrect(5.0, 11.0, 14.0, 10.0, 2.0);
             b.arc(12.0, 11.0, 4.5, 180.0, 180.0);
@@ -539,7 +557,7 @@ impl Icon {
     }
 
     /// Every icon (for galleries and tests).
-    pub const ALL: [Icon; 74] = [
+    pub const ALL: [Icon; 77] = [
         Icon::Folder,
         Icon::File,
         Icon::Document,
@@ -614,6 +632,9 @@ impl Icon {
         Icon::WifiNone,
         Icon::WifiOff,
         Icon::Network,
+        Icon::Mic,
+        Icon::MicOff,
+        Icon::Agent,
     ];
 
     /// Looks an icon up by its manifest name (`apps/*.app` `icon=` field).
@@ -622,6 +643,8 @@ impl Icon {
             "folder" | "files" => Icon::Folder,
             "wifi" | "wireless" => Icon::Wifi,
             "network" | "ethernet" => Icon::Network,
+            "agent" => Icon::Agent,
+            "mic" | "microphone" => Icon::Mic,
             "file" => Icon::File,
             "document" | "editor" | "text" => Icon::Document,
             "image" | "photos" => Icon::Image,

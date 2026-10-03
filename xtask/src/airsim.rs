@@ -16,8 +16,8 @@ pub const PASSWORD: &str = "vindows-wifi";
 /// Builds the simulator for the host; returns the executable.
 pub fn build() -> Result<PathBuf> {
     util::run(util::cargo().args(["build", "--quiet", "--package", "airsim"]))?;
-    let exe =
-        util::workspace_root().join("target").join("debug").join(format!("airsim{}", std::env::consts::EXE_SUFFIX));
+    // Where cargo put it (`$CARGO_TARGET_DIR` moves the target directory).
+    let exe = util::target_dir().join("debug").join(format!("airsim{}", std::env::consts::EXE_SUFFIX));
     if exe.is_file() { Ok(exe) } else { Err(format!("{} was not built", exe.display())) }
 }
 

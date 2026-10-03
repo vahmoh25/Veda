@@ -227,9 +227,10 @@ impl Host {
             }
             let ev = self.pending.pop_front().unwrap();
             match &ev {
-                WindowEvent::CloseRequested {} | WindowEvent::WindowsChanged {} | WindowEvent::StartMenuKey {} => {
-                    unhandled.push(ev.clone())
-                }
+                WindowEvent::CloseRequested {}
+                | WindowEvent::WindowsChanged {}
+                | WindowEvent::StartMenuKey {}
+                | WindowEvent::AgentKey {} => unhandled.push(ev.clone()),
                 WindowEvent::FrameDone { .. } => {}
                 WindowEvent::Configure { .. } => {}
                 _ => self.input.apply(&ev),

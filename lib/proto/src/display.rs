@@ -195,6 +195,8 @@ union! {
         10 => WindowsChanged {},
         /// (Shell) the user pressed the Start/Super key.
         11 => StartMenuKey {},
+        /// (Shell) the user pressed Super+Space: the agent.
+        12 => AgentKey {},
     }
 }
 

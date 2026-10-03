@@ -1,5 +1,5 @@
 //! The taskbar: start button, pinned and running applications in the middle,
-//! and the network, volume and clock buttons on the right.
+//! and the agent, network, volume and clock buttons on the right.
 
 use alloc::format;
 use alloc::string::String;
@@ -10,7 +10,7 @@ use vproto::display::WindowState;
 use vui::{Font, Icon, Ui};
 
 use crate::tooltip::Tip;
-use crate::{Action, DISMISS_GRACE_NS, Model, apps, chrome, volume, wifi};
+use crate::{Action, DISMISS_GRACE_NS, Model, agent, apps, chrome, volume, wifi};
 
 /// Height of the taskbar in pixels.
 pub const HEIGHT: i32 = 48;
@@ -227,6 +227,25 @@ impl Taskbar {
         }
         if resp.hovered {
             tip = Some((wifi::tooltip(m).replace('\n', " \u{00b7} "), net.center().0));
+        }
+
+        // The agent: a small circle that echoes its window.
+        let orb = Rect::new(net.x - 44, 4, 40, h - 8);
+        let resp = ui.interact(ui.id("agent"), orb);
+        Self::button_bg(ui, orb, resp.hovered, resp.held, m.agent.window_open);
+        let t = (ui.now() / 1_000_000) as f32 / 1000.0;
+        agent::draw_orb(ui, orb, &m.agent, t);
+        if resp.clicked {
+            m.push(Action::ToggleAgent);
+        }
+        if resp.hovered {
+            let caption = m.agent.caption();
+            let label = if caption.is_empty() {
+                m.agent.name().into()
+            } else {
+                format!("{} \u{00b7} {}", m.agent.name(), caption)
+            };
+            tip = Some((label, orb.center().0));
         }
 
         // "Show desktop" sliver at the far right.

@@ -7,7 +7,9 @@
 //!   clock;
 //! * the **start menu** ([`start`]), **calendar** ([`calendar`]),
 //!   **volume** ([`volume`]) and **network** ([`wifi`]) popups;
-//! * **notifications** ([`notify`]).
+//! * **notifications** ([`notify`]);
+//! * the voice **agent**'s tray item, window and approval requests
+//!   ([`agent`]).
 //!
 //! Every surface is a [`vui::Host`] window. Surfaces draw from the shared
 //! [`Model`] and request changes as [`Action`]s, which the main loop performs
@@ -19,6 +21,7 @@
 
 extern crate alloc;
 
+mod agent;
 mod apps;
 mod calendar;
 mod chrome;
@@ -87,6 +90,20 @@ pub enum Action {
     WifiDisconnect,
     /// Opens the network page of Settings.
     OpenNetworkSettings,
+    /// Opens or closes the agent's window.
+    ToggleAgent,
+    CloseAgent,
+    /// Starts or ends a conversation with the agent.
+    AgentWake,
+    AgentSleep,
+    /// The user's answer to an approval request.
+    AgentDecide {
+        id: u64,
+        allow: bool,
+        always: bool,
+    },
+    /// Turns the agent's microphone off (or on).
+    AgentMute(bool),
     /// Sets the master volume (0..=1) and mute state.
     SetVolume(f32, bool),
     /// Minimises every window, or restores them if the desktop is showing.
@@ -128,6 +145,8 @@ pub struct Model {
     pub wifi_dismissed_at: u64,
     /// The taskbar button under the pointer, for its tooltip.
     pub tip: Option<tooltip::Tip>,
+    /// The voice agent's state.
+    pub agent: agent::AgentModel,
     pub actions: Vec<Action>,
 }
 
@@ -175,11 +194,16 @@ struct Shell {
     task_events: Option<Channel>,
     /// Windows minimised by "show desktop", restored by the next click.
     hidden_by_show_desktop: Vec<u32>,
+    /// The agent's interface link (`None` while the agent is not running).
+    agent: Option<agent::AgentLink>,
+    agent_win: Option<Popup<agent::AgentWindow>>,
+    /// When to try attaching the agent's interface again.
+    next_agent_try: u64,
 }
 
 /// Connects to a service only if it is running: a call to a service that
 /// never registers would wait forever.
-fn connect_running(name: &str) -> Option<Channel> {
+pub fn connect_running(name: &str) -> Option<Channel> {
     let names = vproto::with_registry(|r| r.list()).ok()?.ok()?;
     if names.iter().any(|n| n == name) { vproto::connect(name).ok() } else { None }
 }
@@ -387,6 +411,101 @@ impl Shell {
         }
     }
 
+    fn open_agent(&mut self) {
+        self.close_start();
+        self.close_calendar();
+        self.close_volume();
+        self.close_wifi();
+        let r = agent::placement(self.model.screen);
+        let mut spec = WindowSpec::new(self.model.agent.name(), r.w as u32, r.h as u32);
+        spec.kind = WindowKind::Borderless;
+        spec.x = r.x;
+        spec.y = r.y;
+        spec.resizable = false;
+        spec.app_id = "agent".into();
+        match Host::new(&self.display, spec) {
+            Ok(host) => {
+                self.agent_win = Some(Popup { host, ui: agent::AgentWindow::new((r.x, r.y)) });
+                self.model.agent.window_open = true;
+                // Approvals now appear in the window.
+                self.notes.remove_approvals(self.model.screen);
+                if let Some(a) = &self.agent {
+                    a.set_window_open(true);
+                    // Opening the agent means wanting to talk.
+                    if !self.model.agent.active() {
+                        a.wake();
+                    }
+                }
+            }
+            Err(e) => println!("cannot open the agent's window: {:?}", e),
+        }
+    }
+
+    fn close_agent(&mut self) {
+        if self.agent_win.take().is_none() {
+            return;
+        }
+        self.model.agent.window_open = false;
+        if let Some(a) = &self.agent {
+            a.set_window_open(false);
+        }
+        for req in self.model.agent.approvals.clone() {
+            self.notes.post_approval(&self.display, &self.model, &req);
+        }
+    }
+
+    /// Attaches the agent's interface and takes its events.
+    fn check_agent(&mut self) {
+        let now = vrt::time::now_ns();
+        if self.agent.is_none() && now >= self.next_agent_try {
+            self.next_agent_try = now + 2_000_000_000;
+            self.agent = agent::AgentLink::connect();
+            if let Some(a) = &self.agent {
+                a.set_window_open(self.agent_win.is_some());
+            }
+        }
+        let Some(link) = &self.agent else { return };
+        let (voice, mic) = link.levels();
+        let (v0, m0) = self.model.agent.levels;
+        let smooth = |old: f32, new: f32| if new > old { new } else { old * 0.75 + new * 0.25 };
+        self.model.agent.levels = (smooth(v0, voice), smooth(m0, mic));
+        let Some(events) = link.take_events() else {
+            // The agent service went away; it will be restarted.
+            self.agent = None;
+            self.model.agent.status = None;
+            self.model.agent.approvals.clear();
+            self.notes.remove_approvals(self.model.screen);
+            self.taskbar_host.invalidate();
+            return;
+        };
+        let changed = !events.is_empty();
+        for ev in events {
+            match ev {
+                vproto::agent::AgentEvent::Status { status } => self.model.agent.status = Some(status),
+                vproto::agent::AgentEvent::Approval { request } => {
+                    if !self.model.agent.approvals.iter().any(|r| r.id == request.id) {
+                        if self.agent_win.is_none() {
+                            self.notes.post_approval(&self.display, &self.model, &request);
+                        }
+                        self.model.agent.approvals.push(request);
+                    }
+                }
+                vproto::agent::AgentEvent::ApprovalDone { id } => {
+                    self.model.agent.approvals.retain(|r| r.id != id);
+                    self.notes.remove_approval(id, self.model.screen);
+                }
+            }
+        }
+        // The orb is redrawn when something changed, and keeps moving
+        // while the agent talks or listens (the wait wakes us for that).
+        if changed || self.model.agent.active() {
+            self.taskbar_host.invalidate();
+        }
+        if changed && let Some(p) = &mut self.agent_win {
+            p.host.invalidate();
+        }
+    }
+
     fn close_volume(&mut self) {
         if self.volume.take().is_some() {
             self.model.volume_open = false;
@@ -586,7 +705,17 @@ impl Shell {
             match ev {
                 WindowEvent::WindowsChanged {} => windows_changed = true,
                 WindowEvent::StartMenuKey {} => model.push(Action::ToggleStart),
+                WindowEvent::AgentKey {} => model.push(Action::ToggleAgent),
                 _ => {}
+            }
+        }
+        if let Some(p) = &mut self.agent_win {
+            let events = p.host.pump(|ui| p.ui.update(ui, model));
+            if p.host.window.closed
+                || p.host.close_requested
+                || events.iter().any(|e| matches!(e, WindowEvent::CloseRequested {}))
+            {
+                model.push(Action::CloseAgent);
             }
         }
         if let Some(p) = start {
@@ -688,6 +817,37 @@ impl Shell {
                 Action::WifiDisconnect => {
                     let _ = vnet::wifi::disconnect();
                     self.refresh_wifi();
+                }
+                Action::ToggleAgent => {
+                    if self.agent_win.is_some() {
+                        self.close_agent();
+                    } else {
+                        self.open_agent();
+                    }
+                }
+                Action::CloseAgent => self.close_agent(),
+                Action::AgentWake => {
+                    if let Some(a) = &self.agent {
+                        a.wake();
+                    }
+                }
+                Action::AgentSleep => {
+                    if let Some(a) = &self.agent {
+                        a.sleep();
+                    }
+                }
+                Action::AgentDecide { id, allow, always } => {
+                    if let Some(a) = &self.agent {
+                        a.decide(id, allow, always);
+                    }
+                    self.model.agent.approvals.retain(|r| r.id != id);
+                    self.notes.remove_approval(id, self.model.screen);
+                    self.taskbar_host.invalidate();
+                }
+                Action::AgentMute(muted) => {
+                    if let Some(a) = &self.agent {
+                        a.set_muted(muted);
+                    }
                 }
                 Action::OpenNetworkSettings => {
                     self.close_wifi();
@@ -795,6 +955,9 @@ impl Shell {
         if let Some(p) = &self.wifi {
             add_host(&p.host, &mut items);
         }
+        if let Some(p) = &self.agent_win {
+            add_host(&p.host, &mut items);
+        }
         if let Some(t) = &self.tooltip {
             add_host(t.host(), &mut items);
         }
@@ -817,6 +980,16 @@ impl Shell {
         }
         if let Some(w) = &self.wifi_watch {
             items.push(WaitItem { handle: w.handle().raw(), signals: readable, ..Default::default() });
+        }
+        match &self.agent {
+            Some(a) => {
+                items.push(WaitItem { handle: a.events_handle(), signals: readable, ..Default::default() });
+                // The tray's orb moves while the agent talks or listens.
+                if self.model.agent.active() {
+                    deadline = deadline.min(vrt::time::now_ns() + 33_000_000);
+                }
+            }
+            None => deadline = deadline.min(self.next_agent_try),
         }
         deadline = deadline.min(self.next_net_poll);
         items.truncate(vabi::WAIT_MANY_MAX);
@@ -841,6 +1014,7 @@ impl Shell {
             self.check_tasks();
             self.poll_network();
             self.check_wifi();
+            self.check_agent();
             self.wait();
         }
     }
@@ -983,6 +1157,7 @@ fn main() -> i32 {
         volume_dismissed_at: 0,
         wifi_dismissed_at: 0,
         tip: None,
+        agent: agent::AgentModel::default(),
         actions: Vec::new(),
     };
     let mut desktop = desktop::Desktop::new();
@@ -1008,6 +1183,9 @@ fn main() -> i32 {
         listener,
         clients: Vec::new(),
         caller: ClientIdentity::default(),
+        agent: None,
+        agent_win: None,
+        next_agent_try: 0,
         task_events,
         hidden_by_show_desktop: Vec::new(),
     };

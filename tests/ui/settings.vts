@@ -1,6 +1,6 @@
 # Settings (1280x800 with the taskbar): applying wallpapers through the
-# desktop shell with the mouse and with the keyboard, and the Network,
-# Display, System and About pages. Settings logs every wallpaper change.
+# desktop shell with the mouse and with the keyboard, and the Agent,
+# Network, Display, System and About pages. Settings logs every wallpaper change.
 boot-cmdline "run=settings"
 wait-serial "desktop ready" 90
 wait-serial "started settings" 60
@@ -21,6 +21,9 @@ key ret
 wait-serial "settings: wallpaper changed to /system/wallpapers/Nebula.jpg" 40
 wait 2
 # Up and Down switch between the pages.
+key down
+wait 3
+shot target/vindows/settings-3-agent.png
 key down
 wait 3
 shot target/vindows/settings-3-network.png

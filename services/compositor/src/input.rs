@@ -327,6 +327,10 @@ impl Compositor {
             }
             return;
         }
+        if pressed && mods & dp::modifiers::SUPER != 0 && code == keys::SPACE {
+            self.send_to_shell(WindowEvent::AgentKey {});
+            return;
+        }
         if pressed
             && mods & dp::modifiers::SUPER != 0
             && matches!(code, keys::LEFT | keys::RIGHT | keys::UP | keys::DOWN | keys::D)

@@ -1,6 +1,10 @@
 //! Notification bubbles, stacked above the taskbar in the bottom-right
 //! corner. They disappear after a few seconds (not while hovered) or when
 //! clicked.
+//!
+//! The agent's approval requests appear here while its window is closed:
+//! they carry Allow and Deny buttons and stay until answered (or until the
+//! request expires).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -11,10 +15,14 @@ use vrt::println;
 use vui::window::Display;
 use vui::{Font, Host, Icon, Ui};
 
-use crate::{Model, apps, chrome, taskbar};
+use vproto::agent::ApprovalRequest;
+
+use crate::{Action, Model, apps, chrome, taskbar};
 
 const WIDTH: i32 = 360;
 const HEIGHT: i32 = 88;
+/// Height of an approval request.
+const APPROVAL_HEIGHT: i32 = 136;
 const GAP: i32 = 10;
 const LIFETIME_NS: u64 = 6_000_000_000;
 const MAX_SHOWN: usize = 4;
@@ -29,13 +37,21 @@ struct View {
     origin: (i32, i32),
     hovered: bool,
     clicked: bool,
+    /// An approval request: its id and whether "always allow" is offered.
+    approval: Option<(u64, bool)>,
+    always: bool,
 }
 
 impl View {
-    fn update(&mut self, ui: &mut Ui, m: &Model) {
+    fn update(&mut self, ui: &mut Ui, m: &mut Model) {
         let t = ui.theme().clone();
         let (w, h) = (ui.width, ui.height);
         chrome::popup_background(&mut ui.canvas, &m.wallpaper.blurred, self.origin);
+        if let Some((id, allow_always)) = self.approval {
+            self.approval_view(ui, m, id, allow_always);
+            chrome::popup_frame(&mut ui.canvas);
+            return;
+        }
         let resp = ui.interact(ui.id("note"), ui.rect());
         self.hovered = resp.hovered;
         self.clicked |= resp.clicked;
@@ -51,12 +67,42 @@ impl View {
         }
         chrome::popup_frame(&mut ui.canvas);
     }
+
+    /// An approval request: what the agent wants to do, and the buttons.
+    fn approval_view(&mut self, ui: &mut Ui, m: &mut Model, id: u64, allow_always: bool) {
+        let t = ui.theme().clone();
+        let w = ui.width;
+        let h = ui.height;
+        crate::agent::draw_circle(ui, 38.0, 38.0, 13.0, &m.agent, 0.0);
+        let font = ui.ctx.font(Font::Bold);
+        let title = ui.ctx.text.ellipsize(font, 14.0, &self.title, (w - 90) as f32);
+        ui.label(Rect::new(68, 14, w - 86, 22), &title, Font::Bold, 14.0, t.text, Align::Left);
+        ui.paragraph(Rect::new(68, 38, w - 86, 44), &self.body, 12.5, t.text_dim);
+        let by = h - 44;
+        if allow_always {
+            ui.checkbox(Rect::new(14, by + 4, 130, 26), "Always allow", &mut self.always);
+        }
+        if ui.button(Rect::new(w - 192, by, 84, 32), "Deny") {
+            m.push(Action::AgentDecide { id, allow: false, always: false });
+            self.clicked = true;
+        }
+        if ui.primary_button(Rect::new(w - 100, by, 84, 32), "Allow") {
+            m.push(Action::AgentDecide { id, allow: true, always: self.always });
+            self.clicked = true;
+        }
+    }
 }
 
 struct Note {
     host: Host,
     view: View,
     expires: u64,
+}
+
+impl Note {
+    fn height(&self) -> i32 {
+        if self.view.approval.is_some() { APPROVAL_HEIGHT } else { HEIGHT }
+    }
 }
 
 pub struct Notifications {
@@ -68,17 +114,70 @@ impl Notifications {
         Notifications { notes: Vec::new() }
     }
 
-    fn origin(screen: Rect, slot: usize) -> (i32, i32) {
-        (screen.w - WIDTH - 14, screen.h - taskbar::HEIGHT - 14 - HEIGHT - slot as i32 * (HEIGHT + GAP))
+    /// Where a note goes: stacked upwards from above the taskbar.
+    fn origin_for(&self, screen: Rect, slot: usize, height: i32) -> (i32, i32) {
+        let below: i32 = self.notes.iter().take(slot).map(|n| n.height() + GAP).sum();
+        (screen.w - WIDTH - 14, screen.h - taskbar::HEIGHT - 14 - height - below)
+    }
+
+    /// Shows an approval request from the agent (until it is answered).
+    pub fn post_approval(&mut self, display: &Display, m: &Model, req: &ApprovalRequest) {
+        if self.notes.iter().any(|n| n.view.approval.is_some_and(|(id, _)| id == req.id)) {
+            return;
+        }
+        let origin = self.origin_for(m.screen, self.notes.len(), APPROVAL_HEIGHT);
+        let mut spec = WindowSpec::new("Approval", WIDTH as u32, APPROVAL_HEIGHT as u32);
+        spec.kind = WindowKind::Notification;
+        spec.x = origin.0;
+        spec.y = origin.1;
+        spec.resizable = false;
+        spec.app_id = "shell".into();
+        match Host::new(display, spec) {
+            Ok(host) => {
+                let view = View {
+                    title: req.action.clone(),
+                    body: req.detail.clone(),
+                    icon: Icon::Info,
+                    color: String::new(),
+                    origin,
+                    hovered: false,
+                    clicked: false,
+                    approval: Some((req.id, req.allow_always)),
+                    always: false,
+                };
+                self.notes.push(Note { host, view, expires: u64::MAX });
+            }
+            Err(e) => println!("cannot show an approval request: {:?}", e),
+        }
+    }
+
+    /// Takes an answered or expired approval request away.
+    pub fn remove_approval(&mut self, id: u64, screen: Rect) {
+        let before = self.notes.len();
+        self.notes.retain(|n| n.view.approval.is_none_or(|(a, _)| a != id));
+        if self.notes.len() != before {
+            self.relayout(screen);
+        }
+    }
+
+    /// Takes every approval request away (the agent's window shows them).
+    pub fn remove_approvals(&mut self, screen: Rect) {
+        let before = self.notes.len();
+        self.notes.retain(|n| n.view.approval.is_none());
+        if self.notes.len() != before {
+            self.relayout(screen);
+        }
     }
 
     /// Shows a notification. `icon` is an icon name (see `vui::Icon::by_name`).
     pub fn post(&mut self, display: &Display, m: &Model, title: &str, body: &str, icon: &str) {
-        if self.notes.len() >= MAX_SHOWN {
-            self.notes.remove(0);
+        if self.notes.len() >= MAX_SHOWN
+            && let Some(i) = self.notes.iter().position(|n| n.view.approval.is_none())
+        {
+            self.notes.remove(i);
             self.relayout(m.screen);
         }
-        let origin = Self::origin(m.screen, self.notes.len());
+        let origin = self.origin_for(m.screen, self.notes.len(), HEIGHT);
         let mut spec = WindowSpec::new(title, WIDTH as u32, HEIGHT as u32);
         spec.kind = WindowKind::Notification;
         spec.x = origin.0;
@@ -96,6 +195,8 @@ impl Notifications {
                     origin,
                     hovered: false,
                     clicked: false,
+                    approval: None,
+                    always: false,
                 };
                 self.notes.push(Note { host, view, expires: vrt::time::now_ns() + LIFETIME_NS });
             }
@@ -105,8 +206,9 @@ impl Notifications {
 
     /// Moves the notifications to their slots (after one went away).
     fn relayout(&mut self, screen: Rect) {
-        for (i, n) in self.notes.iter_mut().enumerate() {
-            let o = Self::origin(screen, i);
+        let origins: Vec<(i32, i32)> =
+            (0..self.notes.len()).map(|i| self.origin_for(screen, i, self.notes[i].height())).collect();
+        for (n, o) in self.notes.iter_mut().zip(origins) {
             if o != n.view.origin {
                 n.view.origin = o;
                 n.host.window.set_position(o.0, o.1);
@@ -115,7 +217,7 @@ impl Notifications {
         }
     }
 
-    pub fn pump(&mut self, m: &Model) {
+    pub fn pump(&mut self, m: &mut Model) {
         let now = vrt::time::now_ns();
         for n in &mut self.notes {
             n.host.pump(|ui| n.view.update(ui, m));
