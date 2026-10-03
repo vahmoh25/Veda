@@ -301,9 +301,17 @@ fn build_system(o: &Options) -> Result<System> {
 /// Writes the disk image of `system` with the boot configuration of `o`
 /// (resolution and kernel command line); returns its path and size.
 fn write_image(o: &Options, system: &System) -> Result<(PathBuf, u64)> {
+    // The machine's clock keeps UTC; local time is the host's, unless the
+    // command line says otherwise.
+    let mut cmdline = o.cmdline.clone();
+    if !cmdline.split_whitespace().any(|a| a.starts_with("tz="))
+        && let Some(tz) = util::host_utc_offset()
+    {
+        cmdline = format!("{cmdline} tz={tz}").trim().to_string();
+    }
     let boot_cfg = format!(
         "# Vindows boot configuration (read by the UEFI loader)\nresolution={}\ncmdline={}\n",
-        o.resolution, o.cmdline
+        o.resolution, cmdline
     );
     let out = util::out_dir();
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;

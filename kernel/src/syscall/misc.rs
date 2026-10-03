@@ -28,6 +28,7 @@ pub fn clock_get(id: usize) -> SysResult {
     match id {
         clock::MONOTONIC => ok(time::now_ns() as usize),
         clock::REALTIME => ok(time::realtime_ns() as usize),
+        clock::UTC => ok(time::utc_ns() as usize),
         _ => Err(Error::InvalidArgs),
     }
 }

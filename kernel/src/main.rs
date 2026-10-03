@@ -38,16 +38,19 @@ static HEAP: mm::heap::KernelHeap = mm::heap::KernelHeap::new();
 /// Options parsed from the kernel command line (`BOOT.CFG`).
 struct Options {
     max_cpus: usize,
+    /// `tz=+02:00`: local time's offset from UTC, in seconds.
+    tz: Option<i64>,
 }
 
 fn parse_cmdline(cmdline: &str) -> Options {
-    let mut o = Options { max_cpus: percpu::MAX_CPUS };
+    let mut o = Options { max_cpus: percpu::MAX_CPUS, tz: None };
     for arg in cmdline.split_whitespace() {
         match arg.split_once('=') {
             Some(("log", "debug")) => log::set_level(log::Level::Debug),
             Some(("log", "warn")) => log::set_level(log::Level::Warn),
             Some(("smp", "off")) | Some(("cpus", "1")) => o.max_cpus = 1,
             Some(("cpus", n)) => o.max_cpus = n.parse().unwrap_or(o.max_cpus).clamp(1, percpu::MAX_CPUS),
+            Some(("tz", z)) => o.tz = time::parse_utc_offset(z),
             _ => {}
         }
     }
@@ -116,7 +119,7 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
         time::set_hpet(hpet);
     }
     time::calibrate_tsc();
-    time::set_boot_time(&boot.boot_time);
+    time::set_boot_time(&boot.boot_time, opts.tz);
     if features.tsc_deadline {
         apic::use_tsc_deadline(true);
     } else {

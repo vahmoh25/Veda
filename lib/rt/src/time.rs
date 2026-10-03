@@ -69,9 +69,21 @@ pub fn sleep_until(deadline: u64) {
     let _ = call(nr::SLEEP, [deadline as usize, 0, 0, 0, 0, 0]);
 }
 
-/// Wall-clock time: seconds since 1970-01-01 in local time.
+/// Wall-clock time: nanoseconds since 1970-01-01 in local time.
 pub fn unix_time_ns() -> u64 {
     clock_get(clock::REALTIME)
+}
+
+/// Wall-clock time: nanoseconds since 1970-01-01 00:00 UTC (for protocols
+/// and certificates; people see [`unix_time_ns`]).
+pub fn utc_time_ns() -> u64 {
+    clock_get(clock::UTC)
+}
+
+/// Local time minus UTC, in seconds (to the minute).
+pub fn utc_offset_s() -> i64 {
+    let diff = unix_time_ns() as i64 - utc_time_ns() as i64;
+    (diff / 1_000_000_000 + 30).div_euclid(60) * 60
 }
 
 /// A broken-down local date and time.

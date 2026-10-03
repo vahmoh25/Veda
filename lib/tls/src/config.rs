@@ -31,7 +31,7 @@ pub struct SystemClock;
 
 impl TimeProvider for SystemClock {
     fn current_time(&self) -> Option<UnixTime> {
-        let secs = vrt::time::unix_time_ns() / 1_000_000_000;
+        let secs = vrt::time::utc_time_ns() / 1_000_000_000;
         (secs >= EARLIEST_PLAUSIBLE_TIME).then(|| UnixTime::since_unix_epoch(Duration::from_secs(secs)))
     }
 }

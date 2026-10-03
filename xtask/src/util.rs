@@ -70,6 +70,63 @@ pub fn human_size(bytes: u64) -> String {
 }
 
 /// Searches `PATH` for an executable.
+/// The host's current offset from UTC as `+HH:MM` (daylight saving
+/// included), for the guest's local time.
+pub fn host_utc_offset() -> Option<String> {
+    let minutes = host_offset_minutes()?;
+    let sign = if minutes < 0 { '-' } else { '+' };
+    Some(format!("{sign}{:02}:{:02}", minutes.abs() / 60, minutes.abs() % 60))
+}
+
+#[cfg(windows)]
+fn host_offset_minutes() -> Option<i64> {
+    #[repr(C)]
+    #[derive(Default)]
+    struct SystemTime {
+        year: u16,
+        month: u16,
+        day_of_week: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        milliseconds: u16,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetLocalTime(t: *mut SystemTime);
+        fn GetSystemTime(t: *mut SystemTime);
+    }
+    let (mut local, mut utc) = (SystemTime::default(), SystemTime::default());
+    // SAFETY: both functions fill in the structure passed.
+    unsafe {
+        GetLocalTime(&mut local);
+        GetSystemTime(&mut utc);
+    }
+    let minutes = |t: &SystemTime| {
+        let (y, m, d) = (t.year as i64, t.month as i64, t.day as i64);
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+        let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        days * 1440 + t.hour as i64 * 60 + t.minute as i64
+    };
+    // Time zones are whole quarter hours.
+    let diff = minutes(&local) - minutes(&utc);
+    Some((diff as f64 / 15.0).round() as i64 * 15)
+}
+
+#[cfg(not(windows))]
+fn host_offset_minutes() -> Option<i64> {
+    let out = Command::new("date").arg("+%z").output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let sign = if s.starts_with('-') { -1 } else { 1 };
+    let digits = s.trim_start_matches(['+', '-']);
+    let (h, m) = (digits.get(..2)?.parse::<i64>().ok()?, digits.get(2..4)?.parse::<i64>().ok()?);
+    Some(sign * (h * 60 + m))
+}
+
 pub fn find_on_path(name: &str) -> Option<PathBuf> {
     let exe = if cfg!(windows) && !name.ends_with(".exe") { format!("{name}.exe") } else { name.to_string() };
     std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(&exe)).find(|p| p.is_file())

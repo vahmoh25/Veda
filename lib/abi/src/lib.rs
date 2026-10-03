@@ -392,6 +392,8 @@ pub mod clock {
     /// Nanoseconds since 1970-01-01 00:00:00 in the machine's local time zone
     /// (the RTC time Vindows was booted with, advanced by the monotonic clock).
     pub const REALTIME: usize = 1;
+    /// Nanoseconds since 1970-01-01 00:00:00 UTC.
+    pub const UTC: usize = 2;
 }
 
 /// Kernel object types (reported by `object_info`).
