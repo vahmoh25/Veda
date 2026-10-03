@@ -1,4 +1,5 @@
-//! The application runner: one main window, an event loop, frame pacing.
+//! Running UIs: [`Host`] drives one window (events, frame pacing, drawing);
+//! [`run`] is the event loop for the common one-window [`App`].
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -9,7 +10,7 @@ use vproto::display::{Cursor, WindowEvent, WindowSpec};
 
 use crate::theme::Theme;
 use crate::ui::{Context, Input, Ui, UiState};
-use crate::window::{Window, connect};
+use crate::window::{Display, Window, WindowError, connect};
 
 /// An application with one main window.
 pub trait App {
@@ -33,53 +34,176 @@ pub trait App {
     fn init(&mut self, _window: &Window) {}
 }
 
-/// Loads the standard fonts from the system image. Order defines the
-/// fallback chain: Inter, Inter SemiBold, JetBrains Mono (+ Bold), Lato.
+/// Font files, loaded once per process and shared by every window.
+static FONT_DATA: vrt::sync::Mutex<Option<Vec<Option<&'static [u8]>>>> = vrt::sync::Mutex::new(None);
+
+const FONT_FILES: [&str; 5] = [
+    "/system/fonts/Inter-Regular.otf",
+    "/system/fonts/Inter-SemiBold.otf",
+    "/system/fonts/JetBrainsMono-Regular.ttf",
+    "/system/fonts/JetBrainsMono-Bold.ttf",
+    "/system/fonts/Lato-Regular.ttf",
+];
+
+/// Loads the standard fonts. Order defines the fallback chain: Inter,
+/// Inter SemiBold, JetBrains Mono (+ Bold), Lato. Returns the text renderer
+/// and the indices of the [`crate::Font`] roles.
 pub fn load_fonts() -> (Text, [usize; 4]) {
+    let mut data = FONT_DATA.lock();
+    if data.is_none() {
+        let mut files = Vec::new();
+        let vfs = vproto::connect(vproto::vfs::NAME).ok().map(vproto::vfs::Client::new);
+        for path in FONT_FILES {
+            let bytes = vfs.as_ref().and_then(|vfs| {
+                let (vmo, len) = vfs.read_file(path.into()).ok()?.ok()?;
+                let mut buf = alloc::vec![0u8; len as usize];
+                vmo.read(0, &mut buf).ok()?;
+                Some(&*buf.leak())
+            });
+            files.push(bytes);
+        }
+        *data = Some(files);
+    }
     let mut text = Text::new();
     let mut idx = [0usize; 4];
-    let Ok(ch) = vproto::connect(vproto::vfs::NAME) else { return (text, idx) };
-    let vfs = vproto::vfs::Client::new(ch);
-    let files = [
-        "/system/fonts/Inter-Regular.otf",
-        "/system/fonts/Inter-SemiBold.otf",
-        "/system/fonts/JetBrainsMono-Regular.ttf",
-        "/system/fonts/JetBrainsMono-Bold.ttf",
-        "/system/fonts/Lato-Regular.ttf",
-    ];
-    for (i, path) in files.iter().enumerate() {
-        let Ok(Ok((vmo, len))) = vfs.read_file((*path).into()) else { continue };
-        let mut data = alloc::vec![0u8; len as usize];
-        if vmo.read(0, &mut data).is_err() {
-            continue;
-        }
-        if let Some(f) = text.add_font(data.leak()) {
-            if i < 4 {
-                idx[i] = f;
-            }
+    for (i, bytes) in data.as_ref().unwrap().iter().enumerate() {
+        if let Some(f) = bytes.and_then(|b| text.add_font(b))
+            && i < 4
+        {
+            idx[i] = f;
         }
     }
     (text, idx)
 }
 
-/// Draws one frame of `app` into `window`.
-fn draw<A: App>(app: &mut A, window: &mut Window, ctx: &mut Context, input: &mut Input, cursor: &mut Cursor) -> (Option<u64>, bool) {
-    input.now = vrt::time::now_ns();
-    let bg = ctx.theme.bg;
-    let Ok(mut canvas) = window.begin_frame() else { return (None, false) };
-    canvas.clear(bg);
-    let mut ui = Ui::new(canvas, ctx, input);
-    app.update(&mut ui);
-    ui.finish();
-    let (repaint, close, new_cursor) = (ui.repaint_at, ui.close_requested, ui.cursor);
-    drop(ui);
-    let _ = window.present(&[]);
-    if new_cursor != *cursor {
-        *cursor = new_cursor;
-        window.set_cursor(new_cursor);
+/// Drives one window: turns window events into UI input, paces frames to the
+/// compositor and calls a drawing function.
+pub struct Host {
+    pub window: Window,
+    pub ctx: Context,
+    pub state: UiState,
+    input: Input,
+    cursor: Cursor,
+    dirty: bool,
+    repaint_at: Option<u64>,
+    pending: VecDeque<WindowEvent>,
+    /// The UI asked to close the window (`Ui::close_window`).
+    pub close_requested: bool,
+}
+
+impl Host {
+    pub fn new(display: &Display, spec: WindowSpec) -> Result<Host, WindowError> {
+        let window = Window::new(display, spec)?;
+        let (text, fonts) = load_fonts();
+        let ctx = Context { text, fonts, theme: Theme::dark(), display: display.clone(), window_id: window.id };
+        Ok(Host {
+            window,
+            ctx,
+            state: UiState::default(),
+            input: Input { focused: true, ..Default::default() },
+            cursor: Cursor::Arrow,
+            dirty: true,
+            repaint_at: None,
+            pending: VecDeque::new(),
+            close_requested: false,
+        })
     }
-    input.begin_frame();
-    (repaint, close)
+
+    /// Forces a redraw at the next opportunity.
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
+    /// What to wait on for this window.
+    pub fn wait_item(&self) -> WaitItem {
+        WaitItem {
+            handle: self.window.event_channel().raw(),
+            signals: signals::READABLE | signals::PEER_CLOSED,
+            ..Default::default()
+        }
+    }
+
+    /// When the next frame is due (absent new events).
+    pub fn deadline(&self) -> u64 {
+        if (self.dirty || !self.pending.is_empty()) && self.window.can_draw() {
+            // A frame is wanted and may be drawn now (e.g. after
+            // `invalidate`): do not wait for further events.
+            0
+        } else if self.dirty {
+            vabi::DEADLINE_INFINITE // waiting for FrameDone
+        } else {
+            self.repaint_at.unwrap_or(vabi::DEADLINE_INFINITE)
+        }
+    }
+
+    fn frame(&mut self, draw: &mut impl FnMut(&mut Ui)) {
+        self.input.now = vrt::time::now_ns();
+        let bg = self.ctx.theme.bg;
+        let Ok(mut canvas) = self.window.begin_frame() else { return };
+        canvas.clear(bg);
+        // While a menu is open it has the keyboard: widgets see no keys.
+        let menu_open = self.state.open_menu.is_some() || self.state.context_menu.is_some();
+        let quiet;
+        let input = if menu_open {
+            quiet = self.input.without_keys();
+            &quiet
+        } else {
+            &self.input
+        };
+        let mut ui = Ui::new(canvas, &mut self.ctx, &mut self.state, input);
+        ui.menu_input = &self.input;
+        draw(&mut ui);
+        ui.finish();
+        let (repaint, close, cursor, skip) = (ui.repaint_at, ui.close_requested, ui.cursor, ui.skip_present);
+        drop(ui);
+        if !skip {
+            let _ = self.window.present(&[]);
+        }
+        if cursor != self.cursor {
+            self.cursor = cursor;
+            self.window.set_cursor(cursor);
+        }
+        self.input.begin_frame();
+        self.repaint_at = repaint;
+        self.close_requested |= close;
+    }
+
+    /// Processes pending window events and draws if needed. Events the UI
+    /// does not consume (close requests, shell notifications) are returned.
+    pub fn pump(&mut self, mut draw: impl FnMut(&mut Ui)) -> Vec<WindowEvent> {
+        let mut unhandled = Vec::new();
+        self.pending.extend(self.window.poll_events());
+        while let Some(ev) = self.pending.front() {
+            if self.input.needs_flush_before(ev) {
+                if !self.window.can_draw() {
+                    break;
+                }
+                self.frame(&mut draw);
+                continue;
+            }
+            let ev = self.pending.pop_front().unwrap();
+            match &ev {
+                WindowEvent::CloseRequested {} | WindowEvent::WindowsChanged {} | WindowEvent::StartMenuKey {} => {
+                    unhandled.push(ev.clone())
+                }
+                WindowEvent::FrameDone { .. } => {}
+                WindowEvent::Configure { .. } => {}
+                _ => self.input.apply(&ev),
+            }
+            if !matches!(ev, WindowEvent::FrameDone { .. }) {
+                self.dirty = true;
+            }
+        }
+        if self.repaint_at.is_some_and(|t| vrt::time::now_ns() >= t) {
+            self.repaint_at = None;
+            self.dirty = true;
+        }
+        if self.dirty && self.window.can_draw() {
+            self.dirty = false;
+            self.frame(&mut draw);
+        }
+        unhandled
+    }
 }
 
 /// Runs `app` in a window described by `spec` until it closes. Returns the
@@ -92,83 +216,38 @@ pub fn run<A: App>(spec: WindowSpec, mut app: A) -> i32 {
             return 1;
         }
     };
-    let mut window = match Window::new(&display, spec) {
-        Ok(w) => w,
+    let mut host = match Host::new(&display, spec) {
+        Ok(h) => h,
         Err(e) => {
             vrt::println!("cannot create a window: {:?}", e);
             return 1;
         }
     };
-    let (text, fonts) = load_fonts();
-    let mut ctx = Context { text, fonts, theme: Theme::dark(), state: UiState::default(), display: display.clone(), window_id: window.id };
-    app.init(&window);
-    let mut input = Input { focused: true, ..Default::default() };
-    let mut cursor = Cursor::Arrow;
-    let mut dirty = true;
-    let mut repaint_at: Option<u64> = None;
-    let mut pending: VecDeque<WindowEvent> = VecDeque::new();
-
+    app.init(&host.window);
     loop {
-        pending.extend(window.poll_events());
-        if window.closed {
+        let events = host.pump(|ui| app.update(ui));
+        if host.window.closed {
             return 0;
         }
-        while let Some(ev) = pending.front() {
-            if input.needs_flush_before(ev) {
-                if !window.can_draw() {
-                    break; // wait for FrameDone, then continue
-                }
-                let (r, close) = draw(&mut app, &mut window, &mut ctx, &mut input, &mut cursor);
-                if close && app.close_requested() {
-                    return 0;
-                }
-                repaint_at = r;
-                break;
-            }
-            let ev = pending.pop_front().unwrap();
-            match &ev {
-                WindowEvent::CloseRequested {} => {
-                    if app.close_requested() {
-                        return 0;
-                    }
-                }
-                WindowEvent::FrameDone { .. } => {}
-                _ => input.apply(&ev),
-            }
-            dirty = true;
-        }
-        let now = vrt::time::now_ns();
-        if repaint_at.is_some_and(|t| now >= t) {
-            repaint_at = None;
-            dirty = true;
-        }
-        if dirty && window.can_draw() {
-            dirty = false;
-            let (r, close) = draw(&mut app, &mut window, &mut ctx, &mut input, &mut cursor);
-            repaint_at = r;
-            if close && app.close_requested() {
+        let wants_close = host.close_requested || events.iter().any(|e| matches!(e, WindowEvent::CloseRequested {}));
+        if wants_close {
+            host.close_requested = false;
+            if app.close_requested() {
                 return 0;
             }
+            host.invalidate();
         }
-        // Wait for window events, the repaint deadline or app handles.
         let extra = app.wait_handles();
         let mut items = Vec::with_capacity(1 + extra.len());
-        items.push(WaitItem { handle: window.event_channel().raw(), signals: signals::READABLE | signals::PEER_CLOSED, ..Default::default() });
+        items.push(host.wait_item());
         for (h, s) in &extra {
             items.push(WaitItem { handle: *h, signals: *s, ..Default::default() });
         }
-        let deadline = if !pending.is_empty() && window.can_draw() {
-            0
-        } else if dirty {
-            vabi::DEADLINE_INFINITE // waiting for FrameDone
-        } else {
-            repaint_at.unwrap_or(vabi::DEADLINE_INFINITE)
-        };
-        let _ = vrt::object::wait_many(&mut items, deadline);
+        let _ = vrt::object::wait_many(&mut items, host.deadline());
         for (i, it) in items.iter().enumerate().skip(1) {
             if it.observed & it.signals != 0 {
                 app.handle_signaled(i - 1, it.observed);
-                dirty = true;
+                host.invalidate();
             }
         }
     }

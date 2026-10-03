@@ -81,7 +81,14 @@ impl<'a> Spawn<'a> {
         let size = pe.size_of_image() as usize;
         let vmo = Vmo::create(size)?;
         vmo.write(0, pe.header_bytes())?;
-        vm::map(Some(&process), &vmo, 0, (pe.size_of_headers() as usize).next_multiple_of(4096), base, map_flags::READ | map_flags::FIXED)?;
+        vm::map(
+            Some(&process),
+            &vmo,
+            0,
+            (pe.size_of_headers() as usize).next_multiple_of(4096),
+            base,
+            map_flags::READ | map_flags::FIXED,
+        )?;
         for s in pe.sections().filter(|s| !s.discardable() && s.virtual_size > 0) {
             vmo.write(s.virtual_address as usize, s.data)?;
             let mut flags = map_flags::READ | map_flags::FIXED;
@@ -111,7 +118,10 @@ impl<'a> Spawn<'a> {
 
         let entry = pe.entry_point() as usize;
         let rsp = stack_base + MAIN_STACK - 72;
-        call(nr::PROCESS_START, [process.raw() as usize, thread.raw() as usize, entry, rsp, theirs.into_handle().into_raw() as usize, 0])?;
+        call(
+            nr::PROCESS_START,
+            [process.raw() as usize, thread.raw() as usize, entry, rsp, theirs.into_handle().into_raw() as usize, 0],
+        )?;
         Ok(process)
     }
 }

@@ -6,6 +6,8 @@
 
 use alloc::vec::Vec;
 
+// Float math under `no_std` (std, linked into host tests, has these inherently).
+#[allow(unused_imports)]
 use vmath::FloatExt;
 use vraster::{FillRule, Path, Rasterizer, Span, StrokeStyle, Transform};
 
@@ -59,7 +61,17 @@ impl<'a> Canvas<'a> {
     /// Wraps a pixel buffer of `width` x `height` with `stride` pixels per row.
     pub fn new(pixels: &'a mut [u32], width: i32, height: i32, stride: i32) -> Canvas<'a> {
         assert!(stride >= width && pixels.len() >= (stride * height.max(0)) as usize);
-        Canvas { pixels, width, height, stride, clip: Rect::new(0, 0, width, height), ox: 0, oy: 0, stack: Vec::new(), raster: None }
+        Canvas {
+            pixels,
+            width,
+            height,
+            stride,
+            clip: Rect::new(0, 0, width, height),
+            ox: 0,
+            oy: 0,
+            stack: Vec::new(),
+            raster: None,
+        }
     }
 
     pub fn for_bitmap(b: &'a mut Bitmap) -> Canvas<'a> {

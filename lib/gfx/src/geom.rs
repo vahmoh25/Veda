@@ -34,11 +34,17 @@ impl Rect {
         x >= self.x && y >= self.y && x < self.right() && y < self.bottom()
     }
 
+    /// The overlap of two rectangles. Disjoint rectangles give the empty
+    /// rectangle at the origin, so that an empty result never carries
+    /// coordinates outside both inputs.
     pub fn intersect(&self, o: &Rect) -> Rect {
         let x0 = self.x.max(o.x);
         let y0 = self.y.max(o.y);
         let x1 = self.right().min(o.right());
         let y1 = self.bottom().min(o.bottom());
+        if x1 <= x0 || y1 <= y0 {
+            return Rect::default();
+        }
         Rect::new(x0, y0, x1 - x0, y1 - y0)
     }
 

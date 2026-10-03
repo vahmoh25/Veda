@@ -255,11 +255,7 @@ impl Error {
 
     /// Decodes a raw syscall return value.
     pub fn from_return(ret: isize) -> core::result::Result<usize, Error> {
-        if ret >= 0 {
-            Ok(ret as usize)
-        } else {
-            Err(Error::from_code((-ret) as i32).unwrap_or(Error::Internal))
-        }
+        if ret >= 0 { Ok(ret as usize) } else { Err(Error::from_code((-ret) as i32).unwrap_or(Error::Internal)) }
     }
 
     pub const fn description(self) -> &'static str {

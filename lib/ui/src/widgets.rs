@@ -137,10 +137,10 @@ impl<'a> Ui<'a> {
             return;
         }
         let now = self.now();
-        let since = match self.ctx.state.tooltip {
+        let since = match self.state.tooltip {
             Some((tid, t)) if tid == id => t,
             _ => {
-                self.ctx.state.tooltip = Some((id, now));
+                self.state.tooltip = Some((id, now));
                 now
             }
         };
@@ -207,14 +207,14 @@ impl<'a> Ui<'a> {
         let t = self.ctx.theme.clone();
         let mut changed = false;
         let span = (max - min).max(f32::EPSILON);
-        if resp.held || resp.pressed {
-            if let Some((px, _)) = self.input.pointer {
-                let f = ((px - r.x) as f32 / r.w.max(1) as f32).clamp(0.0, 1.0);
-                let nv = min + f * span;
-                if (nv - *value).abs() > f32::EPSILON {
-                    *value = nv;
-                    changed = true;
-                }
+        if (resp.held || resp.pressed)
+            && let Some((px, _)) = self.input.pointer
+        {
+            let f = ((px - r.x) as f32 / r.w.max(1) as f32).clamp(0.0, 1.0);
+            let nv = min + f * span;
+            if (nv - *value).abs() > f32::EPSILON {
+                *value = nv;
+                changed = true;
             }
         }
         if resp.hovered && self.input.scroll.1 != 0 {
@@ -293,10 +293,16 @@ impl<'a> Ui<'a> {
 
     /// A vertically scrolling region. `f` draws the content given the
     /// scroll offset (content y = viewport y - offset). Returns `f`'s value.
-    pub fn scroll_area<R>(&mut self, r: Rect, id_label: &str, content_h: i32, f: impl FnOnce(&mut Ui<'a>, i32) -> R) -> R {
+    pub fn scroll_area<R>(
+        &mut self,
+        r: Rect,
+        id_label: &str,
+        content_h: i32,
+        f: impl FnOnce(&mut Ui<'a>, i32) -> R,
+    ) -> R {
         let id = self.id(id_label) ^ 0x5c01;
         let max = (content_h - r.h).max(0) as f32;
-        let mut offset = self.ctx.state.floats.get(&id).copied().unwrap_or(0.0).clamp(0.0, max);
+        let mut offset = self.state.floats.get(&id).copied().unwrap_or(0.0).clamp(0.0, max);
         if self.hovered(r) && self.input.scroll.1 != 0 {
             offset = (offset - self.input.scroll.1 as f32 * 48.0).clamp(0.0, max);
         }
@@ -308,13 +314,13 @@ impl<'a> Ui<'a> {
             let thumb_y = track.y + ((offset / max) * (track.h - thumb_h) as f32) as i32;
             let thumb = Rect::new(track.x, thumb_y, track.w, thumb_h);
             let resp = self.interact(bar_id, track);
-            if resp.held {
-                if let Some((_, py)) = self.input.pointer {
-                    let f = ((py - track.y - thumb_h / 2) as f32 / (track.h - thumb_h).max(1) as f32).clamp(0.0, 1.0);
-                    offset = f * max;
-                }
+            if resp.held
+                && let Some((_, py)) = self.input.pointer
+            {
+                let f = ((py - track.y - thumb_h / 2) as f32 / (track.h - thumb_h).max(1) as f32).clamp(0.0, 1.0);
+                offset = f * max;
             }
-            self.ctx.state.floats.insert(id, offset);
+            self.state.floats.insert(id, offset);
             let content_r = r;
             self.canvas.save();
             self.canvas.clip_to(content_r);
@@ -330,7 +336,7 @@ impl<'a> Ui<'a> {
             self.canvas.fill_rounded_rect(thumb.inset(2, 0, 1, 0), 3.0, Color::rgba(255, 255, 255, alpha));
             out
         } else {
-            self.ctx.state.floats.insert(id, 0.0);
+            self.state.floats.insert(id, 0.0);
             self.canvas.save();
             self.canvas.clip_to(r);
             let was_blocked = self.blocked;
@@ -347,9 +353,15 @@ impl<'a> Ui<'a> {
     /// Scrolls a scroll area so that `[y, y+h)` (content coordinates) is visible.
     pub fn scroll_into_view(&mut self, id_label: &str, viewport_h: i32, y: i32, h: i32) {
         let id = self.id(id_label) ^ 0x5c01;
-        let off = self.ctx.state.floats.get(&id).copied().unwrap_or(0.0) as i32;
-        let new = if y < off { y } else if y + h > off + viewport_h { y + h - viewport_h } else { off };
-        self.ctx.state.floats.insert(id, new.max(0) as f32);
+        let off = self.state.floats.get(&id).copied().unwrap_or(0.0) as i32;
+        let new = if y < off {
+            y
+        } else if y + h > off + viewport_h {
+            y + h - viewport_h
+        } else {
+            off
+        };
+        self.state.floats.insert(id, new.max(0) as f32);
     }
 
     /// A virtualised list with selection, keyboard navigation and
@@ -431,7 +443,11 @@ impl<'a> Ui<'a> {
         let t = self.ctx.theme.clone();
         let inner = r.inset(4, 1, 4, 1);
         if s.selected {
-            self.canvas.fill_rounded_rect(inner, t.radius, if s.focused { t.selection } else { Color::rgba(255, 255, 255, 22) });
+            self.canvas.fill_rounded_rect(
+                inner,
+                t.radius,
+                if s.focused { t.selection } else { Color::rgba(255, 255, 255, 22) },
+            );
         } else if s.hovered {
             self.canvas.fill_rounded_rect(inner, t.radius, Color::rgba(255, 255, 255, 12));
         }
@@ -449,7 +465,7 @@ impl<'a> Ui<'a> {
         self.canvas.stroke_rounded_rect(card, t.radius_large, 1.0, t.border_strong);
         self.modal_shown = true;
         let was_blocked = self.blocked;
-        self.blocked = self.input.pointer.is_some_and(|(x, y)| self.ctx.state.overlays.iter().any(|o| o.contains(x, y)));
+        self.blocked = self.input.pointer.is_some_and(|(x, y)| self.state.overlays.iter().any(|o| o.contains(x, y)));
         self.in_modal = true;
         let out = f(self, card);
         self.in_modal = false;
@@ -501,7 +517,12 @@ impl<'a> Ui<'a> {
             let a = t + i as f32 * core::f32::consts::TAU / 8.0;
             let (s, c) = (vmath::FloatExt::sin(a), vmath::FloatExt::cos(a));
             let alpha = (255.0 * (i as f32 + 1.0) / 8.0) as u8;
-            self.canvas.fill_circle(cx as f32 + c * radius, cy as f32 + s * radius, radius * 0.22, accent.with_alpha(alpha));
+            self.canvas.fill_circle(
+                cx as f32 + c * radius,
+                cy as f32 + s * radius,
+                radius * 0.22,
+                accent.with_alpha(alpha),
+            );
         }
         let now = self.now();
         self.repaint_at(now + 50_000_000);

@@ -132,7 +132,8 @@ impl Bitmap {
         let mut out = Bitmap::new(r.w, r.h);
         for y in 0..r.h {
             let src = ((r.y + y) * self.width + r.x) as usize;
-            out.pixels[(y * r.w) as usize..((y + 1) * r.w) as usize].copy_from_slice(&self.pixels[src..src + r.w as usize]);
+            out.pixels[(y * r.w) as usize..((y + 1) * r.w) as usize]
+                .copy_from_slice(&self.pixels[src..src + r.w as usize]);
         }
         out
     }
@@ -153,9 +154,8 @@ impl Bitmap {
 /// One horizontal or vertical box-blur pass with edge clamping.
 fn box_pass(src: &[u32], dst: &mut [u32], w: i32, h: i32, r: i32, horizontal: bool) {
     let (len, lines) = if horizontal { (w, h) } else { (h, w) };
-    let idx = |line: i32, i: i32| -> usize {
-        if horizontal { (line * w + i) as usize } else { (i * w + line) as usize }
-    };
+    let idx =
+        |line: i32, i: i32| -> usize { if horizontal { (line * w + i) as usize } else { (i * w + line) as usize } };
     let div = (2 * r + 1) as u32;
     for line in 0..lines {
         let mut acc = [0u32; 4];
@@ -168,7 +168,7 @@ fn box_pass(src: &[u32], dst: &mut [u32], w: i32, h: i32, r: i32, horizontal: bo
             acc[3] += p & 0xFF;
         }
         for i in 0..len {
-            dst[idx(line, i)] = (acc[0] / div) << 24 | (acc[1] / div) << 16 | (acc[2] / div) << 8 | acc[3] / div;
+            dst[idx(line, i)] = (acc[0] / div) << 24 | (acc[1] / div) << 16 | (acc[2] / div) << 8 | (acc[3] / div);
             let (add, sub) = (at(i + r + 1), at(i - r));
             acc[0] = acc[0] + (add >> 24) - (sub >> 24);
             acc[1] = acc[1] + ((add >> 16) & 0xFF) - ((sub >> 16) & 0xFF);

@@ -117,8 +117,20 @@ impl DateTime {
     }
 
     pub fn month_name(&self) -> &'static str {
-        const NAMES: [&str; 12] =
-            ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+        const NAMES: [&str; 12] = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
         NAMES[(self.month.clamp(1, 12) - 1) as usize]
     }
 

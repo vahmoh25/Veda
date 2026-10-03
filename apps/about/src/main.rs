@@ -8,7 +8,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 
-use vui::{Align, App, Color, Font, Icon, Rect, Ui, WindowSpec};
+use vui::{Align, App, Font, Icon, Rect, Ui, WindowSpec};
 
 vrt::entry!(main);
 
@@ -16,23 +16,6 @@ struct About {
     info: vabi::SystemInfo,
     last_refresh: u64,
     show_details: bool,
-}
-
-/// The Vindows logo: four rounded gradient tiles.
-pub fn draw_logo(ui: &mut Ui, r: Rect) {
-    let tile = (r.w - r.w / 8) / 2;
-    let gap = r.w - 2 * tile;
-    let colors = [
-        (Color::hex(0x2FD4FF), Color::hex(0x3D8BFF)),
-        (Color::hex(0x4D7CFF), Color::hex(0x7A5CFF)),
-        (Color::hex(0x3D8BFF), Color::hex(0x6A63FF)),
-        (Color::hex(0x7A5CFF), Color::hex(0xC04DFF)),
-    ];
-    for (i, (a, b)) in colors.iter().enumerate() {
-        let x = r.x + (i as i32 % 2) * (tile + gap);
-        let y = r.y + (i as i32 / 2) * (tile + gap);
-        ui.canvas.fill_rounded_rect_gradient(Rect::new(x, y, tile, tile), tile as f32 / 5.0, *a, *b);
-    }
 }
 
 fn cstr(b: &[u8]) -> String {
@@ -53,10 +36,24 @@ impl App for About {
         let t = ui.theme().clone();
         let area = ui.rect().inset(32, 28, 32, 24);
 
-        draw_logo(ui, Rect::new(area.x, area.y + 4, 64, 64));
-        ui.label(Rect::new(area.x + 88, area.y, 400, 40), "Vindows", Font::Bold, t.title_size + 6.0, t.text, Align::Left);
+        vui::draw_logo(&mut ui.canvas, Rect::new(area.x, area.y + 4, 64, 64));
+        ui.label(
+            Rect::new(area.x + 88, area.y, 400, 40),
+            "Vindows",
+            Font::Bold,
+            t.title_size + 6.0,
+            t.text,
+            Align::Left,
+        );
         let version = cstr(&self.info.version);
-        ui.label(Rect::new(area.x + 90, area.y + 40, 400, 24), &format!("{version} · microkernel edition"), Font::Regular, t.font_size, t.text_dim, Align::Left);
+        ui.label(
+            Rect::new(area.x + 90, area.y + 40, 400, 24),
+            &format!("{version} · microkernel edition"),
+            Font::Regular,
+            t.font_size,
+            t.text_dim,
+            Align::Left,
+        );
 
         let card = Rect::new(area.x, area.y + 96, area.w, 168);
         ui.card(card);
@@ -66,14 +63,14 @@ impl App for About {
             (
                 Icon::Chart,
                 "Memory",
-                format!(
-                    "{} MiB free of {} MiB",
-                    self.info.free_memory >> 20,
-                    self.info.total_memory >> 20
-                ),
+                format!("{} MiB free of {} MiB", self.info.free_memory >> 20, self.info.total_memory >> 20),
             ),
             (Icon::Clock, "Uptime", fmt_uptime(self.info.uptime_ns)),
-            (Icon::List, "Processes", format!("{} processes, {} threads", self.info.process_count, self.info.thread_count)),
+            (
+                Icon::List,
+                "Processes",
+                format!("{} processes, {} threads", self.info.process_count, self.info.thread_count),
+            ),
         ];
         for (i, (icon, label, value)) in rows.iter().enumerate() {
             let y = card.y + 12 + i as i32 * 30;

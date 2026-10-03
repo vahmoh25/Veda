@@ -202,10 +202,7 @@ pub mod builder {
         pub fn add(&mut self, path: &str, data: Vec<u8>) -> &mut Self {
             let path = path.trim_start_matches('/');
             assert!(!path.is_empty(), "empty initrd path");
-            assert!(
-                path.split('/').all(|c| !c.is_empty() && c != "." && c != ".."),
-                "invalid initrd path: {path}"
-            );
+            assert!(path.split('/').all(|c| !c.is_empty() && c != "." && c != ".."), "invalid initrd path: {path}");
             assert!(!self.files.iter().any(|(p, _)| p == path), "duplicate initrd path: {path}");
             self.files.push((path.into(), data));
             self

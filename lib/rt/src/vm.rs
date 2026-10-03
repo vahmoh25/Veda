@@ -10,7 +10,14 @@ pub use vabi::map_flags::{COMMIT, EXECUTE, FIXED, READ, WRITE};
 /// Maps `len` bytes of `vmo` (from `offset`) into `process` (or the caller
 /// when `None`). `addr` is a hint (or exact with [`FIXED`]); 0 lets the kernel
 /// choose. Returns the mapped address.
-pub fn map(process: Option<&Process>, vmo: &Vmo, offset: usize, len: usize, addr: usize, flags: usize) -> Result<usize, Error> {
+pub fn map(
+    process: Option<&Process>,
+    vmo: &Vmo,
+    offset: usize,
+    len: usize,
+    addr: usize,
+    flags: usize,
+) -> Result<usize, Error> {
     let p = process.map(|p| p.raw()).unwrap_or(vabi::INVALID_HANDLE);
     call(nr::VM_MAP, [p as usize, vmo.raw() as usize, offset, len, addr, flags])
 }

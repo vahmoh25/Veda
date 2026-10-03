@@ -37,6 +37,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn disjoint_rectangles_intersect_to_canonical_empty() {
+        let a = Rect::new(0, 0, 100, 100);
+        assert_eq!(a.intersect(&Rect::new(1960, 10, 50, 50)), Rect::default());
+        assert!(!a.intersects(&Rect::new(-60, 0, 50, 50)));
+        assert_eq!(a.intersect(&Rect::new(50, 50, 100, 100)), Rect::new(50, 50, 50, 50));
+    }
+
+    #[test]
+    fn drawing_entirely_outside_the_canvas_is_a_no_op() {
+        // Regression: a fill far right of the clip used to slice past a row.
+        let mut b = Bitmap::new(16, 8);
+        let mut c = Canvas::for_bitmap(&mut b);
+        c.fill_rect(Rect::new(40, 2, 10, 3), Color::WHITE);
+        c.fill_rect(Rect::new(-40, 2, 10, 3), Color::WHITE);
+        c.fill_rounded_rect(Rect::new(30, -20, 10, 10), 3.0, Color::WHITE);
+        c.draw_shadow(Rect::new(60, 60, 20, 20), 4, 6, Color::BLACK);
+        let src = Bitmap::filled(4, 4, 0xFFFF_FFFF);
+        c.draw_bitmap(&src, 100, 0, 255);
+        c.blit(&src, src.rect(), -50, -50);
+        drop(c);
+        assert!(b.pixels.iter().all(|&p| p == 0));
+    }
+
+    #[test]
     fn fill_and_clip() {
         let mut b = Bitmap::new(20, 10);
         let mut c = Canvas::for_bitmap(&mut b);

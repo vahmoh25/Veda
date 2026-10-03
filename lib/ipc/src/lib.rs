@@ -24,8 +24,8 @@ use alloc::vec::Vec;
 use core::fmt;
 
 pub use codec::{Bytes, Decode, DecodeError, Decoder, Encode, Encoder};
-pub use vrt::object::{Channel, Handle, Message};
 use vabi::{Error, RawHandle, WaitItem};
+pub use vrt::object::{Channel, Handle, Message};
 
 /// Size of the message header.
 pub const HEADER_LEN: usize = 12;

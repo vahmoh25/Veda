@@ -35,6 +35,9 @@ pub struct KeyPress {
     pub code: u16,
     pub modifiers: u32,
     pub repeat: bool,
+    /// The character typed (also appended to [`Input::text`]); widgets that
+    /// must see keys and text in order use this instead.
+    pub ch: Option<char>,
 }
 
 /// Input accumulated since the previous frame.
@@ -56,6 +59,12 @@ pub struct Input {
 }
 
 impl Input {
+    /// A copy without key presses and typed text, given to widgets while a
+    /// menu has the keyboard.
+    pub fn without_keys(&self) -> Input {
+        Input { text: String::new(), keys: Vec::new(), ..self.clone() }
+    }
+
     /// Clears the per-frame fields.
     pub fn begin_frame(&mut self) {
         self.pressed = [false; 3];
@@ -103,13 +112,15 @@ impl Input {
             WindowEvent::Key { code, pressed, repeat, modifiers, text } => {
                 self.modifiers = *modifiers;
                 if *pressed {
-                    self.keys.push(KeyPress { code: *code, modifiers: *modifiers, repeat: *repeat });
+                    let mut ch = None;
                     if modifiers & (modifiers::CTRL | modifiers::ALT | modifiers::SUPER) == 0 {
                         // Control characters are delivered as key codes only.
                         for c in text.chars().filter(|c| !c.is_control() || *c == '\t') {
                             self.text.push(c);
+                            ch = ch.or(Some(c));
                         }
                     }
+                    self.keys.push(KeyPress { code: *code, modifiers: *modifiers, repeat: *repeat, ch });
                 }
             }
             WindowEvent::Focus { focused } => {
@@ -166,6 +177,9 @@ pub struct UiState {
     pub open_menu: Option<(Id, usize)>,
     /// Open context menu: (id, position).
     pub context_menu: Option<(Id, i32, i32)>,
+    /// Item of the open menu highlighted with the keyboard, and the pointer
+    /// position at that moment (moving the pointer hands over to the mouse).
+    pub menu_key: Option<(usize, Option<(i32, i32)>)>,
     /// Overlay rectangles drawn last frame (they capture the pointer).
     pub overlays: Vec<Rect>,
     /// A modal dialog was shown last frame.
@@ -178,7 +192,6 @@ pub struct Context {
     pub text: Text,
     pub fonts: [usize; 4],
     pub theme: Theme,
-    pub state: UiState,
     pub display: Display,
     pub window_id: u32,
 }
@@ -199,7 +212,13 @@ pub(crate) enum Overlay {
 pub struct Ui<'a> {
     pub canvas: Canvas<'a>,
     pub ctx: &'a mut Context,
+    /// Per-window persistent widget state.
+    pub state: &'a mut UiState,
+    /// This frame's input. While a menu is open its keys and typed text are
+    /// withheld from widgets: the menu has the keyboard.
     pub input: &'a Input,
+    /// This frame's complete input, for menus.
+    pub(crate) menu_input: &'a Input,
     pub width: i32,
     pub height: i32,
     pub(crate) cursor: Cursor,
@@ -212,6 +231,7 @@ pub struct Ui<'a> {
     pub(crate) modal_shown: bool,
     pub(crate) salt: u64,
     pub(crate) close_requested: bool,
+    pub(crate) skip_present: bool,
 }
 
 /// Result of interacting with a widget area.
@@ -230,15 +250,18 @@ pub struct Response {
 }
 
 impl<'a> Ui<'a> {
-    pub(crate) fn new(canvas: Canvas<'a>, ctx: &'a mut Context, input: &'a Input) -> Ui<'a> {
+    /// Starts a frame (the runner calls this; see [`crate::Host`]).
+    pub fn new(canvas: Canvas<'a>, ctx: &'a mut Context, state: &'a mut UiState, input: &'a Input) -> Ui<'a> {
         let (width, height) = (canvas.width(), canvas.height());
-        let blocked_by_overlay = input.pointer.is_some_and(|(x, y)| ctx.state.overlays.iter().any(|r| r.contains(x, y)));
-        let blocked = blocked_by_overlay || ctx.state.modal;
-        ctx.state.hot = None;
+        let blocked_by_overlay = input.pointer.is_some_and(|(x, y)| state.overlays.iter().any(|r| r.contains(x, y)));
+        let blocked = blocked_by_overlay || state.modal;
+        state.hot = None;
         Ui {
             canvas,
             ctx,
+            state,
             input,
+            menu_input: input,
             width,
             height,
             cursor: Cursor::Arrow,
@@ -250,6 +273,7 @@ impl<'a> Ui<'a> {
             modal_shown: false,
             salt: 0,
             close_requested: false,
+            skip_present: false,
         }
     }
 
@@ -302,6 +326,13 @@ impl<'a> Ui<'a> {
         self.cursor = c;
     }
 
+    /// Declares that this frame looks exactly like the one on screen, so it
+    /// is not presented (saving the compositor a redraw). Only valid when
+    /// nothing visible changed since the last presented frame.
+    pub fn skip_present(&mut self) {
+        self.skip_present = true;
+    }
+
     /// Asks the application loop to close the window after this frame.
     pub fn close_window(&mut self) {
         self.close_requested = true;
@@ -310,7 +341,7 @@ impl<'a> Ui<'a> {
     /// Basic button-like interaction for an area.
     pub fn interact(&mut self, id: Id, r: Rect) -> Response {
         let hovered = self.hovered(r);
-        let st = &mut self.ctx.state;
+        let st = &mut self.state;
         if hovered {
             st.hot = Some(id);
         }
@@ -335,25 +366,25 @@ impl<'a> Ui<'a> {
     }
 
     pub fn focused(&self, id: Id) -> bool {
-        self.ctx.state.focus == Some(id)
+        self.state.focus == Some(id)
     }
 
     pub fn focus(&mut self, id: Id) {
-        self.ctx.state.focus = Some(id);
+        self.state.focus = Some(id);
     }
 
     /// Smoothly animates a per-widget value towards `target` (0..=1).
     pub fn animate(&mut self, id: Id, target: f32, speed_per_sec: f32) -> f32 {
         let key = id ^ 0x5bd1_e995;
-        let v = self.ctx.state.floats.get(&key).copied().unwrap_or(target);
+        let v = self.state.floats.get(&key).copied().unwrap_or(target);
         if (v - target).abs() < 0.001 {
-            self.ctx.state.floats.insert(key, target);
+            self.state.floats.insert(key, target);
             return target;
         }
         // Frames arrive irregularly; assume ~30 fps steps.
         let step = speed_per_sec / 30.0;
         let nv = if v < target { (v + step).min(target) } else { (v - step).max(target) };
-        self.ctx.state.floats.insert(key, nv);
+        self.state.floats.insert(key, nv);
         let now = self.now();
         self.repaint_at(now + 30_000_000);
         nv
@@ -404,7 +435,8 @@ impl<'a> Ui<'a> {
     }
 
     /// Finishes the frame: draws overlays and records what they cover.
-    pub(crate) fn finish(&mut self) {
+    /// Finishes the frame (called by the runner after drawing).
+    pub fn finish(&mut self) {
         let overlays = core::mem::take(&mut self.overlays);
         for o in overlays {
             match o {
@@ -418,11 +450,11 @@ impl<'a> Ui<'a> {
                 }
             }
         }
-        self.ctx.state.overlays = core::mem::take(&mut self.new_overlay_rects);
-        self.ctx.state.modal = self.modal_shown;
+        self.state.overlays = core::mem::take(&mut self.new_overlay_rects);
+        self.state.modal = self.modal_shown;
         // Releasing the button anywhere ends any press interaction.
         if self.input.released[0] && !self.input.down[0] {
-            self.ctx.state.active = None;
+            self.state.active = None;
         }
     }
 }

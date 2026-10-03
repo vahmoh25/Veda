@@ -21,6 +21,7 @@
 extern crate alloc;
 
 pub mod app;
+pub mod file_dialog;
 pub mod icons;
 pub mod menu;
 pub mod text_input;
@@ -29,12 +30,13 @@ pub mod ui;
 pub mod widgets;
 pub mod window;
 
-pub use app::{App, load_fonts, run};
-pub use icons::Icon;
+pub use app::{App, Host, load_fonts, run};
+pub use file_dialog::{FileDialog, FileDialogMode, FileDialogResult};
+pub use icons::{Icon, draw_logo};
 pub use menu::{Menu, MenuItem};
 pub use text_input::TextInputResponse;
 pub use theme::{Font, Theme};
-pub use ui::{Id, Input, Response, Ui};
+pub use ui::{Context, Id, Input, Response, Ui, UiState};
 pub use vgfx::{Align, Canvas, Color, Rect};
 pub use vproto::display::{Cursor, WindowKind, WindowSpec, WindowState};
 pub use widgets::{ButtonKind, ListResponse, RowState};

@@ -117,7 +117,10 @@ impl Builder {
 fn build(icon: Icon) -> Builder {
     let mut b = Builder { stroke: Path::new(), fill: Path::new() };
     match icon {
-        Icon::Folder => b.poly(&[(3.0, 7.0), (3.0, 18.0), (21.0, 18.0), (21.0, 8.5), (12.0, 8.5), (10.0, 5.5), (3.0, 5.5), (3.0, 7.0)], true),
+        Icon::Folder => b.poly(
+            &[(3.0, 7.0), (3.0, 18.0), (21.0, 18.0), (21.0, 8.5), (12.0, 8.5), (10.0, 5.5), (3.0, 5.5), (3.0, 7.0)],
+            true,
+        ),
         Icon::File => {
             b.poly(&[(6.0, 3.0), (14.0, 3.0), (19.0, 8.0), (19.0, 21.0), (6.0, 21.0)], true);
             b.poly(&[(14.0, 3.0), (14.0, 8.0), (19.0, 8.0)], false);
@@ -266,7 +269,18 @@ fn build(icon: Icon) -> Builder {
             b.dot(12.0, 17.0, 1.1);
         }
         Icon::Star => b.poly(
-            &[(12.0, 3.0), (14.7, 8.9), (21.0, 9.5), (16.2, 13.7), (17.6, 20.0), (12.0, 16.7), (6.4, 20.0), (7.8, 13.7), (3.0, 9.5), (9.3, 8.9)],
+            &[
+                (12.0, 3.0),
+                (14.7, 8.9),
+                (21.0, 9.5),
+                (16.2, 13.7),
+                (17.6, 20.0),
+                (12.0, 16.7),
+                (6.4, 20.0),
+                (7.8, 13.7),
+                (3.0, 9.5),
+                (9.3, 8.9),
+            ],
             true,
         ),
         Icon::Heart => {
@@ -384,7 +398,18 @@ fn build(icon: Icon) -> Builder {
         Icon::Chess => {
             // A knight.
             b.poly(
-                &[(7.0, 20.0), (17.0, 20.0), (16.0, 17.0), (16.5, 9.0), (13.0, 4.0), (10.0, 4.5), (5.5, 9.5), (7.0, 11.5), (11.0, 10.0), (8.0, 17.0)],
+                &[
+                    (7.0, 20.0),
+                    (17.0, 20.0),
+                    (16.0, 17.0),
+                    (16.5, 9.0),
+                    (13.0, 4.0),
+                    (10.0, 4.5),
+                    (5.5, 9.5),
+                    (7.0, 11.5),
+                    (11.0, 10.0),
+                    (8.0, 17.0),
+                ],
                 true,
             );
             b.dot(11.5, 7.5, 0.9);
@@ -400,7 +425,10 @@ fn build(icon: Icon) -> Builder {
         }
         Icon::Copy => {
             b.rrect(8.5, 8.5, 12.0, 12.0, 2.0);
-            b.poly(&[(15.5, 8.5), (15.5, 5.5), (13.5, 3.5), (5.5, 3.5), (3.5, 5.5), (3.5, 13.5), (5.5, 15.5), (8.5, 15.5)], false);
+            b.poly(
+                &[(15.5, 8.5), (15.5, 5.5), (13.5, 3.5), (5.5, 3.5), (3.5, 5.5), (3.5, 13.5), (5.5, 15.5), (8.5, 15.5)],
+                false,
+            );
         }
         Icon::Cut => {
             b.circle(6.5, 17.5, 2.8);
@@ -430,6 +458,23 @@ fn build(icon: Icon) -> Builder {
         }
     }
     b
+}
+
+/// Draws the Vindows logo (four rounded gradient tiles) filling the square `r`.
+pub fn draw_logo(c: &mut Canvas, r: Rect) {
+    let tile = (r.w - r.w / 8) / 2;
+    let gap = r.w - 2 * tile;
+    let colors = [
+        (Color::hex(0x2FD4FF), Color::hex(0x3D8BFF)),
+        (Color::hex(0x4D7CFF), Color::hex(0x7A5CFF)),
+        (Color::hex(0x3D8BFF), Color::hex(0x6A63FF)),
+        (Color::hex(0x7A5CFF), Color::hex(0xC04DFF)),
+    ];
+    for (i, (a, b)) in colors.iter().enumerate() {
+        let x = r.x + (i as i32 % 2) * (tile + gap);
+        let y = r.y + (i as i32 / 2) * (tile + gap);
+        c.fill_rounded_rect_gradient(Rect::new(x, y, tile, tile), tile as f32 / 5.0, *a, *b);
+    }
 }
 
 impl Icon {

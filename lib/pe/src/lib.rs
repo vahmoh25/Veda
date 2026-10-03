@@ -79,21 +79,15 @@ pub enum Subsystem {
 }
 
 fn rd_u16(b: &[u8], off: usize) -> Result<u16, PeError> {
-    b.get(off..off + 2)
-        .map(|s| u16::from_le_bytes([s[0], s[1]]))
-        .ok_or(PeError::Truncated)
+    b.get(off..off + 2).map(|s| u16::from_le_bytes([s[0], s[1]])).ok_or(PeError::Truncated)
 }
 
 fn rd_u32(b: &[u8], off: usize) -> Result<u32, PeError> {
-    b.get(off..off + 4)
-        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-        .ok_or(PeError::Truncated)
+    b.get(off..off + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]])).ok_or(PeError::Truncated)
 }
 
 fn rd_u64(b: &[u8], off: usize) -> Result<u64, PeError> {
-    b.get(off..off + 8)
-        .map(|s| u64::from_le_bytes(s.try_into().unwrap()))
-        .ok_or(PeError::Truncated)
+    b.get(off..off + 8).map(|s| u64::from_le_bytes(s.try_into().unwrap())).ok_or(PeError::Truncated)
 }
 
 /// A parsed, validated PE32+ image backed by its file bytes.
@@ -374,7 +368,7 @@ impl Iterator for Relocations<'_> {
                 let e = u16::from_le_bytes([self.entries[0], self.entries[1]]);
                 self.entries = &self.entries[2..];
                 match e >> 12 {
-                    0 => continue,                                   // ABSOLUTE: padding
+                    0 => continue,                                             // ABSOLUTE: padding
                     10 => return Some(Ok(self.page_rva + (e & 0xfff) as u32)), // DIR64
                     _ => return Some(Err(PeError::BadRelocation)),
                 }

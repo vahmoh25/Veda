@@ -63,7 +63,14 @@ impl Handle {
         let mut info = HandleBasicInfo::default();
         call(
             nr::OBJECT_INFO,
-            [self.0 as usize, info_topic::HANDLE_BASIC, &mut info as *mut _ as usize, core::mem::size_of_val(&info), 0, 0],
+            [
+                self.0 as usize,
+                info_topic::HANDLE_BASIC,
+                &mut info as *mut _ as usize,
+                core::mem::size_of_val(&info),
+                0,
+                0,
+            ],
         )?;
         Ok(info)
     }
@@ -172,7 +179,11 @@ impl Channel {
 
     /// Reads one message into the given buffers. On `BufferTooSmall`, returns
     /// the required sizes in the error payload via [`Channel::read`].
-    pub fn read_into(&self, bytes: &mut [u8], handles: &mut [RawHandle]) -> Result<(usize, usize), (Error, usize, usize)> {
+    pub fn read_into(
+        &self,
+        bytes: &mut [u8],
+        handles: &mut [RawHandle],
+    ) -> Result<(usize, usize), (Error, usize, usize)> {
         let mut actual = [0u32; 2];
         let r = call(
             nr::CHANNEL_READ,
@@ -287,7 +298,14 @@ impl Process {
         let mut info = ProcessInfo::default();
         call(
             nr::OBJECT_INFO,
-            [self.raw() as usize, info_topic::PROCESS, &mut info as *mut _ as usize, core::mem::size_of_val(&info), 0, 0],
+            [
+                self.raw() as usize,
+                info_topic::PROCESS,
+                &mut info as *mut _ as usize,
+                core::mem::size_of_val(&info),
+                0,
+                0,
+            ],
         )?;
         Ok(info)
     }
@@ -379,7 +397,8 @@ pub fn wait_many(items: &mut [WaitItem], deadline: u64) -> Result<usize, Error> 
 /// Reads the kernel log starting at `offset`; returns bytes read and the next
 /// offset.
 pub fn log_read(offset: u64, buf: &mut [u8]) -> Result<(usize, u64), Error> {
-    call2(nr::LOG_READ, [offset as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0]).map(|(n, next)| (n, next as u64))
+    call2(nr::LOG_READ, [offset as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0])
+        .map(|(n, next)| (n, next as u64))
 }
 
 /// Lists processes (up to `out.len()`); returns the total number.
@@ -404,5 +423,6 @@ pub fn random_bytes(buf: &mut [u8]) {
 }
 
 pub fn process_open(resource: &Resource, koid: u64) -> Result<Process, Error> {
-    call(nr::PROCESS_OPEN, [resource.raw() as usize, koid as usize, 0, 0, 0, 0]).map(|h| Process(Handle(h as RawHandle)))
+    call(nr::PROCESS_OPEN, [resource.raw() as usize, koid as usize, 0, 0, 0, 0])
+        .map(|h| Process(Handle(h as RawHandle)))
 }

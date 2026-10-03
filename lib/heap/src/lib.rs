@@ -284,7 +284,7 @@ impl Tlsf {
     /// The memory must be valid, writable and unused for the allocator's life.
     pub unsafe fn grow(&mut self, start: *mut u8, len: usize) {
         let start_addr = start as usize;
-        assert!(start_addr % ALIGN == 0 && len >= 2 * HEADER + MIN_PAYLOAD && len % ALIGN == 0);
+        assert!(start_addr.is_multiple_of(ALIGN) && len >= 2 * HEADER + MIN_PAYLOAD && len.is_multiple_of(ALIGN));
         // SAFETY: the caller hands us exclusive memory.
         unsafe {
             let block = if self.sentinel.is_null() {
@@ -558,7 +558,7 @@ mod tests {
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
-            if live.len() > 200 || (x % 3 == 0 && !live.is_empty()) {
+            if live.len() > 200 || (x.is_multiple_of(3) && !live.is_empty()) {
                 let i = (x as usize >> 8) % live.len();
                 let (p, _) = live.swap_remove(i);
                 unsafe { t.free(p) };

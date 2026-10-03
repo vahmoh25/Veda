@@ -18,6 +18,15 @@ pub struct TextInputResponse {
     pub focused: bool,
 }
 
+/// The largest character boundary of `s` at or before `i`.
+fn floor_boundary(s: &str, i: usize) -> usize {
+    let mut i = i.min(s.len());
+    while !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 fn prev_boundary(s: &str, i: usize) -> usize {
     s[..i].char_indices().next_back().map(|(p, _)| p).unwrap_or(0)
 }
@@ -47,6 +56,22 @@ fn word_right(s: &str, mut i: usize) -> usize {
 }
 
 impl<'a> Ui<'a> {
+    /// Moves keyboard focus to the text input `id_label`.
+    pub fn focus_text_input(&mut self, id_label: &str) {
+        let id = self.id(id_label) ^ 0x7e47;
+        self.focus(id);
+    }
+
+    /// Sets the selection of the text input `id_label` as byte offsets into
+    /// its value (`anchor == cursor` places the caret), e.g. to select a
+    /// file name without its extension.
+    pub fn set_text_input_selection(&mut self, id_label: &str, anchor: usize, cursor: usize) {
+        let id = self.id(id_label) ^ 0x7e47;
+        let st = self.state.edits.entry(id).or_default();
+        st.anchor = anchor;
+        st.cursor = cursor;
+    }
+
     /// A text box editing `value`. Clicking focuses it; typing, arrows,
     /// Home/End, Backspace/Delete, Shift-selection, Ctrl+A/C/X/V work.
     pub fn text_input(&mut self, r: Rect, id_label: &str, value: &mut String, placeholder: &str) -> TextInputResponse {
@@ -55,9 +80,10 @@ impl<'a> Ui<'a> {
         let size = t.font_size;
         let font = self.ctx.font(Font::Regular);
         let resp = self.interact(id, r);
-        let mut st = self.ctx.state.edits.get(&id).copied().unwrap_or_default();
-        st.cursor = st.cursor.min(value.len());
-        st.anchor = st.anchor.min(value.len());
+        let mut st = self.state.edits.get(&id).copied().unwrap_or_default();
+        // The value may have changed outside: keep both ends on characters.
+        st.cursor = floor_boundary(value, st.cursor);
+        st.anchor = floor_boundary(value, st.anchor);
         let pad = 10;
         let text_x = r.x + pad;
         if resp.pressed {
@@ -74,10 +100,10 @@ impl<'a> Ui<'a> {
                 }
             }
             st.blink_start = self.now();
-        } else if resp.held {
-            if let Some((px, _)) = self.input.pointer {
-                st.cursor = self.ctx.text.index_for_x(font, size, value, (px - text_x) as f32 + st.scroll);
-            }
+        } else if resp.held
+            && let Some((px, _)) = self.input.pointer
+        {
+            st.cursor = self.ctx.text.index_for_x(font, size, value, (px - text_x) as f32 + st.scroll);
         }
         let focused = self.focused(id);
         let mut out = TextInputResponse { focused, ..Default::default() };
@@ -89,8 +115,24 @@ impl<'a> Ui<'a> {
                 let (s0, s1) = sel(&st);
                 let mut moved = None;
                 match k.code {
-                    keys::LEFT => moved = Some(if ctrl { word_left(value, st.cursor) } else if s0 != s1 && !shift { s0 } else { prev_boundary(value, st.cursor) }),
-                    keys::RIGHT => moved = Some(if ctrl { word_right(value, st.cursor) } else if s0 != s1 && !shift { s1 } else { next_boundary(value, st.cursor) }),
+                    keys::LEFT => {
+                        moved = Some(if ctrl {
+                            word_left(value, st.cursor)
+                        } else if s0 != s1 && !shift {
+                            s0
+                        } else {
+                            prev_boundary(value, st.cursor)
+                        })
+                    }
+                    keys::RIGHT => {
+                        moved = Some(if ctrl {
+                            word_right(value, st.cursor)
+                        } else if s0 != s1 && !shift {
+                            s1
+                        } else {
+                            next_boundary(value, st.cursor)
+                        })
+                    }
                     keys::HOME => moved = Some(0),
                     keys::END => moved = Some(value.len()),
                     keys::BACKSPACE => {
@@ -163,7 +205,7 @@ impl<'a> Ui<'a> {
                 }
             }
             if self.input.key(keys::ESC) {
-                self.ctx.state.focus = None;
+                self.state.focus = None;
             }
         }
 
@@ -178,7 +220,13 @@ impl<'a> Ui<'a> {
         st.scroll = st.scroll.max(0.0);
 
         // Draw.
-        let bg = if focused { t.bg } else if resp.hovered { t.control_hover } else { t.control };
+        let bg = if focused {
+            t.bg
+        } else if resp.hovered {
+            t.control_hover
+        } else {
+            t.control
+        };
         self.canvas.fill_rounded_rect(r, t.radius, bg);
         let border = if focused { t.accent } else { t.border };
         self.canvas.stroke_rounded_rect(r, t.radius, if focused { 1.5 } else { 1.0 }, border);
@@ -194,9 +242,25 @@ impl<'a> Ui<'a> {
             self.canvas.fill_rect(sel_rect, t.selection);
         }
         if value.is_empty() && !placeholder.is_empty() {
-            self.ctx.text.draw(&mut self.canvas, font, size, text_x as f32, baseline.floor_px(), placeholder, t.text_faint);
+            self.ctx.text.draw(
+                &mut self.canvas,
+                font,
+                size,
+                text_x as f32,
+                baseline.floor_px(),
+                placeholder,
+                t.text_faint,
+            );
         } else {
-            self.ctx.text.draw(&mut self.canvas, font, size, text_x as f32 - st.scroll, baseline.floor_px(), value, t.text);
+            self.ctx.text.draw(
+                &mut self.canvas,
+                font,
+                size,
+                text_x as f32 - st.scroll,
+                baseline.floor_px(),
+                value,
+                t.text,
+            );
         }
         if focused {
             let phase = ((self.now() - st.blink_start) / 530_000_000) % 2;
@@ -211,7 +275,7 @@ impl<'a> Ui<'a> {
         if resp.hovered {
             self.set_cursor(Cursor::Text);
         }
-        self.ctx.state.edits.insert(id, st);
+        self.state.edits.insert(id, st);
         out
     }
 }

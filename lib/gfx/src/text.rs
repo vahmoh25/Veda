@@ -147,7 +147,16 @@ impl Text {
     }
 
     /// Draws word-wrapped text from the top of `r`; returns the height used.
-    pub fn draw_wrapped(&mut self, c: &mut Canvas, font: usize, size: f32, r: Rect, text: &str, color: Color, align: Align) -> i32 {
+    pub fn draw_wrapped(
+        &mut self,
+        c: &mut Canvas,
+        font: usize,
+        size: f32,
+        r: Rect,
+        text: &str,
+        color: Color,
+        align: Align,
+    ) -> i32 {
         let m = self.metrics(font, size);
         let lines = self.wrap(font, size, text, r.w as f32);
         let mut y = r.y as f32 + m.ascent;

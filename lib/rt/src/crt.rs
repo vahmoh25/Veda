@@ -187,7 +187,8 @@ strlen:
 3:
     sub rax, rcx
     ret
-"#);
+"#
+);
 
 /// Tells the MSVC toolchain that floating point is used.
 #[unsafe(no_mangle)]

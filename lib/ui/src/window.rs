@@ -150,7 +150,8 @@ impl Window {
         let per = (s.stride * s.height) as usize;
         // SAFETY: the mapping holds BUFFERS buffers of `per` pixels; the
         // compositor only reads the one on screen.
-        let pixels = unsafe { core::slice::from_raw_parts_mut((s.map.as_ptr() as *mut u32).add(per * index as usize), per) };
+        let pixels =
+            unsafe { core::slice::from_raw_parts_mut((s.map.as_ptr() as *mut u32).add(per * index as usize), per) };
         Ok(Canvas::new(pixels, s.width, s.height, s.stride))
     }
 

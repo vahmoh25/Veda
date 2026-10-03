@@ -70,7 +70,8 @@ fn dropdown_size(ui: &Ui, items: &[MenuItem]) -> (i32, i32) {
             h += SEP_H;
             continue;
         }
-        let lw = ui.measure(&it.label, Font::Regular, size) as i32 + ui.measure(&it.shortcut, Font::Regular, size) as i32;
+        let lw =
+            ui.measure(&it.label, Font::Regular, size) as i32 + ui.measure(&it.shortcut, Font::Regular, size) as i32;
         w = w.max(lw + 90);
         h += ITEM_H;
     }
@@ -89,6 +90,28 @@ fn item_at(items: &[MenuItem], rect: Rect, x: i32, y: i32) -> Option<usize> {
             return (!it.separator && it.enabled).then_some(i);
         }
         cy += h;
+    }
+    None
+}
+
+/// The next selectable item after (or before) `cur`, wrapping around; with
+/// no `cur`, the first (or last) one.
+fn step_enabled(items: &[MenuItem], cur: Option<usize>, forward: bool) -> Option<usize> {
+    let n = items.len();
+    if n == 0 {
+        return None;
+    }
+    let mut i = match (cur, forward) {
+        (Some(c), true) => c + 1,
+        (Some(c), false) => c + n - 1,
+        (None, true) => 0,
+        (None, false) => n - 1,
+    } % n;
+    for _ in 0..n {
+        if items[i].enabled && !items[i].separator {
+            return Some(i);
+        }
+        i = if forward { (i + 1) % n } else { (i + n - 1) % n };
     }
     None
 }
@@ -133,23 +156,41 @@ impl<'a> Ui<'a> {
     /// Handles and schedules drawing of an open dropdown at `rect`; returns
     /// the chosen item. Clicking outside or pressing Esc closes it.
     fn run_dropdown(&mut self, rect: Rect, items: &[MenuItem], close: &mut bool) -> Option<usize> {
-        let p = self.input.pointer;
-        let hovered = p.and_then(|(x, y)| item_at(items, rect, x, y));
+        let input = self.menu_input;
+        let p = input.pointer;
+        let pointed = p.and_then(|(x, y)| item_at(items, rect, x, y));
+        // The keyboard highlight holds until the pointer moves.
+        let mut key = self.state.menu_key.filter(|&(i, at)| at == p && i < items.len()).map(|(i, _)| i);
         let mut chosen = None;
-        if self.input.released[0] {
-            if let Some(i) = hovered {
-                chosen = Some(i);
-                *close = true;
+        for k in &input.keys {
+            let cur = key.or(pointed);
+            match k.code {
+                keys::DOWN => key = step_enabled(items, cur, true),
+                keys::UP => key = step_enabled(items, cur, false),
+                keys::HOME => key = step_enabled(items, None, true),
+                keys::END => key = step_enabled(items, None, false),
+                keys::ENTER | keys::KPENTER | keys::SPACE => {
+                    if let Some(i) = cur.filter(|&i| items[i].enabled && !items[i].separator) {
+                        chosen = Some(i);
+                        *close = true;
+                    }
+                }
+                keys::ESC => *close = true,
+                _ => {}
             }
         }
-        if self.input.pressed[0] && !p.is_some_and(|(x, y)| rect.contains(x, y)) {
+        if input.released[0]
+            && let Some(i) = pointed
+        {
+            chosen = Some(i);
             *close = true;
         }
-        if self.input.key(keys::ESC) {
+        if input.pressed[0] && !p.is_some_and(|(x, y)| rect.contains(x, y)) {
             *close = true;
         }
+        self.state.menu_key = if *close { None } else { key.map(|i| (i, p)) };
         self.new_overlay_rects.push(rect);
-        self.overlays.push(Overlay::Menu { rect, items: items.to_vec(), hovered });
+        self.overlays.push(Overlay::Menu { rect, items: items.to_vec(), hovered: key.or(pointed) });
         chosen
     }
 
@@ -157,7 +198,7 @@ impl<'a> Ui<'a> {
     pub fn menu_bar(&mut self, r: Rect, menus: &[Menu]) -> Option<(usize, usize)> {
         let id = self.id("menubar") ^ r.y as u64;
         let t = self.ctx.theme.clone();
-        let open = match self.ctx.state.open_menu {
+        let open = match self.state.open_menu {
             Some((mid, i)) if mid == id => Some(i),
             _ => None,
         };
@@ -183,6 +224,23 @@ impl<'a> Ui<'a> {
             self.label(tr, &m.title, Font::Regular, t.font_size, t.text, Align::Center);
             x += w;
         }
+        // Keyboard: F10 opens the first menu, Left/Right move between menus;
+        // a menu opened this way highlights its first item.
+        let n = menus.len();
+        let before = new_open;
+        for k in &self.menu_input.keys {
+            new_open = match (k.code, new_open) {
+                (keys::F10, None) if n > 0 => Some(0),
+                (keys::LEFT, Some(i)) => Some((i + n - 1) % n),
+                (keys::RIGHT, Some(i)) => Some((i + 1) % n),
+                (_, cur) => cur,
+            };
+        }
+        if new_open != before
+            && let Some(i) = new_open
+        {
+            self.state.menu_key = step_enabled(&menus[i].items, None, true).map(|it| (it, self.menu_input.pointer));
+        }
         if let Some(i) = new_open {
             let (w, h) = dropdown_size(self, &menus[i].items);
             let tr = title_rects[i];
@@ -195,29 +253,34 @@ impl<'a> Ui<'a> {
                     result = Some((i, item));
                 }
                 // A press on the title bar row toggles handled above.
-                if close && self.input.pointer.is_some_and(|(px, py)| title_rects.iter().any(|t| t.contains(px, py))) && result.is_none() {
+                if close
+                    && self.input.pointer.is_some_and(|(px, py)| title_rects.iter().any(|t| t.contains(px, py)))
+                    && result.is_none()
+                {
                     close = false;
                 }
             } else {
+                let hovered = self.state.menu_key.map(|(item, _)| item);
                 self.new_overlay_rects.push(rect);
-                self.overlays.push(Overlay::Menu { rect, items: menus[i].items.clone(), hovered: None });
+                self.overlays.push(Overlay::Menu { rect, items: menus[i].items.clone(), hovered });
             }
             new_open = if close { None } else { Some(i) };
         }
-        self.ctx.state.open_menu = new_open.map(|i| (id, i));
+        self.state.open_menu = new_open.map(|i| (id, i));
         result
     }
 
     /// Opens a context menu at (x, y) (window coordinates).
     pub fn open_context_menu(&mut self, id_label: &str, x: i32, y: i32) {
         let id = self.id(id_label) ^ 0xc0e7;
-        self.ctx.state.context_menu = Some((id, x, y));
+        self.state.context_menu = Some((id, x, y));
+        self.state.menu_key = None;
     }
 
     /// Shows the context menu `id_label` if open; returns the chosen item.
     pub fn context_menu(&mut self, id_label: &str, items: &[MenuItem]) -> Option<usize> {
         let id = self.id(id_label) ^ 0xc0e7;
-        let Some((cid, x, y)) = self.ctx.state.context_menu else { return None };
+        let (cid, x, y) = self.state.context_menu?;
         if cid != id {
             return None;
         }
@@ -232,7 +295,7 @@ impl<'a> Ui<'a> {
             self.run_dropdown(rect, items, &mut close)
         };
         if close {
-            self.ctx.state.context_menu = None;
+            self.state.context_menu = None;
         }
         chosen
     }
