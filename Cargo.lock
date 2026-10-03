@@ -1262,7 +1262,6 @@ name = "vagent"
 version = "0.1.0"
 dependencies = [
  "vjson",
- "vmath",
 ]
 
 [[package]]

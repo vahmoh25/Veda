@@ -8,7 +8,7 @@
 //! transcript that addresses the agent by name ([`vagent::wake::addressed`])
 //! wakes it, and becomes the first thing the user said in the conversation.
 //!
-//! The detector is [`vagent::vad::Detector`]. Recognition costs a fraction
+//! The detector is [`vaudio::vad::Vad`]. Recognition costs a fraction
 //! of a conversation, and a budget caps how
 //! long it may run each hour, so a television or music playing all day
 //! cannot run up the bill.
@@ -18,8 +18,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use vabi::{RawHandle, signals};
-use vagent::vad::Detector;
 use vagent::{deepgram, wake};
+use vaudio::vad::Vad;
 use vjson::object;
 use vweb::ws::{Message, WebSocket};
 use vweb::{Conn, WebError};
@@ -49,7 +49,7 @@ pub struct Listener {
     name: String,
     key: String,
     url: String,
-    detector: Detector,
+    vad: Vad,
     /// Audio not yet a whole frame.
     partial: Vec<i16>,
     preroll: VecDeque<i16>,
@@ -75,7 +75,7 @@ impl Listener {
             name: name.into(),
             key: key.into(),
             url,
-            detector: Detector::new(),
+            vad: Vad::new(MIC_RATE),
             partial: Vec::new(),
             preroll: VecDeque::with_capacity(PREROLL),
             held: Vec::new(),
@@ -113,7 +113,8 @@ impl Listener {
         let whole = self.partial.len() / FRAME * FRAME;
         let frames: Vec<i16> = self.partial.drain(..whole).collect();
         for f in frames.chunks(FRAME) {
-            let speaking = self.detector.frame(f);
+            self.vad.process(f);
+            let speaking = self.vad.speaking();
             if speaking {
                 self.last_speech_ns = now;
             }

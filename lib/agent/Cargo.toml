@@ -7,7 +7,6 @@ license.workspace = true
 
 [dependencies]
 vjson = { workspace = true }
-vmath = { workspace = true }
 
 [lints]
 workspace = true

@@ -12,7 +12,8 @@
 //! 16 kHz mono, and the echo canceller removes the system's own playback,
 //! taken from the mixer's [`Reference`](crate::mixer::Reference) at the
 //! moment the frames were recorded (the driver publishes a capture
-//! clock). The canceller estimates the remaining delay itself.
+//! clock). The canceller ([`vaudio::aec`]) estimates the remaining delay
+//! itself; how well it does is logged once a minute while it works.
 //!
 //! **Power.** The device records only while some stream is open: the
 //! service sets the ring's CAPTURE flag and signals `wake_event` when the
@@ -28,14 +29,18 @@ use vaudio::resample::Resampler;
 use vproto::audio::{AudioError, DeviceFormat, InputHandle, InputLink, InputSpec, Ring, RingError, Role, ring};
 use vrt::object::Event;
 
-use crate::echo::EchoCanceller;
 use crate::mixer::Mixer;
+use vaudio::aec::EchoCanceller;
 
 /// Capture stream ids carry this bit, so `close` can tell them from
 /// playback streams.
 pub const ID_BIT: u32 = 0x8000_0000;
 /// Rate and channel count of echo-cancelled streams.
 pub const ECHO_RATE: u32 = 16_000;
+/// Echo-cancelled audio is processed in 10 ms frames.
+const ECHO_FRAME: usize = (ECHO_RATE / 100) as usize;
+/// How often the canceller's performance is logged.
+const ECHO_REPORT_NS: u64 = 60_000_000_000;
 /// Echo path length the canceller models.
 const ECHO_TAIL_MS: u32 = 250;
 /// Largest block taken from the device at once.
@@ -73,6 +78,7 @@ struct EchoPath {
     pending: Vec<i16>,
     /// Time the newest pending sample was recorded.
     pending_end_ns: u64,
+    report_at_ns: u64,
 }
 
 pub struct Capture {
@@ -219,6 +225,7 @@ impl Capture {
                 canceller: EchoCanceller::new(ECHO_RATE, ECHO_TAIL_MS),
                 pending: Vec::new(),
                 pending_end_ns: 0,
+                report_at_ns: 0,
             });
         }
         self.streams.insert(
@@ -334,7 +341,7 @@ impl Capture {
                 echo.pending.extend_from_slice(&self.resampled[..got]);
             }
             echo.pending_end_ns = end_ns;
-            let frame = EchoCanceller::FRAME;
+            let frame = ECHO_FRAME;
             let whole = echo.pending.len() / frame * frame;
             if whole == 0 {
                 return;
@@ -354,12 +361,17 @@ impl Capture {
             for s in self.streams.values_mut().filter(|s| s.echo_cancel) {
                 write_stream(s, &cleaned, end_ns);
             }
+            if end_ns >= echo.report_at_ns {
+                if echo.report_at_ns != 0 && echo.canceller.converged() {
+                    let c = &echo.canceller;
+                    match c.echo_delay_ms() {
+                        Some(d) => vrt::println!("echo cancellation: {:.0} dB, echo delay {:.0} ms", c.erle_db(), d),
+                        None => vrt::println!("echo cancellation: {:.0} dB", c.erle_db()),
+                    }
+                }
+                echo.report_at_ns = end_ns + ECHO_REPORT_NS;
+            }
         }
-    }
-
-    /// Diagnostics for the log: how well the canceller is doing.
-    pub fn echo_report(&self) -> Option<(f32, Option<f32>)> {
-        self.echo.as_ref().map(|e| (e.canceller.erle_db(), e.canceller.echo_delay_ms()))
     }
 }
 

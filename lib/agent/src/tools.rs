@@ -245,10 +245,13 @@ pub fn definitions() -> Vec<Value> {
         ),
         function(
             MEMORY,
-            "Your long-term memory of the user. Remember things worth keeping (their name, preferences, people, plans, how they like things done); search it; forget on request.",
+            "Your long-term memory of the user. Remember only what the user plainly told you about themselves \
+             (their name, people in their life, plans, likes and dislikes, how they want things done) or asked you \
+             to remember — never your own guesses or impressions, and nothing about this conversation itself \
+             (thanks, goodbyes, how long answers were). Also search it, and forget on request.",
             &[
                 choice("operation", "What to do", true, &["remember", "search", "forget", "forget_all"]),
-                opt("text", "string", "What to remember, or what to search for or forget"),
+                opt("text", "string", "What to remember, in the user's terms, or what to search for or forget"),
                 choice("kind", "For remember", false, &["fact", "preference", "habit"]),
                 opt("id", "integer", "For forget: the memory's id"),
             ],

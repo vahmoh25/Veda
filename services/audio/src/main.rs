@@ -20,7 +20,6 @@
 extern crate alloc;
 
 mod capture;
-mod echo;
 mod mixer;
 
 use alloc::collections::BTreeMap;
