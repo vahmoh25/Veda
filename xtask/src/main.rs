@@ -159,9 +159,33 @@ fn generate_assets() -> Result {
     }
     Ok(())
 }
+/// The contents of the boot disk apart from its configuration file.
+struct System {
+    bootloader: Vec<u8>,
+    kernel: Vec<u8>,
+    initrd: Vec<u8>,
+}
+
 /// Builds all components and writes the bootable disk image.
 fn build(o: &Options) -> Result<PathBuf> {
     let started = std::time::Instant::now();
+    let system = build_system(o)?;
+    let (disk, size) = write_image(o, &system)?;
+    util::status(
+        "Finished",
+        format!(
+            "{} (kernel {}, initrd {}) in {:.1}s",
+            util::human_size(size),
+            util::human_size(system.kernel.len() as u64),
+            util::human_size(system.initrd.len() as u64),
+            started.elapsed().as_secs_f32()
+        ),
+    );
+    Ok(disk)
+}
+
+/// Builds all components and packs the initrd.
+fn build_system(o: &Options) -> Result<System> {
     let artifacts = components::build_all(o.profile, &o.skip)?;
     if o.generate {
         generate_assets()?;
@@ -194,15 +218,19 @@ fn build(o: &Options) -> Result<PathBuf> {
         }
     }
     let initrd = initrd.build();
+    let bootloader = util::read(&artifacts.bootloader)?;
+    let kernel = util::read(&artifacts.kernel)?;
+    vpe::PeImage::parse(&kernel).map_err(|e| format!("kernel image is invalid: {e}"))?;
+    Ok(System { bootloader, kernel, initrd })
+}
 
+/// Writes the disk image of `system` with the boot configuration of `o`
+/// (resolution and kernel command line); returns its path and size.
+fn write_image(o: &Options, system: &System) -> Result<(PathBuf, u64)> {
     let boot_cfg = format!(
         "# Vindows boot configuration (read by the UEFI loader)\nresolution={}\ncmdline={}\n",
         o.resolution, o.cmdline
     );
-    let bootloader = util::read(&artifacts.bootloader)?;
-    let kernel = util::read(&artifacts.kernel)?;
-    vpe::PeImage::parse(&kernel).map_err(|e| format!("kernel image is invalid: {e}"))?;
-
     let out = util::out_dir();
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     let disk = out.join("vindows.img");
@@ -210,24 +238,14 @@ fn build(o: &Options) -> Result<PathBuf> {
     let size = image::write_disk_image(
         &disk,
         &image::EspContents {
-            bootloader: &bootloader,
-            kernel: &kernel,
-            initrd: &initrd,
+            bootloader: &system.bootloader,
+            kernel: &system.kernel,
+            initrd: &system.initrd,
             symbols: &[],
             boot_cfg: &boot_cfg,
         },
     )?;
-    util::status(
-        "Finished",
-        format!(
-            "{} (kernel {}, initrd {}) in {:.1}s",
-            util::human_size(size),
-            util::human_size(kernel.len() as u64),
-            util::human_size(initrd.len() as u64),
-            started.elapsed().as_secs_f32()
-        ),
-    );
-    Ok(disk)
+    Ok((disk, size))
 }
 
 fn run(o: &Options) -> Result {
@@ -246,13 +264,23 @@ fn run(o: &Options) -> Result {
 
 /// Boots headless and runs an automation script (see `automate.rs`).
 fn script(o: &Options, script: &str) -> Result {
+    script_on(o, script, None)
+}
+
+/// Runs an automation script on `system`, or on a fresh build if `None`.
+/// Only the boot configuration differs between scripts, so test runs build
+/// the system once and just write a new disk image for each script.
+fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     let install = qemu::QemuInstall::locate()?;
     let mut o = o.clone();
     for extra in automate::boot_cmdline(script) {
         o.cmdline = format!("{} {extra}", o.cmdline).trim().to_string();
     }
     let o = &o;
-    let disk = build(o)?;
+    let disk = match system {
+        Some(system) => write_image(o, system)?.0,
+        None => build(o)?,
+    };
     let mut vm = o.vm.clone();
     vm.audio_wav = Some(util::out_dir().join("audio.wav"));
     // Scripts that reboot the machine need QEMU to stay up across it.
@@ -303,6 +331,10 @@ fn test(o: &Options) -> Result {
         }
         util::run(&mut cmd)?;
     }
+    // One build serves every boot below.
+    let started = std::time::Instant::now();
+    let system = build_system(o)?;
+    util::status("Built", format!("the system in {:.1}s", started.elapsed().as_secs_f32()));
     util::status("Testing", "integration tests inside Vindows (QEMU)");
     let mut o = o.clone();
     o.cmdline = format!("{} systest", o.cmdline).trim().to_string();
@@ -310,7 +342,7 @@ fn test(o: &Options) -> Result {
     // to come back before the screenshot.
     let checks =
         "fail-on \"systest: FAIL\"\nwait-serial \"systest: PASS\" 240\nwait 3\nshot target/vindows/test-desktop.png\n";
-    script(&o, checks)?;
+    script_on(&o, checks, Some(&system))?;
     if o.ui {
         let dir = util::workspace_root().join("tests").join("ui");
         let mut scripts: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -326,7 +358,7 @@ fn test(o: &Options) -> Result {
             let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
             let mut ui = o.clone();
             ui.cmdline.clear();
-            script(&ui, &text).map_err(|e| format!("{name}: {e}"))?;
+            script_on(&ui, &text, Some(&system)).map_err(|e| format!("{name}: {e}"))?;
         }
     }
     util::status("Passed", "all tests");
