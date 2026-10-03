@@ -36,6 +36,9 @@ pub struct PerCpu {
     pub online: AtomicBool,
     /// Accumulated time spent in the idle thread (ns).
     pub idle_ns: AtomicU64,
+    /// This idle CPU was sent a reschedule IPI and has not run the
+    /// scheduler since: further wake-ups pick another CPU.
+    pub resched_pending: AtomicBool,
 }
 
 // SAFETY: each PerCpu is mutated only by its own CPU (or under the BKL);
@@ -56,6 +59,7 @@ const fn new_percpu(id: u32) -> PerCpu {
         tlb_flush_done: AtomicU64::new(0),
         online: AtomicBool::new(false),
         idle_ns: AtomicU64::new(0),
+        resched_pending: AtomicBool::new(false),
     }
 }
 

@@ -125,7 +125,9 @@ fn after_wakeup(prio: u8) {
     {
         cpu_sched().need_resched = true;
     }
-    // Wake one idle CPU (other than us) to pick up the work.
+    // Wake one idle CPU (other than us) to pick up the work: one that has
+    // not been woken already, so that threads made ready together (a thread
+    // pool's workers, say) start on different CPUs at once.
     for p in percpu::online() {
         if p.cpu_id == me {
             continue;
@@ -133,7 +135,7 @@ fn after_wakeup(prio: u8) {
         // SAFETY: reading another CPU's current thread pointer under the BKL;
         // it only changes while that CPU holds the BKL.
         let idle = unsafe { (*p.sched.get()).current.as_ref().is_some_and(|t| t.is_idle) };
-        if idle {
+        if idle && !p.resched_pending.swap(true, Ordering::AcqRel) {
             apic::send_ipi(p.apic_id, idt::RESCHED_VECTOR as u32);
             break;
         }
@@ -238,6 +240,7 @@ fn arm_timer(running_idle: bool) {
 /// blocking or exiting; a `Running` current thread is preempted only if
 /// another thread of at least its priority is ready.
 pub fn schedule() {
+    percpu::current().resched_pending.store(false, Ordering::Release);
     let cs = cpu_sched();
     cs.need_resched = false;
     let cur = cs.current.clone().expect("schedule() without a current thread");
