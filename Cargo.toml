@@ -24,6 +24,7 @@ members = [
     "lib/files",
     "lib/v3d",
     "lib/audio",
+    "lib/entropy",
     "services/init",
     "services/vfs",
     "services/devmgr",
@@ -48,6 +49,9 @@ members = [
     "drivers/virtio-blk",
     "tests/systest",
 ]
+# Vendored third-party crates are path dependencies, not members (their own
+# tests and dev-dependencies stay out of this workspace). See third_party/.
+exclude = ["third_party"]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
 # inside Vindows is cross-built by `cargo xtask build`, which knows the correct
 # target for every component.
@@ -81,6 +85,7 @@ vtext = { path = "lib/text" }
 vfiles = { path = "lib/files" }
 v3d = { path = "lib/v3d" }
 vaudio = { path = "lib/audio" }
+ventropy = { path = "lib/entropy" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

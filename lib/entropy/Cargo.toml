@@ -1,0 +1,9 @@
+[package]
+name = "ventropy"
+description = "ChaCha20, BLAKE2s and the random generator behind the kernel's random system call"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

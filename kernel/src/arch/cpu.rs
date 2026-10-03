@@ -139,6 +139,7 @@ pub struct Features {
     pub tsc_deadline: bool,
     pub invariant_tsc: bool,
     pub rdrand: bool,
+    pub rdseed: bool,
     pub page_1g: bool,
     pub pat: bool,
     pub umip: bool,
@@ -159,6 +160,7 @@ static mut FEATURES: Features = Features {
     tsc_deadline: false,
     invariant_tsc: false,
     rdrand: false,
+    rdseed: false,
     page_1g: false,
     pat: false,
     umip: false,
@@ -189,6 +191,7 @@ pub fn detect_features() -> Features {
         tsc_deadline: l1.ecx & (1 << 24) != 0,
         invariant_tsc: max_ext >= 0x8000_0007 && cpuid(0x8000_0007, 0).edx & (1 << 8) != 0,
         rdrand: l1.ecx & (1 << 30) != 0,
+        rdseed: l7.ebx & (1 << 18) != 0,
         page_1g: ext.edx & (1 << 26) != 0,
         pat: l1.edx & (1 << 16) != 0,
         umip: l7.ecx & (1 << 2) != 0,
@@ -304,31 +307,37 @@ pub fn user_access_end() {
     }
 }
 
-/// Fills `buf` with hardware random numbers (RDRAND) mixed with the TSC.
-pub fn hardware_random(buf: &mut [u8]) {
-    let mut seed = rdtsc() ^ 0x9E37_79B9_7F4A_7C15;
-    for chunk in buf.chunks_mut(8) {
-        let mut v: u64 = 0;
-        if features().rdrand {
-            let mut ok: u8;
-            for _ in 0..10 {
-                // SAFETY: RDRAND is supported (checked above).
-                unsafe {
-                    asm!("rdrand {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok, options(nomem, nostack))
-                };
-                if ok != 0 {
-                    break;
-                }
-            }
-        }
-        // splitmix64 over TSC so the output is unpredictable even without
-        // RDRAND.
-        seed = seed.wrapping_add(0x9E37_79B9_7F4A_7C15 ^ rdtsc());
-        let mut z = seed;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        let bytes = (v ^ z).to_le_bytes();
-        chunk.copy_from_slice(&bytes[..chunk.len()]);
+/// Reads one 64-bit value from RDSEED (conditioned hardware entropy), or
+/// `None` if the instruction is unsupported or keeps failing.
+pub fn rdseed() -> Option<u64> {
+    if !features().rdseed {
+        return None;
     }
+    for _ in 0..64 {
+        let (v, ok): (u64, u8);
+        // SAFETY: RDSEED is supported (checked above).
+        unsafe { asm!("rdseed {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok, options(nomem, nostack)) };
+        if ok != 0 {
+            return Some(v);
+        }
+        core::hint::spin_loop();
+    }
+    None
+}
+
+/// Reads one 64-bit value from RDRAND (the hardware DRBG), or `None` if the
+/// instruction is unsupported or keeps failing.
+pub fn rdrand() -> Option<u64> {
+    if !features().rdrand {
+        return None;
+    }
+    for _ in 0..10 {
+        let (v, ok): (u64, u8);
+        // SAFETY: RDRAND is supported (checked above).
+        unsafe { asm!("rdrand {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok, options(nomem, nostack)) };
+        if ok != 0 {
+            return Some(v);
+        }
+    }
+    None
 }

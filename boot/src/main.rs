@@ -158,6 +158,17 @@ impl Firmware {
         tables.iter().find(|t| t.vendor_guid == *guid).map(|t| t.vendor_table as u64)
     }
 
+    /// Random bytes from `EFI_RNG_PROTOCOL` for the kernel's generator.
+    /// Returns the buffer and the number of valid bytes (0 if the firmware
+    /// has no RNG; the kernel then relies on CPU and timing sources).
+    fn entropy(&self) -> ([u8; bootinfo::ENTROPY_MAX], usize) {
+        let mut buf = [0u8; bootinfo::ENTROPY_MAX];
+        let Ok(rng) = self.locate::<RngProtocol>(&RNG_PROTOCOL) else { return (buf, 0) };
+        // SAFETY: a valid protocol instance and a buffer of the stated size.
+        let s = unsafe { ((*rng).get_rng)(rng, ptr::null(), buf.len(), buf.as_mut_ptr()) };
+        if is_error(s) { ([0; bootinfo::ENTROPY_MAX], 0) } else { (buf, buf.len()) }
+    }
+
     fn boot_time(&self) -> BootTime {
         let mut t = Time::default();
         // SAFETY: runtime services are valid during boot.
@@ -382,6 +393,8 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
 
     let rsdp_phys = fw.config_table(&ACPI_20_TABLE).or_else(|| fw.config_table(&ACPI_10_TABLE)).unwrap_or(0);
     let boot_time = fw.boot_time();
+    let (entropy, entropy_len) = fw.entropy();
+    log!("entropy: {} bytes from the firmware RNG", entropy_len);
 
     // Allocate everything the kernel will receive before taking the final
     // memory map.
@@ -508,7 +521,8 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
             boot_stack: PhysRegion { base: stack, size: BOOT_STACK_SIZE },
             cmdline,
             cmdline_len: cfg.cmdline_len as u32,
-            _reserved: 0,
+            entropy_len: entropy_len as u32,
+            entropy,
         });
     }
     log!("handing over to the kernel ({} memory regions)", merged);

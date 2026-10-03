@@ -150,6 +150,9 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-device", "virtio-blk-pci,drive=home,serial=vindows-home"]);
     }
     cmd.args(["-device", "virtio-tablet-pci"]);
+    // Host entropy for the firmware's EFI_RNG_PROTOCOL, which seeds the
+    // kernel's random number generator.
+    cmd.args(["-device", "virtio-rng-pci"]);
     cmd.args(["-vga", "std"]);
     if cfg.audio {
         match &cfg.audio_wav {

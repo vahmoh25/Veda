@@ -67,7 +67,8 @@ pub mod nr {
     pub const SYSTEM_INFO: usize = 5;
     /// `system_power(resource, action)`.
     pub const SYSTEM_POWER: usize = 6;
-    /// `random(buf, len)`: fill a buffer with kernel entropy.
+    /// `random(buf, len)`: fill a buffer (at most 4096 bytes) with output of
+    /// the kernel's cryptographically secure generator.
     pub const RANDOM: usize = 7;
 
     // --- handles and objects ------------------------------------------

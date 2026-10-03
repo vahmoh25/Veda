@@ -95,7 +95,7 @@ pub fn random(buf: usize, len: usize) -> SysResult {
         return Err(Error::InvalidArgs);
     }
     let mut tmp = vec![0u8; len];
-    crate::arch::cpu::hardware_random(&mut tmp);
+    crate::random::fill(&mut tmp);
     user::copy_to_user(buf as u64, &tmp)?;
     ok(len)
 }

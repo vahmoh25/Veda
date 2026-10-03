@@ -86,6 +86,7 @@ impl Drop for Interrupt {
 
 /// Called from the trap dispatcher for device vectors (BKL held).
 pub fn dispatch(vector: u8) {
+    crate::random::add_interrupt_timing(vector);
     let irq = VECTORS.lock()[vector as usize].as_ref().and_then(|w| w.upgrade());
     match irq {
         Some(irq) => {

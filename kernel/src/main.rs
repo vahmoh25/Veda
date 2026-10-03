@@ -21,6 +21,7 @@ mod log;
 mod mm;
 mod object;
 mod panic;
+mod random;
 mod sched;
 mod sync;
 mod syscall;
@@ -127,6 +128,8 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
         if features.tsc_deadline { "TSC-deadline" } else { "one-shot" },
         if apic::is_x2apic() { "x2APIC" } else { "xAPIC" }
     );
+
+    random::init(boot.entropy());
 
     // Scheduler on the BSP; this boot context becomes CPU 0's idle thread.
     sched::init_cpu(sched::Thread::new_idle_current(0));

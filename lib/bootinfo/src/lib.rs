@@ -28,10 +28,13 @@ pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VINDBOOT");
 
 /// Version of this protocol. Bump on any layout change.
-pub const BOOTINFO_VERSION: u32 = 1;
+pub const BOOTINFO_VERSION: u32 = 2;
 
 /// Maximum length of the kernel command line, in bytes.
 pub const CMDLINE_MAX: usize = 256;
+
+/// Size of the entropy seed the loader passes to the kernel.
+pub const ENTROPY_MAX: usize = 64;
 
 /// Everything the kernel needs to know about the machine at boot.
 #[repr(C)]
@@ -67,8 +70,11 @@ pub struct BootInfo {
     pub cmdline: [u8; CMDLINE_MAX],
     /// Number of valid bytes in [`BootInfo::cmdline`].
     pub cmdline_len: u32,
-    /// Reserved for future use; zero.
-    pub _reserved: u32,
+    /// Number of valid bytes in [`BootInfo::entropy`].
+    pub entropy_len: u32,
+    /// Random bytes from the firmware's `EFI_RNG_PROTOCOL` (if it has one),
+    /// which seed the kernel's random number generator.
+    pub entropy: [u8; ENTROPY_MAX],
 }
 
 impl BootInfo {
@@ -76,6 +82,11 @@ impl BootInfo {
     pub fn cmdline(&self) -> &str {
         let len = (self.cmdline_len as usize).min(CMDLINE_MAX);
         core::str::from_utf8(&self.cmdline[..len]).unwrap_or("")
+    }
+
+    /// The firmware entropy seed (empty if the firmware had none).
+    pub fn entropy(&self) -> &[u8] {
+        &self.entropy[..(self.entropy_len as usize).min(ENTROPY_MAX)]
     }
 
     /// Returns `true` if the magic, version and size fields are what this

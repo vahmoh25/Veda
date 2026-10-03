@@ -285,6 +285,10 @@ name = "vbuild"
 version = "0.1.0"
 
 [[package]]
+name = "ventropy"
+version = "0.1.0"
+
+[[package]]
 name = "vfiles"
 version = "0.1.0"
 dependencies = [
@@ -383,6 +387,7 @@ dependencies = [
  "bootinfo",
  "initrd",
  "vabi",
+ "ventropy",
  "vpe",
 ]
 
