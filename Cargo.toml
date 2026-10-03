@@ -20,13 +20,31 @@ members = [
     "lib/virtio",
     "lib/gfx",
     "lib/ui",
+    "lib/text",
+    "lib/v3d",
+    "lib/audio",
     "services/init",
     "services/vfs",
     "services/devmgr",
     "services/compositor",
     "apps/about",
+    "apps/shell",
+    "apps/editor",
+    "apps/photos",
+    "apps/music",
+    "apps/terminal",
+    "apps/taskmgr",
+    "apps/files",
+    "apps/settings",
+    "games/racer",
+    "games/starfall",
+    "drivers/virtio-snd",
+    "services/audio",
+    "tools/assetgen",
+    "tools/musicgen",
     "drivers/virtio-input",
     "drivers/ps2",
+    "drivers/virtio-blk",
     "tests/systest",
 ]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
@@ -58,6 +76,9 @@ vproto = { path = "lib/proto" }
 vvirtio = { path = "lib/virtio" }
 vgfx = { path = "lib/gfx" }
 vui = { path = "lib/ui" }
+vtext = { path = "lib/text" }
+v3d = { path = "lib/v3d" }
+vaudio = { path = "lib/audio" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -66,6 +87,9 @@ missing_debug_implementations = "allow"
 [workspace.lints.clippy]
 missing_safety_doc = "allow"
 new_without_default = "allow"
+# Drawing functions take a canvas, font, size, position, text and colour;
+# bundling those into structs would only obscure the call sites.
+too_many_arguments = "allow"
 
 # The OS is always built with `panic = "abort"`: there is no unwinder in
 # Vindows. (Cargo ignores this for `cargo test`, which needs unwinding.)

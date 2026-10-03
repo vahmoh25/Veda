@@ -20,10 +20,14 @@ impl QemuInstall {
             .map(PathBuf::from)
             .or_else(|| util::find_on_path("qemu-system-x86_64"))
             .or_else(|| {
-                [r"C:\Program Files\qemu\qemu-system-x86_64.exe", "/usr/bin/qemu-system-x86_64", "/opt/homebrew/bin/qemu-system-x86_64"]
-                    .iter()
-                    .map(PathBuf::from)
-                    .find(|p| p.is_file())
+                [
+                    r"C:\Program Files\qemu\qemu-system-x86_64.exe",
+                    "/usr/bin/qemu-system-x86_64",
+                    "/opt/homebrew/bin/qemu-system-x86_64",
+                ]
+                .iter()
+                .map(PathBuf::from)
+                .find(|p| p.is_file())
             })
             .ok_or("QEMU not found: install it or set the QEMU environment variable")?;
 
@@ -68,6 +72,11 @@ pub struct VmConfig {
     pub gdb: bool,
     /// Allow the guest to terminate QEMU with an exit code (tests).
     pub debug_exit: bool,
+    /// Disk image holding the user's home directory (serial `vindows-home`).
+    pub home_disk: Option<PathBuf>,
+    /// Let the guest reboot (otherwise a reset, e.g. after a triple fault,
+    /// stops QEMU).
+    pub allow_reboot: bool,
     /// Extra raw QEMU arguments.
     pub extra: Vec<String>,
 }
@@ -84,16 +93,39 @@ impl Default for VmConfig {
             qmp_port: None,
             gdb: false,
             debug_exit: false,
+            home_disk: None,
+            allow_reboot: false,
             extra: Vec::new(),
         }
     }
+}
+
+/// Size of a new home disk.
+const HOME_DISK_BYTES: u64 = 64 << 20;
+
+/// Creates an empty home disk at `path` (replacing any existing one when
+/// `fresh`). An empty disk makes Vindows start a new home directory.
+pub fn prepare_home_disk(path: &Path, fresh: bool) -> Result {
+    if fresh || !path.exists() {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let f = std::fs::File::create(path).map_err(|e| format!("creating {}: {e}", path.display()))?;
+        f.set_len(HOME_DISK_BYTES).map_err(|e| format!("sizing {}: {e}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// Builds the QEMU command line for booting `disk`.
 pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) -> Command {
     let mut cmd = Command::new(&install.binary);
     let flash = |file: &Path, ro: bool| {
-        format!("if=pflash,format=raw,unit={},{}file={}", if ro { 0 } else { 1 }, if ro { "readonly=on," } else { "" }, file.display())
+        format!(
+            "if=pflash,format=raw,unit={},{}file={}",
+            if ro { 0 } else { 1 },
+            if ro { "readonly=on," } else { "" },
+            file.display()
+        )
     };
     cmd.args(["-name", "Vindows"]);
     cmd.args(["-machine", "q35"]);
@@ -112,7 +144,11 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-drive", &flash(&install.ovmf_code, true)]);
     cmd.args(["-drive", &flash(vars, false)]);
     cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,file={}", disk.display())]);
-    cmd.args(["-device", "virtio-blk-pci,drive=disk0,bootindex=0"]);
+    cmd.args(["-device", "virtio-blk-pci,drive=disk0,bootindex=0,serial=vindows-boot"]);
+    if let Some(home) = &cfg.home_disk {
+        cmd.args(["-drive", &format!("id=home,if=none,format=raw,file={}", home.display())]);
+        cmd.args(["-device", "virtio-blk-pci,drive=home,serial=vindows-home"]);
+    }
     cmd.args(["-device", "virtio-tablet-pci"]);
     cmd.args(["-vga", "std"]);
     if cfg.audio {
@@ -140,7 +176,9 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     if cfg.gdb {
         cmd.args(["-s", "-S"]);
     }
-    cmd.args(["-no-reboot"]);
+    if !cfg.allow_reboot {
+        cmd.args(["-no-reboot"]);
+    }
     cmd.args(&cfg.extra);
     cmd
 }

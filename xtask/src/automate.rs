@@ -11,11 +11,16 @@
 //! move 0.5 0.5                     # move the pointer (fractions of screen)
 //! click 0.1 0.97 [left|right]      # move + press + release
 //! drag 0.3 0.3 0.6 0.6             # press at A, move to B, release
+//! mouse-down 0.3 0.3 / mouse-up      # press (at a point) and release separately
 //! key ctrl-alt-t                   # press a key combination (QEMU qcodes)
+//! key-down alt / key-up alt         # hold or release a single key
 //! type "hello world"               # type ASCII text
 //! expect-serial "PASS"             # fail unless the log contains the text
 //! reject-serial "panic"            # fail if the log contains the text
 //! fail-on "PANIC"                  # abort later waits as soon as the text appears
+//! reset                            # reboot (disks are kept); later waits see only new output
+//! boot-cmdline "run=about"        # extra kernel command line, applied before boot
+//! double-click 0.05 0.44           # two quick clicks
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -33,6 +38,9 @@ pub struct Session {
     pub serial_log: PathBuf,
     /// Serial log patterns that abort any wait immediately.
     pub fail_patterns: Vec<String>,
+    /// Byte offset in the serial log where `wait-serial` and `expect-serial`
+    /// start looking (moved past the output of earlier boots by `reset`).
+    since: usize,
 }
 
 impl Session {
@@ -53,21 +61,40 @@ impl Session {
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
         let child = cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?;
         let qmp = Qmp::connect(port, Duration::from_secs(20))?;
-        Ok(Session { child, qmp, serial_log, fail_patterns: Vec::new() })
+        // Kernel panics print "PANIC", user-space panics "panicked at".
+        let fail_patterns = vec!["PANIC".into(), "panicked at".into()];
+        Ok(Session { child, qmp, serial_log, fail_patterns, since: 0 })
     }
 
+    fn serial_bytes(&self) -> Vec<u8> {
+        std::fs::read(&self.serial_log).unwrap_or_default()
+    }
+
+    /// The whole serial log.
     pub fn serial(&self) -> String {
-        std::fs::read(&self.serial_log).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+        String::from_utf8_lossy(&self.serial_bytes()).into_owned()
+    }
+
+    /// The serial log since the last `reset`.
+    pub fn recent(&self) -> String {
+        let b = self.serial_bytes();
+        String::from_utf8_lossy(&b[self.since.min(b.len())..]).into_owned()
+    }
+
+    /// Resets the machine (a reboot that keeps the disks).
+    pub fn reset(&mut self) -> Result {
+        self.since = self.serial_bytes().len();
+        self.qmp.execute("system_reset", "{}").map(|_| ())
     }
 
     /// Waits until the serial log contains `needle`.
     pub fn wait_serial(&mut self, needle: &str, timeout: Duration) -> Result {
         let start = Instant::now();
         loop {
-            let log = self.serial();
-            if log.contains(needle) {
+            if self.recent().contains(needle) {
                 return Ok(());
             }
+            let log = self.serial();
             if let Some(p) = self.fail_patterns.iter().find(|p| log.contains(p.as_str())) {
                 return Err(format!("serial log contains failure pattern \"{p}\""));
             }
@@ -129,6 +156,17 @@ fn num(w: &[String], i: usize) -> Result<f64> {
     w.get(i).ok_or("missing argument")?.parse::<f64>().map_err(|_| format!("'{}' is not a number", w[i]))
 }
 
+/// The `boot-cmdline` arguments of a script (they must be known before the
+/// disk image is built, as the command line is part of it).
+pub fn boot_cmdline(script: &str) -> Vec<String> {
+    script
+        .lines()
+        .map(words)
+        .filter(|w| w.first().is_some_and(|c| c == "boot-cmdline"))
+        .filter_map(|w| w.get(1).cloned())
+        .collect()
+}
+
 /// Runs an automation script against a fresh VM booted from `disk`.
 pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str) -> Result<String> {
     let mut s = Session::start(install, disk, vm)?;
@@ -175,17 +213,36 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
                     s.qmp.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
+                "boot-cmdline" => {}
+                "reset" => s.reset().map_err(ctx)?,
+                "mouse-down" => {
+                    s.qmp.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
+                    std::thread::sleep(Duration::from_millis(80));
+                    s.qmp.mouse_button("left", true).map_err(ctx)?;
+                }
+                "mouse-up" => s.qmp.mouse_button("left", false).map_err(ctx)?,
+                "double-click" => {
+                    s.qmp.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
+                    for _ in 0..2 {
+                        std::thread::sleep(Duration::from_millis(60));
+                        s.qmp.mouse_button("left", true).map_err(ctx)?;
+                        std::thread::sleep(Duration::from_millis(60));
+                        s.qmp.mouse_button("left", false).map_err(ctx)?;
+                    }
+                }
                 "key" => s.qmp.send_keys(w.get(1).ok_or("missing key")?).map_err(ctx)?,
+                "key-down" => s.qmp.key_event(w.get(1).ok_or("missing key")?, true).map_err(ctx)?,
+                "key-up" => s.qmp.key_event(w.get(1).ok_or("missing key")?, false).map_err(ctx)?,
                 "type" => s.qmp.type_text(w.get(1).ok_or("missing text")?).map_err(ctx)?,
                 "expect-serial" => {
                     let needle = w.get(1).ok_or("missing text")?;
-                    if !s.serial().contains(needle.as_str()) {
+                    if !s.recent().contains(needle.as_str()) {
                         return Err(ctx(format!("serial log does not contain \"{needle}\"")));
                     }
                 }
                 "reject-serial" => {
                     let needle = w.get(1).ok_or("missing text")?;
-                    if s.serial().contains(needle.as_str()) {
+                    if s.recent().contains(needle.as_str()) {
                         return Err(ctx(format!("serial log contains \"{needle}\"")));
                     }
                 }
@@ -195,6 +252,11 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
         Ok(())
     })();
     let log = s.serial();
+    // Something may also have failed after the last wait.
+    let result = result.and_then(|()| match s.fail_patterns.iter().find(|p| log.contains(p.as_str())) {
+        Some(p) => Err(format!("serial log contains failure pattern \"{p}\"")),
+        None => Ok(()),
+    });
     s.finish();
     result.map(|_| log.clone()).map_err(|e| format!("{e}\n--- serial log ---\n{}", tail(&log, 60)))
 }

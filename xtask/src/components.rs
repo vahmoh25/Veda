@@ -31,9 +31,22 @@ pub const PROGRAMS: &[Program] = &[
     Program { package: "systest", binary: "systest" },
     Program { package: "devmgr", binary: "devmgr" },
     Program { package: "virtio-input", binary: "virtio-input" },
+    Program { package: "virtio-blk", binary: "virtio-blk" },
     Program { package: "ps2", binary: "ps2" },
     Program { package: "compositor", binary: "compositor" },
     Program { package: "about", binary: "about" },
+    Program { package: "racer", binary: "racer" },
+    Program { package: "starfall", binary: "starfall" },
+    Program { package: "virtio-snd", binary: "virtio-snd" },
+    Program { package: "audio", binary: "audio" },
+    Program { package: "music", binary: "music" },
+    Program { package: "photos", binary: "photos" },
+    Program { package: "terminal", binary: "terminal" },
+    Program { package: "taskmgr", binary: "taskmgr" },
+    Program { package: "files", binary: "files" },
+    Program { package: "settings", binary: "settings" },
+    Program { package: "editor", binary: "editor" },
+    Program { package: "shell", binary: "shell" },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,7 +79,7 @@ pub struct Artifacts {
 }
 
 fn target_dir() -> PathBuf {
-    util::workspace_root().join("target")
+    util::target_dir()
 }
 
 fn build_uefi(package: &str, profile: Profile) -> Result<PathBuf> {
@@ -75,25 +88,27 @@ fn build_uefi(package: &str, profile: Profile) -> Result<PathBuf> {
     Ok(target_dir().join(UEFI_TARGET).join(profile.dir()).join(format!("{package}.efi")))
 }
 
-fn build_programs(profile: Profile) -> Result<Vec<(Program, PathBuf)>> {
-    if PROGRAMS.is_empty() {
+/// Builds every program except those named in `skip`.
+fn build_programs(profile: Profile, skip: &[String]) -> Result<Vec<(Program, PathBuf)>> {
+    let programs: Vec<Program> = PROGRAMS.iter().copied().filter(|p| !skip.iter().any(|s| s == p.package)).collect();
+    if programs.is_empty() {
         return Ok(Vec::new());
     }
-    util::status("Building", format!("{} user-space programs ({USER_TARGET})", PROGRAMS.len()));
+    util::status("Building", format!("{} user-space programs ({USER_TARGET})", programs.len()));
     let mut cmd = util::cargo();
     cmd.args(["build", "--target", USER_TARGET]).args(profile.cargo_flag());
-    for p in PROGRAMS {
+    for p in &programs {
         cmd.args(["--package", p.package]);
     }
     util::run(&mut cmd)?;
     let dir = target_dir().join(USER_TARGET).join(profile.dir());
-    Ok(PROGRAMS.iter().map(|p| (*p, dir.join(format!("{}.exe", p.binary)))).collect())
+    Ok(programs.iter().map(|p| (*p, dir.join(format!("{}.exe", p.binary)))).collect())
 }
 
-/// Builds the loader, the kernel and all user-space programs.
-pub fn build_all(profile: Profile) -> Result<Artifacts> {
+/// Builds the loader, the kernel and the user-space programs (all but `skip`).
+pub fn build_all(profile: Profile, skip: &[String]) -> Result<Artifacts> {
     let bootloader = build_uefi("vboot", profile)?;
     let kernel = build_uefi("vkernel", profile)?;
-    let programs = build_programs(profile)?;
+    let programs = build_programs(profile, skip)?;
     Ok(Artifacts { bootloader, kernel, programs })
 }

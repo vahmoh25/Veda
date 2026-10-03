@@ -64,8 +64,7 @@ impl Qmp {
     /// Presses and releases a key combination given in QEMU's `qcode` names
     /// joined by `-` (e.g. `ctrl-alt-t`, `ret`, `a`).
     pub fn send_keys(&mut self, combo: &str) -> Result {
-        let keys: Vec<String> =
-            combo.split('-').map(|k| format!("{{\"type\":\"qcode\",\"data\":\"{k}\"}}")).collect();
+        let keys: Vec<String> = combo.split('-').map(|k| format!("{{\"type\":\"qcode\",\"data\":\"{k}\"}}")).collect();
         self.execute("send-key", &format!("{{\"keys\":[{}]}}", keys.join(","))).map(|_| ())
     }
 
@@ -88,6 +87,28 @@ impl Qmp {
                 '\'' => "apostrophe".into(),
                 '(' => "shift-9".into(),
                 ')' => "shift-0".into(),
+                '\t' => "tab".into(),
+                '=' => "equal".into(),
+                '+' => "shift-equal".into(),
+                '_' => "shift-minus".into(),
+                '[' => "bracket_left".into(),
+                ']' => "bracket_right".into(),
+                '{' => "shift-bracket_left".into(),
+                '}' => "shift-bracket_right".into(),
+                '\\' => "backslash".into(),
+                '|' => "shift-backslash".into(),
+                '"' => "shift-apostrophe".into(),
+                '<' => "shift-comma".into(),
+                '>' => "shift-dot".into(),
+                '`' => "grave_accent".into(),
+                '~' => "shift-grave_accent".into(),
+                '@' => "shift-2".into(),
+                '#' => "shift-3".into(),
+                '$' => "shift-4".into(),
+                '%' => "shift-5".into(),
+                '^' => "shift-6".into(),
+                '&' => "shift-7".into(),
+                '*' => "shift-8".into(),
                 _ => continue,
             };
             self.send_keys(&combo)?;
@@ -111,6 +132,14 @@ impl Qmp {
     pub fn mouse_button(&mut self, button: &str, down: bool) -> Result {
         let events =
             format!("{{\"events\":[{{\"type\":\"btn\",\"data\":{{\"button\":\"{button}\",\"down\":{down}}}}}]}}");
+        self.execute("input-send-event", &events).map(|_| ())
+    }
+
+    /// Presses or releases one key (QEMU qcode), e.g. to hold a modifier.
+    pub fn key_event(&mut self, qcode: &str, down: bool) -> Result {
+        let events = format!(
+            "{{\"events\":[{{\"type\":\"key\",\"data\":{{\"down\":{down},\"key\":{{\"type\":\"qcode\",\"data\":\"{qcode}\"}}}}}}]}}"
+        );
         self.execute("input-send-event", &events).map(|_| ())
     }
 

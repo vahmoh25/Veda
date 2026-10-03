@@ -4,10 +4,6 @@ use super::fat32::SECTOR;
 
 /// Type GUID of an EFI System Partition.
 const ESP_TYPE_GUID: [u8; 16] = guid(0xC12A7328, 0xF81F, 0x11D2, [0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B]);
-/// Type GUID of a "Microsoft basic data" partition, used for the Vindows data
-/// volume so that the host OS can also mount it.
-pub const BASIC_DATA_GUID: [u8; 16] =
-    guid(0xEBD0A0A2, 0xB9E5, 0x4433, [0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7]);
 
 const ENTRY_COUNT: usize = 128;
 const ENTRY_SIZE: usize = 128;

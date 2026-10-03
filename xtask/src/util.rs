@@ -10,9 +10,33 @@ pub fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("xtask lives in the workspace").to_path_buf()
 }
 
-/// Directory that receives the assembled image and QEMU state.
+/// Directory that receives the assembled image and QEMU state
+/// (`$VINDOWS_OUT` overrides it, so several builds can run side by side).
 pub fn out_dir() -> PathBuf {
-    workspace_root().join("target").join("vindows")
+    match std::env::var_os("VINDOWS_OUT") {
+        Some(p) => {
+            let p = PathBuf::from(p);
+            if p.is_absolute() { p } else { workspace_root().join(p) }
+        }
+        None => workspace_root().join("target").join("vindows"),
+    }
+}
+
+/// Cargo's target directory (`$CARGO_TARGET_DIR` overrides it).
+pub fn target_dir() -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(p) => {
+            let p = PathBuf::from(p);
+            if p.is_absolute() { p } else { workspace_root().join(p) }
+        }
+        None => workspace_root().join("target"),
+    }
+}
+
+/// Where build-time generated assets (wallpapers, sample media) go; they
+/// are installed into the system image like `assets/`.
+pub fn generated_dir() -> PathBuf {
+    workspace_root().join("target").join("generated")
 }
 
 /// Runs `cmd`, streaming its output, and fails if it does not succeed.

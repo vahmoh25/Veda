@@ -27,6 +27,7 @@ COMMANDS:
     shot        Boot headless, wait, and save a screenshot (dev aid)
     script FILE Boot headless and run an automation script (see automate.rs)
     test        Run host unit tests, then the in-system integration tests
+                (--ui also runs the GUI automation scripts in tests/ui)
     clean       Remove build outputs
     doctor      Check that the required tools are installed
     help        Show this message
@@ -35,6 +36,8 @@ BUILD OPTIONS:
     --debug             Build without optimisations (slow under emulation)
     --resolution WxH    Preferred screen resolution (default 1280x800)
     --cmdline \"...\"     Extra kernel command line arguments
+    --no-generate       Reuse the media in target/generated instead of regenerating it
+    --skip PROGRAM      Leave a program out of the image (repeatable)
 
 RUN OPTIONS:
     --smp N             Number of virtual CPUs (default 4)
@@ -44,6 +47,7 @@ RUN OPTIONS:
     --serial FILE       Write the serial console to FILE instead of the terminal
     --gdb               Wait for a debugger on localhost:1234
     --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
+    --fresh-home        Start with a new home directory (deletes target/vindows/home.img)
 
 SHOT OPTIONS:
     --wait SECS         Seconds to wait before the screenshot (default 10)
@@ -61,6 +65,14 @@ struct Options {
     wait: f64,
     until: Option<String>,
     out: Option<PathBuf>,
+    /// `test`: also run the GUI scripts in `tests/ui`.
+    ui: bool,
+    /// Run the media generators (off: reuse what `target/generated` has).
+    generate: bool,
+    /// Programs left out of the image.
+    skip: Vec<String>,
+    /// `run`: start with a new, empty home directory.
+    fresh_home: bool,
 }
 
 fn parse_options(args: &[String]) -> Result<Options> {
@@ -72,6 +84,10 @@ fn parse_options(args: &[String]) -> Result<Options> {
         wait: 10.0,
         until: None,
         out: None,
+        ui: false,
+        generate: true,
+        skip: Vec::new(),
+        fresh_home: false,
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -91,16 +107,65 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--wait" => o.wait = value(arg)?.parse().map_err(|_| "--wait expects seconds")?,
             "--until" => o.until = Some(value(arg)?),
             "--out" => o.out = Some(PathBuf::from(value(arg)?)),
+            "--ui" => o.ui = true,
+            "--no-generate" => o.generate = false,
+            "--skip" => o.skip.push(value(arg)?),
+            "--fresh-home" => o.fresh_home = true,
             other => return Err(format!("unknown option '{other}' (see `cargo xtask help`)")),
         }
     }
     Ok(o)
 }
 
+/// Host tools that generate media into `target/generated` at build time,
+/// with the source directories (the tool and the libraries it uses) whose
+/// changes make it run again.
+const GENERATORS: &[(&str, &[&str])] = &[
+    ("assetgen", &["tools/assetgen", "lib/image"]),
+    ("musicgen", &["tools/musicgen", "lib/audio", "lib/image", "lib/math"]),
+];
+
+/// Newest modification time of any file under `dir`.
+fn newest_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
+    let mut newest = None;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).ok()?.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(t) = e.metadata().and_then(|m| m.modified()) {
+                newest = Some(newest.map_or(t, |n: std::time::SystemTime| n.max(t)));
+            }
+        }
+    }
+    newest
+}
+
+/// Runs each generator whose sources changed since its last run.
+fn generate_assets() -> Result {
+    let out = util::generated_dir();
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    for (g, sources) in GENERATORS {
+        let stamp = out.join(format!(".{g}.stamp"));
+        let stamp_time = std::fs::metadata(&stamp).and_then(|m| m.modified()).ok();
+        let src_time = sources.iter().filter_map(|s| newest_mtime(&util::workspace_root().join(s))).max();
+        if stamp_time.is_some() && src_time.is_some() && stamp_time >= src_time {
+            continue;
+        }
+        util::status("Generating", format!("media with {g}"));
+        util::run(util::cargo().args(["run", "--quiet", "--release", "--package", g, "--"]).arg(&out))?;
+        std::fs::write(&stamp, b"ok").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 /// Builds all components and writes the bootable disk image.
 fn build(o: &Options) -> Result<PathBuf> {
     let started = std::time::Instant::now();
-    let artifacts = components::build_all(o.profile)?;
+    let artifacts = components::build_all(o.profile, &o.skip)?;
+    if o.generate {
+        generate_assets()?;
+    }
 
     util::status("Packing", "initrd");
     let mut initrd = initrd::builder::Builder::new();
@@ -110,17 +175,21 @@ fn build(o: &Options) -> Result<PathBuf> {
     initrd.add("etc/version", format!("Vindows {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
     // Everything under assets/ is installed at the same relative path
     // (assets/fonts/X -> /system/fonts/X); README files are documentation.
-    let assets = util::workspace_root().join("assets");
-    let mut stack = vec![assets.clone()];
-    while let Some(dir) = stack.pop() {
-        let entries = std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.file_name().is_some_and(|n| n != "README.md") {
-                let rel = path.strip_prefix(&assets).unwrap().to_string_lossy().replace('\\', "/");
-                initrd.add(&rel, util::read(&path)?);
+    for assets in [util::workspace_root().join("assets"), util::generated_dir()] {
+        if !assets.is_dir() {
+            continue;
+        }
+        let mut stack = vec![assets.clone()];
+        while let Some(dir) = stack.pop() {
+            let entries = std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.file_name().is_some_and(|n| n != "README.md") {
+                    let rel = path.strip_prefix(&assets).unwrap().to_string_lossy().replace('\\', "/");
+                    initrd.add(&rel, util::read(&path)?);
+                }
             }
         }
     }
@@ -140,7 +209,13 @@ fn build(o: &Options) -> Result<PathBuf> {
     util::status("Imaging", disk.display());
     let size = image::write_disk_image(
         &disk,
-        &image::EspContents { bootloader: &bootloader, kernel: &kernel, initrd: &initrd, symbols: &[], boot_cfg: &boot_cfg },
+        &image::EspContents {
+            bootloader: &bootloader,
+            kernel: &kernel,
+            initrd: &initrd,
+            symbols: &[],
+            boot_cfg: &boot_cfg,
+        },
     )?;
     util::status(
         "Finished",
@@ -159,7 +234,12 @@ fn run(o: &Options) -> Result {
     let install = qemu::QemuInstall::locate()?;
     let disk = build(o)?;
     let vars = qemu::vars_file(&install)?;
-    let mut cmd = qemu::command(&install, &disk, &vars, &o.vm);
+    // The home directory lives on its own disk, kept across builds and runs.
+    let home = util::out_dir().join("home.img");
+    qemu::prepare_home_disk(&home, o.fresh_home)?;
+    let mut vm = o.vm.clone();
+    vm.home_disk = Some(home);
+    let mut cmd = qemu::command(&install, &disk, &vars, &vm);
     util::status("Running", format!("{}", install.binary.display()));
     util::run(&mut cmd)
 }
@@ -167,9 +247,20 @@ fn run(o: &Options) -> Result {
 /// Boots headless and runs an automation script (see `automate.rs`).
 fn script(o: &Options, script: &str) -> Result {
     let install = qemu::QemuInstall::locate()?;
+    let mut o = o.clone();
+    for extra in automate::boot_cmdline(script) {
+        o.cmdline = format!("{} {extra}", o.cmdline).trim().to_string();
+    }
+    let o = &o;
     let disk = build(o)?;
     let mut vm = o.vm.clone();
     vm.audio_wav = Some(util::out_dir().join("audio.wav"));
+    // Scripts that reboot the machine need QEMU to stay up across it.
+    vm.allow_reboot = script.lines().any(|l| l.trim() == "reset");
+    // Every scripted run starts with a new, empty home directory.
+    let home = util::out_dir().join("test-home.img");
+    qemu::prepare_home_disk(&home, true)?;
+    vm.home_disk = Some(home);
     let log = automate::run_script(&install, &disk, vm, script)?;
     println!("--- serial log (tail) ---\n{}", automate::tail(&log, 40));
     Ok(())
@@ -195,6 +286,10 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vraster", &[]),
     ("vfont", &[]),
     ("vimage", &[]),
+    ("vaudio", &[]),
+    ("vproto", &[]),
+    ("vgfx", &[]),
+    ("vtext", &[]),
     ("xtask", &[]),
 ];
 
@@ -211,8 +306,29 @@ fn test(o: &Options) -> Result {
     util::status("Testing", "integration tests inside Vindows (QEMU)");
     let mut o = o.clone();
     o.cmdline = format!("{} systest", o.cmdline).trim().to_string();
-    let checks = "fail-on \"PANIC\"\nfail-on \"systest: FAIL\"\nwait-serial \"systest: PASS\" 240\nshot target/vindows/test-desktop.png\n";
+    // The last test restarts the window system; give the desktop a moment
+    // to come back before the screenshot.
+    let checks =
+        "fail-on \"systest: FAIL\"\nwait-serial \"systest: PASS\" 240\nwait 3\nshot target/vindows/test-desktop.png\n";
     script(&o, checks)?;
+    if o.ui {
+        let dir = util::workspace_root().join("tests").join("ui");
+        let mut scripts: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map_err(|e| format!("reading {}: {e}", dir.display()))?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "vts"))
+            .collect();
+        scripts.sort();
+        for path in scripts {
+            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            util::status("Testing", format!("GUI script {name}"));
+            let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+            let mut ui = o.clone();
+            ui.cmdline.clear();
+            script(&ui, &text).map_err(|e| format!("{name}: {e}"))?;
+        }
+    }
     util::status("Passed", "all tests");
     Ok(())
 }
@@ -241,6 +357,7 @@ fn doctor() -> Result {
             }
         }),
     );
+    check("msvc (C++ compiler and linker)", vbuild::find_msvc().map(|m| m.cl.display().to_string()));
     match qemu::QemuInstall::locate() {
         Ok(q) => {
             check("qemu", Ok(q.binary.display().to_string()));

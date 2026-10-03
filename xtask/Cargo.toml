@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 initrd = { workspace = true, features = ["std"] }
 vpe = { workspace = true }
+vbuild = { workspace = true }
 
 [lints]
 workspace = true

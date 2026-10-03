@@ -13,6 +13,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "assetgen"
+version = "0.1.0"
+dependencies = [
+ "vimage",
+]
+
+[[package]]
+name = "audio"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vaudio",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
 name = "bootinfo"
 version = "0.1.0"
 
@@ -34,11 +53,40 @@ dependencies = [
 name = "devmgr"
 version = "0.1.0"
 dependencies = [
+ "initrd",
  "vabi",
  "vbuild",
  "vipc",
  "vproto",
  "vrt",
+]
+
+[[package]]
+name = "editor"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vmath",
+ "vproto",
+ "vrt",
+ "vtext",
+ "vui",
+]
+
+[[package]]
+name = "files"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vimage",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vui",
 ]
 
 [[package]]
@@ -58,12 +106,106 @@ name = "initrd"
 version = "0.1.0"
 
 [[package]]
+name = "music"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vaudio",
+ "vbuild",
+ "vgfx",
+ "vipc",
+ "vmath",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
+name = "musicgen"
+version = "0.1.0"
+dependencies = [
+ "vaudio",
+ "vimage",
+]
+
+[[package]]
+name = "photos"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vimage",
+ "vmath",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
 name = "ps2"
 version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
  "vipc",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
+name = "racer"
+version = "0.1.0"
+dependencies = [
+ "v3d",
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vmath",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
+name = "settings"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vimage",
+ "vipc",
+ "vmath",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
+name = "shell"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vimage",
+ "vipc",
+ "vmath",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
+name = "starfall"
+version = "0.1.0"
+dependencies = [
+ "v3d",
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vmath",
  "vproto",
  "vrt",
 ]
@@ -80,8 +222,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "taskmgr"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
+name = "terminal"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
+name = "v3d"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vmath",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
 name = "vabi"
 version = "0.1.0"
+
+[[package]]
+name = "vaudio"
+version = "0.1.0"
+dependencies = [
+ "vmath",
+]
 
 [[package]]
 name = "vboot"
@@ -140,7 +327,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "virtio-blk"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vvirtio",
+]
+
+[[package]]
 name = "virtio-input"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vvirtio",
+]
+
+[[package]]
+name = "virtio-snd"
 version = "0.1.0"
 dependencies = [
  "vabi",
@@ -192,6 +403,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vtext"
+version = "0.1.0"
+
+[[package]]
 name = "vui"
 version = "0.1.0"
 dependencies = [
@@ -218,5 +433,6 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "initrd",
+ "vbuild",
  "vpe",
 ]
