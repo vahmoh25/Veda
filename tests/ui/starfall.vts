@@ -1,0 +1,17 @@
+# Starfall: start a game, let the computer fly into the first wave and
+# pause. The game must keep rendering (its frame statistics reach the log).
+boot-cmdline "run=starfall"
+fail-on "PANIC"
+wait-serial "starfall: ready" 90
+wait 3
+shot target/vindows/starfall-1-title.png
+key ret
+wait 1
+key f8
+wait-serial "starfall: level 1 wave 1" 20
+wait 10
+shot target/vindows/starfall-2-play.png
+expect-serial "fps, work"
+key esc
+wait 2
+shot target/vindows/starfall-3-paused.png
