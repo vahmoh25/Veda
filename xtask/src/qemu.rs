@@ -159,7 +159,13 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-device", "virtio-sound-pci,audiodev=audio0,streams=1"]);
     }
     if cfg.display {
-        cmd.args(["-display", "sdl"]);
+        // Not SDL: when the guest's virtio tablet driver starts, QEMU
+        // switches to absolute pointing on the vCPU thread, and its SDL front
+        // end then grabs the mouse if the pointer is over the window; on
+        // Windows that call waits for the window's thread, which waits for
+        // the vCPU: QEMU deadlocks right after the boot splash (seen with
+        // QEMU 11.1 whenever the window had the focus). GTK does not grab.
+        cmd.args(["-display", "gtk"]);
     } else {
         cmd.args(["-display", "none"]);
     }
