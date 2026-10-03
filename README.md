@@ -44,15 +44,13 @@ crates (smoltcp, RustCrypto).
 
 ## Screenshots
 
-![The Text Editor and Photos, each snapped to half of the screen](docs/images/editor-photos.png)
-
-| ![The start menu](docs/images/start.png) | ![Music](docs/images/music.png) |
+| ![The Text Editor with a Rust program](docs/images/editor.png) | ![Photos with the picture library](docs/images/photos.png) |
 |:---:|:---:|
+| Text Editor | Photos |
+| ![The start menu](docs/images/start.png) | ![Music](docs/images/music.png) |
 | The start menu | Music |
 | ![Files](docs/images/files.png) | ![Terminal](docs/images/terminal.png) |
 | Files | Terminal |
-| ![The network flyout with the Wi-Fi networks in range](docs/images/wifi.png) | ![Settings: Network & Internet](docs/images/settings-network.png) |
-| Wi-Fi networks | Settings: Network & Internet |
 | ![Velocity](docs/images/velocity.png) | ![Starfall](docs/images/starfall.png) |
 | *Velocity* | *Starfall* |
 

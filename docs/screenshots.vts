@@ -3,9 +3,9 @@
 #   cargo xtask script docs/screenshots.vts
 #
 # which writes docs/images/*.png. Applications are started from the start
-# menu's search and the Terminal, so only Music's play button and the
-# taskbar's network icon are clicked by position. The machine has the
-# virtual Wi-Fi radio and airsim's simulated networks.
+# menu's search and the Terminal, so only Music's play button is clicked by
+# position. The machine has the virtual Wi-Fi radio (its icon is on the
+# taskbar) and airsim's simulated networks.
 net wifi
 fail-on "PANIC"
 wait-serial "desktop ready" 90
@@ -47,25 +47,26 @@ move 0.97 0.08
 wait 3
 shot docs/images/terminal.png
 
-# A Rust program in the Text Editor next to the picture library, each
-# snapped to half of the screen.
-type "edit Documents/primes.rs && run photos && exit"
+# A Rust program in the Text Editor.
+type "edit Documents/primes.rs && exit"
 key ret
-wait-serial "started photos" 30
-wait 10
-key meta_l-right
-wait 2
-key-down alt
-key tab
-key-up alt
-wait 2
-key meta_l-left
-move 0.75 0.06
-wait 4
-shot docs/images/editor-photos.png
+wait-serial "started editor" 30
+move 0.97 0.08
+wait 6
+shot docs/images/editor.png
 key alt-f4
 wait-serial "editor exited" 20
 wait 2
+
+# Photos: the picture library.
+key meta_l
+wait 2
+type "photos"
+key ret
+wait-serial "started photos" 30
+move 0.97 0.08
+wait 10
+shot docs/images/photos.png
 key alt-f4
 wait-serial "photos exited" 20
 wait 2
@@ -139,28 +140,3 @@ shot docs/images/starfall.png
 key alt-f4
 wait-serial "starfall exited" 20
 wait 2
-
-# Wi-Fi: join "Vindows Home" from the Terminal, then show the network
-# flyout and the network page of Settings.
-key meta_l
-wait 2
-type "terminal"
-key ret
-wait-serial "started terminal" 30
-wait 4
-type "wifi connect 'Vindows Home' vindows-wifi && settings network && exit"
-key ret
-wait-serial "connected to Vindows Home" 90
-wait-serial "started settings" 30
-wait-serial "Routable via wlan0" 60
-move 0.97 0.08
-wait 8
-shot docs/images/settings-network.png
-key alt-f4
-wait-serial "settings exited" 20
-wait 2
-click 0.859 0.97
-wait 3
-move 0.6 0.3
-wait 3
-shot docs/images/wifi.png
