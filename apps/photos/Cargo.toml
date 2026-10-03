@@ -1,0 +1,26 @@
+[package]
+name = "photos"
+description = "Photos: picture library and viewer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "photos"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vimage = { workspace = true }
+vmath = { workspace = true }
+vui = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

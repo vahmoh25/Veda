@@ -1,0 +1,32 @@
+# Photos error and empty states, driven from the Terminal (1280x800 screen): a
+# file that is not a picture, the library around it, and an empty folder.
+boot-cmdline "run=terminal"
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait 8
+type "echo not a picture "
+key shift-dot
+type " /home/user/Pictures/Broken.png"
+key ret
+wait 2
+type "open /home/user/Pictures/Broken.png"
+key ret
+wait-serial "cannot open Broken.png" 60
+wait 5
+shot target/vindows/photos-errors-1-viewer.png
+key esc
+wait 4
+shot target/vindows/photos-errors-2-library.png
+key alt-f4
+wait 3
+type "rm /home/user/Pictures/Broken.png"
+key ret
+wait 1
+type "mkdir /tmp/empty"
+key ret
+wait 1
+type "run photos /tmp/empty"
+key ret
+wait-serial "pictures in /tmp/empty" 60
+wait 5
+shot target/vindows/photos-errors-3-empty.png

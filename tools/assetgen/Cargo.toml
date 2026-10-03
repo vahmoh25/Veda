@@ -1,0 +1,13 @@
+[package]
+name = "assetgen"
+description = "Generates Vindows wallpapers and sample media at build time"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+vimage = { workspace = true }
+
+[lints]
+workspace = true

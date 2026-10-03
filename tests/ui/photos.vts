@@ -1,0 +1,65 @@
+# Photos smoke test (1280x800 screen with the taskbar): the library, the viewer
+# (next picture, details, wheel zoom, panning, rotation), full screen, setting
+# the wallpaper and keyboard navigation. The window's client area starts at
+# (20, 36).
+boot-cmdline "run=photos"
+fail-on "PANIC"
+wait-serial "pictures in" 90
+# Thumbnails are decoded in the background.
+wait-serial "thumbnail of Still Life" 90
+wait 3
+shot target/vindows/photos-1-library.png
+# Open the first card (Alpine Lake).
+click 0.1266 0.2588
+wait-serial "opened Alpine Lake" 60
+wait 4
+shot target/vindows/photos-2-viewer.png
+# Next picture with the keyboard, then the details panel.
+key right
+wait-serial "opened City Lights" 60
+wait 3
+key i
+wait 4
+shot target/vindows/photos-3-details.png
+key i
+# Zoom in with the wheel over the picture, then pan by dragging.
+click 0.45 0.47 wheel-up
+click 0.45 0.47 wheel-up
+click 0.45 0.47 wheel-up
+wait 4
+shot target/vindows/photos-4-zoomed.png
+drag 0.45 0.47 0.62 0.57
+wait 4
+shot target/vindows/photos-5-panned.png
+# Back to fitting, rotate a quarter turn, and full screen (controls showing,
+# then hidden).
+key 0
+key r
+wait 4
+shot target/vindows/photos-6-rotated.png
+key f11
+wait 3
+move 0.5 0.3
+wait 1
+shot target/vindows/photos-7-fullscreen.png
+wait 6
+shot target/vindows/photos-8-fullscreen-idle.png
+key esc
+wait 5
+# Make the picture the wallpaper (toolbar button).
+click 0.789 0.079
+wait 2
+shot target/vindows/photos-9-wallpaper.png
+wait 15
+# Back to the library (City Lights selected); move to the next card with the
+# keyboard and open it.
+key esc
+wait 3
+key right
+wait 2
+shot target/vindows/photos-10-keyboard.png
+key ret
+wait-serial "opened Glass Orb" 60
+wait 4
+shot target/vindows/photos-11-transparent.png
+reject-serial "cannot open"

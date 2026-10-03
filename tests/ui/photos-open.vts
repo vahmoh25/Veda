@@ -1,0 +1,26 @@
+# Opening a picture from Files (1280x800 screen): Photos starts with the file's
+# path, shows it directly, and can browse the rest of its folder.
+boot-cmdline "run=files"
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait 8
+# "Pictures" in the Files sidebar, then double-click the fourth file
+# (Lighthouse.jpg, stored rotated with EXIF orientation 6).
+click 0.1383 0.36
+wait 4
+double-click 0.293 0.34
+wait-serial "opened Lighthouse" 90
+wait 5
+shot target/vindows/photos-open-1.png
+# The details show the EXIF orientation; the previous picture is a keypress away.
+key i
+wait 3
+shot target/vindows/photos-open-2.png
+key left
+wait-serial "opened Glass Orb" 60
+wait 3
+shot target/vindows/photos-open-3.png
+key esc
+wait 4
+shot target/vindows/photos-open-4.png
+reject-serial "cannot open"
