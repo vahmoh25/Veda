@@ -337,6 +337,20 @@ const GRAY_SCRIPT: [ScanSpec; 6] = [
     scan(&[0], 1, 63, 1, 0),
 ];
 
+/// A simple successive-approximation script for four-component (CMYK) images.
+const FOUR_SCRIPT: [ScanSpec; 10] = [
+    scan(&[0, 1, 2, 3], 0, 0, 0, 1),
+    scan(&[0], 1, 63, 0, 1),
+    scan(&[1], 1, 63, 0, 1),
+    scan(&[2], 1, 63, 0, 1),
+    scan(&[3], 1, 63, 0, 1),
+    scan(&[0, 1, 2, 3], 0, 0, 1, 0),
+    scan(&[0], 1, 63, 1, 0),
+    scan(&[1], 1, 63, 1, 0),
+    scan(&[2], 1, 63, 1, 0),
+    scan(&[3], 1, 63, 1, 0),
+];
+
 fn marker(out: &mut Vec<u8>, code: u8, body: &[u8]) {
     out.extend_from_slice(&[0xFF, code]);
     out.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
@@ -363,6 +377,27 @@ pub(crate) fn encode(image: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, Ima
 /// Encodes with luma sampling factors `hs x vs` (chroma is always 1x1), e.g. `(1, 2)` for 4:4:0
 /// or `(4, 1)` for 4:1:1.
 pub(crate) fn encode_sampled(image: &Image, opts: &EncodeOptions, hs: usize, vs: usize) -> Result<Vec<u8>, ImageError> {
+    encode_impl(image, opts, hs, vs, false)
+}
+
+/// Test helper: like [`encode_sampled`], but a baseline file gets one scan per component.
+#[cfg(test)]
+pub(crate) fn encode_separate_scans(
+    image: &Image,
+    opts: &EncodeOptions,
+    hs: usize,
+    vs: usize,
+) -> Result<Vec<u8>, ImageError> {
+    encode_impl(image, opts, hs, vs, true)
+}
+
+fn encode_impl(
+    image: &Image,
+    opts: &EncodeOptions,
+    hs: usize,
+    vs: usize,
+    separate_scans: bool,
+) -> Result<Vec<u8>, ImageError> {
     let (w, h) = (image.width as usize, image.height as usize);
     if image.is_empty() {
         return Err(ImageError::InvalidArgument("cannot encode an empty image"));
@@ -429,27 +464,9 @@ pub(crate) fn encode_sampled(image: &Image, opts: &EncodeOptions, hs: usize, vs:
     for (ci, plane) in planes.iter().enumerate() {
         let (ch, cv) = if ci == 0 { (hs, vs) } else { (1, 1) };
         let (cpw, cph) = (pw * ch / hs, ph * cv / vs);
-        let (bw, bh) = (cpw / 8, cph / 8);
+        let bw = cpw / 8;
         let table = if ci == 0 { 0 } else { 1 };
-        let div: [i32; 64] = tables[table].map(|q| q as i32 * 8);
-        let mut coefs = try_vec(bw * bh * 64, 0i16)?;
-        for by in 0..bh {
-            for bx in 0..bw {
-                let mut blk = [0i32; 64];
-                for (y, row) in blk.as_chunks_mut::<8>().0.iter_mut().enumerate() {
-                    let src = &plane[(by * 8 + y) * cpw + bx * 8..][..8];
-                    for (d, &s) in row.iter_mut().zip(src) {
-                        *d = s as i32 - 128;
-                    }
-                }
-                fdct(&mut blk);
-                let out = &mut coefs[(by * bw + bx) * 64..][..64];
-                for ((o, &v), &d) in out.iter_mut().zip(&blk).zip(&div) {
-                    let q = (v.abs() + d / 2) / d;
-                    *o = if v < 0 { -q } else { q } as i16;
-                }
-            }
-        }
+        let coefs = quantize_plane(plane, cpw, cph, &tables[table])?;
         comps.push(Comp {
             id: ci as u8 + 1,
             h: ch,
@@ -462,13 +479,87 @@ pub(crate) fn encode_sampled(image: &Image, opts: &EncodeOptions, hs: usize, vs:
         });
     }
     drop(planes);
+    write_file(&comps, &tables, w, h, opts, (mcus_x, mcus_y), None, separate_scans)
+}
 
-    // Headers.
+/// Forward DCT and quantization of a padded plane (`cpw x cph`, multiples of 8) into
+/// coefficients, 64 per block in natural order.
+fn quantize_plane(plane: &[u8], cpw: usize, cph: usize, qt: &[u16; 64]) -> Result<Vec<i16>, ImageError> {
+    let (bw, bh) = (cpw / 8, cph / 8);
+    let div: [i32; 64] = qt.map(|q| q as i32 * 8);
+    let mut coefs = try_vec(bw * bh * 64, 0i16)?;
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut blk = [0i32; 64];
+            for (y, row) in blk.as_chunks_mut::<8>().0.iter_mut().enumerate() {
+                let src = &plane[(by * 8 + y) * cpw + bx * 8..][..8];
+                for (d, &s) in row.iter_mut().zip(src) {
+                    *d = s as i32 - 128;
+                }
+            }
+            fdct(&mut blk);
+            let out = &mut coefs[(by * bw + bx) * 64..][..64];
+            for ((o, &v), &d) in out.iter_mut().zip(&blk).zip(&div) {
+                let q = (v.abs() + d / 2) / d;
+                *o = if v < 0 { -q } else { q } as i16;
+            }
+        }
+    }
+    Ok(coefs)
+}
+
+/// Test helper: encodes raw component planes (`w x h` each, all sampled 1x1), writing an Adobe
+/// `APP14` segment with the given color transform instead of JFIF when requested. Used to
+/// produce RGB, CMYK and YCCK files.
+/// With `separate_scans`, a baseline file gets one scan per component.
+#[cfg(test)]
+pub(crate) fn encode_planes(
+    planes: &[&[u8]],
+    w: usize,
+    h: usize,
+    adobe_transform: Option<u8>,
+    opts: &EncodeOptions,
+    separate_scans: bool,
+) -> Result<Vec<u8>, ImageError> {
+    let mcus = (w.div_ceil(8), h.div_ceil(8));
+    let (pw, ph) = (mcus.0 * 8, mcus.1 * 8);
+    let tables = [scaled_table(&STD_LUMA_Q, opts.quality), scaled_table(&STD_CHROMA_Q, opts.quality)];
+    let mut comps = Vec::new();
+    for (ci, plane) in planes.iter().enumerate() {
+        let padded: Vec<u8> =
+            (0..ph).flat_map(|y| (0..pw).map(move |x| plane[y.min(h - 1) * w + x.min(w - 1)])).collect();
+        let table = if ci == 0 { 0 } else { 1 };
+        let coefs = quantize_plane(&padded, pw, ph, &tables[table])?;
+        comps.push(Comp { id: ci as u8 + 1, h: 1, v: 1, table, bw: pw / 8, real_bw: mcus.0, real_bh: mcus.1, coefs });
+    }
+    let app14 = adobe_transform.map(|t| [b'A', b'd', b'o', b'b', b'e', 0, 100, 0, 0, 0, 0, t]);
+    write_file(&comps, &tables, w, h, opts, mcus, app14.as_ref().map(|b| (0xEE, &b[..])), separate_scans)
+}
+
+/// Writes the headers and the entropy-coded data. `app` is an application segment
+/// `(marker, body)` written instead of the JFIF `APP0` (for example an Adobe `APP14`).
+/// Baseline images are written with one interleaved scan unless `separate_scans` is set.
+#[allow(clippy::too_many_arguments)]
+fn write_file(
+    comps: &[Comp],
+    tables: &[[u16; 64]; 2],
+    w: usize,
+    h: usize,
+    opts: &EncodeOptions,
+    mcus: (usize, usize),
+    app: Option<(u8, &[u8])>,
+    separate_scans: bool,
+) -> Result<Vec<u8>, ImageError> {
+    let ncomp = comps.len();
     let mut out = Vec::new();
     out.try_reserve(w * h / 4 + 1024)?;
     out.extend_from_slice(&[0xFF, 0xD8]);
-    marker(&mut out, 0xE0, b"JFIF\0\x01\x01\x00\x00\x01\x00\x01\x00\x00");
-    for (slot, t) in tables.iter().enumerate().take(if gray { 1 } else { 2 }) {
+    match app {
+        Some((code, body)) => marker(&mut out, code, body),
+        None => marker(&mut out, 0xE0, b"JFIF\0\x01\x01\x00\x00\x01\x00\x01\x00\x00"),
+    }
+    let used_tables = if comps.iter().any(|c| c.table == 1) { 2 } else { 1 };
+    for (slot, t) in tables.iter().enumerate().take(used_tables) {
         let mut body = vec![slot as u8];
         body.extend(ZIGZAG.iter().map(|&z| t[z] as u8));
         marker(&mut out, 0xDB, &body);
@@ -477,7 +568,7 @@ pub(crate) fn encode_sampled(image: &Image, opts: &EncodeOptions, hs: usize, vs:
     sof.extend_from_slice(&(h as u16).to_be_bytes());
     sof.extend_from_slice(&(w as u16).to_be_bytes());
     sof.push(ncomp as u8);
-    for c in &comps {
+    for c in comps {
         sof.extend_from_slice(&[c.id, (c.h as u8) << 4 | c.v as u8, c.table as u8]);
     }
     marker(&mut out, if opts.progressive { 0xC2 } else { 0xC0 }, &sof);
@@ -487,12 +578,16 @@ pub(crate) fn encode_sampled(image: &Image, opts: &EncodeOptions, hs: usize, vs:
 
     let mut e = Entropy::new(out);
     if opts.progressive {
-        let script: &[ScanSpec] = if gray { &GRAY_SCRIPT } else { &COLOR_SCRIPT };
+        let script: &[ScanSpec] = match ncomp {
+            1 => &GRAY_SCRIPT,
+            3 => &COLOR_SCRIPT,
+            _ => &FOUR_SCRIPT,
+        };
         for s in script {
-            progressive_scan(&mut e, &comps, s, opts.restart_interval as usize, (mcus_x, mcus_y));
+            progressive_scan(&mut e, comps, s, opts.restart_interval as usize, mcus);
         }
     } else {
-        sequential(&mut e, &comps, opts, (mcus_x, mcus_y));
+        sequential(&mut e, comps, opts, mcus, separate_scans);
     }
     let mut out = e.w.out;
     out.extend_from_slice(&[0xFF, 0xD9]);
@@ -552,16 +647,23 @@ fn write_restart(e: &mut Entropy, n: usize) {
     }
 }
 
-fn sequential(e: &mut Entropy, comps: &[Comp], opts: &EncodeOptions, mcus: (usize, usize)) {
-    let all: Vec<usize> = (0..comps.len()).collect();
-    let order = scan_order(comps, &all, mcus, opts.restart_interval as usize);
-    let run = |e: &mut Entropy| {
-        let mut last = [0i32; 3];
-        for &step in &order {
+/// Writes a sequential (baseline) image: one interleaved scan, or one scan per component when
+/// `separate_scans` is set.
+fn sequential(e: &mut Entropy, comps: &[Comp], opts: &EncodeOptions, mcus: (usize, usize), separate_scans: bool) {
+    let scans: Vec<Vec<usize>> = if separate_scans {
+        (0..comps.len()).map(|c| alloc::vec![c]).collect()
+    } else {
+        alloc::vec![(0..comps.len()).collect()]
+    };
+    let orders: Vec<Vec<Step>> =
+        scans.iter().map(|s| scan_order(comps, s, mcus, opts.restart_interval as usize)).collect();
+    let run = |e: &mut Entropy, order: &[Step]| {
+        let mut last = [0i32; 4];
+        for &step in order {
             match step {
                 Step::Restart(n) => {
                     write_restart(e, n);
-                    last = [0; 3];
+                    last = [0; 4];
                 }
                 Step::Block(ci, bx, by) => {
                     let slot = comps[ci].table * 2;
@@ -573,7 +675,9 @@ fn sequential(e: &mut Entropy, comps: &[Comp], opts: &EncodeOptions, mcus: (usiz
     let specs: [Spec; 4] = if opts.optimize_huffman {
         e.counting = true;
         e.freq = [[0; 256]; 4];
-        run(e);
+        for order in &orders {
+            run(e, order);
+        }
         e.counting = false;
         core::array::from_fn(|i| Spec::optimal(&e.freq[i]))
     } else {
@@ -589,14 +693,17 @@ fn sequential(e: &mut Entropy, comps: &[Comp], opts: &EncodeOptions, mcus: (usiz
         write_dht(&mut e.w.out, (i % 2) as u8, (i / 2) as u8, spec);
         e.set_table(i, spec);
     }
-    let mut sos = vec![comps.len() as u8];
-    for c in comps {
-        sos.extend_from_slice(&[c.id, (c.table as u8) << 4 | c.table as u8]);
+    for (scan, order) in scans.iter().zip(&orders) {
+        let mut sos = vec![scan.len() as u8];
+        for &ci in scan {
+            let c = &comps[ci];
+            sos.extend_from_slice(&[c.id, (c.table as u8) << 4 | c.table as u8]);
+        }
+        sos.extend_from_slice(&[0, 63, 0]);
+        marker(&mut e.w.out, 0xDA, &sos);
+        run(e, order);
+        e.w.flush();
     }
-    sos.extend_from_slice(&[0, 63, 0]);
-    marker(&mut e.w.out, 0xDA, &sos);
-    run(e);
-    e.w.flush();
 }
 
 fn progressive_scan(e: &mut Entropy, comps: &[Comp], s: &ScanSpec, ri: usize, mcus: (usize, usize)) {
@@ -605,13 +712,13 @@ fn progressive_scan(e: &mut Entropy, comps: &[Comp], s: &ScanSpec, ri: usize, mc
     const AC_SLOT: usize = 2;
     let order = scan_order(comps, s.comps, mcus, ri);
     let pass = |e: &mut Entropy| {
-        let mut last = [0i32; 3];
+        let mut last = [0i32; 4];
         for &step in &order {
             match step {
                 Step::Restart(n) => {
                     e.emit_eobrun(AC_SLOT);
                     write_restart(e, n);
-                    last = [0; 3];
+                    last = [0; 4];
                 }
                 Step::Block(ci, bx, by) => {
                     let blk = comps[ci].block(bx, by);

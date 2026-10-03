@@ -303,9 +303,9 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageE
     let (w, ht) = (h.width as usize, h.height as usize);
     if h.compression == BI_RLE8 || h.compression == BI_RLE4 {
         let src = data.get(h.data_offset..).ok_or(ImageError::Truncated)?;
-        // An RLE run codes at most 255 pixels per 2 bytes, but "end of bitmap" can skip any
-        // number of rows; still require a minimum amount of data per row.
-        if src.len() < ht / 128 {
+        // A run codes at most 255 pixels per 2 bytes; "delta" and "end of bitmap" codes can skip
+        // more, but refuse to allocate more than 4096 output pixels per input byte.
+        if (src.len() as u64) * 4096 < w as u64 * ht as u64 {
             return Err(ImageError::Truncated);
         }
         let mut img = Image::try_new(h.width, h.height)?;

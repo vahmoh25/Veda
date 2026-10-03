@@ -61,7 +61,7 @@ fn kernel(filter: Filter, x: f64) -> f64 {
             }
         }
         Filter::Lanczos3 if ax < 3.0 => mathf::sinc(x) * mathf::sinc(x / 3.0),
-        // Box and Nearest never use the kernel.
+        // Outside the filter window (Box and Nearest never evaluate the kernel).
         _ => 0.0,
     }
 }

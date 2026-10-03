@@ -286,11 +286,7 @@ pub fn decode(data: &[u8]) -> Result<Image, ImageError> {
 
 /// Decodes a PNG image.
 pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageError> {
-    #[cfg(test)]
-    let t0 = std::time::Instant::now();
     let p = parse(data, options.verify_checksums, false)?;
-    #[cfg(test)]
-    let t1 = std::time::Instant::now();
     let h = p.header;
     options.check_dimensions(h.width, h.height)?;
     let raw_size = h.raw_size().ok_or(ImageError::TooLarge { width: h.width, height: h.height })?;
@@ -310,8 +306,6 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageE
         }
         inflate::zlib_decompress_exact(&joined, raw_size, options.verify_checksums)?
     };
-    #[cfg(test)]
-    let t2 = std::time::Instant::now();
 
     let conv = Converter::new(&h, p.palette, p.trns);
     let mut img = Image::try_new(h.width, h.height)?;
@@ -320,8 +314,6 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageE
     } else {
         decode_rows(&h, raw, &conv, &mut img)?;
     }
-    #[cfg(test)]
-    std::eprintln!("PNGPHASES parse+crc {:.1} ms, inflate {:.1} ms, unfilter+convert {:.1} ms", (t1 - t0).as_secs_f64() * 1e3, (t2 - t1).as_secs_f64() * 1e3, t2.elapsed().as_secs_f64() * 1e3);
     Ok(img)
 }
 

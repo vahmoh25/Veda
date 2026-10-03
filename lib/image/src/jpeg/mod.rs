@@ -31,7 +31,7 @@ mod encoder;
 mod huffman;
 
 #[cfg(test)]
-pub(crate) use encoder::encode_sampled;
+pub(crate) use encoder::{encode_planes, encode_sampled, encode_separate_scans};
 
 use alloc::vec::Vec;
 
@@ -274,6 +274,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn non_interleaved_baseline_scans() {
+        let img = photo(70, 45);
+        for (hs, vs) in [(1, 1), (2, 2), (2, 1)] {
+            for optimize_huffman in [false, true] {
+                for restart_interval in [0, 4] {
+                    let opts = EncodeOptions { optimize_huffman, restart_interval, ..Default::default() };
+                    let interleaved = decode(&encoder::encode_sampled(&img, &opts, hs, vs).unwrap()).unwrap();
+                    let file = encoder::encode_separate_scans(&img, &opts, hs, vs).unwrap();
+                    assert_eq!(file.windows(2).filter(|w| w == &[0xFF, 0xDA]).count(), 3);
+                    assert_eq!(decode(&file).unwrap(), interleaved, "{hs}x{vs} optimize {optimize_huffman}");
+                }
+            }
+        }
+        // Same for raw planes, and a file truncated after the first scan decodes as gray luma.
+        let planes: [Vec<u8>; 3] = [16, 8, 0].map(|s| img.pixels.iter().map(|&p| (p >> s) as u8).collect());
+        let opts = EncodeOptions::default();
+        let a = encode_planes(&[&planes[0], &planes[1], &planes[2]], 70, 45, None, &opts, false).unwrap();
+        let b = encode_planes(&[&planes[0], &planes[1], &planes[2]], 70, 45, None, &opts, true).unwrap();
+        assert_eq!(decode(&a).unwrap(), decode(&b).unwrap());
+        let second_scan = b.windows(2).enumerate().filter(|(_, w)| w == &[0xFF, 0xDA]).nth(1).unwrap().0;
+        let partial = decode(&b[..second_scan]).unwrap();
+        assert_eq!((partial.width, partial.height), (70, 45));
+    }
+
+    #[test]
     fn unusual_sampling_factors() {
         let img = photo(75, 41);
         for (hs, vs) in [(1, 2), (4, 1), (4, 2), (3, 1), (1, 3), (2, 4), (4, 4), (3, 2)] {
@@ -365,5 +390,75 @@ pub(crate) mod tests {
         assert!(decode(&[0xFF, 0xD8, 0xFF]).is_err());
         assert!(decode(&[]).is_err());
         let _ = vec![0u8; 0];
+    }
+}
+
+#[cfg(test)]
+mod adobe_tests {
+    use super::tests::{photo, psnr};
+    use super::*;
+
+    /// The encoder's RGB to YCbCr conversion (libjpeg's).
+    fn to_ycc(r: i32, g: i32, b: i32) -> [u8; 3] {
+        [
+            ((19595 * r + 38470 * g + 7471 * b + 32768) >> 16) as u8,
+            ((-11059 * r - 21709 * g + 32768 * b + (128 << 16) + 32767) >> 16) as u8,
+            ((32768 * r - 27439 * g - 5329 * b + (128 << 16) + 32767) >> 16) as u8,
+        ]
+    }
+
+    fn channels(img: &Image) -> [Vec<u8>; 3] {
+        [16, 8, 0].map(|s| img.pixels.iter().map(|&p| (p >> s) as u8).collect())
+    }
+
+    #[test]
+    fn adobe_rgb_cmyk_and_ycck() {
+        let img = photo(61, 37);
+        let (w, h) = (61, 37);
+        let opts = EncodeOptions { quality: 95, ..Default::default() };
+        let [r, g, b] = channels(&img);
+
+        // Adobe RGB (transform 0): components are R, G, B directly.
+        let file = encode_planes(&[&r, &g, &b], w, h, Some(0), &opts, false).unwrap();
+        assert_eq!(read_info(&file).unwrap().color_model, ColorModel::Rgb);
+        let p = psnr(&img, &decode(&file).unwrap());
+        assert!(p > 35.0, "RGB: {p:.1} dB");
+
+        // Adobe CMYK (inverted): with K = 255 (no black ink) the stored C, M, Y equal R, G, B.
+        // Halve the brightness in the right half through K.
+        let k: Vec<u8> = (0..w * h).map(|i| if i % w < w / 2 { 255 } else { 128 }).collect();
+        let expected = Image::from_fn(w as u32, h as u32, |x, y| {
+            let p = img.get(x, y).unwrap();
+            let kk = if (x as usize) < w / 2 { 255 } else { 128 };
+            let m = |c: u32| (c * kk + 127) / 255;
+            0xFF00_0000 | m((p >> 16) & 0xFF) << 16 | m((p >> 8) & 0xFF) << 8 | m(p & 0xFF)
+        });
+        let file = encode_planes(&[&r, &g, &b, &k], w, h, Some(0), &opts, false).unwrap();
+        let info = read_info(&file).unwrap();
+        assert_eq!((info.components, info.color_model), (4, ColorModel::Cmyk));
+        let cmyk = decode(&file).unwrap();
+        let p = psnr(&expected, &cmyk);
+        assert!(p > 33.0, "CMYK: {p:.1} dB");
+        // Progressive coding of four components decodes identically.
+        let prog = encode_planes(&[&r, &g, &b, &k], w, h, Some(0), &EncodeOptions { progressive: true, ..opts }, false)
+            .unwrap();
+        assert_eq!(decode(&prog).unwrap(), cmyk);
+
+        // YCCK (transform 2): YCbCr of the inverted stored CMY values, plus K.
+        let mut ycc: [Vec<u8>; 3] = Default::default();
+        for i in 0..w * h {
+            let t = to_ycc(255 - r[i] as i32, 255 - g[i] as i32, 255 - b[i] as i32);
+            for c in 0..3 {
+                ycc[c].push(t[c]);
+            }
+        }
+        let file = encode_planes(&[&ycc[0], &ycc[1], &ycc[2], &k], w, h, Some(2), &opts, false).unwrap();
+        assert_eq!(read_info(&file).unwrap().color_model, ColorModel::Ycck);
+        let p = psnr(&expected, &decode(&file).unwrap());
+        assert!(p > 33.0, "YCCK: {p:.1} dB");
+
+        // Without an Adobe marker (this helper then writes JFIF) three components are YCbCr.
+        let file = encode_planes(&[&r, &g, &b], w, h, None, &opts, false).unwrap();
+        assert_eq!(read_info(&file).unwrap().color_model, ColorModel::YCbCr);
     }
 }

@@ -146,6 +146,12 @@ fn corpus() -> Vec<(&'static str, Vec<u8>)> {
         jpeg(EncodeOptions { progressive: true, grayscale: true, restart_interval: 3, ..d }),
     ));
     files.push(("jpeg exif", crate::jpeg::tests::with_orientation(&jpeg(EncodeOptions { quality: 50, ..d }), 6)));
+    files.push(("jpeg separate scans", crate::jpeg::encode_separate_scans(&img, &d, 2, 2).unwrap()));
+    let plane: Vec<u8> = (0..32 * 24).map(|i| (i * 7 % 256) as u8).collect();
+    let planes: [&[u8]; 4] = [&plane, &plane, &plane, &plane];
+    files.push(("jpeg cmyk", crate::jpeg::encode_planes(&planes, 32, 24, Some(0), &d, false).unwrap()));
+    let prog = EncodeOptions { progressive: true, ..d };
+    files.push(("jpeg ycck progressive", crate::jpeg::encode_planes(&planes, 32, 24, Some(2), &prog, false).unwrap()));
 
     files.push(("bmp 32 v4", crate::bmp::encode(&rgba).unwrap()));
     let pal = [[0u8, 0, 255, 0], [0, 255, 0, 0], [255, 0, 0, 0], [9, 9, 9, 0]];

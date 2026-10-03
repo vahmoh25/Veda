@@ -22,7 +22,8 @@
 //! # Entry points
 //!
 //! * [`detect`] identifies a format from its magic bytes.
-//! * [`decode`] / [`decode_with`] decode any supported format.
+//! * [`decode`] / [`decode_with`] decode any supported format; [`decode_lenient`] also accepts
+//!   files whose only fault is a checksum, and says so.
 //! * [`read_info`] returns dimensions and alpha information without decoding pixels.
 //! * [`encode`] writes an image with default settings; the format modules offer more control.
 //! * [`ops`] (re-exported here) resizes, crops, flips and rotates images.
@@ -33,6 +34,15 @@
 //! limited by [`DecodeOptions`] (16384 x 16384 and 64 Mi pixels by default), allocations are
 //! fallible ([`ImageError::OutOfMemory`]) and are only made once the input could plausibly fill
 //! them. Malformed input is reported as an [`ImageError`].
+//!
+//! # Performance and memory
+//!
+//! Hot paths are table driven and process whole rows (no per-pixel allocation or division).
+//! On a modern x86-64 host a 1920x1080 JPEG decodes in about 15 ms and a 1920x1080 RGBA PNG in
+//! about 20 ms; expect roughly ten times that under QEMU's TCG emulation. Decoding needs the
+//! output (4 bytes per pixel) plus intermediate buffers: the inflated PNG rows (up to 8 bytes
+//! per pixel for 16-bit RGBA), or the JPEG component planes (1-3 bytes per pixel) and, for
+//! progressive JPEGs, the coefficients (2-6 bytes per pixel).
 
 #![no_std]
 
@@ -61,8 +71,8 @@ use alloc::vec::Vec;
 pub use error::ImageError;
 pub use image::{Image, Orientation};
 pub use ops::{
-    Filter, apply_orientation, crop, flip_horizontal, flip_vertical, premultiply, premultiply_pixel, resize, rotate90,
-    rotate180, rotate270, thumbnail, unpremultiply, unpremultiply_pixel,
+    Filter, apply_orientation, crop, fit_size, flip_horizontal, flip_vertical, premultiply, premultiply_pixel, resize,
+    rotate90, rotate180, rotate270, thumbnail, unpremultiply, unpremultiply_pixel,
 };
 
 /// Default maximum width or height accepted by the decoders.
@@ -200,6 +210,19 @@ pub fn decode_with(data: &[u8], options: &DecodeOptions) -> Result<Image, ImageE
         Some(Format::Bmp) => bmp::decode_with(data, options),
         Some(Format::Qoi) => qoi::decode_with(data, options),
         None => Err(ImageError::UnknownFormat),
+    }
+}
+
+/// Decodes like [`decode`], but when the only problem is a checksum (a PNG chunk CRC or the zlib
+/// Adler-32, which some tools do not update) decodes again without verifying checksums. The
+/// flag is `true` in that case, so that viewers can say that the file is damaged.
+pub fn decode_lenient(data: &[u8]) -> Result<(Image, bool), ImageError> {
+    match decode(data) {
+        Err(ImageError::ChecksumMismatch(_)) => {
+            let lax = DecodeOptions { verify_checksums: false, ..DecodeOptions::DEFAULT };
+            decode_with(data, &lax).map(|img| (img, true))
+        }
+        other => other.map(|img| (img, false)),
     }
 }
 

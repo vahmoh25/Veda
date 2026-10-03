@@ -332,11 +332,7 @@ impl<'a> Decoder<'a> {
 
     /// Decodes the whole image (without applying the EXIF orientation).
     pub(crate) fn decode(&mut self) -> Result<Image, ImageError> {
-        #[cfg(test)]
-        let t0 = std::time::Instant::now();
         self.run(false)?;
-        #[cfg(test)]
-        let t1 = std::time::Instant::now();
         if self.scans == 0 {
             return Err(if self.frame.is_some() {
                 ImageError::Truncated
@@ -349,12 +345,7 @@ impl<'a> Decoder<'a> {
         if frame.progressive {
             finish_progressive(frame)?;
         }
-        #[cfg(test)]
-        let t2 = std::time::Instant::now();
-        let r = render(frame, model);
-        #[cfg(test)]
-        std::eprintln!("PHASES entropy+idct {:.1} ms, finish {:.1} ms, render {:.1} ms", (t1 - t0).as_secs_f64() * 1e3, (t2 - t1).as_secs_f64() * 1e3, t2.elapsed().as_secs_f64() * 1e3);
-        r
+        render(frame, model)
     }
 
     pub(crate) fn orientation(&self) -> Orientation {
@@ -1023,13 +1014,14 @@ fn render(frame: &Frame, model: ColorModel) -> Result<Image, ImageError> {
     }
     let mut colsum: Vec<u16> = Vec::new();
     for (y, out) in img.pixels.chunks_exact_mut(w).enumerate() {
+        // Upsample the subsampled components of this row into `bufs`.
         for (c, buf) in frame.comps.iter().zip(bufs.iter_mut()) {
             let (fx, fy) = (frame.hmax / c.h, frame.vmax / c.v);
             let stride = c.bw * 8;
             let row = |r: usize| &c.plane[r * stride..r * stride + c.cw];
             if fy == 1 {
                 match fx {
-                    1 => buf[..w].copy_from_slice(&row(y)[..w]),
+                    1 => {}
                     2 => color::h2v1(row(y), buf),
                     _ => color::generic(row(y), row(y), 2, 0, fx, buf),
                 }
@@ -1052,7 +1044,12 @@ fn render(frame: &Frame, model: ColorModel) -> Result<Image, ImageError> {
                 }
             }
         }
-        let [b0, b1, b2, b3] = &bufs;
+        // Full-resolution components are read straight from their planes.
+        let rows: [&[u8]; 4] = core::array::from_fn(|i| match frame.comps.get(i) {
+            Some(c) if c.h == frame.hmax && c.v == frame.vmax => &c.plane[y * c.bw * 8..][..w],
+            _ => &bufs[i][..],
+        });
+        let [b0, b1, b2, b3] = rows;
         match model {
             ColorModel::Gray => color::gray(b0, out),
             ColorModel::YCbCr => color::ycc_to_rgb(b0, b1, b2, out),

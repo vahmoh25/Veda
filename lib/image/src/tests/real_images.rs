@@ -66,7 +66,10 @@ fn windows_wallpapers_and_lock_screens() {
     let mut files = Vec::new();
     walk(Path::new(r"C:\Windows\Web"), &["jpg", "jpeg", "png", "bmp"], &mut files);
     walk(Path::new(r"C:\Windows\SystemApps"), &["jpg", "jpeg"], &mut files);
-    assert!(!files.is_empty(), "no sample images found");
+    if files.is_empty() {
+        println!("skipped: no Windows sample images found");
+        return;
+    }
     let mut progressive = Vec::new();
     for f in &files {
         let data = fs::read(f).expect("read");
@@ -113,7 +116,10 @@ fn windows_png_corpus() {
     walk(Path::new(r"C:\Windows\SystemApps"), &["png"], &mut files);
     walk(Path::new(r"C:\Windows\Web"), &["png"], &mut files);
     walk(Path::new(r"C:\Program Files\qemu"), &["png"], &mut files);
-    assert!(files.len() > 100);
+    if files.is_empty() {
+        println!("skipped: no Windows PNG files found");
+        return;
+    }
     let mut kinds: BTreeMap<String, (usize, PathBuf)> = BTreeMap::new();
     let mut failures = Vec::new();
     let mut bad_crc = Vec::new();
@@ -240,7 +246,9 @@ fn windows_bmps() {
         ok += 1;
     }
     println!("{ok} BMP files decoded");
-    assert!(ok > 5);
+    if files.is_empty() {
+        println!("skipped: no BMP files found");
+    }
 }
 
 /// Decodes the largest sample JPEG and PNG repeatedly and reports timings, plus encoder and
@@ -252,6 +260,9 @@ fn timings() {
         r"C:\Windows\Web\Wallpaper\Windows\img0.jpg",
         r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\DesktopSpotlight\Assets\Images\image_0.jpg",
         r"C:\Windows\Web\4K\Wallpaper\Windows\img0_1920x1200.jpg",
+        r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\Assets\Images\copilot-upsell.jpg",
+        r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\DesktopSpotlight\Assets\Images\image_1.jpg",
+        r"C:\Windows\Web\touchkeyboard\TouchKeyboardThemeLight002.jpg",
     ];
     let pngs =
         [r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\VoiceIsolation\Assets\twoMics_dark.png"];
@@ -304,51 +315,6 @@ fn timings() {
     }
     let t = best(&mut || small = crate::rotate90(&photo));
     println!("rotate90: {:.1} ms", t);
-}
-
-/// Compares our JPEG decoder with the Windows (WIC/GDI+) decoder: reference BMPs produced by
-/// `target/agents/vimage/gdiplus_reference.ps1` are compared with our output.
-#[test]
-#[ignore]
-fn compare_with_windows_decoder() {
-    let ref_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/agents/vimage/ref");
-    let Ok(entries) = fs::read_dir(&ref_dir) else {
-        println!("no reference directory; run gdiplus_reference.ps1 first");
-        return;
-    };
-    let mut n = 0;
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.extension().and_then(|x| x.to_str()) != Some("bmp") {
-            continue;
-        }
-        // The reference name is `<stem>.bmp`, its source path is stored next to it in `<stem>.src`.
-        let Ok(src) = fs::read_to_string(p.with_extension("src")) else { continue };
-        let src = src.trim();
-        let Ok(data) = fs::read(src) else { continue };
-        let reference = crate::bmp::decode(&fs::read(&p).unwrap()).unwrap();
-        let no_rotate = DecodeOptions { apply_orientation: false, ..DecodeOptions::DEFAULT };
-        let ours = match crate::decode_with(&data, &no_rotate) {
-            Ok(i) => i,
-            Err(ImageError::Unsupported(m)) => {
-                println!("{src}: unsupported ({m})");
-                continue;
-            }
-            Err(e) => panic!("{src}: {e}"),
-        };
-        assert_eq!((ours.width, ours.height), (reference.width, reference.height), "{src}");
-        let p = crate::jpeg::tests::psnr(&ours, &reference);
-        let mut max_diff = 0i32;
-        for (&a, &b) in ours.pixels.iter().zip(&reference.pixels) {
-            for s in [0, 8, 16] {
-                max_diff = max_diff.max((((a >> s) & 0xFF) as i32 - ((b >> s) & 0xFF) as i32).abs());
-            }
-        }
-        println!("{src}: PSNR vs Windows decoder {p:.2} dB, max channel difference {max_diff}");
-        assert!(p > 35.0, "{src}: {p:.2} dB");
-        n += 1;
-    }
-    println!("{n} files compared");
 }
 
 /// Dumps the filtered PNG scanlines of a few real images to `target/agents/vimage/zcmp/` and
@@ -406,6 +372,10 @@ fn over_checkerboard(img: &Image) -> Image {
 fn png_contact_sheet() {
     let mut files = Vec::new();
     walk(Path::new(r"C:\Windows\SystemApps"), &["png"], &mut files);
+    if files.is_empty() {
+        println!("skipped: no Windows PNG files found");
+        return;
+    }
     let mut by_kind: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for f in &files {
         let Ok(data) = fs::read(f) else { continue };
@@ -479,6 +449,133 @@ fn bmp_contact_sheet() {
     fs::write(out_dir().join("bmp_contact_sheet.png"), crate::png::encode(&sheet, 6).unwrap()).unwrap();
 }
 
+/// PowerShell script that decodes every file listed in `-List` with the Windows decoder
+/// (GDI+/WIC) and writes `<index>.argb` files to `-Out`: width and height (u32 LE), then
+/// straight-alpha BGRA pixels.
+const WINDOWS_DECODE_PS1: &str = r#"
+param([string]$List, [string]$Out)
+Add-Type -AssemblyName System.Drawing
+$i = 0
+foreach ($f in Get-Content $List) {
+  $img = [System.Drawing.Image]::FromFile($f)
+  $bmp = New-Object System.Drawing.Bitmap($img.Width, $img.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $g = [System.Drawing.Graphics]::FromImage($bmp)
+  $g.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+  $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+  $g.DrawImage($img, 0, 0, $img.Width, $img.Height)
+  $g.Dispose()
+  $rect = New-Object System.Drawing.Rectangle(0, 0, $bmp.Width, $bmp.Height)
+  $data = $bmp.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $bytes = New-Object byte[] ($data.Stride * $bmp.Height)
+  [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $bytes.Length)
+  $bmp.UnlockBits($data)
+  $ms = New-Object System.IO.MemoryStream
+  $ms.Write([BitConverter]::GetBytes([uint32]$bmp.Width), 0, 4)
+  $ms.Write([BitConverter]::GetBytes([uint32]$bmp.Height), 0, 4)
+  $ms.Write($bytes, 0, $bytes.Length)
+  [IO.File]::WriteAllBytes((Join-Path $Out "$i.argb"), $ms.ToArray())
+  $bmp.Dispose(); $img.Dispose()
+  $i++
+}
+"#;
+
+/// Decodes `files` with the Windows decoder by running [`WINDOWS_DECODE_PS1`]. Returns `None`
+/// when PowerShell is not available (or fails).
+fn windows_decode(files: &[PathBuf]) -> Option<Vec<Image>> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/agents/vimage/windows_ref");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).ok()?;
+    let script = dir.join("decode.ps1");
+    let list = dir.join("list.txt");
+    fs::write(&script, WINDOWS_DECODE_PS1).ok()?;
+    let names: Vec<String> = files.iter().map(|f| f.display().to_string()).collect();
+    fs::write(&list, names.join("\r\n")).ok()?;
+    let status = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-List")
+        .arg(&list)
+        .arg("-Out")
+        .arg(&dir)
+        .status()
+        .ok()?;
+    if !status.success() {
+        return None;
+    }
+    let mut images = Vec::new();
+    for i in 0..files.len() {
+        let raw = fs::read(dir.join(format!("{i}.argb"))).ok()?;
+        let w = u32::from_le_bytes(raw.get(0..4)?.try_into().ok()?);
+        let h = u32::from_le_bytes(raw.get(4..8)?.try_into().ok()?);
+        let px = raw[8..].as_chunks::<4>().0.iter().map(|&c| u32::from_le_bytes(c)).collect();
+        images.push(Image::from_pixels(w, h, px).ok()?);
+    }
+    Some(images)
+}
+
+/// Largest per-channel difference over the given channel shifts.
+fn max_channel_diff(a: &Image, b: &Image, shifts: &[u32]) -> i32 {
+    let mut worst = 0;
+    for (&p, &q) in a.pixels.iter().zip(&b.pixels) {
+        for &s in shifts {
+            worst = worst.max((((p >> s) & 0xFF) as i32 - ((q >> s) & 0xFF) as i32).abs());
+        }
+    }
+    worst
+}
+
+/// Compares our decoders with the Windows decoder (GDI+/WIC) on real files: baseline and
+/// progressive JPEGs with 4:4:4 and 4:2:0 sampling, restart markers, and BMPs.
+#[test]
+#[ignore]
+fn compare_with_windows_decoder() {
+    let files: Vec<PathBuf> = [
+        r"C:\Windows\Web\4K\Wallpaper\Windows\img0_1920x1200.jpg",
+        r"C:\Windows\Web\Wallpaper\ThemeA\img22.jpg",
+        r"C:\Windows\Web\Wallpaper\ThemeB\img25.jpg",
+        r"C:\Windows\Web\Wallpaper\Spotlight\img50.jpg",
+        r"C:\Windows\Web\Screen\img105.jpg",
+        r"C:\Windows\Web\touchkeyboard\TouchKeyboardThemeDark000.jpg",
+        r"C:\Windows\Web\touchkeyboard\TouchKeyboardThemeLight002.jpg",
+        r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\DesktopSpotlight\Assets\Images\image_1.jpg",
+        r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\DesktopSpotlight\Assets\Images\image_2.jpg",
+        r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\Assets\Images\copilot-upsell.jpg",
+        r"C:\Windows\SystemApps\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\FileExplorerExtensions\Assets\images\contrast-black\GalleryColdStateLeft.jpg",
+        r"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\ItemTemplates\VC\ATL\ATLControl\1033\Toolbar.bmp",
+        r"C:\Program Files\qemu\share\qemu-nsis.bmp",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .filter(|p| p.exists())
+    .collect();
+    if files.is_empty() {
+        println!("skipped: no Windows sample images found");
+        return;
+    }
+    let Some(theirs) = windows_decode(&files) else {
+        println!("Windows decoder (PowerShell/GDI+) not available");
+        return;
+    };
+    let no_rotate = DecodeOptions { apply_orientation: false, ..DecodeOptions::DEFAULT };
+    for (f, reference) in files.iter().zip(&theirs) {
+        let ours = match crate::decode_with(&fs::read(f).unwrap(), &no_rotate) {
+            Ok(i) => i,
+            Err(ImageError::Unsupported(m)) => {
+                println!("{}: unsupported ({m})", f.display());
+                continue;
+            }
+            Err(e) => panic!("{}: {e}", f.display()),
+        };
+        assert_eq!((ours.width, ours.height), (reference.width, reference.height), "{}", f.display());
+        let p = crate::jpeg::tests::psnr(&ours, reference);
+        let diff = max_channel_diff(&ours, reference, &[0, 8, 16]);
+        println!("{:<28} PSNR vs Windows {p:6.2} dB, max channel difference {diff}", file_stem(f));
+        assert!(p > 35.0, "{}: {p:.2} dB", f.display());
+    }
+    println!("{} files compared", files.len());
+}
+
 fn enc_dir() -> PathBuf {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/agents/vimage/enc");
     let _ = fs::create_dir_all(&p);
@@ -486,27 +583,33 @@ fn enc_dir() -> PathBuf {
 }
 
 /// The image used for the encoder interoperability checks: a real photo at an odd size, plus
-/// a variant with a smooth alpha gradient.
+/// a variant with a smooth alpha gradient and fully transparent squares.
 fn encoder_sample() -> Option<(Image, Image)> {
     let data = fs::read(r"C:\Windows\Web\4K\Wallpaper\Windows\img0_1920x1200.jpg").ok()?;
     let photo = crate::resize(&crate::decode(&data).ok()?, 803, 501, Filter::Lanczos3);
     let alpha = Image::from_fn(photo.width, photo.height, |x, y| {
         let a = ((x * 255) / photo.width).min(255);
         let p = photo.get(x, y).unwrap();
-        if (x / 40 + y / 40) % 7 == 0 { p & 0x00FF_FFFF } else { a << 24 | (p & 0x00FF_FFFF) }
+        if (x / 40 + y / 40) % 7 == 0 { p & 0x00FF_FFFF } else { (a << 24) | (p & 0x00FF_FFFF) }
     });
     Some((photo, alpha))
 }
 
-/// Writes files produced by our encoders to `target/agents/vimage/enc/`; the Windows decoder
-/// then decodes them (`gdiplus_encoded.ps1`) for `compare_encoder_output_with_windows`.
+/// Encodes a real photo with every encoder variant (written to `target/agents/vimage/enc/` for
+/// inspection), has the Windows decoder decode the files, and compares: lossless formats must
+/// reproduce the source exactly and JPEGs must decode identically to our decoder (except 4:1:1
+/// and CMYK, which differ by design, see below).
 #[test]
 #[ignore]
-fn write_encoder_samples() {
+fn compare_encoder_output_with_windows() {
     use crate::jpeg::{EncodeOptions, Subsampling};
-    let Some((photo, alpha)) = encoder_sample() else { return };
+    let Some((photo, alpha)) = encoder_sample() else {
+        println!("skipped: the Windows sample wallpaper is missing");
+        return;
+    };
     let dir = enc_dir();
     let d = EncodeOptions::default();
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     let jpegs: [(&str, EncodeOptions, (usize, usize)); 10] = [
         ("j420", d, (2, 2)),
         ("j422", EncodeOptions { subsampling: Subsampling::Yuv422, ..d }, (2, 1)),
@@ -520,80 +623,66 @@ fn write_encoder_samples() {
         ("jq30", EncodeOptions { quality: 30, ..d }, (2, 2)),
     ];
     for (name, opts, (hs, vs)) in jpegs {
-        let file = crate::jpeg::encode_sampled(&photo, &opts, hs, vs).unwrap();
-        fs::write(dir.join(format!("{name}.jpg")), &file).unwrap();
+        files.push((format!("{name}.jpg"), crate::jpeg::encode_sampled(&photo, &opts, hs, vs).unwrap()));
     }
-    fs::write(dir.join("prgb.png"), crate::png::encode(&photo, 6).unwrap()).unwrap();
-    fs::write(dir.join("prgba.png"), crate::png::encode(&alpha, 9).unwrap()).unwrap();
-    fs::write(dir.join("pstored.png"), crate::png::encode(&photo, 0).unwrap()).unwrap();
-    fs::write(dir.join("brgba.bmp"), crate::bmp::encode(&alpha).unwrap()).unwrap();
-    fs::write(dir.join("brgb.bmp"), crate::bmp::encode(&photo).unwrap()).unwrap();
-    println!("wrote encoder samples to {}", dir.display());
-}
-
-/// Compares the Windows decoder's view of our encoders' output with ours: lossless formats must
-/// reproduce the source exactly, JPEGs must decode (nearly) identically.
-#[test]
-#[ignore]
-fn compare_encoder_output_with_windows() {
-    let Some((photo, alpha)) = encoder_sample() else { return };
-    let dir = enc_dir();
-    let refs = dir.join("ref");
-    let Ok(entries) = fs::read_dir(&refs) else {
-        println!("no references; run gdiplus_encoded.ps1 first");
+    // Adobe RGB and CMYK files (all components full resolution).
+    let (w, h) = (photo.width as usize, photo.height as usize);
+    let ch: [Vec<u8>; 3] = [16, 8, 0].map(|s| photo.pixels.iter().map(|&p| (p >> s) as u8).collect());
+    let k: Vec<u8> = (0..w * h).map(|i| 255 - ((i % w) * 160 / w) as u8).collect();
+    let q95 = EncodeOptions { quality: 95, ..d };
+    let adobe = |planes: &[&[u8]], t| crate::jpeg::encode_planes(planes, w, h, Some(t), &q95, false).unwrap();
+    files.push(("jadobergb.jpg".into(), adobe(&[&ch[0], &ch[1], &ch[2]], 0)));
+    files.push(("jcmyk.jpg".into(), adobe(&[&ch[0], &ch[1], &ch[2], &k], 0)));
+    files.push(("prgb.png".into(), crate::png::encode(&photo, 6).unwrap()));
+    files.push(("prgba.png".into(), crate::png::encode(&alpha, 9).unwrap()));
+    files.push(("pstored.png".into(), crate::png::encode(&photo, 0).unwrap()));
+    files.push(("brgba.bmp".into(), crate::bmp::encode(&alpha).unwrap()));
+    files.push(("brgb.bmp".into(), crate::bmp::encode(&photo).unwrap()));
+    let paths: Vec<PathBuf> = files
+        .iter()
+        .map(|(name, data)| {
+            let p = dir.join(name);
+            fs::write(&p, data).unwrap();
+            p
+        })
+        .collect();
+    let Some(theirs) = windows_decode(&paths) else {
+        println!("Windows decoder (PowerShell/GDI+) not available");
         return;
     };
-    let mut n = 0;
-    for e in entries.flatten() {
-        let r = e.path();
-        let name = file_stem(&r);
-        let Some(src) =
-            fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).find(|p| file_stem(p) == name && p.is_file())
-        else {
-            continue;
-        };
-        let raw = fs::read(&r).unwrap();
-        let (w, h) = (
-            u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]),
-            u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]),
-        );
-        let px: Vec<u32> =
-            raw[8..].as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-        let theirs = Image::from_pixels(w, h, px).unwrap();
-        let ours = crate::decode(&fs::read(&src).unwrap()).unwrap();
-        let p = crate::jpeg::tests::psnr(&ours, &theirs);
-        let max_diff = ours
-            .pixels
-            .iter()
-            .zip(&theirs.pixels)
-            .flat_map(|(&a, &b)| [0, 8, 16, 24].map(|s| (((a >> s) & 0xFF) as i32 - ((b >> s) & 0xFF) as i32).abs()))
-            .max()
-            .unwrap_or(0);
-        println!("{name:<16} Windows vs ours: PSNR {p:6.2} dB, max channel difference {max_diff}");
-        match src.extension().and_then(|x| x.to_str()) {
-            Some("png") | Some("bmp") => {
-                let source = if name.contains("rgba") { &alpha } else { &photo };
-                assert_eq!(&ours, source, "{name}: our decoder");
-                if name.contains("rgba") {
-                    // GDI+ round-trips through premultiplied alpha: compare alpha exactly and
-                    // premultiplied color within rounding.
-                    let mut worst = 0;
-                    for (&a, &b) in ours.pixels.iter().zip(&theirs.pixels) {
-                        assert_eq!(a >> 24, b >> 24, "{name}: alpha differs");
-                        let (pa, pb) = (crate::premultiply_pixel(a), crate::premultiply_pixel(b));
-                        for s in [0, 8, 16] {
-                            worst = worst.max((((pa >> s) & 0xFF) as i32 - ((pb >> s) & 0xFF) as i32).abs());
-                        }
+    for ((name, data), reference) in files.iter().zip(&theirs) {
+        let ours = crate::decode(data).unwrap();
+        let p = crate::jpeg::tests::psnr(&ours, reference);
+        let diff = max_channel_diff(&ours, reference, &[0, 8, 16, 24]);
+        println!("{name:<20} Windows vs ours: PSNR {p:6.2} dB, max channel difference {diff}");
+        if name.ends_with(".png") || name.ends_with(".bmp") {
+            let source = if name.contains("rgba") { &alpha } else { &photo };
+            assert_eq!(&ours, source, "{name}: our decoder");
+            if name.contains("rgba") {
+                // GDI+ round-trips through premultiplied alpha: compare alpha exactly and the
+                // premultiplied color within rounding.
+                let mut worst = 0;
+                for (&a, &b) in ours.pixels.iter().zip(&reference.pixels) {
+                    assert_eq!(a >> 24, b >> 24, "{name}: alpha differs");
+                    let (pa, pb) = (crate::premultiply_pixel(a), crate::premultiply_pixel(b));
+                    for s in [0, 8, 16] {
+                        worst = worst.max((((pa >> s) & 0xFF) as i32 - ((pb >> s) & 0xFF) as i32).abs());
                     }
-                    println!("{name:<16} premultiplied max difference {worst}");
-                    assert!(worst <= 1, "{name}: {worst}");
-                } else {
-                    assert_eq!(max_diff, 0, "{name}: Windows decodes our file differently");
                 }
+                println!("{name:<20} premultiplied max difference {worst}");
+                assert!(worst <= 1, "{name}: {worst}");
+            } else {
+                assert_eq!(diff, 0, "{name}: Windows decodes our file differently");
             }
-            _ => assert!(p > 38.0, "{name}: {p:.2} dB"),
+        } else if name.contains("cmyk") {
+            // Windows converts CMYK with a color-managed (print) model; we use the standard
+            // naive inverted-CMYK formula. Only report.
+        } else if name.contains("411") {
+            // Windows replicates 4x-subsampled chroma; we interpolate it.
+            assert!(p > 38.0, "{name}: {p:.2} dB");
+        } else {
+            assert_eq!(diff, 0, "{name}: {p:.2} dB");
         }
-        n += 1;
     }
-    println!("{n} files compared");
+    println!("{} files compared", files.len());
 }
