@@ -58,7 +58,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 authors = ["Vahid Mohammadi"]
-repository = "https://example.invalid/vindows"
+repository = "https://github.com/vahmoh25/Vindows"
 
 [workspace.dependencies]
 vabi = { path = "lib/abi" }
