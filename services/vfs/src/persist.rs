@@ -72,6 +72,15 @@ impl Samples {
         Samples { by_ptr, by_path }
     }
 
+    /// The sample `d` still is (an unmodified copy, which snapshots store as
+    /// a reference): its path in the system image.
+    pub fn source_of(&self, d: &Data) -> Option<&'static str> {
+        match d {
+            Data::Static(s) => self.by_ptr.get(&(s.as_ptr() as usize)).copied(),
+            Data::Owned(_) => None,
+        }
+    }
+
     /// Where a sample goes in the home directory.
     fn home_path(src: &str) -> Option<String> {
         src.strip_prefix("samples/").map(|rest| format!("home/user/{rest}"))
@@ -92,22 +101,40 @@ impl Samples {
     }
 }
 
-/// Little-endian encoder for snapshots.
-struct Writer(Vec<u8>);
-
-impl Writer {
+/// Where snapshot records go: [`Writer`] builds the encoding, [`Counter`]
+/// only measures it, so the two can never disagree.
+trait Sink {
+    fn bytes(&mut self, b: &[u8]);
     fn u8(&mut self, v: u8) {
-        self.0.push(v);
+        self.bytes(&[v]);
     }
     fn u32(&mut self, v: u32) {
-        self.0.extend_from_slice(&v.to_le_bytes());
+        self.bytes(&v.to_le_bytes());
     }
     fn u64(&mut self, v: u64) {
-        self.0.extend_from_slice(&v.to_le_bytes());
+        self.bytes(&v.to_le_bytes());
     }
     fn str(&mut self, s: &str) {
         self.u32(s.len() as u32);
-        self.0.extend_from_slice(s.as_bytes());
+        self.bytes(s.as_bytes());
+    }
+}
+
+/// Little-endian encoder for snapshots.
+struct Writer(Vec<u8>);
+
+impl Sink for Writer {
+    fn bytes(&mut self, b: &[u8]) {
+        self.0.extend_from_slice(b);
+    }
+}
+
+/// Counts the bytes of a snapshot without building it.
+struct Counter(usize);
+
+impl Sink for Counter {
+    fn bytes(&mut self, b: &[u8]) {
+        self.0 += b.len();
     }
 }
 
@@ -140,41 +167,54 @@ impl<'a> Reader<'a> {
 /// Encodes `/home` of the RAM file system.
 pub fn encode(ram: &Tree, samples: &Samples) -> Vec<u8> {
     let mut w = Writer(Vec::new());
-    for src in samples.by_path.keys() {
-        w.u8(R_KNOWN_SAMPLE);
-        w.str(src);
-    }
-    if let Ok(home) = ram.lookup(&["home"]) {
-        walk(ram, home, "home", samples, &mut w);
-    }
+    snapshot(ram, samples, &mut w);
     w.0
 }
 
+/// The size of [`encode`]'s result, computed without copying any data.
+pub fn encoded_len(ram: &Tree, samples: &Samples) -> usize {
+    let mut c = Counter(0);
+    snapshot(ram, samples, &mut c);
+    c.0
+}
+
+fn snapshot(ram: &Tree, samples: &Samples, out: &mut impl Sink) {
+    for src in samples.by_path.keys() {
+        out.u8(R_KNOWN_SAMPLE);
+        out.str(src);
+    }
+    if let Ok(home) = ram.lookup(&["home"]) {
+        walk(ram, home, "home", samples, out);
+    }
+}
+
 /// Writes the records of a subtree, parents before children.
-fn walk(t: &Tree, id: NodeId, path: &str, samples: &Samples, w: &mut Writer) {
+fn walk(t: &Tree, id: NodeId, path: &str, samples: &Samples, out: &mut impl Sink) {
     let Some(node) = t.node(id) else { return };
     match &node.kind {
         Kind::Dir(children) => {
-            w.u8(R_DIR);
-            w.str(path);
-            w.u64(node.modified);
+            out.u8(R_DIR);
+            out.str(path);
+            out.u64(node.modified);
             for (name, &child) in children {
-                walk(t, child, &format!("{path}/{name}"), samples, w);
+                walk(t, child, &format!("{path}/{name}"), samples, out);
             }
         }
-        Kind::File(Data::Static(s)) if samples.by_ptr.contains_key(&(s.as_ptr() as usize)) => {
-            w.u8(R_SAMPLE_FILE);
-            w.str(path);
-            w.u64(node.modified);
-            w.str(samples.by_ptr[&(s.as_ptr() as usize)]);
-        }
-        Kind::File(d) => {
-            w.u8(R_FILE);
-            w.str(path);
-            w.u64(node.modified);
-            w.u32(d.bytes().len() as u32);
-            w.0.extend_from_slice(d.bytes());
-        }
+        Kind::File(d) => match samples.source_of(d) {
+            Some(src) => {
+                out.u8(R_SAMPLE_FILE);
+                out.str(path);
+                out.u64(node.modified);
+                out.str(src);
+            }
+            None => {
+                out.u8(R_FILE);
+                out.str(path);
+                out.u64(node.modified);
+                out.u32(d.bytes().len() as u32);
+                out.bytes(d.bytes());
+            }
+        },
     }
 }
 
@@ -262,7 +302,7 @@ impl Store {
     }
 
     /// Bytes of snapshot data a slot can hold.
-    fn capacity(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         ((self.sectors / 2 - SLOT0 - 1) as usize) * SECTOR
     }
 

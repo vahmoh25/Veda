@@ -71,6 +71,25 @@ fn test_vfs_read_write() -> TestResult {
     fs.remove("/home/user/Documents/renamed.txt".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }
 
+/// The home directory reports its space, and a file that would not fit on
+/// the home disk is refused instead of being lost at the next save.
+fn test_vfs_space() -> TestResult {
+    let fs = vfs_client()?;
+    let home = fs.space("/home/user".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    check(home.total > 0 && home.used <= home.total, "home space reported")?;
+    let system = fs.space("/system/bin".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    check(system.used > 0 && system.used == system.total, "system image space reported")?;
+    if !home.persistent {
+        return Ok(()); // No home disk: memory is the only limit.
+    }
+    let path: String = "/home/user/Documents/too-big.bin".into();
+    let len = home.total - home.used + 1;
+    let vmo = Vmo::create(len as usize).map_err(|e| e.to_string())?;
+    let r = fs.write_file(path.clone(), vmo, len).map_err(|e| e.to_string())?;
+    check(r == Err(FsError::NoSpace), "a file larger than the free space is refused")?;
+    check(fs.stat(path).map_err(|e| e.to_string())? == Err(FsError::NotFound), "nothing was created")
+}
+
 fn test_launcher() -> TestResult {
     let ch = vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?;
     let l = launcher::Client::new(ch);
@@ -218,11 +237,12 @@ fn main() -> i32 {
         crash();
     }
     println!("starting");
-    let tests: [Test; 7] = [
+    let tests: [Test; 8] = [
         ("ipc primitives", test_ipc_primitives),
         ("threads and locks", test_threads_and_locks),
         ("vfs system image", test_vfs_system_image),
         ("vfs read/write", test_vfs_read_write),
+        ("vfs space", test_vfs_space),
         ("launcher", test_launcher),
         ("crash report", test_crash_report),
         ("service restart", test_service_restart),

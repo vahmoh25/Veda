@@ -25,7 +25,7 @@ use alloc::vec::Vec;
 
 use vabi::signals;
 use vipc::{Bytes, WaitSet};
-use vproto::fs::{DirEntry, FsError, MAX_IO, Stat, open_flags, vfs};
+use vproto::fs::{DirEntry, FsError, MAX_IO, Space, Stat, open_flags, vfs};
 use vrt::object::{Channel, Vmo};
 use vrt::println;
 
@@ -41,6 +41,9 @@ const HOME_DIRS: [&str; 4] = ["home/user/Documents", "home/user/Pictures", "home
 const SAVE_QUIET_NS: u64 = 500_000_000;
 /// ... or at the latest this long after the first unsaved change.
 const SAVE_MAX_DELAY_NS: u64 = 5_000_000_000;
+/// Room reserved for the snapshot record of a new file or directory (its
+/// header and path).
+const RECORD_SLACK: usize = 512;
 
 /// Which tree a path lives in.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,6 +56,8 @@ struct OpenFile {
     mount: Mount,
     node: NodeId,
     flags: u32,
+    /// The file is in `/home`, so it counts against the home disk.
+    home: bool,
 }
 
 struct Fs {
@@ -84,6 +89,28 @@ impl Fs {
             Mount::System => &mut self.system,
             Mount::Ram => &mut self.ram,
         }
+    }
+
+    /// Fails with `NoSpace` unless `/home` can grow by `extra` bytes and
+    /// still fit on the home disk (without one there is nothing to check).
+    fn reserve(&self, extra: usize) -> Result<(), FsError> {
+        if extra == 0 {
+            return Ok(());
+        }
+        match &self.store {
+            Some(store) if persist::encoded_len(&self.ram, &self.samples) + extra > store.capacity() => {
+                Err(FsError::NoSpace)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// How much more of the home disk a file takes once `d` becomes
+    /// `new_len` bytes long (an unmodified sample is stored as a reference,
+    /// so its first change stores the whole file).
+    fn growth(&self, d: &Data, new_len: usize) -> usize {
+        let stored = if self.samples.source_of(d).is_some() { 0 } else { d.bytes().len() };
+        new_len.saturating_sub(stored)
     }
 
     /// Records a change to the writable file system.
@@ -118,6 +145,16 @@ impl Fs {
     }
 }
 
+/// Whether a path is in `/home`, which is kept on the home disk.
+fn in_home(m: Mount, comps: &[&str]) -> bool {
+    m == Mount::Ram && comps.first() == Some(&"home")
+}
+
+/// The length of a path from its components.
+fn path_len(comps: &[&str]) -> usize {
+    comps.iter().map(|c| c.len() + 1).sum()
+}
+
 /// One client connection.
 struct Session<'a> {
     fs: &'a mut Fs,
@@ -129,20 +166,24 @@ const MAX_FDS: usize = 256;
 impl vfs::Server for Session<'_> {
     fn open(&mut self, path: String, flags: u32) -> Result<u32, FsError> {
         let (m, comps) = self.fs.route(&path)?;
-        let tree = self.fs.tree_mut(m);
+        let home = in_home(m, &comps);
         let writing = flags & (open_flags::WRITE | open_flags::CREATE | open_flags::TRUNCATE | open_flags::APPEND) != 0;
-        if writing && tree.read_only {
+        if writing && self.fs.tree(m).read_only {
             return Err(FsError::ReadOnly);
         }
         let mut changed = false;
-        let node = match tree.lookup(&comps) {
+        let node = match self.fs.tree(m).lookup(&comps) {
             Ok(n) => n,
             Err(FsError::NotFound) if flags & open_flags::CREATE != 0 => {
+                if home {
+                    self.fs.reserve(RECORD_SLACK)?;
+                }
                 changed = true;
-                tree.create(&comps, false)?
+                self.fs.tree_mut(m).create(&comps, false)?
             }
             Err(e) => return Err(e),
         };
+        let tree = self.fs.tree_mut(m);
         match &mut tree.node_mut(node).unwrap().kind {
             Kind::Dir(_) => return Err(FsError::IsDir),
             Kind::File(d) if flags & open_flags::TRUNCATE != 0 => {
@@ -159,7 +200,7 @@ impl vfs::Server for Session<'_> {
             self.fs.changed();
         }
         let fd = (1..).find(|fd| !self.fds.contains_key(fd)).unwrap();
-        self.fds.insert(fd, OpenFile { mount: m, node, flags });
+        self.fds.insert(fd, OpenFile { mount: m, node, flags, home });
         Ok(fd)
     }
 
@@ -183,7 +224,11 @@ impl vfs::Server for Session<'_> {
         if f.flags & (open_flags::WRITE | open_flags::APPEND) == 0 {
             return Err(FsError::BadFd);
         }
-        let (m, node, append) = (f.mount, f.node, f.flags & open_flags::APPEND != 0);
+        let (m, node, append, home) = (f.mount, f.node, f.flags & open_flags::APPEND != 0, f.home);
+        if home && let Some(tree::Node { kind: Kind::File(d), .. }) = self.fs.tree(m).node(node) {
+            let at = if append { d.bytes().len() } else { offset as usize };
+            self.fs.reserve(self.fs.growth(d, d.bytes().len().max(at.saturating_add(data.0.len()))))?;
+        }
         let tree = self.fs.tree_mut(m);
         let Some(tree::Node { kind: Kind::File(d), .. }) = tree.node_mut(node) else { return Err(FsError::BadFd) };
         let v = d.make_mut();
@@ -220,6 +265,9 @@ impl vfs::Server for Session<'_> {
 
     fn mkdir(&mut self, path: String) -> Result<(), FsError> {
         let (m, comps) = self.fs.route(&path)?;
+        if in_home(m, &comps) {
+            self.fs.reserve(RECORD_SLACK)?;
+        }
         self.fs.tree_mut(m).create(&comps, true)?;
         self.fs.changed();
         Ok(())
@@ -237,6 +285,18 @@ impl vfs::Server for Session<'_> {
         let (m2, c2) = self.fs.route(&to)?;
         if m1 != m2 {
             return Err(FsError::Invalid);
+        }
+        if in_home(m2, &c2) {
+            let t = self.fs.tree(m1);
+            let (bytes, nodes) = t.subtree_size(t.lookup(&c1)?);
+            // Within /home only the paths in the records change; moving in
+            // from elsewhere (/tmp) brings the contents along.
+            let extra = if in_home(m1, &c1) {
+                nodes * path_len(&c2).saturating_sub(path_len(&c1))
+            } else {
+                bytes + nodes * RECORD_SLACK
+            };
+            self.fs.reserve(extra)?;
         }
         self.fs.tree_mut(m1).rename(&c1, &c2)?;
         self.fs.changed();
@@ -258,6 +318,14 @@ impl vfs::Server for Session<'_> {
         let (m, comps) = self.fs.route(&path)?;
         if len > 1 << 30 {
             return Err(FsError::NoSpace);
+        }
+        if in_home(m, &comps) {
+            let t = self.fs.tree(m);
+            let extra = match t.lookup(&comps).ok().and_then(|n| t.node(n)) {
+                Some(tree::Node { kind: Kind::File(d), .. }) => self.fs.growth(d, len as usize),
+                _ => len as usize + RECORD_SLACK,
+            };
+            self.fs.reserve(extra)?;
         }
         let mut buf = alloc::vec![0u8; len as usize];
         data.read(0, &mut buf).map_err(|_| FsError::Invalid)?;
@@ -281,7 +349,10 @@ impl vfs::Server for Session<'_> {
 
     fn truncate(&mut self, fd: u32, len: u64) -> Result<(), FsError> {
         let f = self.fds.get(&fd).ok_or(FsError::BadFd)?;
-        let (m, node) = (f.mount, f.node);
+        let (m, node, home) = (f.mount, f.node, f.home);
+        if home && let Some(tree::Node { kind: Kind::File(d), .. }) = self.fs.tree(m).node(node) {
+            self.fs.reserve(self.fs.growth(d, len.min(1 << 31) as usize))?;
+        }
         let tree = self.fs.tree_mut(m);
         if tree.read_only {
             return Err(FsError::ReadOnly);
@@ -294,6 +365,26 @@ impl vfs::Server for Session<'_> {
 
     fn sync(&mut self) -> Result<(), FsError> {
         self.fs.save()
+    }
+
+    fn space(&mut self, path: String) -> Result<Space, FsError> {
+        let (m, comps) = self.fs.route(&path)?;
+        let t = self.fs.tree(m);
+        t.lookup(&comps)?;
+        let (bytes, _) = t.subtree_size(tree::ROOT);
+        Ok(match (m, &self.fs.store) {
+            (Mount::System, _) => Space { total: bytes as u64, used: bytes as u64, persistent: true },
+            (Mount::Ram, Some(store)) if in_home(m, &comps) => Space {
+                total: store.capacity() as u64,
+                used: persist::encoded_len(&self.fs.ram, &self.fs.samples) as u64,
+                persistent: true,
+            },
+            // Kept in memory: as much as the free memory allows.
+            (Mount::Ram, _) => {
+                let free = vrt::object::system_info().map(|i| i.free_memory).unwrap_or(0);
+                Space { total: bytes as u64 + free, used: bytes as u64, persistent: false }
+            }
+        })
     }
 }
 

@@ -69,6 +69,20 @@ message! {
     }
 }
 
+message! {
+    /// How full the file system holding a path is (see `vfs::space`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct Space {
+        /// Bytes it can hold.
+        pub total: u64,
+        /// Bytes in use.
+        pub used: u64,
+        /// Its contents survive a restart (the system image, or a home
+        /// directory kept on the home disk).
+        pub persistent: bool,
+    }
+}
+
 /// Flags for `open`.
 pub mod open_flags {
     pub const READ: u32 = 1;
@@ -104,5 +118,8 @@ protocol! {
         12 => fn truncate(fd: u32, len: u64) -> Result<(), FsError>;
         /// Writes all changes to persistent storage now (before power-off).
         13 => fn sync() -> Result<(), FsError>;
+        /// How full the file system holding `path` is. Writes that would
+        /// not fit fail with `NoSpace`.
+        14 => fn space(path: String) -> Result<Space, FsError>;
     }
 }

@@ -161,6 +161,19 @@ impl Tree {
         }
     }
 
+    /// The bytes of all files under `id` (itself included) and the number
+    /// of nodes there.
+    pub fn subtree_size(&self, id: NodeId) -> (usize, usize) {
+        match self.nodes.get(&id).map(|n| &n.kind) {
+            Some(Kind::File(d)) => (d.bytes().len(), 1),
+            Some(Kind::Dir(children)) => children.values().fold((0, 1), |(bytes, nodes), &child| {
+                let (b, n) = self.subtree_size(child);
+                (bytes + b, nodes + n)
+            }),
+            None => (0, 0),
+        }
+    }
+
     pub fn list(&self, id: NodeId) -> Result<Vec<DirEntry>, FsError> {
         let Kind::Dir(children) = &self.nodes[&id].kind else { return Err(FsError::NotDir) };
         Ok(children
