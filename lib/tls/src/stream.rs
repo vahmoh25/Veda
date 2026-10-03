@@ -19,6 +19,7 @@ use rustls::unbuffered::{
     ConnectionState, EncodeError, EncodeTlsData, EncryptError, InsufficientSizeError, UnbufferedStatus, WriteTraffic,
 };
 use rustls::{Error, ProtocolVersion};
+use zeroize::Zeroize;
 
 use crate::config::ClientConfig;
 use crate::error::TlsError;
@@ -140,6 +141,12 @@ impl<T: Transport> fmt::Debug for TlsStream<T> {
     }
 }
 
+impl<T: Transport> Drop for TlsStream<T> {
+    fn drop(&mut self) {
+        self.plaintext.zeroize();
+    }
+}
+
 impl<T: Transport> TlsStream<T> {
     /// Runs the handshake over `transport` (blocking) and verifies that the
     /// server's certificate is valid for `server_name` (a DNS name, sent as
@@ -235,7 +242,8 @@ impl<T: Transport> TlsStream<T> {
             buf[..n].copy_from_slice(&available[..n]);
             self.plaintext_pos += n;
             if self.plaintext_pos == self.plaintext.len() {
-                self.plaintext.clear();
+                // Read data does not linger in memory.
+                self.plaintext.zeroize();
                 self.plaintext_pos = 0;
             }
             return Ok(Some(n));

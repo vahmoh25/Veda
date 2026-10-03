@@ -135,11 +135,16 @@ Networking is three layers of processes (details in
   applications use through `vnet`, one channel per socket with
   credit-based flow control in both directions.
 
+TLS is not a service: `vtls` (rustls with a pure-Rust cryptography
+provider) runs inside each application, over its `vnet` sockets, so keys
+and plaintext never leave the process that uses them.
+
 `netd` and `wlan` are restarted by `init` if they exit; drivers attach to
 the new instance. Calls from a service to a driver have timeouts and the
 driver reports its state with one-way events, so a hung or crashed driver
 cannot block a service. Random numbers (TCP sequence numbers, DHCP and DNS
-ids, Wi-Fi nonces and keys) come from the kernel's ChaCha20 generator.
+ids, Wi-Fi nonces and keys, TLS secrets) come from the kernel's ChaCha20
+generator.
 
 ## The window system (`services/compositor`)
 
@@ -256,11 +261,12 @@ the pool's workers on different CPUs at once.
   tool).
 * `systest`, a program that runs inside Vindows and exercises kernel objects,
   threads, the file system, the launcher, crash reports and the restart of
-  the window system; `nettest` checks DNS, UDP, TCP, HTTP and ping over
-  Ethernet or Wi-Fi.
+  the window system; `nettest` checks DNS, UDP, TCP, HTTP, HTTPS and ping
+  over Ethernet or Wi-Fi.
 * Network host tests: the 802.11 protocol and its cryptography against
   published vectors, a station against an access point, two TCP/IP stacks
-  over a simulated cable, and the Wi-Fi simulator.
+  over a simulated cable, the Wi-Fi simulator, and the TLS client against
+  a rustls server and real certificate chains.
 * GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
   mouse, keyboard, waits on log lines, screenshots — and fail on panics.
 
@@ -283,6 +289,7 @@ the pool's workers on different CPUs at once.
 | `lib/virtio` | virtio device access shared by the drivers |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
+| `lib/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
 | `lib/wlan`, `lib/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
 | `third_party/` | vendored crates with documented patches (smoltcp) |
 | `services/`, `drivers/`, `apps/` | system services, drivers and applications (the games included) |

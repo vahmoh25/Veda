@@ -42,7 +42,9 @@ talk over kernel channels; the kernel knows nothing about networks.
   `third_party/smoltcp` with one documented patch (see below).
 * **Applications** use `vnet` (`lib/net`): blocking, `std::net`-like
   `TcpStream`, `TcpListener`, `UdpSocket`, name resolution, ping, a small
-  HTTP client, and `vnet::wifi` for Wi-Fi.
+  HTTP client, and `vnet::wifi` for Wi-Fi; and `vtls` (`lib/tls`) for TLS
+  (HTTPS, secure WebSockets) over a `TcpStream`, inside the application's
+  own process.
 
 Frames travel between processes through shared-memory rings
 (`vproto::netring`): a pair of single-producer/single-consumer rings per
@@ -62,6 +64,7 @@ out, and a system call only when the other side is asleep.
 | `drivers/vwifi` | the virtual Wi-Fi radio (virtio-console port) |
 | `lib/radiolink` | `vradiolink`: the message format between `vwifi` and `airsim` |
 | `lib/net` | `vnet`: the application API, including `vnet::wifi` |
+| `lib/tls` | `vtls`: TLS 1.3 and 1.2 client (rustls with a pure-Rust cryptography provider) |
 | `lib/proto/src/{net,wlan,netring}.rs` | the service protocols and frame rings |
 | `lib/entropy`, `kernel/src/random.rs` | the kernel's random number generator |
 | `tools/airsim` | the simulated Wi-Fi environment on the host |
@@ -254,11 +257,56 @@ for n in vnet::wifi::networks()? {
 }
 vnet::wifi::connect("Vindows Home", Some("vindows-wifi"), true)?;
 let events = vnet::wifi::Watcher::new()?; // status changes, scans, failures
+
+let config = vtls::ClientConfig::with_alpn(&[b"http/1.1"]); // share it
+let mut tls = vtls::connect("example.com", 443, Duration::from_secs(20), &config)?;
+tls.write_all(b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")?;
+let n = tls.read(&mut buf)?; // Ok(0): the server closed the connection
 ```
 
-HTTPS and other TLS protocols will be layered on `TcpStream`; the random
-number generator, the hash and cipher primitives (RustCrypto) and the
-blocking socket API they need are in place.
+## TLS
+
+`vtls` (`lib/tls`) is the TLS client of Vindows applications: HTTPS,
+secure WebSockets, anything else over TLS 1.3 or TLS 1.2. It runs in the
+application's process, on top of a `vnet::TcpStream`.
+
+* **Protocol.** [rustls](https://github.com/rustls/rustls) 0.23, through
+  its `no_std` "unbuffered" API: `TlsStream` keeps the received TLS bytes,
+  the decrypted data and the records to send, lets rustls process what
+  arrived, sends what rustls produces and reads from the socket only when
+  rustls needs more. Partial records, several records per read, key
+  updates, session tickets, alerts and close_notify are handled inside.
+* **Cryptography** is vtls' own rustls provider on pure-Rust crates (no C,
+  no assembly): AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 records;
+  SHA-256/384 and HMAC, with rustls' HKDF and TLS 1.2 PRF over them; X25519,
+  secp256r1 and secp384r1 key exchange; ECDSA (P-256, P-384), Ed25519, RSA
+  PKCS#1 v1.5 and RSA-PSS signatures. The cipher suites are the three TLS
+  1.3 ones and ECDHE-ECDSA/ECDHE-RSA with AES-GCM or ChaCha20-Poly1305 for
+  TLS 1.2. RSA verification is implemented in vtls on `crypto-bigint`,
+  with *ring*'s rules (2048 to 8192-bit moduli, PSS salts as long as the
+  hash). Ephemeral secrets come from the kernel's ChaCha20 generator and
+  are zeroed after use.
+* **Certificates** are verified by rustls-webpki against the Mozilla root
+  program (webpki-roots, 121 roots compiled in), at the time of the system
+  clock (the firmware's clock, advanced by the kernel). A clock that reads
+  earlier than 2025 is treated as unset, and the handshake fails with a
+  message saying so rather than with misleading expiry errors.
+* **Errors** are `TlsError`s with messages for users: "the server's
+  certificate is not trusted: it expired on 2025-01-01 (the system clock
+  reads 2026-06-01)", "secure connection failed: the server refused the
+  connection: no security parameters in common". After a protocol error
+  the alert rustls produces is sent to the server; every later call
+  reports the same error. Nothing panics on what the network sends.
+* **Event loops** wait for `tls.transport().handle()` to become readable
+  and call `try_read` until it returns `Ok(None)`: it decrypts whatever
+  the socket holds without waiting.
+
+Under QEMU's TCG emulation a full TLS 1.3 handshake with example.com
+(X25519, an ECDSA P-256/P-384 chain) took 115 ms, the network round trip
+included. Every connection is a full handshake (there is no session cache
+yet).
+
+`run=nettest:https` checks it from inside Vindows (see Testing).
 
 ## Dependencies
 
@@ -273,13 +321,44 @@ built `no_std`:
   `aes-kw`, `p256` (SAE), plus `subtle` (constant-time comparisons) and
   `zeroize`.
 * **httparse** for the HTTP client.
+* **TLS** (`vtls`):
+  * **rustls 0.23.45** (`tls12`, `custom-provider`; no default features):
+    the most widely used Rust TLS implementation, memory safe and
+    `no_std`-capable through its unbuffered API. It brings
+    **rustls-webpki 0.103** (certificate path validation) and
+    **rustls-pki-types 1**. The 0.24 line is still a pre-release.
+  * **webpki-roots 1.0.9**: the Mozilla root certificates, compiled in.
+  * **aes-gcm 0.11**, **chacha20poly1305 0.11**, **p384 0.14** and the
+    `ecdsa`/`ecdh` features of **p256 0.14** (pulling **ecdsa 0.17**),
+    **crypto-bigint 0.7**: the RustCrypto generation the Wi-Fi code
+    already uses (`aes` 0.9, `sha2` 0.11, `hmac` 0.13, `p256` 0.14), so no
+    crate family is built twice.
+  * **x25519-dalek 3** and **ed25519-dalek 3** (on curve25519-dalek 5):
+    the standard X25519 and Ed25519 implementations, same generation
+    (`sha2` 0.11, `rand_core` 0.10, unused here: secrets are made from
+    the kernel's random bytes).
+  * Not used: *ring* and aws-lc-rs (rustls' usual providers) contain C and
+    assembly; the `rsa` crate's current line (0.10) is only a release
+    candidate, and verification, all a TLS client needs, is short and
+    involves no secrets, so vtls implements it on `crypto-bigint`. The
+    lock file lists `ring` because of a weak optional feature of
+    rustls-webpki; it is never built.
+
+  LLVM cannot build the SIMD code (AES-NI, SSE2, AVX2) of the RustCrypto
+  and dalek crates for the soft-float UEFI target, which only the `no_std`
+  check of the libraries uses: `.cargo/config.toml` selects their portable
+  code for that target (Vindows' user space keeps the fast code, chosen at
+  run time from the processor's features).
 
 Everything else — the 802.11 protocol, the handshakes, SAE's protocol
-logic, the services and drivers — is in this repository. The cryptography
-is checked against published test vectors: RFC 8439 (ChaCha20), RFC 7693
-(BLAKE2s), RFC 3394 (AES key wrap), RFC 4493 (AES-CMAC), the IEEE 802.11
-PSK and PRF vectors, the IEEE 802.11i CCMP test MPDUs and the
-IEEE 802.11-2020 Annex J.10 SAE vectors.
+logic, the TLS stream and provider, the services and drivers — is in this
+repository. The cryptography is checked against published test vectors:
+RFC 8439 (ChaCha20), RFC 7693 (BLAKE2s), RFC 3394 (AES key wrap), RFC 4493
+(AES-CMAC), the IEEE 802.11 PSK and PRF vectors, the IEEE 802.11i CCMP
+test MPDUs, the IEEE 802.11-2020 Annex J.10 SAE vectors, and for TLS the
+RFC 8448 handshake trace (X25519, protected records, RSA-PSS and PKCS#1
+signatures), RFC 4231 (HMAC), RFC 8032 (Ed25519), the TLS 1.2 PRF vector
+and RSA signatures made by OpenSSL.
 
 ## Testing
 
@@ -291,11 +370,22 @@ IEEE 802.11-2020 Annex J.10 SAE vectors.
   server outages, TCP, UDP, DNS, ICMP, IPv6), `vradiolink`, `airsim`
   (the simulator driven by the station: every network, failover, range,
   rekeying, password changes, lossy links, DHCP and DNS conditions,
-  malformed frames), and the profile and policy modules.
+  malformed frames), the profile and policy modules, and `vtls`: the
+  provider against the vectors above, handshakes with a rustls server in
+  memory (every cipher suite, key exchange group and certificate type, data
+  both ways, closing from either side, key updates, records split down to
+  single bytes, expired, future, misnamed, untrusted and client-only
+  certificates, broken servers, every bit of the server's first flight
+  damaged in turn), and the certificate chains of api.deepgram.com,
+  example.com and www.google.com captured on 2026-10-03, verified against
+  the built-in roots. `cargo test -p vtls -- --ignored --nocapture`
+  connects to those servers for real with each cipher suite and group.
 * **In-system**: `nettest` (`run=nettest`, `run=nettest:wifi`): DNS, UDP,
-  TCP, HTTP and ping over Ethernet or Wi-Fi. These checks, and the scripts
-  below, reach real Internet hosts through QEMU's NAT, so the host must be
-  online.
+  TCP, HTTP and ping over Ethernet or Wi-Fi; `run=nettest:https`: HTTPS
+  requests to example.com (200 and the page) and api.deepgram.com (401
+  without a key) with the TLS version, cipher suite and handshake time.
+  These checks, and the scripts below, reach real Internet hosts through
+  QEMU's NAT, so the host must be online.
 * **GUI and recovery** (`cargo xtask test --ui`): `tests/ui/wifi-connect.vts`
   joins networks through the flyout (a wrong password first), Settings and
   the Terminal; `tests/ui/wifi-recovery.vts` breaks the network through
@@ -313,6 +403,14 @@ IEEE 802.11-2020 Annex J.10 SAE vectors.
   soft-MAC drivers; full-MAC adapters would need a variant of it).
 * WPA2/WPA3-Enterprise (802.1X/EAP), Enhanced Open (OWE), fast roaming
   (802.11r), power saving, 802.11n/ac rate control.
-* TLS (HTTPS) and a certificate store, for the web browser and cloud
-  services of the next phase.
+* TLS: no session resumption (each connection is a full handshake), no
+  client certificates, no revocation checking (OCSP, CRLs), no Encrypted
+  Client Hello, and no post-quantum key exchange yet (X25519MLKEM768, which
+  RustCrypto's `ml-kem` 0.3 could provide as a hybrid group). The trusted
+  roots are compiled in: updating them needs a new build, and there is no
+  system certificate store to add one to (`ClientConfigBuilder` can, per
+  application). Certificate checks depend on the firmware clock being
+  right.
+* An HTTPS client in `vnet::http` (applications speak HTTP over a
+  `vtls::TlsStream` themselves for now).
 * Encrypting the saved passphrases at rest.

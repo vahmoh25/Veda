@@ -10,12 +10,15 @@ These rules apply to every crate in the repository.
   repository. Where a protocol or cryptographic primitive has a mature,
   widely reviewed Rust implementation, that is used instead of a new one:
   smoltcp (TCP/IP, vendored in `third_party/` with documented patches),
-  the RustCrypto crates (hashes, HMAC, PBKDF2, AES, CCM, CMAC, AES key wrap,
-  P-256), `subtle`, `zeroize` and `httparse`. A new dependency must build
-  `no_std` (check with `--target x86_64-unknown-uefi`), be declared in the
-  workspace's `[workspace.dependencies]`, and come with a reason; avoid
-  crates with large dependency trees. `core`, `alloc` and (for host tools
-  only) `std` are available.
+  rustls with rustls-webpki and webpki-roots (TLS), the RustCrypto crates
+  (hashes, HMAC, PBKDF2, AES, AES-GCM, CCM, CMAC, AES key wrap,
+  ChaCha20-Poly1305, P-256, P-384, ECDSA, `crypto-bigint`), x25519-dalek
+  and ed25519-dalek, `subtle`, `zeroize` and `httparse`. A new dependency
+  must build `no_std` (check with `--target x86_64-unknown-uefi`), be
+  declared in the workspace's `[workspace.dependencies]`, and come with a
+  reason; avoid crates with large dependency trees, and a second
+  generation of a crate family already used. `core`, `alloc` and (for host
+  tools only) `std` are available.
 * **Rust only**, performance-critical code included (see Performance below).
 
 ## Targets
@@ -36,7 +39,10 @@ These rules apply to every crate in the repository.
   `x.sqrt()`, `x.sin()`, ... on `f32`/`f64`), or small local helpers in crates
   that must not depend on `vmath`.
 * Verify that a library really is `no_std`-clean with
-  `cargo build -p <crate> --target x86_64-unknown-uefi`.
+  `cargo build -p <crate> --target x86_64-unknown-uefi`. (That target is
+  soft-float: `.cargo/config.toml` makes the RustCrypto and dalek crates
+  use their portable code there, as LLVM cannot build their SIMD code for
+  it.)
 
 ## Pixels and colors
 

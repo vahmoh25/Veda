@@ -10,8 +10,9 @@ vrt = { workspace = true, default-features = false }
 vnet = { workspace = true }
 rustls = { workspace = true }
 webpki-roots = { workspace = true }
-sha2 = { workspace = true }
-hmac = { workspace = true }
+# `zeroize`: the hash and HMAC states derived from secrets are wiped when dropped.
+sha2 = { workspace = true, features = ["zeroize"] }
+hmac = { workspace = true, features = ["zeroize"] }
 aes-gcm = { workspace = true }
 chacha20poly1305 = { workspace = true }
 x25519-dalek = { workspace = true }
@@ -20,7 +21,7 @@ p256 = { workspace = true, features = ["ecdsa", "ecdh"] }
 p384 = { workspace = true }
 crypto-bigint = { workspace = true }
 subtle = { workspace = true }
-zeroize = { workspace = true }
+zeroize = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 # The tests run a rustls server against the client; its buffered

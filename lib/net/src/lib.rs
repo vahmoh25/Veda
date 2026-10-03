@@ -9,8 +9,8 @@
 //! * [`resolve`] / [`lookup`] — name resolution through the system's
 //!   caching resolver.
 //! * [`Pinger`] — ICMP echo (what `ping` uses).
-//! * [`http`] — a small HTTP/1.1 client (plain HTTP; HTTPS arrives with TLS
-//!   in a later version, layered on [`TcpStream`]).
+//! * [`http`] — a small HTTP/1.1 client (plain HTTP; TLS is the `vtls`
+//!   crate's, over a [`TcpStream`]).
 //! * [`status`], [`interfaces`], ... — the state of the network, and
 //!   configuration for the Settings app and the Terminal.
 //! * [`wifi`] — Wi-Fi: networks in range, joining, saved networks, events.

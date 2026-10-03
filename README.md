@@ -5,8 +5,8 @@ entirely in Rust. It is built around a capability-based microkernel and
 ships a polished graphical desktop and everyday applications, and reaches
 the Internet over Ethernet and Wi-Fi. Everything — bootloader, kernel,
 drivers, services, toolkit, applications — is in this repository; the
-TCP/IP engine and the cryptographic primitives come from a few mature Rust
-crates (smoltcp, RustCrypto).
+TCP/IP engine, the TLS protocol and the cryptographic primitives come from
+a few mature Rust crates (smoltcp, rustls, RustCrypto).
 
 ![The Vindows desktop](docs/images/desktop.png)
 
@@ -28,8 +28,10 @@ crates (smoltcp, RustCrypto).
   DHCP, DNS, routing, TCP, UDP, ICMP) and a Wi-Fi service that scans,
   joins WPA2, WPA3 and open networks with management frame protection,
   remembers networks, reconnects and roams on its own. Drivers only move
-  frames. Under QEMU a simulated Wi-Fi environment provides access points
-  bridged to the Internet. See [Networking](docs/NETWORKING.md).
+  frames. Applications get TLS 1.3 and 1.2 (HTTPS, secure WebSockets)
+  from `vtls`, with certificates checked against the Mozilla roots. Under
+  QEMU a simulated Wi-Fi environment provides access points bridged to the
+  Internet. See [Networking](docs/NETWORKING.md).
 * **Storage.** virtio-blk and AHCI (SATA) drivers and a file system
   service that keeps the home directory on its own disk with crash-safe
   snapshots, so your files survive restarts.
@@ -191,8 +193,9 @@ recovery of the window system after it is killed), failing on any panic.
 
 Networking has its own host tests (the 802.11 protocol and cryptography
 against published test vectors, station against access point, TCP/IP stacks
-over a simulated cable, the Wi-Fi simulator), and `nettest` checks DNS,
-TCP, HTTP and ping from inside Vindows.
+over a simulated cable, the Wi-Fi simulator, TLS handshakes against a
+rustls server and real certificate chains), and `nettest` checks DNS,
+TCP, HTTP, HTTPS and ping from inside Vindows.
 
 GUI automation scripts in `tests/ui/` click through the desktop and
 applications, check the log and save screenshots. The Wi-Fi scripts join
@@ -224,7 +227,7 @@ The serial console (kernel log plus every program's output) is saved to
 |------|----------|
 | `boot/` | `vboot`, the UEFI bootloader |
 | `kernel/` | `vkernel`, the microkernel |
-| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit), `v3d` (3D engine), `audio`, `text`, `math`, ... |
+| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit), `v3d` (3D engine), `net` and `tls` (networking and TLS for applications), `audio`, `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `netd` (network), `wlan` (Wi-Fi) |
 | `drivers/` | `ps2`, `virtio-input`, `virtio-blk`, `ahci` (SATA), `virtio-snd`, `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
 | `apps/` | the desktop `shell` and the applications, including `racer` (*Velocity*) and `starfall` |
