@@ -1,0 +1,56 @@
+# The Text Editor's agent interface, with a simulated Voice Agent service:
+# the agent writes a document, reads what the editor shows, replaces a word
+# and saves the file, as the user would with the keyboard. Throwing away
+# unsaved changes waits for the user's OK.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+# The editor starts for the agent and describes itself.
+agent-call app_actions '{"app":"editor"}' 60
+agent-result replace
+wait-serial "editor offers" 10
+agent-call use_app '{"app":"editor","action":"write","arguments":{"text":"Shopping list\nMilk\nBread\nApples"}}' 30
+agent-result written
+agent-call read_app '{"app":"editor"}' 30
+agent-result "Shopping list\nMilk"
+agent-call use_app '{"app":"editor","action":"replace","arguments":{"find":"bread","with":"Butter"}}' 30
+agent-result '"replaced":1'
+agent-call use_app '{"app":"editor","action":"go_to_line","arguments":{"line":3}}' 30
+agent-result '"line":3'
+# Saving an untitled document needs a new file's name.
+agent-call use_app '{"app":"editor","action":"save"}' 30
+agent-result "no file yet"
+agent-call use_app '{"app":"editor","action":"save","arguments":{"path":"~/Documents/shopping.txt"}}' 30
+agent-result "~/Documents/shopping.txt"
+agent-call files '{"operation":"read","path":"~/Documents/shopping.txt"}' 30
+agent-result "Butter"
+wait 2
+shot target/vindows/agent-app-editor.png
+# A second save under the same name does not replace the file silently.
+agent-call use_app '{"app":"editor","action":"new_document","arguments":{"text":"Other"}}' 30
+agent-call use_app '{"app":"editor","action":"save","arguments":{"path":"~/Documents/shopping.txt"}}' 30
+agent-result "already exists"
+# Throwing the new document's changes away needs the user's consent.
+agent-call use_app '{"app":"editor","action":"discard_changes","arguments":{"name":"Untitled 2"}}' 30
+agent-result waiting_for_approval
+wait-serial "approval 1 requested" 10
+agent-call use_app '{"app":"editor","action":"switch_document","arguments":{"name":"shopping.txt"}}' 30
+agent-result "shopping.txt"
+agent-call use_app '{"app":"editor","action":"undo","arguments":{"times":1}}' 30
+agent-result '"undo":'
+agent-call read_app '{"app":"editor"}' 30
+agent-result "Bread"
+# Allowed in the agent's window, the discard applies to the document it
+# named, though another one is in front by now.
+click 0.825 0.97
+wait 2
+agent-mark
+click 0.9375 0.8275
+wait-serial "approval 1 allowed" 10
+agent-expect "it was done" 20
+agent-call use_app '{"app":"editor","action":"switch_document","arguments":{"name":"Untitled 2"}}' 30
+agent-result "no open document"
+agent-call read_app '{"app":"editor"}' 30
+agent-result '"title":"shopping.txt","file":"~/Documents/shopping.txt","unsaved_changes":true'

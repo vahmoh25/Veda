@@ -127,7 +127,10 @@ impl AgentSim {
             json_string(args_json)
         );
         self.send_json(&msg)?;
-        self.wait_text(&format!("\"id\":\"{id}\""), skip, timeout)
+        let response = self.wait_text(&format!("\"id\":\"{id}\""), skip, timeout)?;
+        // The result as the language model reads it (the response carries
+        // it as a JSON string).
+        Ok(string_field(&response, "content").unwrap_or(response))
     }
 
     /// The agent "speaks" for `secs` seconds (a tone at 24 kHz).
@@ -163,6 +166,30 @@ fn frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
     }
     f.extend_from_slice(payload);
     f
+}
+
+/// The value of the string field `name` in a flat JSON message, decoded.
+fn string_field(json: &str, name: &str) -> Option<String> {
+    let start = json.find(&format!("\"{name}\":\""))? + name.len() + 4;
+    let mut out = String::new();
+    let mut chars = json[start..].chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                'u' => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    out.push(char::from_u32(u32::from_str_radix(&hex, 16).ok()?).unwrap_or('\u{fffd}'));
+                }
+                c => out.push(c),
+            },
+            c => out.push(c),
+        }
+    }
+    None
 }
 
 fn json_string(s: &str) -> String {
@@ -293,5 +320,14 @@ mod tests {
         assert_eq!(base64(&h.finalize()), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
         assert_eq!(json_string("a\"b"), "\"a\\\"b\"");
         assert_eq!(frame(1, b"hi"), vec![0x81, 2, b'h', b'i']);
+    }
+
+    #[test]
+    fn decodes_function_results() {
+        let msg = r#"{"type":"FunctionCallResponse","id":"call-1","content":"{\"ok\":true,\"text\":\"a\\nb é\"}"}"#;
+        assert_eq!(string_field(msg, "content").as_deref(), Some(r#"{"ok":true,"text":"a\nb é"}"#));
+        assert_eq!(string_field(msg, "id").as_deref(), Some("call-1"));
+        assert_eq!(string_field(msg, "missing"), None);
+        assert_eq!(string_field(r#"{"content":"cut"#, "content"), None);
     }
 }

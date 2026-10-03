@@ -134,6 +134,55 @@ pub fn arg_bool(args: &Value, name: &str) -> Option<bool> {
     }
 }
 
+/// Reads an optional whole-number argument (`None` when absent).
+pub fn arg_opt_int(args: &Value, name: &str) -> Result<Option<i64>, String> {
+    match args.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(_) => {
+            let f = arg_f64(args, name)?;
+            let n = f as i64;
+            if n as f64 != f {
+                return Err(alloc::format!("'{name}' must be a whole number"));
+            }
+            Ok(Some(n))
+        }
+    }
+}
+
+/// Reads a path argument the way the agent speaks of files: `~` is the
+/// home directory, and relative paths start there too. The agent's private
+/// storage is refused.
+pub fn arg_path(args: &Value, name: &str) -> Result<String, String> {
+    let p = arg_str(args, name)?.trim();
+    if p.is_empty() {
+        return Err(alloc::format!("'{name}' is empty"));
+    }
+    let p = vfiles::path::resolve(vfiles::path::HOME, p);
+    if vfiles::path::is_within(&p, "/home/.private") {
+        return Err("that location is private".into());
+    }
+    Ok(p)
+}
+
+/// How a path reads aloud ("~/Documents/notes.txt").
+pub fn show_path(path: &str) -> String {
+    vfiles::path::display_path(path)
+}
+
+/// `text` cut to at most `max` bytes (at a character boundary), and
+/// whether it was cut: application state stays small for the agent.
+pub fn clip(text: &str, max: usize) -> (&str, bool) {
+    if text.len() <= max {
+        return (text, false);
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
+}
+
 /// What a program implements to serve the agent.
 pub trait AgentServer {
     fn agent_info(&self) -> AppAgentInfo;

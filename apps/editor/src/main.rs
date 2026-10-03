@@ -4,13 +4,15 @@
 //! The editing model (buffer, selection, undo, layout, highlighting) is the
 //! host-tested `vtext` crate; [`view`] draws it and maps input to edits.
 //! This module is the application around it: tabs, menus, files, dialogs,
-//! the find bar and the status bar.
+//! the find bar and the status bar; [`agent`] lets the voice agent read and
+//! write documents.
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
+mod agent;
 mod view;
 
 use alloc::format;
@@ -899,6 +901,18 @@ impl App for Editor {
         let dot = if tab.doc.is_modified() { "\u{2022} " } else { "" };
         let title = format!("{dot}{} \u{2014} Text Editor", tab.title);
         ui.set_title(&title);
+    }
+
+    fn agent_info(&self) -> Option<vui::agent::AppAgentInfo> {
+        Some(agent::info())
+    }
+
+    fn agent_state(&self) -> vui::agent::Value {
+        agent::state(self)
+    }
+
+    fn agent_invoke(&mut self, action: &str, args: &vui::agent::Value) -> Result<vui::agent::Value, String> {
+        Editor::agent_invoke(self, action, args)
     }
 
     fn close_requested(&mut self) -> bool {
