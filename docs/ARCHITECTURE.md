@@ -32,7 +32,23 @@ that communicate over kernel channels.
    and jumps to the kernel with a `bootinfo::BootInfo`.
 3. The kernel initialises memory, ACPI, APICs, timers and the other CPUs, then
    starts `bin/init.exe` from the initrd (the only program it loads itself).
-4. `init` starts the system services and the desktop shell.
+4. `init` starts the system services and the desktop shell, then supervises
+   them: the window system, the shell, audio and the PS/2 driver are restarted
+   if they crash (at most three times a minute). Drivers reconnect to a
+   restarted compositor through the registry, which queues connections
+   until a service registers again.
+
+## Storage
+
+* `virtio-blk` serves each disk through the `block` protocol under the name
+  `block/<serial>`, so clients find a disk by its serial number.
+* `vfs` serves `/system` straight from the initrd and keeps `/home` and
+  `/tmp` in memory. If a disk with serial `vindows-home` is attached, `/home`
+  is restored from it at boot and written back half a second after changes
+  stop (and before a shutdown from the start menu). The disk holds two
+  snapshot slots with checksums; saves alternate between them, so an
+  interrupted save never damages the previous one. Unchanged sample files
+  are stored as references to the system image.
 
 ## The kernel (`kernel/`)
 
@@ -87,6 +103,72 @@ eager FPU/SSE/AVX state switching with XSAVE.
   Protocols are declared with the `vipc` macros, which generate typed client
   stubs and server dispatch code.
 
+## The window system (`services/compositor`)
+
+The compositor owns the framebuffer and serves two protocols: `display`
+for applications and `input` for drivers.
+
+* **Surfaces.** A client creates a window and attaches two pixel buffers in
+  a shared VMO. It draws into the back buffer and `present`s it; the
+  compositor answers `FrameDone` once the previous buffer is no longer
+  needed, which paces every client to the display without copying pixels.
+* **Composition** is damage driven: changed rectangles are recomposed from
+  the bottom up into a back buffer (premultiplied alpha, shadows,
+  open/close/minimise animations) and copied to the framebuffer, at most
+  once per display frame.
+* **Window kinds** form layers: the desktop, normal and borderless windows,
+  panels (which reserve screen space), popups (closed when they lose focus)
+  and notifications. Decorations are drawn by the compositor, so a hung
+  client can still be moved and closed.
+* **Input**: keyboard events go through a keymap (US layout, modifiers, key
+  repeat) to the focused window; pointer events go to the window under the
+  pointer, or to the one that grabbed it while a button is held. Dragging a
+  window to the top or a side edge maximises it or snaps it to that half of
+  the screen. Alt+Tab shows the window switcher (live thumbnails), Alt+F4
+  closes, and tapping Super sends `StartMenuKey` to the shell.
+
+## The desktop shell (`apps/shell`)
+
+The shell is an ordinary process that the compositor trusts with shell
+surfaces: the desktop (wallpaper and icons), the taskbar (a panel), the
+start menu and calendar (popups) and notifications. Each surface is a
+`vui::Host`; they draw from one shared model and request changes as actions
+(launch an app, activate or minimise a window, toggle a popup) that the
+main loop performs. Running windows come from the compositor
+(`list_windows`, refreshed on `WindowsChanged`); installed applications
+come from the launcher in `init`, which reads the `.app` manifests. The
+shell serves the `shell` protocol so applications can change the wallpaper
+and post notifications.
+
+## Graphics and the toolkit
+
+| Library | Role |
+|---------|------|
+| `vraster` | paths (lines, quadratic and cubic curves, arcs), transforms, strokes, anti-aliased scanline rasterisation with coverage spans |
+| `vfont` | TrueType/OpenType (CFF) parsing, glyph outlines, metrics, kerning, a glyph bitmap cache |
+| `vimage` | PNG, JPEG (baseline and progressive), BMP and QOI decoders and encoders, resampling |
+| `vgfx` | `Canvas` drawing on pixel buffers: fills, gradients, rounded rectangles, paths, bitmaps, shadows, text layout and rendering |
+| `vui` | the immediate-mode toolkit: windows, frame pacing, input, widgets (buttons, toggles, sliders, text boxes, lists, scroll areas, tabs), menus, modal dialogs, the file dialog, vector icons, the dark theme |
+| `vtext` | the text editing model behind the Text Editor: line buffer, selections, grouped undo, search, soft-wrap layout, syntax highlighting |
+
+`vui` is immediate mode: each frame the application's `update` lays out and
+draws widgets, and the widgets report their interactions in the same call.
+State that must survive between frames (focus, scroll offsets, text cursors,
+open menus, animations) lives in a per-window `UiState` keyed by widget ids.
+Frames are drawn only when input arrives or an animation asks for one.
+
+## Testing
+
+* Host unit tests for the libraries with platform-independent logic (ABI,
+  heap, IPC codec, math, rasteriser, fonts, image codecs, 2D graphics, text
+  editing, build tool).
+* `systest`, a program that runs inside Vindows and exercises kernel objects,
+  threads, the file system and the launcher.
+* GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
+  mouse, keyboard, waits on log lines, screenshots — and fail on panics.
+
+`cargo xtask test --ui` runs all three.
+
 ## Repository layout
 
 | Path | Contents |
@@ -96,7 +178,10 @@ eager FPU/SSE/AVX state switching with XSAVE.
 | `lib/abi`, `lib/bootinfo`, `lib/initrd`, `lib/pe` | shared formats and the kernel ABI |
 | `lib/rt`, `lib/heap`, `lib/build` | user runtime, allocator, build helper |
 | `lib/math`, `lib/raster`, `lib/font`, `lib/image` | math, vector rasterisation, fonts, image codecs |
-| `services/`, `drivers/`, `apps/` | system services, drivers and applications |
+| `lib/ipc`, `lib/proto` | message encoding and the service protocols |
+| `lib/gfx`, `lib/ui`, `lib/text` | 2D drawing, the GUI toolkit, the text editing model |
+| `services/`, `drivers/`, `apps/`, `games/` | system services, drivers, applications and games |
+| `tests/` | in-system tests and GUI automation scripts |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |
 | `assets/` | fonts and other data shipped in the initrd |
 | `docs/` | documentation |
