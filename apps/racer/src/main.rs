@@ -3,7 +3,8 @@
 //! A procedurally generated circuit with hills, banked corners, curbs and
 //! scenery; four cars (one player, computer opponents following a racing
 //! line); countdown start, laps and timing, positions, mini-map, pause menu
-//! and results. Rendering uses the `v3d` software renderer.
+//! and results. Rendering uses the `v3d` software renderer; [`agent`] lets
+//! the voice agent start, pause and resume races and change the settings.
 //!
 //! Controls: arrows/WASD drive, Space handbrake, Esc pause, Enter confirm,
 //! F3 performance overlay.
@@ -13,6 +14,7 @@
 
 extern crate alloc;
 
+mod agent;
 mod ai;
 mod car;
 mod hud;
@@ -49,6 +51,11 @@ const PAINTS: [(u32, u32); 6] = [
     (0xFF8A3AC8, 0xFFF2C23A),
     (0xFFEC7020, 0xFF1E2024),
 ];
+
+/// The most laps a race can have.
+const MAX_LAPS: u32 = 9;
+/// The most computer drivers in a race.
+const MAX_OPPONENTS: usize = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Phase {
@@ -127,6 +134,10 @@ struct Racer {
     /// A circuit to generate at the next update (after a frame showed the
     /// "generating" note).
     pending_track: Option<usize>,
+    /// Start a race on that circuit once it is ready (the agent asked).
+    start_when_ready: bool,
+    /// The registration with the voice agent.
+    agent: Option<agent::Link>,
 }
 
 fn asphalt_texture() -> Texture {
@@ -235,6 +246,8 @@ impl Racer {
             map,
             rng: Rng::new(42),
             pending_track: None,
+            start_when_ready: false,
+            agent: None,
         };
         g.place_grid();
         // Let the attract mode start with the cars already spread out.
@@ -245,6 +258,8 @@ impl Racer {
             g.progress[i] = Progress::new(s);
         }
         g.snap_camera();
+        // Ready to answer the agent from the first frame on.
+        g.agent = Some(agent::Link::new());
         g
     }
 
@@ -305,6 +320,33 @@ impl Racer {
         self.message = None;
         self.particles.clear();
         self.snap_camera();
+    }
+
+    /// Pauses the race (Esc, or the window lost the keyboard).
+    fn pause(&mut self) {
+        self.paused = true;
+        self.menu = 0;
+    }
+
+    /// Back to the main menu, from the pause menu or the results.
+    fn quit_to_menu(&mut self) {
+        self.paused = false;
+        self.phase = Phase::Title;
+        self.menu = 0;
+        self.snap_camera();
+    }
+
+    /// Changes the number of computer drivers on the main menu, where the
+    /// cars drive around the whole circuit.
+    fn set_opponents(&mut self, opponents: usize) {
+        self.opponents = opponents;
+        self.place_grid();
+        let n = self.cars.len();
+        for i in 0..n {
+            let s = self.track.length * i as f32 / n as f32;
+            self.cars[i] = Car::new(&self.track, s, 0.0);
+            self.progress[i] = Progress::new(s);
+        }
     }
 
     fn snap_camera(&mut self) {
@@ -541,11 +583,15 @@ fn chase_target(car: &Car, yaw: f32) -> (Vec3, Vec3) {
 const TITLE_ITEMS: usize = 5;
 const PAUSE_ITEMS: [&str; 3] = ["Resume", "Restart race", "Quit to menu"];
 
-impl Game for Racer {
-    fn update(&mut self, app: &mut AppState, dt: f32) {
+impl Racer {
+    /// Input and simulation for one frame.
+    fn step(&mut self, app: &mut AppState, dt: f32) {
         if let Some(v) = self.pending_track.take() {
             // The previous frame showed the "generating" note.
             self.load_track(v);
+            if core::mem::take(&mut self.start_when_ready) {
+                self.start_race();
+            }
             return;
         }
         let k = &app.keys;
@@ -576,16 +622,9 @@ impl Game for Racer {
                             let v = (self.variant as i32 + delta).rem_euclid(3) as usize;
                             self.pending_track = Some(v);
                         }
-                        2 => self.laps = (self.laps as i32 + delta).clamp(1, 9) as u32,
+                        2 => self.laps = (self.laps as i32 + delta).clamp(1, MAX_LAPS as i32) as u32,
                         3 => {
-                            self.opponents = (self.opponents as i32 + delta).clamp(1, 5) as usize;
-                            self.place_grid();
-                            let n = self.cars.len();
-                            for i in 0..n {
-                                let s = self.track.length * i as f32 / n as f32;
-                                self.cars[i] = Car::new(&self.track, s, 0.0);
-                                self.progress[i] = Progress::new(s);
-                            }
+                            self.set_opponents((self.opponents as i32 + delta).clamp(1, MAX_OPPONENTS as i32) as usize)
                         }
                         _ => {}
                     }
@@ -630,20 +669,14 @@ impl Game for Racer {
                     match self.menu {
                         0 => self.paused = false,
                         1 => self.start_race(),
-                        _ => {
-                            self.paused = false;
-                            self.phase = Phase::Title;
-                            self.menu = 0;
-                            self.snap_camera();
-                        }
+                        _ => self.quit_to_menu(),
                     }
                 }
                 return;
             }
             Phase::Countdown => {
                 if esc || !app.focused {
-                    self.paused = true;
-                    self.menu = 0;
+                    self.pause();
                 }
                 self.phase_time += dt;
                 self.simulate(dt, Some(Controls::default()), true);
@@ -657,8 +690,7 @@ impl Game for Racer {
             }
             Phase::Racing => {
                 if esc || !app.focused {
-                    self.paused = true;
-                    self.menu = 0;
+                    self.pause();
                     return;
                 }
                 self.race_time += dt;
@@ -690,21 +722,26 @@ impl Game for Racer {
                 self.phase_time += dt;
                 self.simulate(dt, None, false);
                 if enter && self.phase_time > 0.5 {
-                    self.phase = Phase::Title;
-                    self.menu = 0;
-                    self.snap_camera();
+                    self.quit_to_menu();
                 } else if k.pressed(keys::R) {
                     self.start_race();
                 } else if esc {
-                    self.phase = Phase::Title;
-                    self.menu = 0;
-                    self.snap_camera();
+                    self.quit_to_menu();
                 }
             }
         }
         self.particles.update(dt);
         self.sparks.update(dt);
         self.update_camera(dt);
+    }
+}
+
+impl Game for Racer {
+    fn update(&mut self, app: &mut AppState, dt: f32) {
+        self.step(app, dt);
+        // The agent's requests come after the keyboard's, so what they
+        // change shows in this frame.
+        agent::serve(self, app);
     }
 
     fn render(&mut self, r: &mut Renderer) {
