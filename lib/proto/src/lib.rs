@@ -14,8 +14,11 @@ pub mod display;
 pub mod fs;
 pub mod init;
 pub mod input;
+pub mod net;
+pub mod netring;
 pub mod pci;
 pub mod shell;
+pub mod wlan;
 
 pub use fs::vfs;
 pub use init::{launcher, registry};

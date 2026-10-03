@@ -1,0 +1,19 @@
+[package]
+name = "vnetstack"
+description = "The Vindows network stack: interfaces, DHCP, DNS, routing and sockets on top of smoltcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+smoltcp = { workspace = true }
+vproto = { workspace = true }
+vipc = { workspace = true }
+ventropy = { workspace = true }
+
+[dev-dependencies]
+# DhcpRepr's DNS server list type, for the test DHCP server.
+heapless = "0.9"
+
+[lints]
+workspace = true

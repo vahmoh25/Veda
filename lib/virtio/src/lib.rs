@@ -123,8 +123,12 @@ pub struct Virtqueue {
     avail_off: usize,
     used_off: usize,
     free: Vec<u16>,
-    /// Length of the chain starting at each head (to free it again).
+    /// Length of the chain starting at each head (0: not an outstanding
+    /// head).
     chain_len: Vec<u16>,
+    /// Our own copy of each descriptor's `next` link, so freeing a chain
+    /// never trusts memory the device can write.
+    next: Vec<u16>,
     last_used: u16,
     notify: *mut u16,
 }
@@ -148,6 +152,7 @@ impl Virtqueue {
             used_off,
             free: (0..size).rev().collect(),
             chain_len: alloc::vec![0; size as usize],
+            next: alloc::vec![0; size as usize],
             last_used: 0,
             notify,
         })
@@ -205,6 +210,7 @@ impl Virtqueue {
             } else {
                 0
             };
+            self.next[ids[i] as usize] = next;
             // SAFETY: descriptor owned by us until the device uses it.
             unsafe { write_volatile(self.desc(ids[i]), Desc { addr: seg.phys, len: seg.len, flags, next }) };
         }
@@ -228,26 +234,34 @@ impl Virtqueue {
     }
 
     /// Takes the next completed chain: (head, bytes written by the device).
-    /// The chain's descriptors are returned to the free list.
+    /// The chain's descriptors are returned to the free list. Entries naming
+    /// a descriptor that is not the head of an outstanding chain (a device
+    /// bug) are skipped.
     pub fn pop_used(&mut self) -> Option<(u16, u32)> {
-        fence(Ordering::SeqCst);
-        if self.last_used == self.used_idx() {
-            return None;
-        }
-        let (id, len) = self.used_elem(self.last_used % self.size);
-        self.last_used = self.last_used.wrapping_add(1);
-        let head = id as u16;
-        let mut cur = head;
-        for _ in 0..self.chain_len[head as usize].max(1) {
-            self.free.push(cur);
-            // SAFETY: reading back our own descriptor.
-            let d = unsafe { read_volatile(self.desc(cur)) };
-            if d.flags & DESC_F_NEXT == 0 {
-                break;
+        loop {
+            fence(Ordering::SeqCst);
+            if self.last_used == self.used_idx() {
+                return None;
             }
-            cur = d.next;
+            let (id, len) = self.used_elem(self.last_used % self.size);
+            self.last_used = self.last_used.wrapping_add(1);
+            if id >= self.size as u32 || self.chain_len[id as usize] == 0 {
+                continue;
+            }
+            return Some(self.release(id as u16, len));
         }
-        Some((head, len))
+    }
+
+    fn release(&mut self, head: u16, len: u32) -> (u16, u32) {
+        let count = core::mem::take(&mut self.chain_len[head as usize]);
+        let mut cur = head;
+        for i in 0..count {
+            self.free.push(cur);
+            if i + 1 < count {
+                cur = self.next[cur as usize];
+            }
+        }
+        (head, len)
     }
 }
 
@@ -543,6 +557,12 @@ impl Device {
         assert!(off < self.device_cfg_len);
         // SAFETY: inside the device-specific configuration.
         unsafe { write_volatile(self.device_cfg.add(off as usize), v) }
+    }
+
+    pub fn cfg_read16(&self, off: u32) -> u16 {
+        assert!(off + 2 <= self.device_cfg_len);
+        // SAFETY: inside the device-specific configuration.
+        unsafe { read_volatile(self.device_cfg.add(off as usize) as *const u16) }
     }
 
     pub fn cfg_read32(&self, off: u32) -> u32 {

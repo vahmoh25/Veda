@@ -48,6 +48,8 @@ const DRIVERS: &[DriverMatch] = &[
     DriverMatch { vendor: 0x1AF4, devices: &[0x1059], driver: "virtio-snd" },
     // virtio block (transitional and modern)
     DriverMatch { vendor: 0x1AF4, devices: &[0x1001, 0x1042], driver: "virtio-blk" },
+    // virtio network card (transitional and modern)
+    DriverMatch { vendor: 0x1AF4, devices: &[0x1000, 0x1041], driver: "virtio-net" },
 ];
 
 fn class_name(info: &DeviceInfo) -> &'static str {

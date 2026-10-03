@@ -25,10 +25,13 @@ members = [
     "lib/v3d",
     "lib/audio",
     "lib/entropy",
+    "lib/netstack",
+    "lib/net",
     "services/init",
     "services/vfs",
     "services/devmgr",
     "services/compositor",
+    "services/netd",
     "apps/about",
     "apps/shell",
     "apps/editor",
@@ -47,7 +50,9 @@ members = [
     "drivers/virtio-input",
     "drivers/ps2",
     "drivers/virtio-blk",
+    "drivers/virtio-net",
     "tests/systest",
+    "tests/nettest",
 ]
 # Vendored third-party crates are path dependencies, not members (their own
 # tests and dev-dependencies stay out of this workspace). See third_party/.
@@ -86,6 +91,37 @@ vfiles = { path = "lib/files" }
 v3d = { path = "lib/v3d" }
 vaudio = { path = "lib/audio" }
 ventropy = { path = "lib/entropy" }
+vnetstack = { path = "lib/netstack" }
+vnet = { path = "lib/net" }
+# HTTP/1.x message parsing (no_std).
+httparse = { version = "1.10", default-features = false }
+# The TCP/IP stack (vendored with a security patch, see third_party/).
+smoltcp = { path = "third_party/smoltcp", default-features = false, features = [
+    "alloc",
+    "medium-ethernet",
+    "medium-ip",
+    "proto-ipv4",
+    "proto-ipv4-fragmentation",
+    "proto-dhcpv4",
+    "proto-ipv6",
+    "proto-ipv6-slaac",
+    "proto-dns",
+    "socket-tcp",
+    "socket-udp",
+    "socket-icmp",
+    "socket-dhcpv4",
+    "multicast",
+    "auto-icmp-echo-reply",
+    "iface-max-addr-count-6",
+    "iface-max-route-count-8",
+    "iface-max-prefix-count-2",
+    "iface-neighbor-cache-count-32",
+    "iface-max-multicast-group-count-8",
+    "assembler-max-segment-count-8",
+    "reassembly-buffer-size-4096",
+    "reassembly-buffer-count-4",
+    "fragmentation-buffer-size-4096",
+] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

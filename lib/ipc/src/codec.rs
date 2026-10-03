@@ -361,6 +361,96 @@ impl<T: Decode + Copy + Default, const N: usize> Decode for [T; N] {
     }
 }
 
+// Network addresses (`core::net`): an IP address is a tag byte (4 or 6)
+// followed by its octets; a socket address adds the port (and, for IPv6,
+// the flow label and scope id).
+
+impl Encode for core::net::Ipv4Addr {
+    fn encode(self, e: &mut Encoder) {
+        e.put_bytes(&self.octets());
+    }
+}
+
+impl Decode for core::net::Ipv4Addr {
+    fn decode(d: &mut Decoder) -> Result<Self, DecodeError> {
+        Ok(core::net::Ipv4Addr::from(<[u8; 4]>::decode(d)?))
+    }
+}
+
+impl Encode for core::net::Ipv6Addr {
+    fn encode(self, e: &mut Encoder) {
+        e.put_bytes(&self.octets());
+    }
+}
+
+impl Decode for core::net::Ipv6Addr {
+    fn decode(d: &mut Decoder) -> Result<Self, DecodeError> {
+        Ok(core::net::Ipv6Addr::from(<[u8; 16]>::decode(d)?))
+    }
+}
+
+impl Encode for core::net::IpAddr {
+    fn encode(self, e: &mut Encoder) {
+        match self {
+            core::net::IpAddr::V4(a) => {
+                4u8.encode(e);
+                a.encode(e);
+            }
+            core::net::IpAddr::V6(a) => {
+                6u8.encode(e);
+                a.encode(e);
+            }
+        }
+    }
+}
+
+impl Decode for core::net::IpAddr {
+    fn decode(d: &mut Decoder) -> Result<Self, DecodeError> {
+        match u8::decode(d)? {
+            4 => Ok(core::net::IpAddr::V4(Decode::decode(d)?)),
+            6 => Ok(core::net::IpAddr::V6(Decode::decode(d)?)),
+            t => Err(DecodeError::BadTag(t as u32)),
+        }
+    }
+}
+
+impl Encode for core::net::SocketAddr {
+    fn encode(self, e: &mut Encoder) {
+        match self {
+            core::net::SocketAddr::V4(a) => {
+                4u8.encode(e);
+                a.ip().encode(e);
+                a.port().encode(e);
+            }
+            core::net::SocketAddr::V6(a) => {
+                6u8.encode(e);
+                a.ip().encode(e);
+                a.port().encode(e);
+                a.flowinfo().encode(e);
+                a.scope_id().encode(e);
+            }
+        }
+    }
+}
+
+impl Decode for core::net::SocketAddr {
+    fn decode(d: &mut Decoder) -> Result<Self, DecodeError> {
+        match u8::decode(d)? {
+            4 => {
+                let ip = core::net::Ipv4Addr::decode(d)?;
+                Ok(core::net::SocketAddr::V4(core::net::SocketAddrV4::new(ip, u16::decode(d)?)))
+            }
+            6 => {
+                let ip = core::net::Ipv6Addr::decode(d)?;
+                let port = u16::decode(d)?;
+                let (flow, scope) = (u32::decode(d)?, u32::decode(d)?);
+                Ok(core::net::SocketAddr::V6(core::net::SocketAddrV6::new(ip, port, flow, scope)))
+            }
+            t => Err(DecodeError::BadTag(t as u32)),
+        }
+    }
+}
+
 impl Encode for Handle {
     fn encode(self, e: &mut Encoder) {
         e.put_handle(self)
@@ -536,6 +626,23 @@ mod tests {
         assert_eq!(roundtrip::<Result<u32, u8>>(Err(3)), Err(3));
         assert_eq!(roundtrip((1u8, "a".to_string(), 2u64)), (1, "a".to_string(), 2));
         assert_eq!(roundtrip(Bytes(vec![9; 1000])), Bytes(vec![9; 1000]));
+    }
+
+    #[test]
+    fn network_addresses() {
+        use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+        let v4: IpAddr = Ipv4Addr::new(10, 0, 2, 15).into();
+        let v6: IpAddr = "fe80::5054:ff:fe12:3456".parse::<Ipv6Addr>().unwrap().into();
+        assert_eq!(roundtrip(v4), v4);
+        assert_eq!(roundtrip(v6), v6);
+        let s4: SocketAddr = "93.184.215.14:443".parse().unwrap();
+        let s6: SocketAddr = "[2001:db8::1]:8080".parse().unwrap();
+        assert_eq!(roundtrip(s4), s4);
+        assert_eq!(roundtrip(s6), s6);
+        let mut d = Decoder::new(&[5, 1, 2, 3, 4], Vec::new());
+        assert_eq!(IpAddr::decode(&mut d), Err(DecodeError::BadTag(5)));
+        let mut d = Decoder::new(&[6, 1, 2, 3], Vec::new());
+        assert_eq!(IpAddr::decode(&mut d), Err(DecodeError::Truncated));
     }
 
     #[test]

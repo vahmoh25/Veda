@@ -64,10 +64,8 @@ mod tests {
         }
         let nonce = [0, 0, 0, 0x09, 0, 0, 0, 0x4a, 0, 0, 0, 0];
         let block = chacha20_block(&key, 1, &nonce);
-        let expected = hex(
-            "10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4e
-             d2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e",
-        );
+        let expected = hex("10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4e
+             d2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e");
         assert_eq!(block.as_slice(), expected.as_slice());
     }
 
@@ -75,10 +73,8 @@ mod tests {
     #[test]
     fn rfc8439_zero_key() {
         let block = chacha20_block(&[0; 32], 0, &[0; 12]);
-        let expected = hex(
-            "76b8e0ada0f13d90405d6ae55386bd28bdd219b8a08ded1aa836efcc8b770dc7
-             da41597c5157488d7724e03fb8d84a376a43b8f41518a11cc387b669b2ee6586",
-        );
+        let expected = hex("76b8e0ada0f13d90405d6ae55386bd28bdd219b8a08ded1aa836efcc8b770dc7
+             da41597c5157488d7724e03fb8d84a376a43b8f41518a11cc387b669b2ee6586");
         assert_eq!(block.as_slice(), expected.as_slice());
     }
 }

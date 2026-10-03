@@ -46,7 +46,7 @@ pub const CHANNEL_MAX_BYTES: usize = 64 * 1024;
 /// Maximum number of handles in one channel message.
 pub const CHANNEL_MAX_HANDLES: usize = 64;
 /// Maximum number of items in one `object_wait_many` call.
-pub const WAIT_MANY_MAX: usize = 64;
+pub const WAIT_MANY_MAX: usize = 1024;
 /// Maximum length of process and thread names.
 pub const NAME_MAX: usize = 32;
 

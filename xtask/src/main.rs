@@ -48,6 +48,8 @@ RUN OPTIONS:
     --gdb               Wait for a debugger on localhost:1234
     --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
     --fresh-home        Start with a new home directory (deletes target/vindows/home.img)
+    --net MODE          Network: ethernet (default, QEMU's NAT) or none
+    --nic MODEL         QEMU model of the wired card (default virtio-net-pci; e1000e, ...)
 
 SHOT OPTIONS:
     --wait SECS         Seconds to wait before the screenshot (default 10)
@@ -111,6 +113,11 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--no-generate" => o.generate = false,
             "--skip" => o.skip.push(value(arg)?),
             "--fresh-home" => o.fresh_home = true,
+            "--net" => {
+                let v = value(arg)?;
+                o.vm.net = qemu::NetMode::parse(&v).ok_or(format!("unknown network mode '{v}'"))?;
+            }
+            "--nic" => o.vm.nic_model = value(arg)?,
             other => return Err(format!("unknown option '{other}' (see `cargo xtask help`)")),
         }
     }
@@ -319,6 +326,9 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vgfx", &[]),
     ("vtext", &[]),
     ("vfiles", &["thumbnails"]),
+    ("ventropy", &[]),
+    ("vnetstack", &[]),
+    ("vnet", &[]),
     ("xtask", &[]),
 ];
 

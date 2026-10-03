@@ -1,0 +1,16 @@
+[package]
+name = "vnet"
+description = "Networking for Vindows applications: TCP streams, UDP sockets, name resolution, ping and a small HTTP client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+httparse = { workspace = true }
+
+[lints]
+workspace = true

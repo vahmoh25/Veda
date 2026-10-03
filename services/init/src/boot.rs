@@ -24,16 +24,17 @@ pub mod roles {
 }
 
 /// System services in start order. File systems come first (everything
-/// else loads data through them), then device management and drivers, the
-/// window system, audio and the desktop shell.
-const SERVICES: [&str; 6] = ["vfs", "devmgr", "ps2", "compositor", "audio", "shell"];
+/// else loads data through them), then the network service (drivers attach
+/// to it as they start), device management and drivers, the window system,
+/// audio and the desktop shell.
+const SERVICES: [&str; 7] = ["vfs", "netd", "devmgr", "ps2", "compositor", "audio", "shell"];
 
 /// Services that are started again if they exit. They hold no state other
-/// processes cannot recover: drivers reconnect to a restarted compositor,
-/// and the shell rebuilds its windows. (The file system and the device
-/// manager are not restarted: one holds the user's files, the other owns
-/// the running drivers.)
-pub const RESTARTABLE: [&str; 4] = ["compositor", "shell", "audio", "ps2"];
+/// processes cannot recover: drivers reconnect to a restarted compositor
+/// or network service, and the shell rebuilds its windows. (The file
+/// system and the device manager are not restarted: one holds the user's
+/// files, the other owns the running drivers.)
+pub const RESTARTABLE: [&str; 5] = ["compositor", "shell", "audio", "ps2", "netd"];
 
 fn dup(h: &Option<vrt::Vmo>) -> Option<Handle> {
     h.as_ref().and_then(|v| v.0.duplicate(None).ok())

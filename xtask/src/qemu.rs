@@ -54,6 +54,26 @@ impl QemuInstall {
     }
 }
 
+/// How the virtual machine reaches the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetMode {
+    /// No network card.
+    None,
+    /// A wired card on QEMU's NAT (DHCP 10.0.2.15, gateway 10.0.2.2, DNS
+    /// 10.0.2.3; the host is reachable at 10.0.2.2).
+    Ethernet,
+}
+
+impl NetMode {
+    pub fn parse(s: &str) -> Option<NetMode> {
+        match s {
+            "none" | "off" => Some(NetMode::None),
+            "ethernet" | "wired" | "user" => Some(NetMode::Ethernet),
+            _ => None,
+        }
+    }
+}
+
 /// User-tunable virtual machine settings.
 #[derive(Debug, Clone)]
 pub struct VmConfig {
@@ -77,6 +97,10 @@ pub struct VmConfig {
     /// Let the guest reboot (otherwise a reset, e.g. after a triple fault,
     /// stops QEMU).
     pub allow_reboot: bool,
+    /// The network connection.
+    pub net: NetMode,
+    /// QEMU model of the wired card (`virtio-net-pci`, `e1000e`, ...).
+    pub nic_model: String,
     /// Extra raw QEMU arguments.
     pub extra: Vec<String>,
 }
@@ -95,6 +119,8 @@ impl Default for VmConfig {
             debug_exit: false,
             home_disk: None,
             allow_reboot: false,
+            net: NetMode::Ethernet,
+            nic_model: "virtio-net-pci".into(),
             extra: Vec::new(),
         }
     }
@@ -160,6 +186,16 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
             None => cmd.args(["-audiodev", if cfg!(windows) { "dsound,id=audio0" } else { "sdl,id=audio0" }]),
         };
         cmd.args(["-device", "virtio-sound-pci,audiodev=audio0,streams=1"]);
+    }
+    match cfg.net {
+        // Without this QEMU adds a default card.
+        NetMode::None => {
+            cmd.args(["-nic", "none"]);
+        }
+        NetMode::Ethernet => {
+            cmd.args(["-netdev", "user,id=net0"]);
+            cmd.args(["-device", &format!("{},netdev=net0,mac=52:54:00:12:34:56", cfg.nic_model)]);
+        }
     }
     if cfg.display {
         // Not SDL: when the guest's virtio tablet driver starts, QEMU
