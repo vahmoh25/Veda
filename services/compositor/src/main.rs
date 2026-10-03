@@ -18,6 +18,7 @@ extern crate alloc;
 
 mod decor;
 mod keymap;
+mod switcher;
 mod window;
 
 use alloc::collections::BTreeMap;
@@ -37,6 +38,7 @@ use vrt::vm::Mapping;
 
 use decor::{Decor, DecorState};
 use keymap::Keyboard;
+use switcher::Switcher;
 use window::{Anim, AnimKind, Buffers, Part, TITLE_HEIGHT, Window};
 
 vrt::entry!(main);
@@ -65,7 +67,12 @@ impl Screen {
         for y in r.y..r.bottom() {
             let src = &self.back.pixels[(y * w + r.x) as usize..(y * w + r.right()) as usize];
             // SAFETY: the framebuffer mapping covers `pitch * height` bytes.
-            let dst = unsafe { core::slice::from_raw_parts_mut((fb.add(y as usize * self.pitch) as *mut u32).add(r.x as usize), r.w as usize) };
+            let dst = unsafe {
+                core::slice::from_raw_parts_mut(
+                    (fb.add(y as usize * self.pitch) as *mut u32).add(r.x as usize),
+                    r.w as usize,
+                )
+            };
             if self.rgb {
                 for (d, &s) in dst.iter_mut().zip(src) {
                     *d = (s & 0xFF00_FF00) | ((s >> 16) & 0xFF) | ((s & 0xFF) << 16);
@@ -80,12 +87,40 @@ impl Screen {
 /// An interactive move or resize in progress.
 #[derive(Clone, Copy)]
 enum Drag {
-    Move { id: u32, dx: i32, dy: i32 },
-    Resize { id: u32, edge: (i8, i8), start: Rect, px: i32, py: i32 },
+    /// Moving by the title bar. `restore`: the window is maximised or
+    /// snapped and returns to its normal size once the pointer really moves
+    /// away from `origin`.
+    Move {
+        id: u32,
+        dx: i32,
+        dy: i32,
+        origin: (i32, i32),
+        restore: bool,
+    },
+    Resize {
+        id: u32,
+        edge: (i8, i8),
+        start: Rect,
+        px: i32,
+        py: i32,
+    },
     /// Pointer grab by a client (button held inside its client area).
-    Client { id: u32 },
+    Client {
+        id: u32,
+    },
     /// Pressing a caption button (activates on release over it).
-    Button { id: u32, part: Part },
+    Button {
+        id: u32,
+        part: Part,
+    },
+}
+
+/// Where a dragged window snaps when released at a screen edge.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Snap {
+    Maximize,
+    Left,
+    Right,
 }
 
 struct DisplayClient {
@@ -117,7 +152,10 @@ struct Compositor {
     clipboard: String,
     last_frame: u64,
     work_area: Rect,
-    alt_tab: Option<usize>,
+    /// The Alt+Tab switcher while Alt is held.
+    switcher: Option<Switcher>,
+    /// Snap target (and its preview rectangle) of the window being moved.
+    snap: Option<(Snap, Rect)>,
 }
 
 fn layer(kind: WindowKind) -> u8 {
@@ -197,10 +235,10 @@ impl Compositor {
             self.send(old, WindowEvent::Focus { focused: false });
             self.damage_window(old);
             // Popups close when they lose focus.
-            if let Some(w) = self.windows.get(&old) {
-                if w.kind == WindowKind::Popup {
-                    self.send(old, WindowEvent::CloseRequested {});
-                }
+            if let Some(w) = self.windows.get(&old)
+                && w.kind == WindowKind::Popup
+            {
+                self.send(old, WindowEvent::CloseRequested {});
             }
         }
         self.focused = id;
@@ -215,7 +253,9 @@ impl Compositor {
     /// Focuses the topmost visible normal window.
     fn focus_top(&mut self) {
         let top = self.order.iter().rev().copied().find(|id| {
-            self.windows.get(id).is_some_and(|w| w.kind == WindowKind::Normal && w.state != WindowState::Minimized && !w.closing)
+            self.windows
+                .get(id)
+                .is_some_and(|w| w.kind == WindowKind::Normal && w.state != WindowState::Minimized && !w.closing)
         });
         self.focus(top);
     }
@@ -295,6 +335,73 @@ impl Compositor {
         self.notify_shell();
     }
 
+    /// A maximised or snapped window starts being dragged: it returns to its
+    /// normal size, keeping the grabbed point of the title bar under the
+    /// pointer.
+    fn unsnap_for_drag(&mut self, id: u32, origin: (i32, i32), (x, y): (i32, i32)) {
+        let Some(w) = self.windows.get(&id) else { return };
+        let frac = (origin.0 - w.client_rect.x) as f32 / w.client_rect.w.max(1) as f32;
+        let rest = w.restore_rect;
+        if w.state == WindowState::Maximized {
+            self.set_state(id, WindowState::Normal);
+        }
+        let Some(w) = self.windows.get_mut(&id) else { return };
+        let before = w.paint_bounds();
+        w.snapped = false;
+        w.client_rect = Rect::new(x - (rest.w as f32 * frac) as i32, y + TITLE_HEIGHT / 2, rest.w, rest.h);
+        let (c, st) = (w.client_rect, w.state);
+        let after = w.paint_bounds();
+        self.damage.add(before);
+        self.damage.add(after);
+        self.send(id, WindowEvent::Configure { width: c.w as u32, height: c.h as u32, state: st });
+        self.drag = Some(Drag::Move { id, dx: x - c.x, dy: y - c.y, origin, restore: false });
+    }
+
+    /// Updates the snap preview for a window dragged to (x, y).
+    fn update_snap(&mut self, id: u32, x: i32, y: i32) {
+        let area = self.work_area;
+        let resizable = self.windows.get(&id).is_some_and(|w| w.resizable);
+        let zone = match () {
+            _ if !resizable => None,
+            _ if y <= area.y + 1 => Some(Snap::Maximize),
+            _ if x <= area.x + 1 => Some(Snap::Left),
+            _ if x >= area.right() - 2 => Some(Snap::Right),
+            _ => None,
+        };
+        let half = area.w / 2;
+        let target = zone.map(|z| match z {
+            Snap::Maximize => (z, area),
+            Snap::Left => (z, Rect::new(area.x, area.y, half, area.h)),
+            Snap::Right => (z, Rect::new(area.x + half, area.y, area.w - half, area.h)),
+        });
+        if target != self.snap {
+            for (_, r) in [self.snap, target].into_iter().flatten() {
+                self.damage.add(r.inflate(8));
+            }
+            self.snap = target;
+        }
+    }
+
+    /// Snaps a window into `r` (the whole work area or one half of it).
+    fn apply_snap(&mut self, id: u32, snap: Snap, r: Rect) {
+        if snap == Snap::Maximize {
+            self.set_state(id, WindowState::Maximized);
+            return;
+        }
+        let Some(w) = self.windows.get_mut(&id) else { return };
+        if !w.snapped {
+            w.restore_rect = w.client_rect;
+        }
+        w.snapped = true;
+        let before = w.paint_bounds();
+        w.client_rect = Rect::new(r.x, r.y + TITLE_HEIGHT, r.w, r.h - TITLE_HEIGHT);
+        let (c, st) = (w.client_rect, w.state);
+        let after = w.paint_bounds();
+        self.damage.add(before);
+        self.damage.add(after);
+        self.send(id, WindowEvent::Configure { width: c.w as u32, height: c.h as u32, state: st });
+    }
+
     fn destroy_window(&mut self, id: u32) {
         self.damage_window(id);
         self.windows.remove(&id);
@@ -309,7 +416,8 @@ impl Compositor {
         if self.hover_window == Some(id) {
             self.hover_window = None;
         }
-        if matches!(self.drag, Some(Drag::Move { id: d, .. } | Drag::Resize { id: d, .. } | Drag::Client { id: d } | Drag::Button { id: d, .. }) if d == id) {
+        if matches!(self.drag, Some(Drag::Move { id: d, .. } | Drag::Resize { id: d, .. } | Drag::Client { id: d } | Drag::Button { id: d, .. }) if d == id)
+        {
             self.drag = None;
         }
         self.update_work_area();
@@ -355,7 +463,12 @@ impl Compositor {
         }
         self.pointer = (x, y);
         match self.drag {
-            Some(Drag::Move { id, dx, dy }) => {
+            Some(Drag::Move { id, origin, restore: true, .. }) => {
+                if (x - origin.0).abs() + (y - origin.1).abs() >= 6 {
+                    self.unsnap_for_drag(id, origin, (x, y));
+                }
+            }
+            Some(Drag::Move { id, dx, dy, .. }) => {
                 let area = self.work_area;
                 if let Some(w) = self.windows.get_mut(&id) {
                     let before = w.paint_bounds();
@@ -365,6 +478,7 @@ impl Compositor {
                     self.damage.add(before);
                     self.damage.add(after);
                 }
+                self.update_snap(id, x, y);
             }
             Some(Drag::Resize { id, edge, start, px, py }) => {
                 if let Some(w) = self.windows.get_mut(&id) {
@@ -454,10 +568,25 @@ impl Compositor {
         }
         if !pressed {
             match self.drag.take() {
+                Some(Drag::Move { id, .. }) => {
+                    if let Some((snap, r)) = self.snap.take() {
+                        self.damage.add(r.inflate(8));
+                        self.apply_snap(id, snap, r);
+                    }
+                }
                 Some(Drag::Client { id }) => {
                     if let Some(w) = self.windows.get(&id) {
                         let c = w.client_rect;
-                        self.send(id, WindowEvent::PointerButton { x: x - c.x, y: y - c.y, button, pressed: false, clicks: self.click_count });
+                        self.send(
+                            id,
+                            WindowEvent::PointerButton {
+                                x: x - c.x,
+                                y: y - c.y,
+                                button,
+                                pressed: false,
+                                clicks: self.click_count,
+                            },
+                        );
                     }
                     if self.buttons != 0 {
                         self.drag = Some(Drag::Client { id });
@@ -472,7 +601,11 @@ impl Compositor {
                             Part::Minimize => self.set_state(id, WindowState::Minimized),
                             Part::Maximize => {
                                 let st = self.windows.get(&id).map(|w| w.state);
-                                let next = if st == Some(WindowState::Maximized) { WindowState::Normal } else { WindowState::Maximized };
+                                let next = if st == Some(WindowState::Maximized) {
+                                    WindowState::Normal
+                                } else {
+                                    WindowState::Maximized
+                                };
                                 self.set_state(id, next);
                             }
                             _ => {}
@@ -490,7 +623,12 @@ impl Compositor {
         let hit = self.window_at(x, y);
         let target = hit.map(|(id, _)| id).unwrap_or(0);
         let (t, last_id, last_button, lx, ly) = self.last_click;
-        if now - t < DOUBLE_CLICK_NS && last_id == target && last_button == button && (x - lx).abs() < 5 && (y - ly).abs() < 5 {
+        if now - t < DOUBLE_CLICK_NS
+            && last_id == target
+            && last_button == button
+            && (x - lx).abs() < 5
+            && (y - ly).abs() < 5
+        {
             self.click_count = self.click_count.saturating_add(1);
         } else {
             self.click_count = 1;
@@ -504,10 +642,11 @@ impl Compositor {
         };
         let kind = self.windows[&id].kind;
         // Clicking outside a focused popup closes it.
-        if let Some(f) = self.focused {
-            if f != id && self.windows.get(&f).is_some_and(|w| w.kind == WindowKind::Popup) {
-                self.send(f, WindowEvent::CloseRequested {});
-            }
+        if let Some(f) = self.focused
+            && f != id
+            && self.windows.get(&f).is_some_and(|w| w.kind == WindowKind::Popup)
+        {
+            self.send(f, WindowEvent::CloseRequested {});
         }
         if matches!(kind, WindowKind::Normal | WindowKind::Borderless) {
             self.raise(id);
@@ -518,28 +657,31 @@ impl Compositor {
         match part {
             Part::Client => {
                 let c = self.windows[&id].client_rect;
-                self.send(id, WindowEvent::PointerButton { x: x - c.x, y: y - c.y, button, pressed: true, clicks: self.click_count });
+                self.send(
+                    id,
+                    WindowEvent::PointerButton {
+                        x: x - c.x,
+                        y: y - c.y,
+                        button,
+                        pressed: true,
+                        clicks: self.click_count,
+                    },
+                );
                 self.drag = Some(Drag::Client { id });
             }
             Part::Title if button == 0 => {
                 if self.click_count >= 2 && self.windows[&id].resizable {
                     let st = self.windows[&id].state;
-                    self.set_state(id, if st == WindowState::Maximized { WindowState::Normal } else { WindowState::Maximized });
+                    self.set_state(
+                        id,
+                        if st == WindowState::Maximized { WindowState::Normal } else { WindowState::Maximized },
+                    );
                     return;
                 }
                 let w = &self.windows[&id];
-                if w.state == WindowState::Maximized {
-                    // Dragging a maximised window restores it under the cursor.
-                    let rest = w.restore_rect;
-                    let frac = (x - w.client_rect.x) as f32 / w.client_rect.w.max(1) as f32;
-                    self.set_state(id, WindowState::Normal);
-                    if let Some(w) = self.windows.get_mut(&id) {
-                        let nx = x - (rest.w as f32 * frac) as i32;
-                        w.client_rect = Rect::new(nx, y + TITLE_HEIGHT / 2, rest.w, rest.h);
-                    }
-                }
-                let c = self.windows[&id].client_rect;
-                self.drag = Some(Drag::Move { id, dx: x - c.x, dy: y - c.y });
+                let restore = w.state == WindowState::Maximized || w.snapped;
+                let c = w.client_rect;
+                self.drag = Some(Drag::Move { id, dx: x - c.x, dy: y - c.y, origin: (x, y), restore });
                 self.set_cursor_shape(Cursor::Move);
             }
             Part::Close | Part::Minimize | Part::Maximize if button == 0 => {
@@ -575,11 +717,18 @@ impl Compositor {
             return;
         }
         if pressed && alt && code == keys::TAB {
-            self.cycle_windows(mods & dp::modifiers::SHIFT != 0);
+            self.switcher_step(mods & dp::modifiers::SHIFT != 0);
             return;
         }
-        if !pressed && matches!(code, keys::LEFTALT | keys::RIGHTALT) {
-            self.alt_tab = None;
+        if self.switcher.is_some() {
+            if pressed && code == keys::ESC {
+                self.close_switcher(false);
+                return;
+            }
+            if !pressed && matches!(code, keys::LEFTALT | keys::RIGHTALT) {
+                // Activate the choice; the Alt release still reaches it below.
+                self.close_switcher(true);
+            }
         }
         if pressed && alt && code == keys::F4 {
             if let Some(f) = self.focused {
@@ -592,32 +741,66 @@ impl Compositor {
 
     fn deliver_key(&mut self, out: keymap::KeyOutput) {
         if let Some(f) = self.focused {
-            self.send(f, WindowEvent::Key { code: out.code, pressed: out.pressed, repeat: out.repeat, modifiers: out.modifiers, text: out.text });
+            self.send(
+                f,
+                WindowEvent::Key {
+                    code: out.code,
+                    pressed: out.pressed,
+                    repeat: out.repeat,
+                    modifiers: out.modifiers,
+                    text: out.text,
+                },
+            );
         }
     }
 
     fn send_to_shell(&self, ev: WindowEvent) {
-        if let Some(sc) = self.shell {
-            if let Some((id, _)) = self.windows.iter().find(|(_, w)| w.client == sc && w.kind == WindowKind::Panel) {
-                self.send(*id, ev);
-            }
+        if let Some(sc) = self.shell
+            && let Some((id, _)) = self.windows.iter().find(|(_, w)| w.client == sc && w.kind == WindowKind::Panel)
+        {
+            self.send(*id, ev);
         }
     }
 
-    fn cycle_windows(&mut self, backwards: bool) {
-        let candidates: Vec<u32> = self
+    /// Alt+Tab: opens the window switcher or moves its selection.
+    fn switcher_step(&mut self, backwards: bool) {
+        if let Some(s) = &mut self.switcher {
+            s.step(backwards);
+            let b = s.bounds();
+            self.damage.add(b);
+            return;
+        }
+        // Most recently used first (the stacking order is kept that way).
+        let windows: Vec<u32> = self
             .order
             .iter()
             .rev()
             .copied()
             .filter(|id| self.windows.get(id).is_some_and(|w| w.kind == WindowKind::Normal && !w.closing))
             .collect();
-        if candidates.len() < 2 {
+        if windows.is_empty() {
             return;
         }
-        let i = self.alt_tab.map(|i| if backwards { i + candidates.len() - 1 } else { i + 1 }).unwrap_or(1) % candidates.len();
-        self.alt_tab = Some(i);
-        let id = candidates[i];
+        let thumbs = windows.iter().map(|id| switcher::thumbnail(&self.windows[id])).collect();
+        let n = windows.len();
+        let selected = match (n, backwards) {
+            (1, _) => 0,
+            (_, true) => n - 1,
+            (_, false) => 1,
+        };
+        let s = Switcher::new(windows, thumbs, selected, self.screen_rect());
+        self.damage.add(s.bounds());
+        self.switcher = Some(s);
+    }
+
+    /// Closes the switcher, activating the selected window if `commit`.
+    fn close_switcher(&mut self, commit: bool) {
+        let Some(s) = self.switcher.take() else { return };
+        self.damage.add(s.bounds());
+        let id = s.windows[s.selected];
+        if !commit || !self.windows.contains_key(&id) {
+            return;
+        }
         if self.windows[&id].state == WindowState::Minimized {
             self.set_state(id, WindowState::Normal);
         }
@@ -665,12 +848,21 @@ impl Compositor {
             c.clip_to(r);
             // Skip the background when an opaque desktop covers everything.
             let desktop_covers = order.iter().any(|id| {
-                self.windows.get(id).is_some_and(|w| w.kind == WindowKind::Desktop && w.current.is_some() && w.frame().intersect(&r) == r)
+                self.windows.get(id).is_some_and(|w| {
+                    w.kind == WindowKind::Desktop && w.current.is_some() && w.frame().intersect(&r) == r
+                })
             });
             if !desktop_covers {
                 decor::draw_background(&mut c, screen);
             }
             for id in &order {
+                // The snap preview goes just below the window being dragged.
+                if let (Some((_, preview)), Some(Drag::Move { id: dragged, .. })) = (self.snap, self.drag)
+                    && *id == dragged
+                    && preview.inflate(8).intersects(&r)
+                {
+                    decor::draw_snap_preview(&mut c, preview);
+                }
                 let win = &self.windows[id];
                 if !win.visible() || !win.paint_bounds().intersects(&r) {
                     continue;
@@ -688,17 +880,25 @@ impl Compositor {
                 };
                 self.decor.draw_window(&mut c, win, self.focused == Some(*id), self.decor_state, opacity, dy);
             }
+            if let Some(s) = &self.switcher
+                && s.bounds().intersects(&r)
+            {
+                let titles: Vec<&str> =
+                    s.windows.iter().map(|id| self.windows.get(id).map_or("", |w| w.title.as_str())).collect();
+                self.decor.draw_switcher(&mut c, s, &titles);
+            }
             // Cursor on top.
-            if self.cursor_rect.intersects(&r) {
-                if let Some((b, hx, hy)) = self.decor.cursor(self.cursor_shape) {
-                    c.draw_bitmap(b, self.pointer.0 - hx, self.pointer.1 - hy, 255);
-                }
+            if self.cursor_rect.intersects(&r)
+                && let Some((b, hx, hy)) = self.decor.cursor(self.cursor_shape)
+            {
+                c.draw_bitmap(b, self.pointer.0 - hx, self.pointer.1 - hy, 255);
             }
             drop(c);
             self.screen.flush(r);
         }
         // Clients may now draw their next frame.
-        let owed: Vec<(u32, u8)> = self.windows.iter_mut().filter_map(|(id, w)| w.frame_owed.take().map(|b| (*id, b))).collect();
+        let owed: Vec<(u32, u8)> =
+            self.windows.iter_mut().filter_map(|(id, w)| w.frame_owed.take().map(|b| (*id, b))).collect();
         for (id, b) in owed {
             self.send(id, WindowEvent::FrameDone { shown: b });
         }
@@ -762,6 +962,7 @@ impl display::Server for Session<'_> {
             cursor: Cursor::Arrow,
             anim: animate.then(|| Anim { kind: AnimKind::Open, start: vrt::time::now_ns(), duration: 180_000_000 }),
             closing: false,
+            snapped: false,
         };
         let kind = win.kind;
         self.comp.windows.insert(id, win);
@@ -787,7 +988,15 @@ impl display::Server for Session<'_> {
         Ok((id, theirs))
     }
 
-    fn attach_buffers(&mut self, id: u32, buffers: Vmo, width: u32, height: u32, stride: u32, count: u8) -> Result<(), DisplayError> {
+    fn attach_buffers(
+        &mut self,
+        id: u32,
+        buffers: Vmo,
+        width: u32,
+        height: u32,
+        stride: u32,
+        count: u8,
+    ) -> Result<(), DisplayError> {
         self.own(id)?;
         if width == 0 || height == 0 || stride < width || count == 0 || count > 3 || width > 8192 || height > 8192 {
             return Err(DisplayError::BadBuffer);
@@ -797,7 +1006,8 @@ impl display::Server for Session<'_> {
         if size < bytes {
             return Err(DisplayError::BadBuffer);
         }
-        let map = Mapping::new(buffers, bytes.next_multiple_of(4096), vabi::map_flags::READ).map_err(|_| DisplayError::NoMemory)?;
+        let map = Mapping::new(buffers, bytes.next_multiple_of(4096), vabi::map_flags::READ)
+            .map_err(|_| DisplayError::NoMemory)?;
         let w = self.comp.windows.get_mut(&id).unwrap();
         w.buffers = Some(Buffers { map, width: width as i32, height: height as i32, stride: stride as i32, count });
         w.current = None;
@@ -874,7 +1084,7 @@ impl display::Server for Session<'_> {
         self.own(id)?;
         let c = self.comp.windows[&id].client_rect;
         let (x, y) = self.comp.pointer;
-        self.comp.drag = Some(Drag::Move { id, dx: x - c.x, dy: y - c.y });
+        self.comp.drag = Some(Drag::Move { id, dx: x - c.x, dy: y - c.y, origin: (x, y), restore: false });
         Ok(())
     }
 
@@ -968,9 +1178,10 @@ fn load_font(vfs: &vproto::vfs::Client, path: &str) -> Option<&'static [u8]> {
 
 fn main() -> i32 {
     use vabi::startup::role;
-    let (Some(fb_vmo), Some(info_vmo)) =
-        (vrt::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle), vrt::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle))
-    else {
+    let (Some(fb_vmo), Some(info_vmo)) = (
+        vrt::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
+        vrt::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
+    ) else {
         println!("no framebuffer");
         return 1;
     };
@@ -978,7 +1189,8 @@ fn main() -> i32 {
     let _ = info_vmo.read(0, &mut raw);
     // SAFETY: plain data written by the kernel.
     let info: vabi::KernelBootInfo = unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const vabi::KernelBootInfo) };
-    let (width, height, pitch) = (info.framebuffer_width as i32, info.framebuffer_height as i32, info.framebuffer_pitch as usize);
+    let (width, height, pitch) =
+        (info.framebuffer_width as i32, info.framebuffer_height as i32, info.framebuffer_pitch as usize);
     let fb_size = (pitch * height as usize).next_multiple_of(4096);
     let fb = match Mapping::new(fb_vmo, fb_size, vabi::map_flags::READ | vabi::map_flags::WRITE) {
         Ok(m) => m,
@@ -992,13 +1204,16 @@ fn main() -> i32 {
     let mut title_font = 0;
     if let Ok(ch) = vproto::connect(vproto::vfs::NAME) {
         let vfs = vproto::vfs::Client::new(ch);
-        for (i, path) in ["/system/fonts/Inter-SemiBold.otf", "/system/fonts/Inter-Regular.otf", "/system/fonts/Lato-Regular.ttf"].iter().enumerate() {
-            if let Some(data) = load_font(&vfs, path) {
-                if let Some(idx) = text.add_font(data) {
-                    if i == 0 {
-                        title_font = idx;
-                    }
-                }
+        for (i, path) in
+            ["/system/fonts/Inter-SemiBold.otf", "/system/fonts/Inter-Regular.otf", "/system/fonts/Lato-Regular.ttf"]
+                .iter()
+                .enumerate()
+        {
+            if let Some(data) = load_font(&vfs, path)
+                && let Some(idx) = text.add_font(data)
+                && i == 0
+            {
+                title_font = idx;
             }
         }
     }
@@ -1033,7 +1248,8 @@ fn main() -> i32 {
         clipboard: String::new(),
         last_frame: 0,
         work_area: Rect::new(0, 0, width, height),
-        alt_tab: None,
+        switcher: None,
+        snap: None,
     };
     comp.update_cursor_rect();
     comp.damage.add(comp.screen_rect());

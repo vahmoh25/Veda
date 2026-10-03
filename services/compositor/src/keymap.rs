@@ -175,7 +175,13 @@ impl Keyboard {
         } else if !pressed && self.repeat.is_some_and(|(c, _)| c == code) {
             self.repeat = None;
         }
-        KeyOutput { code, pressed, repeat: false, modifiers: self.modifiers(), text: if pressed { self.text_for(code) } else { String::new() } }
+        KeyOutput {
+            code,
+            pressed,
+            repeat: false,
+            modifiers: self.modifiers(),
+            text: if pressed { self.text_for(code) } else { String::new() },
+        }
     }
 
     /// True once if Super was pressed and released on its own.

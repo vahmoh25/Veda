@@ -101,6 +101,8 @@ pub struct Window {
     pub anim: Option<Anim>,
     /// The client asked to close; destroy after the close animation.
     pub closing: bool,
+    /// Snapped to half of the screen (dragging restores `restore_rect`).
+    pub snapped: bool,
 }
 
 impl Window {
@@ -156,8 +158,20 @@ impl Window {
         if self.decorated() && self.resizable && self.state == WindowState::Normal {
             let grip = f.inflate(RESIZE_MARGIN);
             if grip.contains(x, y) && !f.inset(2, 2, 2, 2).contains(x, y) {
-                let dx = if x < f.x + 4 { -1 } else if x >= f.right() - 4 { 1 } else { 0 };
-                let dy = if y < f.y + 4 { -1 } else if y >= f.bottom() - 4 { 1 } else { 0 };
+                let dx = if x < f.x + 4 {
+                    -1
+                } else if x >= f.right() - 4 {
+                    1
+                } else {
+                    0
+                };
+                let dy = if y < f.y + 4 {
+                    -1
+                } else if y >= f.bottom() - 4 {
+                    1
+                } else {
+                    0
+                };
                 if dx != 0 || dy != 0 {
                     return Some(Part::Edge(dx, dy));
                 }

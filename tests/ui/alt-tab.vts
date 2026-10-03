@@ -1,0 +1,22 @@
+# Window switching (1280x800): open a second application from the start menu
+# with the keyboard, hold Alt and press Tab to show the switcher, then release
+# Alt to bring the other window to the front.
+boot-cmdline "run=about"
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "started about" 60
+wait 3
+key meta_l
+wait 2
+type "text editor"
+key ret
+wait-serial "started editor" 30
+wait 5
+key-down alt
+key tab
+wait 2
+shot target/vindows/alttab-1-switcher.png
+key-up alt
+wait 2
+shot target/vindows/alttab-2-switched.png
+reject-serial "crashed"

@@ -1,17 +1,19 @@
-# Interaction smoke test for the About window (1280x800 screen).
+# Interaction smoke test for the About window (1280x800 screen with the
+# taskbar): move the window, flip a toggle, close it with OK.
+boot-cmdline "run=about"
 fail-on "PANIC"
 wait-serial "started about" 60
 wait 6
-# Drag the title bar 200 px to the right and 60 px down.
-drag 0.30 0.162 0.4562 0.2370
+# Drag the title bar (y = 100) 200 px to the right and 60 px down.
+drag 0.3516 0.125 0.5078 0.2
 wait 1
 shot target/vindows/ui-1-dragged.png
-# Toggle "Show licences" (now at about x=0.42, y=0.665).
-click 0.4235 0.665
+# Toggle "Show licences" (moved with the window to x = 543, y = 502).
+click 0.4242 0.6275
 wait 2
 shot target/vindows/ui-2-toggled.png
-# Click OK: the window should close.
-click 0.752 0.757
+# Click OK (x = 963, y = 636): the window should close.
+click 0.7523 0.795
 wait 2
 shot target/vindows/ui-3-closed.png
 expect-serial "about exited with code 0"

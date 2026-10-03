@@ -2,11 +2,12 @@
 
 use alloc::vec::Vec;
 
-use vgfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, ShadowTemplate, StrokeStyle, Text};
 use vgfx::color::{over, scale};
+use vgfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, ShadowTemplate, StrokeStyle, Text};
 use vmath::FloatExt;
 use vproto::display::Cursor;
 
+use crate::switcher::Switcher;
 use crate::window::{CORNER_RADIUS, Part, TITLE_HEIGHT, Window};
 
 /// Visual theme of the window system (dark).
@@ -18,6 +19,7 @@ pub mod theme {
     pub const TITLE_INACTIVE: Color = Color::hex(0x1A1A1E);
     pub const TITLE_TEXT: Color = Color::hex(0xE8E8EE);
     pub const TITLE_TEXT_INACTIVE: Color = Color::hex(0x80808A);
+    pub const ACCENT: Color = Color::hex(0x5B8CFF);
     pub const BORDER: Color = Color::rgba(255, 255, 255, 26);
     pub const BORDER_INACTIVE: Color = Color::rgba(255, 255, 255, 16);
     pub const BUTTON_HOVER: Color = Color::rgba(255, 255, 255, 24);
@@ -82,7 +84,11 @@ impl Decor {
                 let title = Rect::new(frame.x, frame.y, frame.w, TITLE_HEIGHT);
                 c.save();
                 c.clip_to(title);
-                c.fill_rounded_rect(Rect::new(frame.x, frame.y, frame.w, TITLE_HEIGHT + radius * 2), radius as f32, tc.fade(opacity));
+                c.fill_rounded_rect(
+                    Rect::new(frame.x, frame.y, frame.w, TITLE_HEIGHT + radius * 2),
+                    radius as f32,
+                    tc.fade(opacity),
+                );
                 c.restore();
                 self.draw_client(c, w, client, op, radius);
                 self.draw_title_content(c, w, title, focused, st, opacity);
@@ -99,10 +105,51 @@ impl Decor {
         }
     }
 
-    fn draw_title_content(&mut self, c: &mut Canvas, w: &Window, title: Rect, focused: bool, st: DecorState, opacity: f32) {
+    /// Draws the Alt+Tab switcher overlay; `titles` are the window titles in
+    /// the switcher's order.
+    pub fn draw_switcher(&mut self, c: &mut Canvas, s: &Switcher, titles: &[&str]) {
+        let panel = s.rect;
+        self.popup_shadow.draw(c, panel.translate(0, 10), Color::rgba(0, 0, 0, 150), true);
+        c.fill_rounded_rect(panel, 16.0, Color::rgba(30, 30, 38, 242));
+        c.stroke_rounded_rect(panel, 16.0, 1.0, Color::rgba(255, 255, 255, 34));
+        for (i, title) in titles.iter().enumerate() {
+            let cell = s.cell(i);
+            let selected = i == s.selected;
+            if selected {
+                c.fill_rounded_rect(cell, 12.0, Color::rgba(255, 255, 255, 20));
+                c.stroke_rounded_rect(cell, 12.0, 2.0, theme::ACCENT);
+            }
+            let bx = s.thumb_box(i);
+            match s.thumbs.get(i).and_then(|t| t.as_ref()) {
+                Some(b) => {
+                    let r = Rect::new(bx.x + (bx.w - b.width) / 2, bx.y + (bx.h - b.height) / 2, b.width, b.height);
+                    c.draw_shadow(r.translate(0, 3), 6, 10, Color::rgba(0, 0, 0, 110));
+                    c.draw_bitmap(b, r.x, r.y, 255);
+                    c.stroke_rounded_rect(r.inflate(1), 2.0, 1.0, Color::rgba(255, 255, 255, 30));
+                }
+                None => c.fill_rounded_rect(bx.inset(24, 12, 24, 12), 6.0, theme::CLIENT_BACKGROUND),
+            }
+            let font = self.title_font;
+            let label = self.text.ellipsize(font, 13.0, title, (cell.w - 24) as f32);
+            let color = if selected { theme::TITLE_TEXT } else { theme::TITLE_TEXT_INACTIVE };
+            let tr = Rect::new(cell.x + 12, bx.bottom() + 10, cell.w - 24, 24);
+            self.text.draw_in(c, font, 13.0, tr, &label, color, vgfx::Align::Center);
+        }
+    }
+
+    fn draw_title_content(
+        &mut self,
+        c: &mut Canvas,
+        w: &Window,
+        title: Rect,
+        focused: bool,
+        st: DecorState,
+        opacity: f32,
+    ) {
         let text_color = if focused { theme::TITLE_TEXT } else { theme::TITLE_TEXT_INACTIVE }.fade(opacity);
         let buttons = if w.resizable { 3 } else { 2 };
-        let text_rect = Rect::new(title.x + 16, title.y, title.w - 16 - buttons * crate::window::BUTTON_WIDTH - 8, TITLE_HEIGHT);
+        let text_rect =
+            Rect::new(title.x + 16, title.y, title.w - 16 - buttons * crate::window::BUTTON_WIDTH - 8, TITLE_HEIGHT);
         let font = self.title_font;
         self.text.draw_in(c, font, 13.0, text_rect, &w.title, text_color, vgfx::Align::Left);
         let dy = title.y - w.title_rect().y;
@@ -120,11 +167,19 @@ impl Decor {
                     _ => theme::BUTTON_HOVER,
                 };
                 // Respect the window's rounded top-right corner.
-                let radius = if part == Part::Close && w.state != vproto::display::WindowState::Maximized { CORNER_RADIUS } else { 0 };
+                let radius = if part == Part::Close && w.state != vproto::display::WindowState::Maximized {
+                    CORNER_RADIUS
+                } else {
+                    0
+                };
                 c.save();
                 c.clip_to(r);
                 if radius > 0 {
-                    c.fill_rounded_rect(Rect::new(r.x - radius, r.y, r.w + radius, r.h + radius), radius as f32, bg.fade(opacity));
+                    c.fill_rounded_rect(
+                        Rect::new(r.x - radius, r.y, r.w + radius, r.h + radius),
+                        radius as f32,
+                        bg.fade(opacity),
+                    );
                 } else {
                     c.fill_rect(r, bg.fade(opacity));
                 }
@@ -150,7 +205,10 @@ impl Decor {
         // Areas of the client rect not covered by the buffer (mid-resize).
         if w.decorated() && (buf.width < dst.w || buf.height < dst.h) {
             c.fill_rect(Rect::new(dst.x + buf.width, dst.y, dst.w - buf.width, dst.h), theme::CLIENT_BACKGROUND);
-            c.fill_rect(Rect::new(dst.x, dst.y + buf.height, buf.width.min(dst.w), dst.h - buf.height), theme::CLIENT_BACKGROUND);
+            c.fill_rect(
+                Rect::new(dst.x, dst.y + buf.height, buf.width.min(dst.w), dst.h - buf.height),
+                theme::CLIENT_BACKGROUND,
+            );
         }
         if vis.is_empty() {
             return;
@@ -224,6 +282,13 @@ fn draw_button_glyph(c: &mut Canvas, part: Part, r: Rect, color: Color, maximize
     c.stroke_path(&p, &stroke, color);
 }
 
+/// The translucent rectangle showing where a dragged window will snap.
+pub fn draw_snap_preview(c: &mut Canvas, r: Rect) {
+    let r = r.inset(8, 8, 8, 8);
+    c.fill_rounded_rect(r, 12.0, Color::rgba(91, 140, 255, 46));
+    c.stroke_rounded_rect(r, 12.0, 2.0, Color::rgba(150, 185, 255, 170));
+}
+
 /// Renders a cursor shape: white fill with a dark outline and a soft shadow.
 fn render_cursor(path: &Path, w: i32, h: i32) -> Bitmap {
     let mut shape = Bitmap::new(w, h);
@@ -242,7 +307,12 @@ fn render_cursor(path: &Path, w: i32, h: i32) -> Bitmap {
         }
         c.draw_bitmap(&out, -pad + 1, -pad + 2, 255);
         let t = vgfx::Transform::IDENTITY;
-        c.stroke_path_transformed(path, &StrokeStyle::new(2.0).with_join(vgfx::LineJoin::Round), &t, Color::rgba(20, 20, 26, 255));
+        c.stroke_path_transformed(
+            path,
+            &StrokeStyle::new(2.0).with_join(vgfx::LineJoin::Round),
+            &t,
+            Color::rgba(20, 20, 26, 255),
+        );
         c.fill_path(path, Color::WHITE, FillRule::NonZero);
     }
     final_bm
@@ -323,4 +393,3 @@ fn build_cursors() -> Vec<(Cursor, Bitmap, i32, i32)> {
 pub fn draw_background(c: &mut Canvas, screen: Rect) {
     c.fill_vertical_gradient(screen, theme::DESKTOP_TOP, theme::DESKTOP_BOTTOM);
 }
-
