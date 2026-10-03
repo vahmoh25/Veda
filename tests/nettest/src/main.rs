@@ -7,6 +7,10 @@
 //! * `nettest local HOST PORT`: fetches `http://HOST:PORT/hello` and expects
 //!   "hello from the host", for a test server on the host machine (QEMU's
 //!   NAT makes the host reachable at the gateway address, 10.0.2.2).
+//! * `nettest lan`: the online checks, after checking that the address came
+//!   from a real network rather than a hypervisor's NAT (VirtualBox
+//!   `--net bridged`), plus TCP over IPv6 when there is a global address.
+//! * `nettest ipv6`: TCP over IPv6 to example.com.
 //! * `nettest wifi [SSID [PASSWORD]]`: joins a Wi-Fi network through the
 //!   Wi-Fi service (by default the simulated "Vindows Home" network of
 //!   `cargo xtask run --net wifi`), then runs the online checks over it.
@@ -70,6 +74,88 @@ fn wait_online(timeout: Duration) -> Check {
 
 fn wifi(e: wifi::WifiError) -> String {
     format!("{e}")
+}
+
+/// TCP over IPv6 to example.com, when the machine has a global IPv6
+/// address. Reported but never a failure: many networks have no IPv6, and
+/// VirtualBox's bridge over a Wi-Fi adapter carries IPv4 only (it learns
+/// guests' addresses from ARP and DHCP).
+fn check_ipv6_internet() -> Check {
+    match ipv6_tcp(true) {
+        Ok(s) => Ok(s),
+        Err(e) => Ok(format!("unavailable ({e}); IPv4 is what counts here")),
+    }
+}
+
+/// TCP over IPv6 to example.com from any routable IPv6 address (QEMU's NAT
+/// uses site-local ones).
+fn ipv6_tcp(global_only: bool) -> Check {
+    let end = vrt::time::now_ns() + 20_000_000_000;
+    let global = loop {
+        let found = vnet::interfaces().map_err(net)?.iter().flat_map(|i| i.addresses.iter().map(|a| a.address)).find(
+            |a| match a {
+                IpAddr::V6(v) if global_only => (v.segments()[0] & 0xE000) == 0x2000,
+                IpAddr::V6(v) => !v.is_loopback() && (v.segments()[0] & 0xFFC0) != 0xFE80,
+                _ => false,
+            },
+        );
+        if found.is_some() || vrt::time::now_ns() > end {
+            break found;
+        }
+        vrt::time::sleep(Duration::from_millis(250));
+    };
+    let Some(own) = global else { return Ok(String::from("skipped: no global IPv6 address")) };
+    let l = vnet::lookup("example.com", vnet::AddrFamily::V6, Duration::from_secs(15)).map_err(net)?;
+    let target = *l.addresses.first().ok_or("example.com has no IPv6 address")?;
+    let s = TcpStream::connect_timeout(SocketAddr::new(target, 80), Duration::from_secs(20)).map_err(net)?;
+    Ok(format!("connected to {} from {:?} (own address {})", s.peer_addr(), s.local_addr(), own))
+}
+
+/// Waits (up to a minute) for an IPv4 lease on the wired interface, shows
+/// the configuration, and fails if it is a hypervisor's NAT (10.0.2.0/24,
+/// or 10.0.3.0/24 for the simulated Wi-Fi).
+fn check_lan() -> Check {
+    let end = vrt::time::now_ns() + 60_000_000_000;
+    let ifaces = loop {
+        let ifaces = vnet::interfaces().map_err(net)?;
+        let leased = ifaces.iter().any(|i| {
+            i.kind == vnet::InterfaceKind::Ethernet && i.link_up && i.addresses.iter().any(|a| a.address.is_ipv4())
+        });
+        if leased {
+            break ifaces;
+        }
+        if vrt::time::now_ns() > end {
+            let states: Vec<String> = ifaces.iter().map(|i| format!("{}: DHCP {:?}", i.name, i.dhcp.state)).collect();
+            return Err(format!("no IPv4 lease after 60 s ({})", states.join(", ")));
+        }
+        vrt::time::sleep(Duration::from_millis(250));
+    };
+    let eth = ifaces
+        .iter()
+        .find(|i| i.kind == vnet::InterfaceKind::Ethernet && i.link_up)
+        .ok_or("no wired interface is up")?;
+    let v4 = eth
+        .addresses
+        .iter()
+        .find_map(|a| match a.address {
+            IpAddr::V4(v) => Some((v, a.prefix_len)),
+            _ => None,
+        })
+        .ok_or("no IPv4 address")?;
+    let o = v4.0.octets();
+    if o[0] == 10 && o[1] == 0 && (o[2] == 2 || o[2] == 3) {
+        return Err(format!("{}/{} is a hypervisor's NAT, not a real network", v4.0, v4.1));
+    }
+    let gw: Vec<String> = eth.gateways.iter().map(|g| format!("{g}")).collect();
+    let dns: Vec<String> = eth.dns.iter().map(|d| format!("{d}")).collect();
+    Ok(format!(
+        "{} has {}/{} from the network's DHCP server; gateway {}, DNS {}",
+        eth.name,
+        v4.0,
+        v4.1,
+        gw.join(", "),
+        dns.join(", ")
+    ))
 }
 
 /// Waits for the Wi-Fi service and its adapter (both may still be starting).
@@ -355,6 +441,31 @@ fn main() -> i32 {
                 ("ping gateway", &gateway),
             ])
         }
+        "lan" => {
+            let gateway = || -> Check {
+                let st = vnet::status().map_err(net)?;
+                let gw = st.default_gateway.ok_or("no gateway")?;
+                check_ping(gw)
+            };
+            run(&[
+                ("link", &|| wait_online(Duration::from_secs(60))),
+                ("real network", &check_lan),
+                ("dns example.com", &|| check_dns("example.com")),
+                ("dns www.wikipedia.org", &|| check_dns("www.wikipedia.org")),
+                ("dns failure", &|| match vnet::resolve("no-such-host.invalid") {
+                    Err(NetError::NameNotFound) => Ok(String::from("name not found, as expected")),
+                    Err(e) => Err(format!("unexpected error {e}")),
+                    Ok(a) => Err(format!("resolved to {a:?}")),
+                }),
+                ("udp dns query", &check_udp),
+                ("tcp 1.1.1.1:443", &|| check_tcp("1.1.1.1", 443)),
+                ("tcp example.com:80", &|| check_tcp("example.com", 80)),
+                ("http example.com", &|| check_http("http://example.com/", "Example Domain")),
+                ("tcp over ipv6", &check_ipv6_internet),
+                ("ping gateway", &gateway),
+            ])
+        }
+        "ipv6" => run(&[("link", &|| wait_online(Duration::from_secs(60))), ("tcp over ipv6", &|| ipv6_tcp(false))]),
         "local" => {
             let host = args.get(2).cloned().unwrap_or_else(|| String::from("10.0.2.2"));
             let port: u16 = args.get(3).and_then(|p| p.parse().ok()).unwrap_or(8080);

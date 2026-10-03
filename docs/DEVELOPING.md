@@ -16,6 +16,10 @@ cargo xtask script tests/ui/about-interaction.vts   # scripted GUI test
 cargo xtask test               # host unit tests + in-system integration tests
 cargo xtask test --ui          # ... plus every GUI script in tests/ui
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
+cargo xtask run --vm virtualbox            # the same in VirtualBox (VM "Vindows")
+cargo xtask run --vm virtualbox --net bridged   # ... on the host's real network
+cargo xtask test --ui --vm virtualbox      # the test suite in VirtualBox
+cargo xtask run --disk-bus ahci             # QEMU with SATA disks (as VirtualBox has)
 cargo xtask run --net wifi     # boot with the virtual Wi-Fi radio and airsim
 cargo xtask run --net both     # ... plus the wired card (or --net none)
 cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
@@ -26,6 +30,16 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
 * Headless runs record audio to `target/vindows/audio.wav`.
+* With `--vm virtualbox`, xtask creates the VirtualBox machine "Vindows"
+  (files in `target/vindows/vbox`) on first use and updates it from the
+  options on every run. Its disks are VMDK descriptors (`vindows.vmdk`,
+  `home.vmdk`) that point at the raw images, so VirtualBox and QEMU use the
+  same files (not at the same time). The serial console goes to
+  `target/vindows/serial-vbox.log` and the terminal; Ctrl+C powers the
+  machine off. Scripts drive VirtualBox through `VBoxManage` (keys as PS/2
+  scan codes, screenshots) and its COM API (the mouse, through a helper
+  PowerShell process); `test` skips scripts that need QEMU's simulated
+  Wi-Fi.
 * With `--net wifi`, xtask builds and starts `airsim` (the simulated Wi-Fi
   environment) next to QEMU; it logs to `target/vindows/airsim.log` and
   prints its control port, which takes commands such as `ap home off`,

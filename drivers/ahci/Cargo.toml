@@ -1,0 +1,24 @@
+[package]
+name = "ahci"
+description = "Driver for SATA disks behind AHCI controllers (VirtualBox, QEMU q35, most PCs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ahci"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+vvirtio = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

@@ -31,6 +31,36 @@ use uefi::{memory_type as mt, *};
 
 const PAGE: u64 = 4096;
 const BOOT_STACK_SIZE: u64 = 128 * 1024;
+/// Most separately recorded allocations handed to the kernel.
+const MAX_TAGS: usize = 256;
+
+/// The allocations handed to the kernel and what they hold.
+///
+/// Everything is allocated as ordinary loader data and told apart here,
+/// not with the OS-defined memory types the UEFI specification allows:
+/// some firmware mishandles those (VirtualBox's indexes a table with them
+/// and crashes).
+struct Tags {
+    list: [(u64, u64, MemoryKind); MAX_TAGS],
+    len: usize,
+}
+
+impl Tags {
+    fn add(&mut self, base: u64, pages: u64, kind: MemoryKind) -> Result<()> {
+        // Extend the last range when this one follows it.
+        if let Some(last) = self.list[..self.len].last_mut()
+            && last.2 == kind
+            && last.0 + last.1 * PAGE == base
+        {
+            last.1 += pages;
+            return Ok(());
+        }
+        let slot = self.list.get_mut(self.len).ok_or("too many boot allocations")?;
+        *slot = (base, pages, kind);
+        self.len += 1;
+        Ok(())
+    }
+}
 
 type Result<T> = core::result::Result<T, &'static str>;
 
@@ -39,6 +69,7 @@ struct Firmware {
     image: Handle,
     st: &'static SystemTable,
     bs: &'static BootServices,
+    tags: core::cell::RefCell<Tags>,
 }
 
 impl Firmware {
@@ -67,16 +98,24 @@ impl Firmware {
         flush(&mut buf, &mut n);
     }
 
-    fn alloc_pages(&self, pages: u64, mem_type: u32) -> Result<u64> {
+    /// Allocates loader-data pages; `tag` records what they will hold for
+    /// the kernel (`None`: scratch the kernel may reuse).
+    fn alloc_pages(&self, pages: u64, tag: Option<MemoryKind>) -> Result<u64> {
         let mut addr = 0u64;
         // SAFETY: plain firmware call with valid out-pointer.
-        let s = unsafe { (self.bs.allocate_pages)(AllocateType::AnyPages, mem_type, pages as usize, &mut addr) };
-        if is_error(s) { Err("out of memory") } else { Ok(addr) }
+        let s = unsafe { (self.bs.allocate_pages)(AllocateType::AnyPages, mt::LOADER_DATA, pages as usize, &mut addr) };
+        if is_error(s) {
+            return Err("out of memory");
+        }
+        if let Some(kind) = tag {
+            self.tags.borrow_mut().add(addr, pages, kind)?;
+        }
+        Ok(addr)
     }
 
-    fn alloc_zeroed(&self, bytes: u64, mem_type: u32) -> Result<u64> {
+    fn alloc_zeroed(&self, bytes: u64, tag: Option<MemoryKind>) -> Result<u64> {
         let pages = bytes.div_ceil(PAGE);
-        let addr = self.alloc_pages(pages, mem_type)?;
+        let addr = self.alloc_pages(pages, tag)?;
         // SAFETY: freshly allocated, identity-mapped pages.
         unsafe { ptr::write_bytes(addr as *mut u8, 0, (pages * PAGE) as usize) };
         Ok(addr)
@@ -108,9 +147,9 @@ impl Firmware {
         if is_error(s) { Err("cannot open boot volume") } else { Ok(root) }
     }
 
-    /// Reads a whole file into newly allocated pages of `mem_type`.
+    /// Reads a whole file into newly allocated pages (recorded as `tag`).
     /// Returns `None` if the file does not exist.
-    fn read_file(&self, root: *mut FileProtocol, path: &str, mem_type: u32) -> Result<Option<PhysRegion>> {
+    fn read_file(&self, root: *mut FileProtocol, path: &str, tag: Option<MemoryKind>) -> Result<Option<PhysRegion>> {
         let mut name = [0u16; 64];
         for (i, c) in path.encode_utf16().enumerate().take(63) {
             name[i] = c;
@@ -135,7 +174,7 @@ impl Firmware {
         }
         // SAFETY: the firmware wrote an EFI_FILE_INFO into the aligned buffer.
         let size = unsafe { (*(info.0.as_ptr() as *const FileInfo)).file_size };
-        let base = self.alloc_zeroed(size.max(1), mem_type)?;
+        let base = self.alloc_zeroed(size.max(1), tag)?;
         let mut done = 0u64;
         while done < size {
             let mut chunk = (size - done).min(16 << 20) as usize;
@@ -245,7 +284,7 @@ struct TableFrames<'a>(&'a Firmware);
 
 impl paging::FrameSource for TableFrames<'_> {
     fn alloc_zeroed_page(&mut self) -> Result<u64> {
-        self.0.alloc_zeroed(PAGE, mt::VINDOWS_BOOT_DATA)
+        self.0.alloc_zeroed(PAGE, Some(MemoryKind::BootData))
     }
 }
 
@@ -259,7 +298,7 @@ fn load_kernel(fw: &Firmware, file: &[u8]) -> Result<(vpe::PeImage<'static>, Ker
         return Err("kernel is not linked at KERNEL_BASE");
     }
     let size = (pe.size_of_image() as u64).next_multiple_of(PAGE);
-    let phys = fw.alloc_zeroed(size, mt::VINDOWS_KERNEL)?;
+    let phys = fw.alloc_zeroed(size, Some(MemoryKind::Kernel))?;
     // SAFETY: the destination was just allocated with `size` bytes and the
     // parser verified every section lies inside `size_of_image`.
     unsafe {
@@ -308,10 +347,6 @@ fn convert_type(ty: u32) -> MemoryKind {
         mt::ACPI_NVS => MemoryKind::AcpiNvs,
         mt::MMIO | mt::MMIO_PORT_SPACE => MemoryKind::Mmio,
         mt::UNUSABLE => MemoryKind::Unusable,
-        mt::VINDOWS_KERNEL => MemoryKind::Kernel,
-        mt::VINDOWS_INITRD => MemoryKind::Initrd,
-        mt::VINDOWS_BOOT_DATA => MemoryKind::BootData,
-        mt::VINDOWS_SYMBOLS => MemoryKind::Symbols,
         _ => MemoryKind::Reserved,
     }
 }
@@ -354,7 +389,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     unsafe { (fw.bs.set_watchdog_timer)(0, 0, 0, ptr::null()) };
 
     let root = fw.boot_volume()?;
-    let cfg = match fw.read_file(root, "\\VINDOWS\\BOOT.CFG", mt::LOADER_DATA)? {
+    let cfg = match fw.read_file(root, "\\VINDOWS\\BOOT.CFG", None)? {
         Some(r) => {
             // SAFETY: the file was read into r.base with r.size bytes.
             let bytes = unsafe { core::slice::from_raw_parts(r.base as *const u8, r.size as usize) };
@@ -379,17 +414,17 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
         rgb: framebuffer.format == PixelFormat::Rgbx,
     });
 
-    let kernel_file =
-        fw.read_file(root, "\\VINDOWS\\VKERNEL.EXE", mt::LOADER_DATA)?.ok_or("\\VINDOWS\\VKERNEL.EXE not found")?;
+    let kernel_file = fw.read_file(root, "\\VINDOWS\\VKERNEL.EXE", None)?.ok_or("\\VINDOWS\\VKERNEL.EXE not found")?;
     // SAFETY: the kernel file was read into kernel_file.base.
     let kernel_bytes = unsafe { core::slice::from_raw_parts(kernel_file.base as *const u8, kernel_file.size as usize) };
     let (pe, kernel) = load_kernel(fw, kernel_bytes)?;
     log!("kernel: {} KiB at phys {:#x}, entry {:#x}", kernel.size / 1024, kernel.phys_base, pe.entry_point());
 
-    let initrd =
-        fw.read_file(root, "\\VINDOWS\\INITRD.IMG", mt::VINDOWS_INITRD)?.ok_or("\\VINDOWS\\INITRD.IMG not found")?;
+    let initrd = fw
+        .read_file(root, "\\VINDOWS\\INITRD.IMG", Some(MemoryKind::Initrd))?
+        .ok_or("\\VINDOWS\\INITRD.IMG not found")?;
     log!("initrd: {} KiB at {:#x}", initrd.size / 1024, initrd.base);
-    let symbols = fw.read_file(root, "\\VINDOWS\\VKERNEL.SYM", mt::VINDOWS_SYMBOLS)?.unwrap_or(PhysRegion::EMPTY);
+    let symbols = fw.read_file(root, "\\VINDOWS\\VKERNEL.SYM", Some(MemoryKind::Symbols))?.unwrap_or(PhysRegion::EMPTY);
 
     let rsdp_phys = fw.config_table(&ACPI_20_TABLE).or_else(|| fw.config_table(&ACPI_10_TABLE)).unwrap_or(0);
     let boot_time = fw.boot_time();
@@ -398,15 +433,16 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
 
     // Allocate everything the kernel will receive before taking the final
     // memory map.
-    let boot_info_phys = fw.alloc_zeroed(PAGE, mt::VINDOWS_BOOT_DATA)?;
-    let stack = fw.alloc_zeroed(BOOT_STACK_SIZE, mt::VINDOWS_BOOT_DATA)?;
+    let boot_info_phys = fw.alloc_zeroed(PAGE, Some(MemoryKind::BootData))?;
+    let stack = fw.alloc_zeroed(BOOT_STACK_SIZE, Some(MemoryKind::BootData))?;
     let (map_bytes, desc_size) = memory_map_size(fw);
     // Head-room for the descriptors created by the allocations below.
     let map_capacity = map_bytes + 16 * desc_size;
-    let raw_map = fw.alloc_zeroed(map_capacity as u64, mt::LOADER_DATA)?;
-    let max_entries = map_capacity / desc_size;
+    let raw_map = fw.alloc_zeroed(map_capacity as u64, None)?;
+    // Each recorded allocation can split a firmware region in up to three.
+    let max_entries = map_capacity / desc_size + 2 * MAX_TAGS;
     let regions =
-        fw.alloc_zeroed((max_entries * core::mem::size_of::<MemoryRegion>()) as u64, mt::VINDOWS_BOOT_DATA)?;
+        fw.alloc_zeroed((max_entries * core::mem::size_of::<MemoryRegion>()) as u64, Some(MemoryKind::BootData))?;
 
     // The direct map covers all RAM and at least the low 4 GiB (MMIO hole).
     let mut phys_limit = 4u64 << 30;
@@ -471,20 +507,44 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
         }
     }
 
-    // Translate, sort and merge the firmware map.
+    // Translate, sort and merge the firmware map; loader data is split by
+    // the recorded allocations.
+    let mut tags = fw.tags.borrow_mut();
+    let tag_count = tags.len;
+    tags.list[..tag_count].sort_unstable_by_key(|t| t.0);
     let out = regions as *mut MemoryRegion;
     let mut count = 0usize;
+    let mut push = |base: u64, end: u64, kind: MemoryKind| {
+        if end > base && count < max_entries {
+            let r = MemoryRegion { base, pages: (end - base) / PAGE, kind, _pad: 0 };
+            // SAFETY: `count < max_entries`, the capacity of `regions`.
+            unsafe { out.add(count).write(r) };
+            count += 1;
+        }
+    };
     for i in 0..map_size / desc_size_out {
         // SAFETY: within the returned map.
         let d = unsafe { &*((raw_map as usize + i * desc_size_out) as *const MemoryDescriptor) };
         if d.number_of_pages == 0 {
             continue;
         }
-        let r = MemoryRegion { base: d.physical_start, pages: d.number_of_pages, kind: convert_type(d.ty), _pad: 0 };
-        // SAFETY: `count < max_entries` because each descriptor yields at
-        // most one region.
-        unsafe { out.add(count).write(r) };
-        count += 1;
+        let (start, end) = (d.physical_start, d.physical_start + d.number_of_pages * PAGE);
+        let kind = convert_type(d.ty);
+        if d.ty != mt::LOADER_DATA {
+            push(start, end, kind);
+            continue;
+        }
+        let mut cur = start;
+        for &(base, pages, tag) in &tags.list[..tag_count] {
+            let (ts, te) = (base.max(cur), (base + pages * PAGE).min(end));
+            if ts >= te {
+                continue;
+            }
+            push(cur, ts, kind);
+            push(ts, te, tag);
+            cur = te;
+        }
+        push(cur, end, kind);
     }
     // SAFETY: `count` regions were initialised above.
     let slice = unsafe { core::slice::from_raw_parts_mut(out, count) };
@@ -564,7 +624,12 @@ extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
     // SAFETY: the firmware passes a valid system table.
     let st: &'static SystemTable = unsafe { &*st };
     // SAFETY: boot services are valid until ExitBootServices.
-    let fw = Firmware { image, st, bs: unsafe { &*st.boot_services } };
+    let fw = Firmware {
+        image,
+        st,
+        bs: unsafe { &*st.boot_services },
+        tags: core::cell::RefCell::new(Tags { list: [(0, 0, MemoryKind::Reserved); MAX_TAGS], len: 0 }),
+    };
     let Err(err) = boot(&fw);
     log!("fatal: {err}");
     fw.print("\nVindows could not start: ");

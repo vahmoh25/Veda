@@ -68,6 +68,10 @@ pub enum NetMode {
     Wifi,
     /// Both the wired card and the Wi-Fi radio.
     Both,
+    /// The wired card bridged to a host network adapter (VirtualBox only):
+    /// Vindows joins the host's real network (its router's DHCP, DNS and
+    /// Internet).
+    Bridged,
 }
 
 impl NetMode {
@@ -77,12 +81,13 @@ impl NetMode {
             "ethernet" | "wired" | "user" => Some(NetMode::Ethernet),
             "wifi" | "wi-fi" | "wireless" => Some(NetMode::Wifi),
             "both" => Some(NetMode::Both),
+            "bridged" | "bridge" => Some(NetMode::Bridged),
             _ => None,
         }
     }
 
     pub fn wired(self) -> bool {
-        matches!(self, NetMode::Ethernet | NetMode::Both)
+        matches!(self, NetMode::Ethernet | NetMode::Both | NetMode::Bridged)
     }
 
     pub fn wireless(self) -> bool {
@@ -99,6 +104,26 @@ pub struct WifiPorts {
     pub qemu_udp: u16,
     /// The simulator's end of it (UDP).
     pub sim_udp: u16,
+}
+
+/// How the disks are attached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskBus {
+    /// virtio-blk (QEMU's default here).
+    Virtio,
+    /// SATA disks on the machine's AHCI controller (as in VirtualBox and most
+    /// PCs).
+    Ahci,
+}
+
+impl DiskBus {
+    pub fn parse(s: &str) -> Option<DiskBus> {
+        match s {
+            "virtio" => Some(DiskBus::Virtio),
+            "ahci" | "sata" => Some(DiskBus::Ahci),
+            _ => None,
+        }
+    }
 }
 
 /// User-tunable virtual machine settings.
@@ -121,13 +146,19 @@ pub struct VmConfig {
     pub debug_exit: bool,
     /// Disk image holding the user's home directory (serial `vindows-home`).
     pub home_disk: Option<PathBuf>,
+    /// How the boot and home disks are attached.
+    pub disk_bus: DiskBus,
     /// Let the guest reboot (otherwise a reset, e.g. after a triple fault,
     /// stops QEMU).
     pub allow_reboot: bool,
     /// The network connection.
     pub net: NetMode,
-    /// QEMU model of the wired card (`virtio-net-pci`, `e1000e`, ...).
-    pub nic_model: String,
+    /// Model of the wired card (`None`: the hypervisor's default, virtio-net
+    /// for QEMU and the Intel 82540EM for VirtualBox).
+    pub nic_model: Option<String>,
+    /// VirtualBox: the host adapter to bridge to (`None`: the first one
+    /// connected).
+    pub bridge_adapter: Option<String>,
     /// Ports for the Wi-Fi radio and its NAT link (required when `net`
     /// includes Wi-Fi).
     pub wifi: Option<WifiPorts>,
@@ -148,9 +179,11 @@ impl Default for VmConfig {
             gdb: false,
             debug_exit: false,
             home_disk: None,
+            disk_bus: DiskBus::Virtio,
             allow_reboot: false,
             net: NetMode::Ethernet,
-            nic_model: "virtio-net-pci".into(),
+            nic_model: None,
+            bridge_adapter: None,
             wifi: None,
             extra: Vec::new(),
         }
@@ -204,10 +237,17 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-drive", &flash(&install.ovmf_code, true)]);
     cmd.args(["-drive", &flash(vars, false)]);
     cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,file={}", disk.display())]);
-    cmd.args(["-device", "virtio-blk-pci,drive=disk0,bootindex=0,serial=vindows-boot"]);
+    // q35's built-in AHCI controller has six ports, ide.0 to ide.5.
+    match cfg.disk_bus {
+        DiskBus::Virtio => cmd.args(["-device", "virtio-blk-pci,drive=disk0,bootindex=0,serial=vindows-boot"]),
+        DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.0,drive=disk0,bootindex=0,serial=vindows-boot"]),
+    };
     if let Some(home) = &cfg.home_disk {
         cmd.args(["-drive", &format!("id=home,if=none,format=raw,file={}", home.display())]);
-        cmd.args(["-device", "virtio-blk-pci,drive=home,serial=vindows-home"]);
+        match cfg.disk_bus {
+            DiskBus::Virtio => cmd.args(["-device", "virtio-blk-pci,drive=home,serial=vindows-home"]),
+            DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.1,drive=home,serial=vindows-home"]),
+        };
     }
     cmd.args(["-device", "virtio-tablet-pci"]);
     // Host entropy for the firmware's EFI_RNG_PROTOCOL, which seeds the
@@ -222,8 +262,9 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-device", "virtio-sound-pci,audiodev=audio0,streams=1"]);
     }
     if cfg.net.wired() {
+        let model = cfg.nic_model.as_deref().unwrap_or("virtio-net-pci");
         cmd.args(["-netdev", "user,id=net0"]);
-        cmd.args(["-device", &format!("{},id={WIRED_NIC_ID},netdev=net0,mac=52:54:00:12:34:56", cfg.nic_model)]);
+        cmd.args(["-device", &format!("{model},id={WIRED_NIC_ID},netdev=net0,mac=52:54:00:12:34:56")]);
     } else {
         // Without this QEMU adds a default card.
         cmd.args(["-nic", "none"]);

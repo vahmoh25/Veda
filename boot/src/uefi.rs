@@ -93,13 +93,6 @@ pub mod memory_type {
     pub const MMIO_PORT_SPACE: u32 = 12;
     pub const PAL_CODE: u32 = 13;
     pub const PERSISTENT: u32 = 14;
-
-    // OS-loader-defined types (0x80000000 and above) used to tag our
-    // allocations so the kernel can tell them apart in the memory map.
-    pub const VINDOWS_KERNEL: u32 = 0x8000_0001;
-    pub const VINDOWS_INITRD: u32 = 0x8000_0002;
-    pub const VINDOWS_BOOT_DATA: u32 = 0x8000_0003;
-    pub const VINDOWS_SYMBOLS: u32 = 0x8000_0004;
 }
 
 #[repr(C)]

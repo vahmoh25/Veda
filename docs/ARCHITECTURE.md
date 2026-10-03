@@ -93,8 +93,11 @@ eager FPU/SSE/AVX state switching with XSAVE.
 
 ## Storage
 
-* `virtio-blk` serves each disk through the `block` protocol under the name
-  `block/<serial>`, so clients find a disk by its serial number.
+* `virtio-blk` (QEMU) and `ahci` (SATA disks: VirtualBox, QEMU's q35
+  controller, most PCs) serve each disk through the `block` protocol under
+  the name `block/<serial>`, so clients find a disk by its serial number
+  whatever the controller. `devmgr` matches drivers by vendor and device,
+  and AHCI controllers by their PCI class.
 * `vfs` serves `/system` straight from the initrd and keeps `/home` and
   `/tmp` in memory. If a disk with serial `vindows-home` is attached, `/home`
   is restored from it at boot and written back half a second after changes

@@ -81,3 +81,45 @@ pub mod cap {
     pub const VENDOR: u8 = 0x09;
     pub const MSI_X: u8 = 0x11;
 }
+
+fn config_read(pci: &pcidev::Client, off: u16, width: u8) -> Option<u32> {
+    pci.config_read(off, width).ok()?.ok()
+}
+
+/// Finds a capability in the device's capability list.
+pub fn find_capability(pci: &pcidev::Client, id: u8) -> Option<u16> {
+    let mut at = (config_read(pci, 0x34, 1)? & 0xFC) as u16;
+    // The list is at most 48 entries long in 256 bytes of space.
+    for _ in 0..48 {
+        if at == 0 {
+            return None;
+        }
+        if config_read(pci, at, 1)? as u8 == id {
+            return Some(at);
+        }
+        at = (config_read(pci, at + 1, 1)? & 0xFC) as u16;
+    }
+    None
+}
+
+/// Sets up a single MSI vector for every interrupt cause of a device with
+/// the MSI capability, and returns the interrupt to wait on (`None`: no
+/// MSI; poll the device instead).
+pub fn enable_msi(pci: &pcidev::Client) -> Option<Interrupt> {
+    let at = find_capability(pci, cap::MSI)?;
+    let control = config_read(pci, at + 2, 2)? as u16;
+    let (irq, msi) = pci.alloc_msi().ok()?.ok()?;
+    let ok = |r: Result<Result<(), PciError>, vipc::IpcError>| matches!(r, Ok(Ok(())));
+    let mut good = ok(pci.config_write(at + 4, 4, msi.address as u32));
+    // 64-bit capable devices have an upper address register before the data.
+    let data_at = if control & (1 << 7) != 0 {
+        good &= ok(pci.config_write(at + 8, 4, (msi.address >> 32) as u32));
+        at + 12
+    } else {
+        at + 8
+    };
+    good &= ok(pci.config_write(data_at, 2, msi.data & 0xFFFF));
+    // Enable, with a single message.
+    good &= ok(pci.config_write(at + 2, 2, ((control & !(0x7 << 4)) | 1) as u32));
+    good.then_some(irq)
+}

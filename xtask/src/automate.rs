@@ -26,6 +26,7 @@
 //! double-click 0.05 0.44           # two quick clicks
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
 //! nic e1000                        # QEMU model of the wired card for this run, applied before boot
+//! requires qemu                    # only for QEMU (or `virtualbox`); `test` skips it elsewhere
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
 //! air-expect "list" "1 joined"     # fail unless the simulator's answer contains the text
 //! air-wait "list" "1 joined" 60    # wait until it does (timeout in s)
@@ -39,11 +40,116 @@ use crate::airsim::AirSim;
 use crate::qemu::{self, NetMode, QemuInstall, VmConfig};
 use crate::qmp::Qmp;
 use crate::util::{self, Result};
+use crate::vboxctl;
 
-/// A running headless VM under QMP control.
+/// Where a script runs.
+pub enum Hypervisor<'a> {
+    Qemu(&'a QemuInstall),
+    /// VirtualBox, with the screen resolution the image boots with.
+    VirtualBox {
+        resolution: &'a str,
+    },
+}
+
+/// The machine a script drives.
+pub enum Machine {
+    Qemu { child: Child, qmp: Qmp },
+    VirtualBox(vboxctl::Control),
+}
+
+impl Machine {
+    pub fn screenshot(&mut self, path: &Path) -> Result {
+        match self {
+            Machine::Qemu { qmp, .. } => qmp.screenshot(path),
+            Machine::VirtualBox(c) => c.screenshot(path),
+        }
+    }
+
+    pub fn move_mouse(&mut self, fx: f64, fy: f64) -> Result {
+        match self {
+            Machine::Qemu { qmp, .. } => qmp.move_mouse(fx, fy),
+            Machine::VirtualBox(c) => c.move_mouse(fx, fy),
+        }
+    }
+
+    pub fn mouse_button(&mut self, button: &str, down: bool) -> Result {
+        match self {
+            Machine::Qemu { qmp, .. } => qmp.mouse_button(button, down),
+            Machine::VirtualBox(c) => c.mouse_button(button, down),
+        }
+    }
+
+    pub fn send_keys(&mut self, combo: &str) -> Result {
+        match self {
+            Machine::Qemu { qmp, .. } => qmp.send_keys(combo),
+            Machine::VirtualBox(c) => c.send_keys(combo),
+        }
+    }
+
+    pub fn key_event(&mut self, key: &str, down: bool) -> Result {
+        match self {
+            Machine::Qemu { qmp, .. } => qmp.key_event(key, down),
+            Machine::VirtualBox(c) => c.key_event(key, down),
+        }
+    }
+
+    pub fn type_text(&mut self, text: &str) -> Result {
+        match self {
+            Machine::Qemu { qmp, .. } => qmp.type_text(text),
+            Machine::VirtualBox(c) => c.type_text(text),
+        }
+    }
+
+    /// Plugs in or unplugs the wired card's cable.
+    pub fn set_wired_link(&mut self, up: bool) -> Result {
+        match self {
+            Machine::Qemu { qmp, .. } => {
+                let name = qemu::WIRED_NIC_ID;
+                qmp.execute("set_link", &format!("{{\"name\":\"{name}\",\"up\":{up}}}")).map(|_| ())
+            }
+            Machine::VirtualBox(c) => c.vbox().set_link(up),
+        }
+    }
+
+    fn reset(&mut self) -> Result {
+        match self {
+            Machine::Qemu { qmp, .. } => qmp.execute("system_reset", "{}").map(|_| ()),
+            Machine::VirtualBox(c) => c.reset(),
+        }
+    }
+
+    /// Why the machine stopped, if it did.
+    fn stopped(&mut self) -> Option<String> {
+        match self {
+            Machine::Qemu { child, .. } => match child.try_wait() {
+                Ok(Some(status)) => Some(format!("QEMU exited ({status})")),
+                _ => None,
+            },
+            Machine::VirtualBox(c) => (!c.vbox().is_running()).then(|| "the VirtualBox machine stopped".into()),
+        }
+    }
+
+    fn finish(&mut self) {
+        match self {
+            Machine::Qemu { child, qmp } => {
+                qmp.quit();
+                let start = Instant::now();
+                while start.elapsed() < Duration::from_secs(5) {
+                    if let Ok(Some(_)) = child.try_wait() {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                let _ = child.kill();
+            }
+            Machine::VirtualBox(c) => c.finish(),
+        }
+    }
+}
+
+/// A running headless VM under script control.
 pub struct Session {
-    child: Child,
-    pub qmp: Qmp,
+    pub m: Machine,
     pub serial_log: PathBuf,
     /// Serial log patterns that abort any wait immediately.
     pub fail_patterns: Vec<String>,
@@ -55,10 +161,26 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn start(install: &QemuInstall, disk: &Path, mut vm: VmConfig) -> Result<Self> {
+    pub fn start(hv: &Hypervisor, disk: &Path, mut vm: VmConfig) -> Result<Self> {
         let out = util::out_dir();
         let serial_log = out.join("serial.log");
         let _ = std::fs::remove_file(&serial_log);
+        // Kernel panics print "PANIC", user-space panics "panicked at".
+        let fail_patterns = vec!["PANIC".into(), "panicked at".into()];
+        let install = match hv {
+            Hypervisor::Qemu(install) => *install,
+            Hypervisor::VirtualBox { resolution } => {
+                let vbox = crate::vbox::VBox::locate()?;
+                vbox.configure(&vm, disk, vm.home_disk.as_deref(), &serial_log, resolution)?;
+                vbox.start(true)?;
+                let (w, h) = resolution
+                    .split_once('x')
+                    .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+                    .unwrap_or((1280, 800));
+                let m = Machine::VirtualBox(vboxctl::Control::new(vbox, (w, h)));
+                return Ok(Session { m, serial_log, fail_patterns, since: 0, sim: None });
+            }
+        };
         let port = {
             let l = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
             l.local_addr().map_err(|e| e.to_string())?.port()
@@ -79,9 +201,7 @@ impl Session {
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
         let child = cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?;
         let qmp = Qmp::connect(port, Duration::from_secs(20))?;
-        // Kernel panics print "PANIC", user-space panics "panicked at".
-        let fail_patterns = vec!["PANIC".into(), "panicked at".into()];
-        Ok(Session { child, qmp, serial_log, fail_patterns, since: 0, sim })
+        Ok(Session { m: Machine::Qemu { child, qmp }, serial_log, fail_patterns, since: 0, sim })
     }
 
     fn serial_bytes(&self) -> Vec<u8> {
@@ -107,7 +227,7 @@ impl Session {
     /// Resets the machine (a reboot that keeps the disks).
     pub fn reset(&mut self) -> Result {
         self.since = self.serial_bytes().len();
-        self.qmp.execute("system_reset", "{}").map(|_| ())
+        self.m.reset()
     }
 
     /// Waits until the serial log contains `needle`.
@@ -121,8 +241,8 @@ impl Session {
             if let Some(p) = self.fail_patterns.iter().find(|p| log.contains(p.as_str())) {
                 return Err(format!("serial log contains failure pattern \"{p}\""));
             }
-            if let Ok(Some(status)) = self.child.try_wait() {
-                return Err(format!("QEMU exited ({status}) before \"{needle}\" appeared"));
+            if let Some(why) = self.m.stopped() {
+                return Err(format!("{why} before \"{needle}\" appeared"));
             }
             if start.elapsed() > timeout {
                 return Err(format!("timed out after {}s waiting for \"{needle}\"", timeout.as_secs()));
@@ -132,15 +252,7 @@ impl Session {
     }
 
     pub fn finish(mut self) {
-        self.qmp.quit();
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(5) {
-            if let Ok(Some(_)) = self.child.try_wait() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let _ = self.child.kill();
+        self.m.finish();
     }
 }
 
@@ -203,6 +315,26 @@ pub fn net_mode(script: &str) -> Result<Option<NetMode>> {
     Ok(mode)
 }
 
+/// Why a script can only run under QEMU, if it can: the simulated Wi-Fi
+/// (virtio-serial and airsim), QEMU's 82574L card, or `requires qemu`.
+pub fn needs_qemu(script: &str) -> Option<&'static str> {
+    for w in script.lines().map(words) {
+        match w.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+            ["net", "wifi" | "both", ..] => return Some("simulated Wi-Fi"),
+            ["nic", "e1000e", ..] => return Some("the 82574L card"),
+            ["air" | "air-expect" | "air-wait", ..] => return Some("the Wi-Fi simulator"),
+            ["requires", "qemu", ..] => return Some("marked as QEMU only"),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether a script says `requires virtualbox`.
+pub fn needs_virtualbox(script: &str) -> bool {
+    script.lines().map(words).any(|w| w.len() >= 2 && w[0] == "requires" && w[1] == "virtualbox")
+}
+
 /// The wired card model a script asks for with `nic`.
 pub fn nic_model(script: &str) -> Option<String> {
     script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "nic")).find_map(|w| w.get(1).cloned())
@@ -215,8 +347,8 @@ impl Session {
 }
 
 /// Runs an automation script against a fresh VM booted from `disk`.
-pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str) -> Result<String> {
-    let mut s = Session::start(install, disk, vm)?;
+pub fn run_script(hv: &Hypervisor, disk: &Path, vm: VmConfig, script: &str) -> Result<String> {
+    let mut s = Session::start(hv, disk, vm)?;
     let result = (|| -> Result {
         for (lineno, line) in script.lines().enumerate() {
             let w = words(line);
@@ -257,33 +389,33 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
                     if let Some(dir) = path.parent() {
                         std::fs::create_dir_all(dir).ok();
                     }
-                    s.qmp.screenshot(&path).map_err(ctx)?;
+                    s.m.screenshot(&path).map_err(ctx)?;
                     util::status("Screenshot", path.display());
                 }
-                "move" => s.qmp.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?,
+                "move" => s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?,
                 "click" => {
                     let button = w.get(3).map(String::as_str).unwrap_or("left");
-                    s.qmp.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
+                    s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
                     std::thread::sleep(Duration::from_millis(80));
-                    s.qmp.mouse_button(button, true).map_err(ctx)?;
+                    s.m.mouse_button(button, true).map_err(ctx)?;
                     std::thread::sleep(Duration::from_millis(80));
-                    s.qmp.mouse_button(button, false).map_err(ctx)?;
+                    s.m.mouse_button(button, false).map_err(ctx)?;
                 }
                 "drag" => {
-                    s.qmp.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
+                    s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
                     std::thread::sleep(Duration::from_millis(80));
-                    s.qmp.mouse_button("left", true).map_err(ctx)?;
+                    s.m.mouse_button("left", true).map_err(ctx)?;
                     for step in 1..=10 {
                         let t = step as f64 / 10.0;
                         let x = num(&w, 1)? + (num(&w, 3)? - num(&w, 1)?) * t;
                         let y = num(&w, 2)? + (num(&w, 4)? - num(&w, 2)?) * t;
-                        s.qmp.move_mouse(x, y).map_err(ctx)?;
+                        s.m.move_mouse(x, y).map_err(ctx)?;
                         std::thread::sleep(Duration::from_millis(40));
                     }
-                    s.qmp.mouse_button("left", false).map_err(ctx)?;
+                    s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" => {}
+                "boot-cmdline" | "net" | "nic" | "requires" => {}
                 "air" => {
                     let line = w.get(1).ok_or("missing command")?;
                     s.sim().and_then(|sim| sim.command(line)).map_err(ctx)?;
@@ -328,27 +460,28 @@ pub fn run_script(install: &QemuInstall, disk: &Path, vm: VmConfig, script: &str
                         Some("wired") => qemu::WIRED_NIC_ID,
                         _ => return Err(ctx("usage: link wired on|off".into())),
                     };
-                    s.qmp.execute("set_link", &format!("{{\"name\":\"{name}\",\"up\":{up}}}")).map_err(ctx)?;
+                    let _ = name;
+                    s.m.set_wired_link(up).map_err(ctx)?;
                 }
                 "mouse-down" => {
-                    s.qmp.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
+                    s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
                     std::thread::sleep(Duration::from_millis(80));
-                    s.qmp.mouse_button("left", true).map_err(ctx)?;
+                    s.m.mouse_button("left", true).map_err(ctx)?;
                 }
-                "mouse-up" => s.qmp.mouse_button("left", false).map_err(ctx)?,
+                "mouse-up" => s.m.mouse_button("left", false).map_err(ctx)?,
                 "double-click" => {
-                    s.qmp.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
+                    s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
                     for _ in 0..2 {
                         std::thread::sleep(Duration::from_millis(60));
-                        s.qmp.mouse_button("left", true).map_err(ctx)?;
+                        s.m.mouse_button("left", true).map_err(ctx)?;
                         std::thread::sleep(Duration::from_millis(60));
-                        s.qmp.mouse_button("left", false).map_err(ctx)?;
+                        s.m.mouse_button("left", false).map_err(ctx)?;
                     }
                 }
-                "key" => s.qmp.send_keys(w.get(1).ok_or("missing key")?).map_err(ctx)?,
-                "key-down" => s.qmp.key_event(w.get(1).ok_or("missing key")?, true).map_err(ctx)?,
-                "key-up" => s.qmp.key_event(w.get(1).ok_or("missing key")?, false).map_err(ctx)?,
-                "type" => s.qmp.type_text(w.get(1).ok_or("missing text")?).map_err(ctx)?,
+                "key" => s.m.send_keys(w.get(1).ok_or("missing key")?).map_err(ctx)?,
+                "key-down" => s.m.key_event(w.get(1).ok_or("missing key")?, true).map_err(ctx)?,
+                "key-up" => s.m.key_event(w.get(1).ok_or("missing key")?, false).map_err(ctx)?,
+                "type" => s.m.type_text(w.get(1).ok_or("missing text")?).map_err(ctx)?,
                 "expect-serial" => {
                     let needle = w.get(1).ok_or("missing text")?;
                     if !s.recent().contains(needle.as_str()) {

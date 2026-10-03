@@ -58,6 +58,25 @@ const DRIVERS: &[DriverMatch] = &[
     DriverMatch { vendor: 0x8086, devices: &[0x100E, 0x100F, 0x10D3], driver: "e1000" },
 ];
 
+/// Drivers for whole device classes: (class, subclass, programming
+/// interface, driver). Consulted when no vendor/device entry matches.
+const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
+    // SATA controllers in AHCI mode (VirtualBox, QEMU q35, most PCs)
+    (0x01, 0x06, 0x01, "ahci"),
+];
+
+/// The driver for a device, if any.
+fn driver_for(info: &DeviceInfo) -> Option<&'static str> {
+    DRIVERS.iter().find(|m| m.vendor == info.vendor && m.devices.contains(&info.device)).map(|m| m.driver).or_else(
+        || {
+            CLASS_DRIVERS
+                .iter()
+                .find(|(c, s, p, _)| (*c, *s, *p) == (info.class, info.subclass, info.prog_if))
+                .map(|(_, _, _, d)| *d)
+        },
+    )
+}
+
 fn class_name(info: &DeviceInfo) -> &'static str {
     match (info.class, info.subclass) {
         (0x01, 0x06) => "SATA controller",
@@ -214,10 +233,10 @@ fn main() -> i32 {
             info.device,
             class_name(&info)
         );
-        let Some(m) = DRIVERS.iter().find(|m| m.vendor == info.vendor && m.devices.contains(&info.device)) else {
+        let Some(driver) = driver_for(&info) else {
             continue;
         };
-        if let Some(ch) = start_driver(&boot, m.driver, &info) {
+        if let Some(ch) = start_driver(&boot, driver, &info) {
             bound.insert(next, Bound { address: a, info, channel: ch });
             next += 1;
         }

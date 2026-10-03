@@ -43,6 +43,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahci"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vvirtio",
+]
+
+[[package]]
 name = "airsim"
 version = "0.1.0"
 dependencies = [

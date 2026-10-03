@@ -94,10 +94,10 @@ const LINK_SLOTS: u32 = 256;
 const POLL_NS: u64 = 5_000_000;
 const IDLE_POLL_NS: u64 = 1_000_000_000;
 
-/// The PCI capability ID of MSI.
-const CAP_MSI: u8 = 0x05;
-
 struct Card {
+    /// The channel to devmgr, kept open while the driver runs (closing it
+    /// tells devmgr the driver has exited).
+    pci: pcidev::Client,
     _bar: Mapping,
     mmio: *mut u8,
     rx_ring: DmaBuffer,
@@ -220,42 +220,6 @@ impl Card {
     }
 }
 
-fn config_read(pci: &pcidev::Client, off: u16, width: u8) -> Option<u32> {
-    pci.config_read(off, width).ok()?.ok()
-}
-
-/// Sets up MSI if the card has it: one vector for every cause.
-fn enable_msi(pci: &pcidev::Client) -> Option<Interrupt> {
-    let mut cap = (config_read(pci, 0x34, 1)? & 0xFC) as u16;
-    for _ in 0..48 {
-        if cap == 0 {
-            return None;
-        }
-        if config_read(pci, cap, 1)? as u8 == CAP_MSI {
-            break;
-        }
-        cap = (config_read(pci, cap + 1, 1)? & 0xFC) as u16;
-    }
-    if cap == 0 || config_read(pci, cap, 1)? as u8 != CAP_MSI {
-        return None;
-    }
-    let control = config_read(pci, cap + 2, 2)? as u16;
-    let (irq, msi) = pci.alloc_msi().ok()?.ok()?;
-    let is64 = control & (1 << 7) != 0;
-    let ok = |r: Result<Result<(), vproto::pci::PciError>, vipc::IpcError>| matches!(r, Ok(Ok(())));
-    let mut good = ok(pci.config_write(cap + 4, 4, msi.address as u32));
-    let data_at = if is64 {
-        good &= ok(pci.config_write(cap + 8, 4, (msi.address >> 32) as u32));
-        cap + 12
-    } else {
-        cap + 8
-    };
-    good &= ok(pci.config_write(data_at, 2, msi.data & 0xFFFF));
-    // Enable, with a single message.
-    good &= ok(pci.config_write(cap + 2, 2, ((control & !(0x7 << 4)) | 1) as u32));
-    good.then_some(irq)
-}
-
 fn setup() -> Result<Card, String> {
     let h = vrt::env::take_handle(PCIDEV_ROLE).ok_or("no pcidev channel")?;
     let pci = pcidev::Client::new(Channel::from_handle(h));
@@ -280,6 +244,7 @@ fn setup() -> Result<Card, String> {
         Mapping::new(vmo, size, map_flags::READ | map_flags::WRITE).map_err(|_| String::from("cannot map BAR 0"))?;
     let alloc = |len: usize| DmaBuffer::new(&dma, len).map_err(|_| String::from("out of DMA memory"));
     let mut card = Card {
+        pci,
         mmio: bar.as_ptr(),
         _bar: bar,
         rx_ring: alloc(RING * DESC)?,
@@ -355,7 +320,7 @@ fn setup() -> Result<Card, String> {
     card.w(reg::TCTL, TCTL_EN | TCTL_PSP | (0x0F << 4) | (0x40 << 12));
     card.w(reg::TIPG, 10 | (8 << 10) | (6 << 20));
 
-    card.irq = enable_msi(&pci);
+    card.irq = vproto::pci::enable_msi(&card.pci);
     card.w(reg::IMS, INT_MASK);
     Ok(card)
 }

@@ -30,9 +30,9 @@ crates (smoltcp, RustCrypto).
   remembers networks, reconnects and roams on its own. Drivers only move
   frames. Under QEMU a simulated Wi-Fi environment provides access points
   bridged to the Internet. See [Networking](docs/NETWORKING.md).
-* **Storage.** A virtio-blk driver and a file system service that keeps
-  the home directory on its own disk with crash-safe snapshots, so your
-  files survive restarts.
+* **Storage.** virtio-blk and AHCI (SATA) drivers and a file system
+  service that keeps the home directory on its own disk with crash-safe
+  snapshots, so your files survive restarts.
 * **Applications.** Text Editor (tabs, syntax highlighting, find and
   replace, undo), Photos, Music, Files, Terminal, Task Manager, Settings
   and About.
@@ -57,6 +57,7 @@ crates (smoltcp, RustCrypto).
 | *Velocity* | *Starfall* |
 
 All screenshots are taken in QEMU by `cargo xtask script docs/screenshots.vts`.
+Vindows also runs in VirtualBox (see below).
 
 ## Quick start
 
@@ -70,7 +71,8 @@ All screenshots are taken in QEMU by `cargo xtask script docs/screenshots.vts`.
   Visual Studio Build Tools with the MSVC build tools (`link.exe`). The
   Rust installer offers to set these up.
 * [QEMU](https://www.qemu.org/download/#windows) for Windows, which includes
-  the OVMF UEFI firmware.
+  the OVMF UEFI firmware, and/or [VirtualBox](https://www.virtualbox.org/)
+  7.1 or newer (no Extension Pack needed).
 
 Check the environment:
 
@@ -105,6 +107,33 @@ This also starts `airsim`, a simulated Wi-Fi environment whose networks
 ("Vindows Home", "Vindows WPA3", ...; password `vindows-wifi`) lead to the
 Internet. `--net both` adds the wired card. See `cargo xtask help` for all
 commands and options.
+
+### VirtualBox
+
+Every command takes `--vm virtualbox` to use VirtualBox instead of QEMU,
+with the same options:
+
+```bash
+cargo xtask run --vm virtualbox
+```
+
+xtask creates (and on every run updates) a VirtualBox machine named
+"Vindows" whose disks are the same images QEMU uses, so builds need no
+conversion and the home directory is shared between the two. VirtualBox
+uses the CPU's hardware virtualization (QEMU on Windows emulates the CPU
+in software). The machine is closer to a real
+PC: SATA disks, an Intel PRO/1000 network card, PS/2 keyboard and mouse.
+Click into the window to use the mouse; the right **Ctrl** key releases it.
+
+To put Vindows on your real network (your router's DHCP and DNS, the real
+Internet) through the host's network adapter, Wi-Fi included:
+
+```bash
+cargo xtask run --vm virtualbox --net bridged
+```
+
+`shot`, `script` and `test` work with `--vm virtualbox` too; scripts that
+need QEMU (the simulated Wi-Fi) are skipped.
 
 ### Using the desktop
 
@@ -191,7 +220,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `kernel/` | `vkernel`, the microkernel |
 | `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit), `v3d` (3D engine), `audio`, `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `netd` (network), `wlan` (Wi-Fi) |
-| `drivers/` | `ps2`, `virtio-input`, `virtio-blk`, `virtio-snd`, `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
+| `drivers/` | `ps2`, `virtio-input`, `virtio-blk`, `ahci` (SATA), `virtio-snd`, `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
 | `apps/` | the desktop `shell` and the applications, including `racer` (*Velocity*) and `starfall` |
 | `tests/` | `systest` and `nettest` (in-system tests) and GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |

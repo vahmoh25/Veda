@@ -57,6 +57,7 @@ members = [
     "drivers/virtio-net",
     "drivers/vwifi",
     "drivers/e1000",
+    "drivers/ahci",
     "tests/systest",
     "tests/nettest",
 ]

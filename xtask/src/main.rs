@@ -9,6 +9,8 @@ mod image;
 mod qemu;
 mod qmp;
 mod util;
+mod vbox;
+mod vboxctl;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -41,6 +43,7 @@ BUILD OPTIONS:
     --skip PROGRAM      Leave a program out of the image (repeatable)
 
 RUN OPTIONS:
+    --vm HYPERVISOR     qemu (default) or virtualbox (run, shot, script, test)
     --smp N             Number of virtual CPUs (default 4)
     --memory MiB        Guest RAM in MiB (default 1024)
     --headless          No display window (serial console only)
@@ -49,9 +52,13 @@ RUN OPTIONS:
     --gdb               Wait for a debugger on localhost:1234
     --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
     --fresh-home        Start with a new home directory (deletes target/vindows/home.img)
-    --net MODE          Network: ethernet (default, QEMU's NAT), wifi (the virtual Wi-Fi
-                        radio and the airsim access points), both, or none
-    --nic MODEL         QEMU model of the wired card (default virtio-net-pci; e1000e, ...)
+    --net MODE          Network: ethernet (default, the hypervisor's NAT), wifi (QEMU: the
+                        virtual Wi-Fi radio and the airsim access points), both (QEMU),
+                        bridged (VirtualBox: the host's real network), or none
+    --nic MODEL         Model of the wired card (QEMU: virtio-net-pci (default), e1000, e1000e;
+                        VirtualBox: e1000 (82540EM, default), 82545EM, virtio)
+    --bridge ADAPTER    VirtualBox host adapter for --net bridged (default: the first connected)
+    --disk-bus BUS      How QEMU attaches the disks: virtio (default) or ahci (SATA)
 
 SHOT OPTIONS:
     --wait SECS         Seconds to wait before the screenshot (default 10)
@@ -77,6 +84,15 @@ struct Options {
     skip: Vec<String>,
     /// `run`: start with a new, empty home directory.
     fresh_home: bool,
+    /// The hypervisor for `run`, `shot`, `script` and `test`.
+    hypervisor: Hypervisor,
+}
+
+/// Which hypervisor runs Vindows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hypervisor {
+    Qemu,
+    VirtualBox,
 }
 
 fn parse_options(args: &[String]) -> Result<Options> {
@@ -92,6 +108,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         generate: true,
         skip: Vec::new(),
         fresh_home: false,
+        hypervisor: Hypervisor::Qemu,
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -115,11 +132,23 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--no-generate" => o.generate = false,
             "--skip" => o.skip.push(value(arg)?),
             "--fresh-home" => o.fresh_home = true,
+            "--vm" => {
+                o.hypervisor = match value(arg)?.to_ascii_lowercase().as_str() {
+                    "qemu" => Hypervisor::Qemu,
+                    "virtualbox" | "vbox" => Hypervisor::VirtualBox,
+                    v => return Err(format!("unknown hypervisor '{v}' (qemu, virtualbox)")),
+                }
+            }
+            "--bridge" => o.vm.bridge_adapter = Some(value(arg)?),
             "--net" => {
                 let v = value(arg)?;
                 o.vm.net = qemu::NetMode::parse(&v).ok_or(format!("unknown network mode '{v}'"))?;
             }
-            "--nic" => o.vm.nic_model = value(arg)?,
+            "--nic" => o.vm.nic_model = Some(value(arg)?),
+            "--disk-bus" => {
+                let v = value(arg)?;
+                o.vm.disk_bus = qemu::DiskBus::parse(&v).ok_or(format!("unknown disk bus '{v}' (virtio, ahci)"))?;
+            }
             other => return Err(format!("unknown option '{other}' (see `cargo xtask help`)")),
         }
     }
@@ -258,6 +287,12 @@ fn write_image(o: &Options, system: &System) -> Result<(PathBuf, u64)> {
 }
 
 fn run(o: &Options) -> Result {
+    if o.hypervisor == Hypervisor::VirtualBox {
+        return run_vbox(o);
+    }
+    if o.vm.net == qemu::NetMode::Bridged {
+        return Err("bridged networking needs VirtualBox (--vm virtualbox)".into());
+    }
     let install = qemu::QemuInstall::locate()?;
     let disk = build(o)?;
     let vars = qemu::vars_file(&install)?;
@@ -288,6 +323,22 @@ fn run(o: &Options) -> Result {
     util::run(&mut cmd)
 }
 
+/// `run` with VirtualBox: the same build, the same disks, a VirtualBox
+/// machine configured from the options.
+fn run_vbox(o: &Options) -> Result {
+    let vbox = vbox::VBox::locate()?;
+    util::status("Using", format!("VirtualBox {}", vbox.version()?));
+    let disk = build(o)?;
+    let home = util::out_dir().join("home.img");
+    qemu::prepare_home_disk(&home, o.fresh_home)?;
+    let serial = o.vm.serial_file.clone().unwrap_or_else(|| util::out_dir().join("serial-vbox.log"));
+    let _ = std::fs::remove_file(&serial);
+    vbox.configure(&o.vm, &disk, Some(&home), &serial, &o.resolution)?;
+    vbox.start(!o.vm.display)?;
+    util::status("Running", format!("VirtualBox machine \"{}\" (Ctrl+C powers it off)", vbox::VM));
+    vbox::follow(&vbox, &serial, o.vm.serial_file.is_none())
+}
+
 /// Boots headless and runs an automation script (see `automate.rs`).
 fn script(o: &Options, script: &str) -> Result {
     script_on(o, script, None)
@@ -297,7 +348,10 @@ fn script(o: &Options, script: &str) -> Result {
 /// Only the boot configuration differs between scripts, so test runs build
 /// the system once and just write a new disk image for each script.
 fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
-    let install = qemu::QemuInstall::locate()?;
+    let install = match o.hypervisor {
+        Hypervisor::Qemu => Some(qemu::QemuInstall::locate()?),
+        Hypervisor::VirtualBox => None,
+    };
     let mut o = o.clone();
     for extra in automate::boot_cmdline(script) {
         o.cmdline = format!("{} {extra}", o.cmdline).trim().to_string();
@@ -314,14 +368,27 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     if let Some(net) = automate::net_mode(script)? {
         vm.net = net;
     }
+    match o.hypervisor {
+        Hypervisor::Qemu if vm.net == qemu::NetMode::Bridged || automate::needs_virtualbox(script) => {
+            return Err("this script needs VirtualBox (--vm virtualbox)".into());
+        }
+        Hypervisor::VirtualBox if let Some(why) = automate::needs_qemu(script) => {
+            return Err(format!("this script needs QEMU ({why})"));
+        }
+        _ => {}
+    }
     if let Some(model) = automate::nic_model(script) {
-        vm.nic_model = model;
+        vm.nic_model = Some(model);
     }
     // Every scripted run starts with a new, empty home directory.
     let home = util::out_dir().join("test-home.img");
     qemu::prepare_home_disk(&home, true)?;
     vm.home_disk = Some(home);
-    let log = automate::run_script(&install, &disk, vm, script)?;
+    let hv = match &install {
+        Some(install) => automate::Hypervisor::Qemu(install),
+        None => automate::Hypervisor::VirtualBox { resolution: &o.resolution },
+    };
+    let log = automate::run_script(&hv, &disk, vm, script)?;
     println!("--- serial log (tail) ---\n{}", automate::tail(&log, 40));
     Ok(())
 }
@@ -374,7 +441,8 @@ fn test(o: &Options) -> Result {
     let started = std::time::Instant::now();
     let system = build_system(o)?;
     util::status("Built", format!("the system in {:.1}s", started.elapsed().as_secs_f32()));
-    util::status("Testing", "integration tests inside Vindows (QEMU)");
+    let hv_name = if o.hypervisor == Hypervisor::VirtualBox { "VirtualBox" } else { "QEMU" };
+    util::status("Testing", format!("integration tests inside Vindows ({hv_name})"));
     let mut o = o.clone();
     o.cmdline = format!("{} systest", o.cmdline).trim().to_string();
     // The last test restarts the window system; give the desktop a moment
@@ -393,8 +461,14 @@ fn test(o: &Options) -> Result {
         scripts.sort();
         for path in scripts {
             let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-            util::status("Testing", format!("GUI script {name}"));
             let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+            if o.hypervisor == Hypervisor::VirtualBox
+                && let Some(why) = automate::needs_qemu(&text)
+            {
+                util::status("Skipping", format!("GUI script {name} (needs QEMU: {why})"));
+                continue;
+            }
+            util::status("Testing", format!("GUI script {name}"));
             let mut ui = o.clone();
             ui.cmdline.clear();
             script_on(&ui, &text, Some(&system)).map_err(|e| format!("{name}: {e}"))?;

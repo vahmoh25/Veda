@@ -187,6 +187,44 @@ A driver for real hardware would implement the same `wlanphy` protocol as
 `vwifi`: report its channels, move frames through the link and tune the
 radio. The service needs no change.
 
+The simulated environment needs QEMU (VirtualBox has no virtio-serial
+port).
+
+## Real networks (VirtualBox)
+
+```bash
+cargo xtask run --vm virtualbox --net bridged
+```
+
+bridges Vindows' network card (VirtualBox's Intel PRO/1000, driven by
+`e1000`) to a host adapter (`--bridge NAME`, by default the first one
+connected, preferring a wired one), so Vindows is a machine on your real
+network: it gets its address, gateway and DNS server from your router by
+DHCP and reaches the Internet through it. This works over the host's Wi-Fi
+too (VirtualBox translates MAC addresses there); the host's adapter does
+the Wi-Fi part. For Vindows itself to run Wi-Fi against a real router, it
+needs a radio of its own: a USB Wi-Fi adapter passed through to the
+virtual machine, with drivers for the USB controller and the adapter's
+chip.
+
+To check it from inside Vindows:
+
+```bash
+cargo xtask script tests/real/bridged.vts --vm virtualbox
+```
+
+On this machine (bridged over the laptop's Wi-Fi) Vindows got
+192.168.1.124/24 from the router, DNS through it, and passed the DNS, UDP,
+TCP, HTTP and ping checks. It also gets a global IPv6 address from the
+router, but VirtualBox's bridge over a Wi-Fi adapter only learns guests'
+IPv4 addresses (from ARP and DHCP), so IPv6 traffic beyond the link does
+not come back; the check reports it without failing. Vindows' IPv6 itself
+reaches the Internet: through QEMU's NAT, `run=nettest:ipv6` connects to
+example.com over IPv6. A wired adapter has no such limitation.
+
+The default `--net ethernet` uses VirtualBox's NAT (10.0.2.15, gateway
+10.0.2.2), which passes the host's DNS server to Vindows.
+
 ## Using the network
 
 * **The taskbar's network icon** shows the Wi-Fi signal (or the wired
