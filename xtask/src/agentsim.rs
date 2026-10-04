@@ -82,11 +82,12 @@ impl AgentSim {
         Ok(AgentSim { port, shared, next_call: 1 })
     }
 
-    /// The kernel command line arguments pointing the agent here (and,
-    /// with `wake`, starting a conversation at once).
-    pub fn boot_arg(&self, wake: bool) -> String {
+    /// The kernel command line arguments pointing the agent here, at
+    /// `host` (this computer as the guest's network sees it), and with
+    /// `wake` starting a conversation at once.
+    pub fn boot_arg(&self, host: &str, wake: bool) -> String {
         format!(
-            "agent.endpoint=ws://10.0.2.2:{0}/v1/agent/converse agent.listen=ws://10.0.2.2:{0}/v1/listen{1}",
+            "agent.endpoint=ws://{host}:{0}/v1/agent/converse agent.listen=ws://{host}:{0}/v1/listen{1}",
             self.port,
             if wake { " agent.wake" } else { "" }
         )

@@ -422,7 +422,11 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     }
     let agent = if automate::needs_agentsim(script) { Some(agentsim::AgentSim::start()?) } else { None };
     if let Some(a) = &agent {
-        o.cmdline = format!("{} {}", o.cmdline, a.boot_arg(!automate::agent_asleep(script))).trim().to_string();
+        // This computer is the gateway of the guest's network: QEMU's NAT,
+        // or the Wi-Fi radio's own when that is the only network.
+        let wifi_only = automate::net_mode(script)? == Some(qemu::NetMode::Wifi);
+        let host = if wifi_only { "10.0.3.2" } else { "10.0.2.2" };
+        o.cmdline = format!("{} {}", o.cmdline, a.boot_arg(host, !automate::agent_asleep(script))).trim().to_string();
     }
     for extra in automate::boot_cmdline(script) {
         o.cmdline = format!("{} {extra}", o.cmdline).trim().to_string();

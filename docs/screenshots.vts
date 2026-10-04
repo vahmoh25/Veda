@@ -3,18 +3,45 @@
 #   cargo xtask script docs/screenshots.vts
 #
 # which writes docs/images/*.png. Applications are started from the start
-# menu's search and the Terminal, so only Music's play button is clicked by
-# position. The machine has the virtual Wi-Fi radio (its icon is on the
-# taskbar) and airsim's simulated networks.
+# menu's search and the Terminal, so only Music's play button and a few
+# things on the taskbar are clicked by position. The machine has the
+# virtual Wi-Fi radio (its icon is on the taskbar) and airsim's simulated
+# networks, and the agent talks to the stand-in for Deepgram.
 net wifi
+agent-asleep
 fail-on "PANIC"
 wait-serial "desktop ready" 90
-wait 4
+wait-serial "attached to the network service as wlan0" 120
+wait 6
 
-# The desktop on its own: the README's main picture.
-move 0.97 0.08
+# Join the simulated home network from the network flyout: "Vindows Home",
+# its password, Enter.
+click 0.859 0.97
+wait 4
+click 0.85 0.4113
 wait 2
+click 0.8383 0.4713
+wait 1
+type "vindows-wifi"
+key ret
+wait-serial "Routable via wlan0" 90
+wait 2
+click 0.5 0.45
+wait 2
+
+# The README's main picture: the desktop with the agent's window open,
+# listening (the ring on the taskbar opens it and wakes the agent).
+click 0.825 0.97
+wait-serial "state: Listening" 30
+move 0.97 0.08
+wait 3
 shot docs/images/desktop.png
+# The agent back to sleep (the ring in its window), and the window closed.
+checkpoint
+click 0.8578 0.61
+wait-serial "state: Asleep" 20
+click 0.825 0.97
+wait 2
 
 # A Rust program in the Text Editor, opened from the Terminal.
 key meta_l

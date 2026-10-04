@@ -10,7 +10,7 @@ drivers, services, toolkit, applications — is in this repository; the
 TCP/IP engine, the TLS protocol and the cryptographic primitives come from
 a few mature Rust crates (smoltcp, rustls, RustCrypto).
 
-![The Vindows desktop](docs/images/desktop.png)
+![The Vindows desktop, with the agent's window open](docs/images/desktop.png)
 
 ## Highlights
 
@@ -58,10 +58,8 @@ a few mature Rust crates (smoltcp, rustls, RustCrypto).
 
 ## Screenshots
 
-| ![The agent's window over the Text Editor, while the agent speaks](docs/images/agent.png) | ![The agent asking for consent before deleting a file](docs/images/agent-approval.png) |
-|:---:|:---:|
-| The agent wrote a shopping list and answers | It asks before deleting anything |
 | ![The Text Editor with a Rust program](docs/images/editor.png) | ![Photos with the picture library](docs/images/photos.png) |
+|:---:|:---:|
 | Text Editor | Photos |
 | ![Music](docs/images/music.png) | ![Files](docs/images/files.png) |
 | Music | Files |
@@ -69,7 +67,7 @@ a few mature Rust crates (smoltcp, rustls, RustCrypto).
 | *Velocity* | *Starfall* |
 
 All screenshots are taken in QEMU by `cargo xtask script docs/screenshots.vts`
-(the agent's by `docs/screenshots-agent.vts`, with the stand-in for Deepgram).
+(the agent talking to the stand-in for Deepgram).
 Vindows also runs in VirtualBox (see below).
 
 ## Quick start
