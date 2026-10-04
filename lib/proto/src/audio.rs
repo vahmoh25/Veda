@@ -268,6 +268,10 @@ protocol! {
         /// Mutes or unmutes the microphone for every capture stream (they
         /// then receive silence).
         10 => fn set_input_muted(muted: bool) -> ();
+        /// While on, every other client's streams play quieter (a voice
+        /// assistant in a conversation: music under it, so that it hears
+        /// the user); off again when the connection closes.
+        11 => fn set_ducking(on: bool) -> ();
     }
 }
 

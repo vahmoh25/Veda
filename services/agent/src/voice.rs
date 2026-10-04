@@ -215,6 +215,11 @@ impl Voice {
         }
     }
 
+    /// Makes other sound play quieter (music under a conversation), or not.
+    pub fn duck_others(&self, on: bool) {
+        let _ = self.client.set_ducking(on);
+    }
+
     /// Closes the voice stream (when the conversation ends).
     pub fn close_speaker(&mut self) {
         self.queue.clear();

@@ -143,6 +143,10 @@ impl audio::Server for ClientSession<'_> {
         }
         self.capture.muted = muted;
     }
+
+    fn set_ducking(&mut self, on: bool) {
+        self.mixer.set_ducking(self.owner, on);
+    }
 }
 
 struct DriverSession<'a> {

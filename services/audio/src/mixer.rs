@@ -20,6 +20,10 @@
 //! frames played, these marks turn into a per-stream "played" position
 //! that is published (with a timestamp) in the stream's ring.
 //!
+//! **Ducking.** While a client asks for it (the agent in a conversation),
+//! every other client's streams play quieter, fading down and back up over
+//! a quarter of a second.
+//!
 //! **Echo reference.** While an echo-cancelled capture stream is open, the
 //! mixer also keeps the last two seconds of what it sent to the device,
 //! as 16 kHz mono ([`Reference`]); [`Mixer::reference`] finds the part
@@ -46,6 +50,10 @@ pub const NULL_CHANNELS: usize = 2;
 const MAX_BLOCK: usize = 4096;
 /// Periods kept queued in the device ring ahead of the driver.
 const TARGET_PERIODS: u32 = 2;
+/// Other clients' streams play at this gain while one ducks them ...
+const DUCK_GAIN: f32 = 0.1;
+/// ... fading to it (and back) over this many seconds.
+const DUCK_FADE_S: f32 = 0.25;
 /// A stream counts as active for this long after it last produced audio.
 const ACTIVE_HOLD_NS: u64 = 300_000_000;
 /// Limits.
@@ -194,6 +202,9 @@ pub struct Mixer {
     pub muted: bool,
     /// The echo reference, while someone needs it.
     reference: Option<Reference>,
+    /// Clients ducking the others, and the others' ducking gain now.
+    duckers: Vec<u64>,
+    duck: f32,
     next_id: u32,
     acc: Vec<i32>,
     out: Vec<i16>,
@@ -221,6 +232,8 @@ impl Mixer {
             master: 1.0,
             muted: false,
             reference: None,
+            duckers: Vec::new(),
+            duck: 1.0,
             next_id: 1,
             acc: vec![0; max],
             out: vec![0; max],
@@ -410,6 +423,20 @@ impl Mixer {
     /// Removes every stream of a client that disconnected.
     pub fn close_owner(&mut self, owner: u64) {
         self.streams.retain(|_, s| s.owner != owner);
+        self.set_ducking(owner, false);
+    }
+
+    /// Ducks every other client's streams while `on` (see the module
+    /// documentation).
+    pub fn set_ducking(&mut self, owner: u64, on: bool) {
+        let had = !self.duckers.is_empty();
+        self.duckers.retain(|&o| o != owner);
+        if on {
+            self.duckers.push(owner);
+        }
+        if had != !self.duckers.is_empty() {
+            vrt::println!("{} the other sound", if on { "ducking" } else { "no longer ducking" });
+        }
     }
 
     pub fn set_paused(&mut self, owner: u64, id: u32, paused: bool) -> Result<(), AudioError> {
@@ -526,6 +553,10 @@ impl Mixer {
         let n = n.min(MAX_BLOCK);
         self.acc[..n * dch].fill(0);
         let master = if self.muted { 0.0 } else { self.master };
+        // The ducking gain at the end of this block, moving towards its goal.
+        let goal = if self.duckers.is_empty() { 1.0 } else { DUCK_GAIN };
+        let step = (1.0 - DUCK_GAIN) * n as f32 / (self.rate as f32 * DUCK_FADE_S);
+        self.duck = if self.duck < goal { (self.duck + step).min(goal) } else { (self.duck - step).max(goal) };
         let mut produced_max = 0;
         let mut produced_by: Vec<(u32, usize)> = Vec::with_capacity(self.streams.len());
         for (&id, s) in self.streams.iter_mut() {
@@ -534,7 +565,8 @@ impl Mixer {
             }
             s.flush_tail();
             let sch = s.ring.channels() as usize;
-            let target = if s.fading_out { 0 } else { mix::gain_q15(s.volume * master) };
+            let duck = if self.duckers.contains(&s.owner) { 1.0 } else { self.duck };
+            let target = if s.fading_out { 0 } else { mix::gain_q15(s.volume * master * duck) };
             let g_start = s.gain;
             let gain_at = |done: usize| g_start + ((target - g_start) as i64 * done as i64 / n as i64) as i32;
             let mut produced = 0;

@@ -53,6 +53,7 @@
 //! agent-asleep                     # boot with the agent asleep (no conversation at start)
 //! agent-hear "Hey Vera, hello" 30  # the simulated recogniser hears this, once the agent streams speech to it
 //! agent-listens 1                  # fail unless the agent opened exactly this many recognition streams
+//! agent-listens-at-most 2          # fail if the agent opened more recognition streams than this
 //! agent-mic-quiet -60              # fail if the agent sent microphone audio this loud (dBFS) since agent-mark
 //! agent-mic-heard -30              # fail unless it sent microphone audio at least this loud since agent-mark
 //! ```
@@ -685,6 +686,15 @@ pub fn run_script(
                             if a.listen_connections() != n {
                                 return Err(ctx(format!(
                                     "the agent opened {} recognition streams, not {n}",
+                                    a.listen_connections()
+                                )));
+                            }
+                        }
+                        "agent-listens-at-most" => {
+                            let n = num(&w, 1).map_err(ctx)? as u32;
+                            if a.listen_connections() > n {
+                                return Err(ctx(format!(
+                                    "the agent opened {} recognition streams, more than {n}",
                                     a.listen_connections()
                                 )));
                             }

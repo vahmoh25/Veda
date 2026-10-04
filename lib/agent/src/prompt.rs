@@ -19,6 +19,9 @@ pub struct PromptContext<'a> {
     pub screen: &'a str,
     /// What the agent remembers ([`crate::memory::Memory::prompt_section`]).
     pub memory: &'a str,
+    /// How the last conversation ended ("User: ..." and "You: ..." lines),
+    /// or nothing.
+    pub last_conversation: &'a str,
     /// The applications and their actions, one per line.
     pub apps: &'a str,
     /// The agent has never talked with this user.
@@ -91,6 +94,13 @@ should call them.\n"
     }
     p.push('\n');
     p.push_str(c.memory);
+    if !c.last_conversation.is_empty() {
+        p.push_str(
+            "\nHow your last conversation ended, for reference only. It is over and this is a new one: do not pick up \
+where it left off or bring it up, unless the user asks about it.\n",
+        );
+        p.push_str(c.last_conversation);
+    }
     if !c.apps.is_empty() {
         p.push_str("\nApplications (id: what it is; actions for use_app):\n");
         p.push_str(c.apps);
@@ -117,10 +127,13 @@ mod tests {
             now: "Saturday 3 October 2026, 18:42",
             screen: "Open windows: Text Editor (in front), Music.",
             memory: "What you know about the user:\n- Their name is Alex\n",
+            last_conversation: "User: Play some music.\nYou: Neon Horizon is playing.\n",
             apps: "editor: Text Editor; open_file(path), new_document()\n",
             first_meeting: false,
         };
         let p = system_prompt(&ctx);
+        assert!(p.contains("It is over and this is a new one"));
+        assert!(p.contains("User: Play some music.\nYou: Neon Horizon is playing.\n"));
         assert!(p.starts_with("You are Vera, the voice that lives inside Vindows"));
         assert!(p.contains("Right now it is Saturday 3 October 2026, 18:42."));
         assert!(p.contains("Their name is Alex"));

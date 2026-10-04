@@ -63,22 +63,34 @@ is closed.
   nobody speaks. When someone does, the speech — with 0.6 s from before,
   so the first word is not cut — is streamed to Deepgram's Nova-3
   recogniser, with the agent's name as a key term, until three seconds of
-  quiet (or a minute). `vagent::wake::addressed` decides whether a final
-  transcript calls the agent ("Hey Vera, …", "… Vera?") or only mentions it
-  ("I told Anna about Vera"). Recognition is capped at ten minutes an hour,
-  so a television or music playing all day cannot run up the bill.
+  quiet, eight seconds without a word, or a minute. Sound that brought no
+  words (music, a television) is then taken for a background: until it
+  has stopped for five seconds, only a sound clearly louder than its usual
+  peaks starts recognition again, so music playing does not keep the recogniser
+  busy, while calling over it still works. The detector learns the room
+  for 1.6 s whenever listening starts, and speech must last 0.2 s. `vagent::wake`
+  decides whether a transcript calls the agent ("Hey Vera, …", "… Vera?")
+  or only mentions it ("I told Anna about Vera"): the name starts or ends
+  one of its sentences, so other words before it (a song) do not matter,
+  and one letter off counts ("Vira"), common words aside ("very"). What
+  came close without being a call is logged ("heard something like its
+  name"). Recognition is capped at ten minutes an hour, so a television or
+  music playing all day cannot run up the bill.
 * **Waking** opens a Voice Agent conversation
   (`wss://agent.deepgram.com/v1/agent/converse`) and sends its `Settings`:
   16 kHz microphone audio in, 24 kHz voice out, Flux speech recognition
   (which decides when you have finished a turn), the language model and
   voice from Settings, the agent's instructions (`vagent::prompt`: its
   character, how it talks, what it can do, what it remembers about you,
-  the time and what is on the screen, and every application's actions),
-  its functions, and the last few turns of earlier conversations.
+  the time and what is on the screen, and every application's actions,
+  and how the last conversation ended — for reference only: each
+  conversation starts afresh) and its functions.
   `mip_opt_out` keeps the audio out of Deepgram's model improvement.
+  While a conversation is on, the agent asks the audio service to duck
+  every other sound (music plays 20 dB quieter), so that it hears
+  you over it; it comes back up when the agent goes to sleep.
 * **Listening and speaking.** The microphone streams in 20 ms packets.
-  Deepgram's voice arrives faster than real time and queues behind what is
-  playing; when you start talking (`UserStartedSpeaking`) the queue and the
+  Deepgram's voice arrives in bursts and queues behind what is playing; when you start talking (`UserStartedSpeaking`) the queue and the
   stream are flushed at once. An answer starts playing once some of it has
   arrived (or all of it, `AgentAudioDone`): speech crossing a network comes
   in bursts, and starting on the first packet would turn every late one
@@ -171,8 +183,9 @@ in one line; `app_actions` gives the details.
 The agent remembers what you tell it about yourself — your name, people in
 your life, plans, how you like things done — when you say it plainly or
 ask it to, never its own guesses. It also notes which applications you use
-at what times of day, and keeps the last turns of recent conversations so
-it can pick up where you left off. All of it lives in
+at what times of day, and keeps the last turns of recent conversations, so
+that it can tell you what you talked about (a new conversation starts
+afresh all the same). All of it lives in
 `/home/.private/agent/memory.json`, on your computer; the prompt carries
 what is relevant. Settings → Agent → Memory shows everything it remembers
 and forgets any item, or everything; you can also just ask it ("what do you

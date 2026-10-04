@@ -11,7 +11,8 @@
 //!   microphone streams to Deepgram and the voice comes back. When the user
 //!   starts talking, the voice stops at once. A conversation ends after a
 //!   quiet spell (or when the agent says goodbye), to save cost; the next
-//!   one starts from the recent history, so it feels continuous.
+//!   one starts afresh, with how the last one ended in the instructions
+//!   only for reference (asked about it, the agent knows).
 //! * **Actions** ([`worker`]): function calls run on the worker thread.
 //!   Anything above routine risk waits for the user's approval, which the
 //!   shell asks for — in the agent's window when it is open, otherwise in a
@@ -70,10 +71,11 @@ vrt::entry!(main);
 const APPROVAL_TTL_NS: u64 = 180_000_000_000;
 /// How often the interface's live levels are refreshed.
 const LIVE_PERIOD_NS: u64 = 33_000_000;
-/// Context carried into a new conversation.
-const HISTORY_CHARS: usize = 3000;
-/// Only conversation from the last few hours is carried over.
-const HISTORY_AGE_S: u64 = 6 * 3600;
+/// How the last conversation ended, shown to the next one for reference
+/// (not as turns to continue) ...
+const RECAP_CHARS: usize = 800;
+/// ... if it was within the last few hours.
+const RECAP_AGE_S: u64 = 6 * 3600;
 
 /// A client connection.
 struct Conn {
@@ -259,6 +261,11 @@ impl Agent {
         };
         println!("waking ({reason})");
         self.listener = None;
+        // Music and other sound play quieter during the conversation, so
+        // that the agent hears the user (and the user the agent).
+        if let Some(v) = &self.voice {
+            v.duck_others(true);
+        }
         if let Some(v) = &mut self.voice
             && !self.muted
             && !v.open_mic()
@@ -277,10 +284,18 @@ impl Agent {
     /// The prompt for a conversation.
     fn build_prompt(&self) -> String {
         let installed = worker::installed_apps();
-        let (memory, infos, name, first) = {
+        let since = (vrt::time::unix_time_ns() / 1_000_000_000).saturating_sub(RECAP_AGE_S);
+        let (memory, recap, infos, name, first) = {
             let s = self.shared.lock();
+            let recap: String = s
+                .memory
+                .recent_turns(RECAP_CHARS, since)
+                .iter()
+                .map(|(role, text)| format!("{}: {}\n", if *role == Role::User { "User" } else { "You" }, text))
+                .collect();
             (
                 s.memory.prompt_section(),
+                recap,
                 s.apps.clone(),
                 s.config.name.clone(),
                 s.memory.facts.is_empty() && s.memory.turns.is_empty(),
@@ -294,6 +309,7 @@ impl Agent {
             now: &now,
             screen: &screen,
             memory: &memory,
+            last_conversation: &recap,
             apps: &apps,
             first_meeting: first,
         })
@@ -302,8 +318,6 @@ impl Agent {
     /// The `Settings` message for a new conversation.
     fn settings(&self) -> vjson::Value {
         let c = self.config();
-        let since = (vrt::time::unix_time_ns() / 1_000_000_000).saturating_sub(HISTORY_AGE_S);
-        let history = self.shared.lock().memory.recent_turns(HISTORY_CHARS, since);
         deepgram::settings(&deepgram::SessionSettings {
             listen_model: c.listen_model.clone(),
             keyterms: alloc::vec![c.name.clone()],
@@ -313,7 +327,9 @@ impl Agent {
             functions: tools::definitions(),
             voice: c.voice.clone(),
             speed: c.speed,
-            history,
+            // Each conversation starts afresh (the last one's end is in the
+            // prompt, for reference).
+            history: Vec::new(),
             greeting: None,
         })
     }
@@ -367,6 +383,7 @@ impl Agent {
         if let Some(v) = &mut self.voice {
             v.close_mic();
             v.close_speaker();
+            v.duck_others(false);
         }
         self.shared.lock().save_memory();
         match error {
