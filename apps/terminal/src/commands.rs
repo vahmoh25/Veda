@@ -1650,21 +1650,23 @@ fn cmd_sysinfo(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
     info.push(("Shell", "vsh 0.1".to_string()));
     info.push(("Terminal", "Vindows Terminal".to_string()));
     info.push(("Font", "JetBrains Mono".to_string()));
-    // The logo: four tiles, like the About window.
-    let tiles = [color::BRIGHT_CYAN, color::BRIGHT_BLUE, color::BLUE, color::BRIGHT_MAGENTA];
-    let logo_rows = 7;
-    let rows = (info.len() + 2).max(logo_rows);
+    // The logo: the ring, like the About window's (round in cells about
+    // twice as tall as they are wide).
+    const RING: [&str; 7] = [
+        "    ████████    ",
+        "  ███      ███  ",
+        "███          ███",
+        "██            ██",
+        "███          ███",
+        "  ███      ███  ",
+        "    ████████    ",
+    ];
+    let rows = (info.len() + 2).max(RING.len());
     for r in 0..rows {
         io.print("  ");
-        if r < logo_rows && r != 3 {
-            let top = r < 3;
-            for (k, gap) in [(0, "  "), (1, "")] {
-                let t = tiles[if top { k } else { 2 + k }];
-                io.styled("██████", Style::fg(t));
-                io.print(gap);
-            }
-        } else {
-            io.print(&pad("", 14));
+        match RING.get(r) {
+            Some(line) => io.styled(line, Style::fg(color::BRIGHT_WHITE)),
+            None => io.print(&pad("", 16)),
         }
         io.print("    ");
         match r {

@@ -14,8 +14,8 @@ a few mature Rust crates (smoltcp, rustls, RustCrypto).
 
 ## Highlights
 
-* **A voice that lives in it.** Say "Hey Vera" (or click the ring in the
-  taskbar) and talk: the agent answers in its own voice, can be
+* **A voice that lives in it.** Say "Hey Vera" (or click the small ring at
+  the right of the taskbar) and talk: the agent answers in its own voice, can be
   interrupted at any moment, and acts on the whole system — it opens and
   arranges applications, writes in the Text Editor, works with files,
   plays music, changes settings, sets timers. Every application offers
@@ -162,10 +162,10 @@ need QEMU (the simulated Wi-Fi) are skipped.
 
 * Talk to the agent: add your Deepgram API key in **Settings → Agent**
   (also its voice, language model and memory), then say "Hey Vera", click
-  the ring on the taskbar or press **Super+Space**. Talk naturally and
+  the small ring at the right of the taskbar or press **Super+Space**. Talk naturally and
   interrupt whenever you like; say goodbye when you are done.
-* Click the logo on the taskbar or tap the **Super** key for the start
-  menu; type to search for an application.
+* Click the logo (the ring in the middle of the taskbar) or tap the
+  **Super** key for the start menu; type to search for an application.
 * Click a taskbar button to open, focus or minimise an application;
   middle-click opens another window. Click the clock for the calendar.
 * Double-click desktop icons. Right-click the desktop to change the

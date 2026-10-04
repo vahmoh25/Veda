@@ -801,20 +801,8 @@ impl Settings {
     fn about(&mut self, ui: &mut Ui, r: Rect) -> i32 {
         let t = ui.theme().clone();
         let mut y = r.y;
-        // The Vindows logo: four gradient tiles.
-        let logo = Rect::new(r.x, y + 4, 64, 64);
-        let tile = 28;
-        let colors = [
-            (Color::hex(0x2FD4FF), Color::hex(0x3D8BFF)),
-            (Color::hex(0x4D7CFF), Color::hex(0x7A5CFF)),
-            (Color::hex(0x3D8BFF), Color::hex(0x6A63FF)),
-            (Color::hex(0x7A5CFF), Color::hex(0xC04DFF)),
-        ];
-        for (k, (a, b)) in colors.iter().enumerate() {
-            let tx = logo.x + (k as i32 % 2) * (tile + 8);
-            let ty = logo.y + (k as i32 / 2) * (tile + 8);
-            ui.canvas.fill_rounded_rect_gradient(Rect::new(tx, ty, tile, tile), 6.0, *a, *b);
-        }
+        // The Vindows logo: the ring.
+        vui::draw_logo(&mut ui.canvas, Rect::new(r.x, y + 4, 64, 64));
         ui.label(Rect::new(r.x + 88, y, r.w - 88, 40), "Vindows", Font::Bold, t.title_size + 4.0, t.text, Align::Left);
         let version = cstr(&self.info.version);
         ui.label(

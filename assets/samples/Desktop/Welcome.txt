@@ -9,7 +9,8 @@ isolated user-space programs that talk to each other over IPC channels.
 Getting around
 --------------
 
-  * Start menu ........ click the logo on the taskbar or tap the Super key.
+  * Start menu ........ click the logo (the ring in the middle of the taskbar)
+                        or tap the Super key.
                         Start typing to search for an application.
   * Taskbar ........... click an app to open it, click again to minimise it.
                         Middle-click opens another window of the same app.

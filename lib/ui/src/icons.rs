@@ -521,21 +521,17 @@ fn build(icon: Icon) -> Builder {
     b
 }
 
-/// Draws the Vindows logo (four rounded gradient tiles) filling the square `r`.
+/// Draws the Vindows logo filling the square `r`: OS1's white ring from
+/// Spike Jonze's "Her", a quarter of its radius wide (the agent's ring).
 pub fn draw_logo(c: &mut Canvas, r: Rect) {
-    let tile = (r.w - r.w / 8) / 2;
-    let gap = r.w - 2 * tile;
-    let colors = [
-        (Color::hex(0x2FD4FF), Color::hex(0x3D8BFF)),
-        (Color::hex(0x4D7CFF), Color::hex(0x7A5CFF)),
-        (Color::hex(0x3D8BFF), Color::hex(0x6A63FF)),
-        (Color::hex(0x7A5CFF), Color::hex(0xC04DFF)),
-    ];
-    for (i, (a, b)) in colors.iter().enumerate() {
-        let x = r.x + (i as i32 % 2) * (tile + gap);
-        let y = r.y + (i as i32 / 2) * (tile + gap);
-        c.fill_rounded_rect_gradient(Rect::new(x, y, tile, tile), tile as f32 / 5.0, *a, *b);
-    }
+    let (cx, cy) = (r.x as f32 + r.w as f32 / 2.0, r.y as f32 + r.h as f32 / 2.0);
+    let outer = r.w.min(r.h) as f32 / 2.0;
+    // A quarter of the middle radius wide: 2/9 of the outer one.
+    let inner = outer * 7.0 / 9.0;
+    let mut ring = Path::new();
+    ring.circle(cx, cy, outer);
+    ring.circle(cx, cy, inner);
+    c.fill_path(&ring, Color::WHITE, FillRule::EvenOdd);
 }
 
 impl Icon {

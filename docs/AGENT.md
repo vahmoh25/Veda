@@ -1,8 +1,8 @@
 # The voice agent
 
 Vindows has a voice that lives in it. The agent — Vera, until you rename
-it — is not an application you open: it is always there, a small ring in
-the taskbar, asleep until you call it. You talk to it as you would to a
+it — is not an application you open: it is always there, a small ring at
+the right of the taskbar, asleep until you call it. You talk to it as you would to a
 person in the room; it answers in its own voice and does things on the
 computer for you — opens and arranges applications, writes in the Text
 Editor, works with files, plays music, changes settings, sets timers —
@@ -40,8 +40,8 @@ the models and the voice are system settings (Settings → Agent).
 * **Say its name**: "Hey Vera, open my shopping list", "Vera, play some
   music", "what time is it, Vera?". Whatever you said with its name is the
   first thing it hears.
-* **Click the ring** in the taskbar, or press **Win+Space**: the agent's
-  window opens and it listens.
+* **Click its ring** at the right of the taskbar, or press **Win+Space**:
+  the agent's window opens and it listens.
 * Talk naturally. Interrupt it whenever you like — it stops speaking at
   once and listens. Change your mind, ask follow-up questions, or ask it to
   do several things in a row.
