@@ -214,8 +214,10 @@ struct Player {
     queued: usize,
     running: bool,
     depth: usize,
-    /// Ring frames whose buffers finished playing.
+    /// Ring frames whose buffers finished playing, and when that count
+    /// last grew.
     played: u64,
+    played_ns: u64,
     underruns: u32,
     starving: bool,
     last_audio_ns: u64,
@@ -250,7 +252,10 @@ impl Player {
         let halted = self.engine.halted();
         let mut any = false;
         while self.queued > 0 && (self.oldest != current || halted) {
-            self.played += self.taken[self.oldest] as u64;
+            if self.taken[self.oldest] > 0 {
+                self.played += self.taken[self.oldest] as u64;
+                self.played_ns = now_ns();
+            }
             self.oldest = (self.oldest + 1) % ENTRIES;
             self.queued -= 1;
             any = true;
@@ -329,7 +334,7 @@ impl Player {
     }
 
     fn publish(&self, ring: &Ring) {
-        ring.set_played(self.played, now_ns());
+        ring.set_played(self.played, self.played_ns);
         ring.set_latency((self.queued * PERIOD_FRAMES) as u32);
         ring.set_underruns(self.underruns);
         ring.set_consumer_flags(if self.running { flags::RUNNING } else { 0 });
@@ -496,6 +501,7 @@ fn setup() -> Result<Device, &'static str> {
         running: false,
         depth: DEPTH,
         played: 0,
+        played_ns: 0,
         underruns: 0,
         starving: false,
         last_audio_ns: 0,
@@ -625,6 +631,7 @@ fn run(mut dev: Device) {
             Ok((link, ring, data_event, space_event, input)) => {
                 println!("attached to the audio service{}", if input.is_some() { " (with recording)" } else { "" });
                 dev.player.played = ring.read_pos();
+                dev.player.played_ns = 0;
                 serve(&mut dev, &link, &ring, &data_event, &space_event, input.as_ref());
                 println!("the audio service went away");
                 dev.player.halt();

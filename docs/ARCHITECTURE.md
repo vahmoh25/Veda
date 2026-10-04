@@ -254,8 +254,9 @@ the pool's workers on different CPUs at once.
 * **Recording.** An input device produces into a ring with a capture
   clock; the service converts it for each capture stream, and runs the
   echo canceller for streams that ask for it (the agent's microphone) with
-  the mixed output as reference, aligned by the two clocks. The device
-  records only while a capture stream is open.
+  the mixed output as reference, aligned by the two clocks; such a stream
+  may carry the reference and the uncancelled microphone beside the
+  cleaned one. The device records only while a capture stream is open.
 * The `audio` service mixes every client stream: exact rational resampling
   (polyphase windowed sinc in integer arithmetic), ramped gains, click-free
   pause and seek, master volume and mute.

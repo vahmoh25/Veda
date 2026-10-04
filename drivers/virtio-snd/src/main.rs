@@ -81,8 +81,10 @@ struct Player {
     inflight: VecDeque<(usize, u32)>,
     running: bool,
     depth: usize,
-    /// Ring frames whose transfers completed.
+    /// Ring frames whose transfers completed, and when that count last
+    /// grew.
     played: u64,
+    played_ns: u64,
     underruns: u32,
     starving: bool,
     /// Last time real audio was queued.
@@ -143,7 +145,10 @@ impl Player {
             let slot = self.slot_of_head[head as usize];
             if let Some(i) = self.inflight.iter().position(|&(s, _)| s == slot) {
                 let (_, frames) = self.inflight.remove(i).unwrap_or((slot, 0));
-                self.played += frames as u64;
+                if frames > 0 {
+                    self.played += frames as u64;
+                    self.played_ns = now_ns();
+                }
             }
             // SAFETY: the device has written the status of this transfer.
             let st = unsafe { self.dma.bytes(slot * self.stride + self.status_off, 4) };
@@ -277,7 +282,7 @@ impl Player {
 
     /// Publishes our progress in the ring header.
     fn publish(&self, ring: &Ring) {
-        ring.set_played(self.played, now_ns());
+        ring.set_played(self.played, self.played_ns);
         ring.set_latency(self.queued_frames());
         ring.set_underruns(self.underruns);
         ring.set_consumer_flags(if self.running { flags::RUNNING } else { 0 });
@@ -551,6 +556,7 @@ fn setup() -> Result<Player, DriverError> {
         running: false,
         depth: DEPTH,
         played: 0,
+        played_ns: 0,
         underruns: 0,
         starving: false,
         last_audio_ns: 0,
@@ -571,6 +577,7 @@ fn run(mut player: Player) {
             Ok((link, ring, data_event, space_event, input)) => {
                 println!("attached to the audio service{}", if input.is_some() { " (with recording)" } else { "" });
                 player.played = ring.read_pos();
+                player.played_ns = 0;
                 serve(&mut player, &link, &ring, &data_event, &space_event, input.as_ref());
                 println!("the audio service went away");
                 player.halt();

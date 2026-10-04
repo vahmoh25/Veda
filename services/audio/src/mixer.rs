@@ -298,7 +298,9 @@ impl Mixer {
 
     /// Fills `out` with the 16 kHz mono reference that was playing up to
     /// monotonic time `end_ns` (silence where nothing was playing or the
-    /// history does not reach).
+    /// history does not reach). The position is extrapolated from the
+    /// moment the driver last saw it advance, so once the device runs dry
+    /// the reference falls silent with it.
     pub fn reference(&self, end_ns: u64, out: &mut [i16]) {
         out.fill(0);
         let (Some(r), Output::Device { ring, .. }) = (&self.reference, &self.output) else { return };
@@ -312,9 +314,12 @@ impl Mixer {
         let frame = played as i128 + dt * r.rate as i128 / 1_000_000_000;
         let end = (frame - r.origin as i128) * REFERENCE_RATE as i128 / r.rate as i128;
         let start = end - out.len() as i128;
+        // Nothing the driver has not taken yet can be playing.
+        let taken = (ring.read_pos() as i128 - r.origin as i128) * REFERENCE_RATE as i128 / r.rate as i128;
+        let available = (taken - r.start as i128).clamp(0, r.history.len() as i128);
         for (i, o) in out.iter_mut().enumerate() {
             let idx = start + i as i128 - r.start as i128;
-            if idx >= 0 && (idx as usize) < r.history.len() {
+            if idx >= 0 && idx < available {
                 *o = r.history[idx as usize];
             }
         }

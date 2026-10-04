@@ -13,13 +13,17 @@
 //! taken from the mixer's [`Reference`](crate::mixer::Reference) at the
 //! moment the frames were recorded (the driver publishes a capture
 //! clock). The canceller ([`vaudio::aec`]) estimates the remaining delay
-//! itself; how well it does is logged once a minute while it works.
+//! itself; how well it does is logged once a minute while it works. A
+//! stream may ask for more channels beside the cleaned microphone: what
+//! was playing when it was recorded (the echo's source), and the
+//! microphone as recorded — so a voice assistant can tell its own echo
+//! from the user (see `vagent::gate`).
 //!
 //! **Power.** The device records only while some stream is open: the
 //! service sets the ring's CAPTURE flag and signals `wake_event` when the
 //! first stream opens and clears it when the last one closes.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -78,6 +82,9 @@ struct EchoPath {
     pending: Vec<i16>,
     /// Time the newest pending sample was recorded.
     pending_end_ns: u64,
+    /// The reference and the recorded microphone, delayed like the
+    /// canceller's output.
+    side: VecDeque<(i16, i16)>,
     report_at_ns: u64,
 }
 
@@ -196,10 +203,13 @@ impl Capture {
     }
 
     pub fn open(&mut self, owner: u64, spec: &InputSpec) -> Result<InputHandle, AudioError> {
-        if !(8_000..=48_000).contains(&spec.rate) || !(1..=2).contains(&spec.channels) {
+        // Echo-cancelled streams have up to three channels: the cleaned
+        // microphone, what was playing, the microphone as recorded.
+        let max_channels = if spec.echo_cancel { 3 } else { 2 };
+        if !(8_000..=48_000).contains(&spec.rate) || !(1..=max_channels).contains(&spec.channels) {
             return Err(AudioError::BadFormat);
         }
-        if spec.echo_cancel && (spec.rate != ECHO_RATE || spec.channels != 1) {
+        if spec.echo_cancel && spec.rate != ECHO_RATE {
             return Err(AudioError::BadFormat);
         }
         if self.streams.len() >= MAX_INPUT_STREAMS
@@ -220,11 +230,14 @@ impl Capture {
         let device_rate = self.device_rate();
         let in_rate = if device_rate == 0 { spec.rate } else { device_rate };
         if spec.echo_cancel && self.echo.is_none() {
+            let canceller = EchoCanceller::new(ECHO_RATE, ECHO_TAIL_MS);
+            let side = core::iter::repeat_n((0, 0), canceller.latency_samples()).collect();
             self.echo = Some(EchoPath {
                 to_16k: Resampler::new(in_rate, ECHO_RATE, 1),
-                canceller: EchoCanceller::new(ECHO_RATE, ECHO_TAIL_MS),
+                canceller,
                 pending: Vec::new(),
                 pending_end_ns: 0,
+                side,
                 report_at_ns: 0,
             });
         }
@@ -357,9 +370,28 @@ impl Capture {
                 let r = &reference[i * frame..(i + 1) * frame];
                 echo.canceller.process(chunk, r, &mut cleaned[i * frame..(i + 1) * frame]);
             }
+            // Beside the cleaned microphone (for the streams that want
+            // them): what was playing and the microphone as recorded.
+            let widest = self.streams.values().filter(|s| s.echo_cancel).map(|s| s.ring.channels()).max();
+            let mut wide = Vec::new();
+            if widest.is_some_and(|c| c > 1) {
+                wide.reserve(whole * 3);
+                for ((&c, &r), &m) in cleaned.iter().zip(&reference).zip(&echo.pending[..whole]) {
+                    echo.side.push_back((r, m));
+                    let (r, m) = echo.side.pop_front().unwrap_or((0, 0));
+                    wide.extend_from_slice(&[c, r, m]);
+                }
+            }
             echo.pending.drain(..whole);
             for s in self.streams.values_mut().filter(|s| s.echo_cancel) {
-                write_stream(s, &cleaned, end_ns);
+                match s.ring.channels() {
+                    1 => write_stream(s, &cleaned, end_ns),
+                    2 => {
+                        let two: Vec<i16> = wide.as_chunks::<3>().0.iter().flat_map(|f| [f[0], f[1]]).collect();
+                        write_stream(s, &two, end_ns);
+                    }
+                    _ => write_stream(s, &wide, end_ns),
+                }
             }
             if end_ns >= echo.report_at_ns {
                 if echo.report_at_ns != 0 && echo.canceller.converged() {

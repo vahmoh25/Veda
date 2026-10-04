@@ -25,9 +25,9 @@
 //! its own audio but not the other side's state.
 //!
 //! The consumer also publishes `played_pos` (frames that have actually
-//! been played) with a timestamp, which lets a player show an accurate
-//! position and drive a visualiser from the samples that are audible right
-//! now ([`OutputStream::played_now`]).
+//! been played) with the moment it got there, which lets a player show an
+//! accurate position and drive a visualiser from the samples that are
+//! audible right now ([`OutputStream::played_now`]).
 //!
 //! # Flow control
 //!
@@ -162,7 +162,8 @@ message! {
     pub struct InputSpec {
         /// Sample rate the client wants (8 000 ..= 48 000 Hz).
         pub rate: u32,
-        /// 1 (mono) or 2 (stereo, interleaved).
+        /// 1 (mono) or 2 (stereo, interleaved); see `echo_cancel` for its
+        /// third channel.
         pub channels: u32,
         /// Ring capacity in frames (rounded up to a power of two, clamped
         /// to 1 024 ..= 262 144). Frames the client does not read in time
@@ -175,7 +176,10 @@ message! {
         pub name: String,
         /// Remove what the system itself plays from the signal (acoustic
         /// echo cancellation), so a voice assistant can listen while it
-        /// talks. Needs a mono stream at 16 000 Hz.
+        /// talks. Needs a stream at 16 000 Hz: its first channel is the
+        /// cleaned microphone, a second one what was playing when it was
+        /// recorded (the echo's source), a third the microphone as
+        /// recorded.
         pub echo_cancel: bool,
     }
 }
@@ -629,10 +633,13 @@ impl Ring {
         self.local.get()
     }
 
-    /// Consumer: publishes how much has been played, and when.
-    pub fn set_played(&self, played: u64, now_ns: u64) {
+    /// Consumer: publishes how much has been played, and when it got
+    /// there. That moment, not the time of publishing: whoever extrapolates
+    /// the position must see time pass after the last frame, or the device
+    /// running dry looks like the last frames playing on and on.
+    pub fn set_played(&self, played: u64, at_ns: u64) {
         self.u64_at(ring::OFF_PLAYED_POS).store(played, Ordering::Release);
-        self.u64_at(ring::OFF_PLAYED_NS).store(now_ns, Ordering::Release);
+        self.u64_at(ring::OFF_PLAYED_NS).store(at_ns, Ordering::Release);
     }
 
     /// `(played frames, timestamp ns)` as published by the consumer.
