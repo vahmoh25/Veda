@@ -1,6 +1,4 @@
-<img src="docs/icon/veda.svg" width="96" height="96" alt="The Veda icon">
-
-# Veda
+# Veda — The Agentic-Native Operating System
 
 Veda is a modern x86-64 operating system written from scratch,
 entirely in Rust. It is built around a capability-based microkernel and
