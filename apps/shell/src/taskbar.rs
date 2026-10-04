@@ -229,12 +229,12 @@ impl Taskbar {
             tip = Some((wifi::tooltip(m).replace('\n', " \u{00b7} "), net.center().0));
         }
 
-        // The agent: a small circle that echoes its window.
+        // The agent: a small ring that echoes its window.
         let orb = Rect::new(net.x - 44, 4, 40, h - 8);
         let resp = ui.interact(ui.id("agent"), orb);
         Self::button_bg(ui, orb, resp.hovered, resp.held, m.agent.window_open);
-        let t = (ui.now() / 1_000_000) as f32 / 1000.0;
-        agent::draw_orb(ui, orb, &m.agent, t);
+        let now = ui.now();
+        agent::draw_orb(ui, orb, &m.agent, now);
         if resp.clicked {
             m.push(Action::ToggleAgent);
         }

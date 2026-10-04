@@ -5,24 +5,29 @@
 //!   voice levels) and the requests only the shell may make (wake, sleep,
 //!   decide on approvals, mute).
 //! * [`AgentWindow`]: the agent's window, deliberately minimal: the
-//!   taskbar's own background and a white circle. The circle breathes while
-//!   the agent listens and trembles with its voice while it speaks; a line
-//!   of small text says what is going on only when that helps. When the
-//!   agent needs consent for an action, the request appears at the bottom
-//!   of the window (or, when the window is closed, as a notification).
-//! * [`draw_orb`]: the agent's tray item.
+//!   taskbar's own background and a white ring, OS1's from "Her" (see
+//!   [`crate::presence`]). The ring breathes while the agent listens,
+//!   trembles and glows with its voice while it speaks, and a light runs
+//!   around it while it thinks; waking up, it is the film's coil, which
+//!   turns to face the user and becomes the ring when the agent is ready.
+//!   A line of small text says what is going on only when that helps. When
+//!   the agent needs consent for an action, the request appears at the
+//!   bottom of the window (or, when the window is closed, as a
+//!   notification).
+//! * [`draw_orb`]: the agent's tray item, a small ring that does the same.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vgfx::{Align, Color, FillRule, Path, Rect};
+use vgfx::{Align, Color, Rect};
 use vmath::FloatExt;
 use vproto::agent::{AGENT_EVENT, AgentEvent, AgentState, AgentStatus, ApprovalRequest, Live, agent};
 use vrt::object::Channel;
 use vrt::vm::Mapping;
 use vui::{Font, Icon, Ui};
 
+use crate::presence::{self, RING_WIDTH};
 use crate::{Action, Model, chrome, connect_running, taskbar};
 
 /// The window's size.
@@ -30,6 +35,14 @@ pub const WIDTH: i32 = 340;
 pub const HEIGHT: i32 = 420;
 /// The taskbar's tint (see `taskbar::Taskbar::update`).
 const TINT: Color = Color::rgba(20, 20, 28, 200);
+/// How long the coil takes to become the ring once the agent is ready,
+/// and the ring the coil when it wakes.
+const RESOLVE_NS: u64 = 1_200_000_000;
+const DISSOLVE_NS: u64 = 700_000_000;
+/// How fast the coil spins (radians a second), and how much more it turns
+/// as it becomes the ring.
+const SPIN: f32 = 2.1;
+const SPIN_EXTRA: f32 = 9.0;
 
 /// Where the window appears: above the tray, at the right.
 pub fn placement(screen: Rect) -> Rect {
@@ -110,11 +123,42 @@ pub struct AgentModel {
     /// Voice levels (agent, microphone), smoothed for drawing.
     pub levels: (f32, f32),
     pub window_open: bool,
+    /// When the state last changed, and how much of a ring the figure was
+    /// then (see [`AgentModel::figure`]).
+    since_ns: u64,
+    figure_from: f32,
+}
+
+/// Smooth from 0 to 1.
+fn ease(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
 }
 
 impl AgentModel {
     pub fn state(&self) -> Option<AgentState> {
         self.status.as_ref().map(|s| s.state)
+    }
+
+    /// Takes a new status (noting when the state changed, for the figure).
+    pub fn set_status(&mut self, status: AgentStatus, now: u64) {
+        if self.state() != Some(status.state) {
+            self.figure_from = self.figure(now);
+            self.since_ns = now;
+        }
+        self.status = Some(status);
+    }
+
+    /// How much of a ring the agent's figure is at `now`: 0 is the coil
+    /// (waking up), 1 the ring; in between it turns from one to the other.
+    pub fn figure(&self, now: u64) -> f32 {
+        let (target, duration) =
+            if self.state() == Some(AgentState::Waking) { (0.0, DISSOLVE_NS) } else { (1.0, RESOLVE_NS) };
+        if self.since_ns == 0 {
+            return target;
+        }
+        let k = now.saturating_sub(self.since_ns) as f32 / duration as f32;
+        self.figure_from + (target - self.figure_from) * ease(k)
     }
 
     /// In a conversation (or starting one).
@@ -138,7 +182,7 @@ impl AgentModel {
         }
         match s.state {
             AgentState::Off | AgentState::Error => s.detail.clone(),
-            AgentState::Asleep => format!("Say \u{201c}{}\u{201d} or tap the circle", s.name),
+            AgentState::Asleep => format!("Say \u{201c}{}\u{201d} or tap the ring", s.name),
             AgentState::Waking => "One moment\u{2026}".into(),
             AgentState::Listening => "Listening".into(),
             AgentState::Thinking => "Thinking\u{2026}".into(),
@@ -147,88 +191,61 @@ impl AgentModel {
     }
 }
 
-/// The closed outline of the circle at time `t` (seconds): radius `r`,
-/// trembling by `amount` (0..=1).
-fn blob(cx: f32, cy: f32, r: f32, amount: f32, t: f32) -> Path {
-    let mut p = Path::new();
-    const N: usize = 96;
-    for i in 0..=N {
-        let a = i as f32 / N as f32 * core::f32::consts::TAU;
-        let wave = (5.0 * a + 3.1 * t).sin() + 0.6 * (8.0 * a - 4.3 * t).sin() + 0.4 * (3.0 * a + 2.2 * t).sin();
-        let rr = r * (1.0 + amount * (0.06 + 0.035 * wave));
-        let (x, y) = (cx + rr * a.cos(), cy + rr * a.sin());
-        if i == 0 {
-            p.move_to(x, y);
-        } else {
-            p.line_to(x, y);
-        }
-    }
-    p.close();
-    p
-}
-
-/// Draws the circle for the agent's state (`levels` smoothed).
-pub fn draw_circle(ui: &mut Ui, cx: f32, cy: f32, base: f32, a: &AgentModel, t: f32) {
+/// Draws the agent's figure for its state around (`cx`, `cy`): a ring of
+/// radius `base` (the coil while waking up). `now` is the time in
+/// nanoseconds; small figures (the tray) are simpler.
+pub fn draw_presence(ui: &mut Ui, cx: f32, cy: f32, base: f32, a: &AgentModel, now: u64) {
     let (voice, mic) = a.levels;
     let state = a.state().unwrap_or(AgentState::Off);
-    let white = |alpha: u8| Color::rgba(255, 255, 255, alpha);
+    // Seconds, wrapped every hour (an f32 keeps them precise).
+    let t = (now % 3_600_000_000_000) as f32 / 1e9;
+    let small = base < 16.0;
+    let width = (RING_WIDTH * base).max(2.2);
+    let white = |alpha: f32| Color::rgba(255, 255, 255, (alpha.clamp(0.0, 1.0) * 255.0) as u8);
+    let c = &mut ui.canvas;
+    let v = a.figure(now);
+    if v < 1.0 {
+        // Turning between the coil and the ring.
+        let ring_alpha = ease((v - 0.85) / 0.15);
+        let coil_alpha = 1.0 - ease((v - 0.8) / 0.12);
+        if coil_alpha > 0.0 {
+            let spin = SPIN * t + SPIN_EXTRA * v * v * v;
+            let turn = ease((v - 0.25) / 0.75);
+            presence::coil(c, cx, cy, presence::coil_scale(base), spin, turn, coil_alpha, small);
+        }
+        if ring_alpha > 0.0 {
+            let r = base * (0.9 + 0.1 * ring_alpha);
+            presence::ring(c, cx, cy, r, width, 0.0, t, white(ring_alpha));
+        }
+        return;
+    }
     match state {
         AgentState::Speaking => {
-            // A soft halo that swells with the voice, and the trembling disc.
-            let halo = base * (1.12 + 0.18 * voice);
-            ui.canvas.fill_circle(cx, cy, halo, white((18.0 + 40.0 * voice) as u8));
-            ui.canvas.fill_path(&blob(cx, cy, base, 0.25 + 1.4 * voice, t), white(255), FillRule::NonZero);
+            // A soft glow that swells with the voice; the ring itself grows
+            // bolder with it and trembles a little.
+            let w = width * (1.0 + 0.35 * voice);
+            presence::glow(c, cx, cy, base, w, base * (0.18 + 0.12 * voice), 0.16 + 0.3 * voice);
+            presence::ring(c, cx, cy, base, w, 0.1 + 0.5 * voice, t, white(1.0));
         }
         AgentState::Listening => {
             let breath = 0.5 + 0.5 * (t * 1.6).sin();
-            let r = base * (0.97 + 0.03 * breath + 0.06 * mic);
-            ui.canvas.fill_circle(cx, cy, r * 1.14, white((14.0 + 22.0 * breath + 40.0 * mic) as u8));
-            ui.canvas.fill_path(&blob(cx, cy, r, 0.15 + 0.6 * mic, t * 0.6), white(250), FillRule::NonZero);
+            let r = base * (0.98 + 0.02 * breath + 0.04 * mic);
+            presence::glow(c, cx, cy, r, width, base * 0.16, 0.06 + 0.08 * breath + 0.25 * mic);
+            presence::ring(c, cx, cy, r, width, 0.3 * mic, t * 0.6, white(0.98));
         }
-        AgentState::Thinking | AgentState::Waking => {
-            let pulse = 0.5 + 0.5 * (t * 3.4).sin();
-            let r = base * (0.92 + 0.04 * pulse);
-            ui.canvas.fill_circle(cx, cy, r * 1.12, white((10.0 + 20.0 * pulse) as u8));
-            ui.canvas.fill_circle(cx, cy, r, white((200.0 + 55.0 * pulse) as u8));
-        }
-        AgentState::Asleep => {
-            ui.canvas.fill_circle(cx, cy, base * 0.86, white(150));
-        }
+        AgentState::Thinking => presence::ring_with_light(c, cx, cy, base, width, t * 3.0, 150, 255),
+        AgentState::Waking => presence::ring(c, cx, cy, base, width, 0.0, t, white(0.9)),
+        AgentState::Asleep => presence::ring(c, cx, cy, base * 0.94, width, 0.0, t, white(0.6)),
         AgentState::Off | AgentState::Error => {
-            let mut ring = Path::new();
-            ring.circle(cx, cy, base * 0.86);
-            ui.canvas.stroke_path(&ring, &vgfx::StrokeStyle::new(2.0), white(110));
+            presence::ring(c, cx, cy, base * 0.9, (0.06 * base).max(1.5), 0.0, t, white(0.43));
         }
     }
 }
 
-/// The agent's tray item: a small circle that echoes the big one.
-pub fn draw_orb(ui: &mut Ui, r: Rect, a: &AgentModel, t: f32) {
+/// The agent's tray item: a small ring that echoes the big one.
+pub fn draw_orb(ui: &mut Ui, r: Rect, a: &AgentModel, now: u64) {
     let (cx, cy) = (r.center().0 as f32, r.center().1 as f32);
-    let state = a.state();
-    let (voice, mic) = a.levels;
-    let white = |alpha: u8| Color::rgba(255, 255, 255, alpha);
-    match state {
-        Some(AgentState::Speaking) => {
-            ui.canvas.fill_circle(cx, cy, 9.0 + 3.0 * voice, white(40));
-            ui.canvas.fill_path(&blob(cx, cy, 7.0, 0.4 + 1.5 * voice, t), white(255), FillRule::NonZero);
-        }
-        Some(AgentState::Listening) => {
-            let breath = 0.5 + 0.5 * (t * 1.6).sin();
-            ui.canvas.fill_circle(cx, cy, 9.5, white((30.0 + 30.0 * breath + 50.0 * mic) as u8));
-            ui.canvas.fill_circle(cx, cy, 7.0, white(255));
-        }
-        Some(AgentState::Thinking | AgentState::Waking) => {
-            let pulse = 0.5 + 0.5 * (t * 3.4).sin();
-            ui.canvas.fill_circle(cx, cy, 7.0, white((170.0 + 85.0 * pulse) as u8));
-        }
-        Some(AgentState::Asleep) => ui.canvas.fill_circle(cx, cy, 6.5, white(200)),
-        _ => {
-            let mut ring = Path::new();
-            ring.circle(cx, cy, 6.5);
-            ui.canvas.stroke_path(&ring, &vgfx::StrokeStyle::new(1.5), white(150));
-        }
-    }
+    draw_presence(ui, cx, cy, 7.0, a, now);
     if a.status.as_ref().is_some_and(|s| s.muted) {
         ui.canvas.fill_rect(Rect::new(r.center().0 - 9, r.center().1, 18, 2), Color::rgba(255, 120, 110, 230));
     }
@@ -242,7 +259,6 @@ pub fn draw_orb(ui: &mut Ui, r: Rect, a: &AgentModel, t: f32) {
 pub struct AgentWindow {
     /// "Always allow" ticked on the approval being shown.
     always: bool,
-    started: u64,
 }
 
 /// What an approval asks for, in bold over up to two lines (the end of a
@@ -265,7 +281,7 @@ pub fn approval_title(ui: &mut Ui, r: Rect, text: &str) -> i32 {
 
 impl AgentWindow {
     pub fn new() -> AgentWindow {
-        AgentWindow { always: false, started: vrt::time::now_ns() }
+        AgentWindow { always: false }
     }
 
     pub fn update(&mut self, ui: &mut Ui, m: &mut Model) {
@@ -280,19 +296,18 @@ impl AgentWindow {
             ui.close_window();
         }
         let now = ui.now();
-        let t = (now - self.started) as f32 / 1e9;
         let approval = m.agent.approvals.first().cloned();
         let cy = if approval.is_some() { 118 } else { 168 };
         let base = if approval.is_some() { 50.0 } else { 64.0 };
 
-        // The circle: tap to talk, tap again to stop.
-        let circle =
+        // The ring: tap to talk, tap again to stop.
+        let ring =
             Rect::new(w / 2 - base as i32 - 10, cy - base as i32 - 10, 2 * base as i32 + 20, 2 * base as i32 + 20);
-        let resp = ui.interact(ui.id("circle"), circle);
+        let resp = ui.interact(ui.id("ring"), ring);
         if resp.hovered {
             ui.set_cursor(vui::Cursor::Hand);
         }
-        draw_circle(ui, w as f32 / 2.0, cy as f32, base, &m.agent, t);
+        draw_presence(ui, w as f32 / 2.0, cy as f32, base, &m.agent, now);
         if resp.clicked {
             m.push(if m.agent.active() { Action::AgentSleep } else { Action::AgentWake });
         }

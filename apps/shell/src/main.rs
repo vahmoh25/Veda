@@ -27,6 +27,7 @@ mod calendar;
 mod chrome;
 mod desktop;
 mod notify;
+mod presence;
 mod start;
 mod taskbar;
 mod tooltip;
@@ -483,7 +484,7 @@ impl Shell {
         let changed = !events.is_empty();
         for ev in events {
             match ev {
-                vproto::agent::AgentEvent::Status { status } => self.model.agent.status = Some(status),
+                vproto::agent::AgentEvent::Status { status } => self.model.agent.set_status(status, now),
                 vproto::agent::AgentEvent::Approval { request } => {
                     if !self.model.agent.approvals.iter().any(|r| r.id == request.id) {
                         if self.agent_win.is_none() {

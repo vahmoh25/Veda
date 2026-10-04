@@ -1,7 +1,7 @@
 # The voice agent
 
 Vindows has a voice that lives in it. The agent — Vera, until you rename
-it — is not an application you open: it is always there, a small circle in
+it — is not an application you open: it is always there, a small ring in
 the taskbar, asleep until you call it. You talk to it as you would to a
 person in the room; it answers in its own voice and does things on the
 computer for you — opens and arranges applications, writes in the Text
@@ -17,7 +17,7 @@ the models and the voice are system settings (Settings → Agent).
 
 ```
             ┌───────────── shell ─────────────┐      ┌──── Settings ────┐
-            │ tray circle · agent window ·    │      │ Agent page: key, │
+            │ tray ring · agent window ·      │      │ Agent page: key, │
             │ approval cards / notifications  │      │ voice, models,   │
             └──────────────┬──────────────────┘      │ memory, consent  │
                ui link     │  (events + live levels)  └────────┬─────────┘
@@ -40,7 +40,7 @@ the models and the voice are system settings (Settings → Agent).
 * **Say its name**: "Hey Vera, open my shopping list", "Vera, play some
   music", "what time is it, Vera?". Whatever you said with its name is the
   first thing it hears.
-* **Click the circle** in the taskbar, or press **Win+Space**: the agent's
+* **Click the ring** in the taskbar, or press **Win+Space**: the agent's
   window opens and it listens.
 * Talk naturally. Interrupt it whenever you like — it stops speaking at
   once and listens. Change your mind, ask follow-up questions, or ask it to
@@ -49,9 +49,13 @@ the models and the voice are system settings (Settings → Agent).
   goodbye; it also falls asleep after a quiet spell (40 seconds by
   default, Settings → Agent → Listening).
 
-The window is deliberately plain: the taskbar's colour and a white circle
-that breathes while the agent listens and moves with its voice while it
-speaks. A microphone button mutes it. Requests for your consent appear in
+The window is deliberately plain: the taskbar's colour and a white ring,
+OS1's from Spike Jonze's *Her* (`apps/shell/src/presence.rs`). It breathes
+while the agent listens, trembles and glows with its voice while it
+speaks, and a light runs around it while it thinks. Waking up, it is the
+film's loading figure, a white ribbon coiled around a long loop and
+spinning, its far side fading; when the agent is ready the coil turns to
+face you, faster and faster, and becomes the ring. A microphone button mutes it. Requests for your consent appear in
 the window while it is open, and as notifications above the tray while it
 is closed.
 
