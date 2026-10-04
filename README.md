@@ -1,3 +1,5 @@
+<img src="docs/icon/veda.svg" width="96" height="96" alt="The Veda icon">
+
 # Veda
 
 Veda is a modern x86-64 operating system written from scratch,
@@ -262,6 +264,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `third_party/` | vendored crates with Veda patches (smoltcp) |
 | `xtask/` | the build system: cross-compilation, disk image, QEMU, automation |
 | `assets/` | fonts, application manifests, sample documents |
+| `docs/` | documentation, the README's screenshots and the icon (`docs/icon/`) |
 
 ## Documentation
 
