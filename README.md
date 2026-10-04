@@ -276,6 +276,15 @@ The serial console (kernel log plus every program's output) is saved to
 
 ## License
 
-Veda is released under the MIT license. The bundled fonts (Inter, Lato,
-JetBrains Mono) are under the SIL Open Font License 1.1; see
-`assets/fonts/`.
+Copyright © 2026 Vahid Mohammadi.
+
+Veda is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License, version 3, as published by the
+Free Software Foundation (see [LICENSE](LICENSE)). It is distributed in
+the hope that it will be useful, but WITHOUT ANY WARRANTY; without even
+the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE.
+
+The bundled fonts (Inter, Lato, JetBrains Mono) are under the SIL Open
+Font License 1.1; see `assets/fonts/`. Vendored third-party code keeps its
+own license; see `third_party/`.

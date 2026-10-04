@@ -88,6 +88,7 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
 | Source | Installed as |
 |--------|--------------|
 | every program listed in `xtask/src/components.rs` (`PROGRAMS`) | `/system/bin/<name>.exe` |
+| `LICENSE` (the GNU General Public License, version 3) | `/system/LICENSE.txt` |
 | everything under `assets/` | `/system/<same relative path>` |
 | everything under `target/generated/` (build-time generated media) | `/system/<same relative path>` |
 

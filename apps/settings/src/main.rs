@@ -822,7 +822,7 @@ impl Settings {
         let w = card.w - 44;
         let mut ry = card.y + 14;
         let rows: [(&str, &str); 4] = [
-            ("Veda", "MIT License · © Vahid Mohammadi"),
+            ("Veda", "GNU General Public License 3.0 · © Vahid Mohammadi"),
             ("Inter", "SIL Open Font License 1.1 · © The Inter Project Authors"),
             ("JetBrains Mono", "SIL Open Font License 1.1 · © The JetBrains Mono Project Authors"),
             ("Lato", "SIL Open Font License 1.1 · © tyPoland Łukasz Dziedzic"),

@@ -16,8 +16,9 @@ use vui::{Align, App, Font, Icon, Rect, Ui, WindowSpec};
 vrt::entry!(main);
 
 /// What "Show licences" shows.
-const LICENCES: &str = "Veda is written from scratch in Rust and released under the MIT license. \
-                        Fonts: Inter (© The Inter Project Authors), \
+const LICENCES: &str = "Veda © 2026 Vahid Mohammadi is free software: you can redistribute it and/or modify it \
+                        under the terms of the GNU General Public License, version 3 (in /system/LICENSE.txt). \
+                        It comes with ABSOLUTELY NO WARRANTY. Fonts: Inter (© The Inter Project Authors), \
                         Lato (© tyPoland Lukasz Dziedzic) and JetBrains Mono (© The JetBrains Mono Project Authors), \
                         all under the SIL Open Font License 1.1.";
 
@@ -90,7 +91,7 @@ impl App for About {
         self.show_details = toggle;
         ui.label(Rect::new(area.x + 54, ty, 300, 28), "Show licences", Font::Regular, t.font_size, t.text, Align::Left);
         if self.show_details {
-            ui.paragraph(Rect::new(area.x, ty + 40, area.w, 80), LICENCES, t.small_size + 1.0, t.text_dim);
+            ui.paragraph(Rect::new(area.x, ty + 40, area.w, 120), LICENCES, t.small_size + 1.0, t.text_dim);
         }
         let br = Rect::new(area.right() - 110, area.bottom() - 36, 110, 36);
         if ui.primary_button(br, "OK") {
@@ -151,7 +152,7 @@ fn fmt_uptime(ns: u64) -> String {
 }
 
 fn main() -> i32 {
-    let mut spec = WindowSpec::new("About Veda", 560, 500);
+    let mut spec = WindowSpec::new("About Veda", 560, 540);
     spec.resizable = false;
     spec.app_id = "about".into();
     vui::run(spec, About { info: vabi::SystemInfo::default(), last_refresh: 0, show_details: false })

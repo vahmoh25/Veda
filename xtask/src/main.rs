@@ -280,6 +280,8 @@ fn build_system(o: &Options) -> Result<System> {
         initrd.add(&format!("bin/{}.exe", program.binary), util::read(path)?);
     }
     initrd.add("etc/version", format!("Veda {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
+    // The licence, which About Veda refers to.
+    initrd.add("LICENSE.txt", util::read(&util::workspace_root().join("LICENSE"))?);
     // Everything under assets/ is installed at the same relative path
     // (assets/fonts/X -> /system/fonts/X); README files are documentation.
     for assets in [util::workspace_root().join("assets"), util::generated_dir()] {

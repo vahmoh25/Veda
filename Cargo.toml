@@ -80,7 +80,7 @@ default-members = ["xtask"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "GPL-3.0-only"
 authors = ["Vahid Mohammadi"]
 repository = "https://github.com/vahmoh25/Veda"
 

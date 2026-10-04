@@ -111,7 +111,7 @@ agent-call use_app '{"app":"racer","action":"quit_to_menu"}' 30
 agent-result '"screen":"menu"'
 # About Veda shows its licences for the agent and says what it shows.
 agent-call use_app '{"app":"about","action":"show_licences"}' 60
-agent-result "MIT license"
+agent-result "GNU General Public License"
 wait-serial "about offers 1 action(s)" 10
 agent-call read_app '{"app":"about"}' 30
 agent-result '"version":"Veda 0.1.0"'
