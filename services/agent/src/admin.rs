@@ -29,6 +29,17 @@ const NET_TIMEOUT: Duration = Duration::from_secs(15);
 /// What a voice preview says.
 const PREVIEW: &str = "Hi, this is how I sound. I'm here whenever you need me.";
 
+/// Logs how long a request to Deepgram took (the path only: queries can
+/// be long).
+fn log_fetch(url: &str, start: u64, bytes: Option<usize>) {
+    let ms = (vrt::time::now_ns() - start) / 1_000_000;
+    let path = url.split('?').next().unwrap_or(url);
+    match bytes {
+        Some(b) => vrt::println!("{path}: {b} bytes in {ms} ms"),
+        None => vrt::println!("{path}: failed after {ms} ms"),
+    }
+}
+
 /// Serves one Settings connection until it closes.
 pub fn spawn(channel: Channel, shared: Arc<Mutex<Shared>>, status: Arc<Mutex<AgentStatus>>, apps: Registrar) {
     let r = vrt::thread::Builder::new().name("settings").spawn(move || {
@@ -90,7 +101,10 @@ impl Admin {
     /// GET with the key; maps failures to agent errors.
     fn get(&self, url: &str) -> Result<String, AgentError> {
         let auth = alloc::format!("Token {}", self.key()?);
-        match vweb::http::fetch("GET", url, &[("Authorization", &auth)], &[], NET_TIMEOUT, 4 << 20) {
+        let start = vrt::time::now_ns();
+        let r = vweb::http::fetch("GET", url, &[("Authorization", &auth)], &[], NET_TIMEOUT, 4 << 20);
+        log_fetch(url, start, r.as_ref().map(|r| r.body.len()).ok());
+        match r {
             Ok(r) if r.status == 401 || r.status == 403 => Err(AgentError::BadKey),
             Ok(r) if (200..300).contains(&r.status) => Ok(r.text()),
             Ok(r) => {
@@ -233,15 +247,18 @@ impl agent::Server for Admin {
         }
         let auth = alloc::format!("Token {}", self.key()?);
         let body = deepgram::speak_body(PREVIEW);
+        let url = deepgram::speak_url(&voice);
+        let start = vrt::time::now_ns();
         let r = vweb::http::fetch(
             "POST",
-            &deepgram::speak_url(&voice),
+            &url,
             &[("Authorization", &auth), ("Content-Type", "application/json")],
             body.as_bytes(),
             NET_TIMEOUT,
             8 << 20,
-        )
-        .map_err(|e: WebError| {
+        );
+        log_fetch(&url, start, r.as_ref().map(|r| r.body.len()).ok());
+        let r = r.map_err(|e: WebError| {
             vrt::println!("voice preview failed: {}", e);
             AgentError::Network
         })?;

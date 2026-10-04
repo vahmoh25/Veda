@@ -296,7 +296,14 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     }
     match &cfg.serial_file {
         Some(path) => cmd.args(["-serial", &format!("file:{}", path.display())]),
-        None => cmd.args(["-serial", "stdio"]),
+        // The terminal, and a copy in the output directory (for looking at
+        // a session afterwards).
+        None => cmd.args([
+            "-chardev",
+            &format!("stdio,id=serial0,logfile={}", util::out_dir().join("serial.log").display()),
+            "-serial",
+            "chardev:serial0",
+        ]),
     };
     if let Some(port) = cfg.qmp_port {
         cmd.args(["-qmp", &format!("tcp:127.0.0.1:{port},server=on,wait=off")]);
