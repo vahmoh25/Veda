@@ -7,7 +7,7 @@ wait-serial "desktop ready" 120
 mic-silence 1
 agent-connected 120
 agent-expect Settings 10
-agent-expect "You are Vera" 5
+agent-expect "You are Veda" 5
 agent-expect open_app 5
 wait-serial "state: Listening" 30
 # A function call runs for real: the Text Editor opens.

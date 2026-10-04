@@ -1,6 +1,6 @@
 [package]
 name = "vnetstack"
-description = "The Vindows network stack: interfaces, DHCP, DNS, routing and sockets on top of smoltcp"
+description = "The Veda network stack: interfaces, DHCP, DNS, routing and sockets on top of smoltcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,6 +1,6 @@
-//! The test microphone: audio that automation scripts make Vindows hear.
+//! The test microphone: audio that automation scripts make Veda hear.
 //!
-//! [`MicServer`] listens on a local TCP port; inside Vindows, `testmic`
+//! [`MicServer`] listens on a local TCP port; inside Veda, `testmic`
 //! (started with the boot argument from [`MicServer::boot_arg`]) connects
 //! to it through QEMU's NAT (the host is 10.0.2.2) and attaches to the audio
 //! service as the microphone. The server streams 16 kHz mono 16-bit PCM in
@@ -14,7 +14,7 @@
 //! Scripts queue speech with `say "..."`, synthesised by Deepgram's
 //! text-to-speech REST API on the host ([`synthesize`], with the key from
 //! `$DEEPGRAM_API_KEY`). Results are cached under
-//! `target/vindows/tts-cache`, so a phrase is only paid for once.
+//! `target/veda/tts-cache`, so a phrase is only paid for once.
 
 use std::collections::VecDeque;
 use std::io::Write;
@@ -125,7 +125,7 @@ impl MicServer {
         Ok(MicServer { port, shared })
     }
 
-    /// The kernel command line argument that starts `testmic` in Vindows.
+    /// The kernel command line argument that starts `testmic` in Veda.
     pub fn boot_arg(&self) -> String {
         format!("run=testmic:10.0.2.2,{},{}", self.port, RATE)
     }

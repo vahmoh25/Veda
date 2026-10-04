@@ -593,7 +593,7 @@ impl AgentPage {
         let mut row = card.y + 74;
         ui.label(Rect::new(ix, row, 140, 34), "Name", Font::Regular, t.font_size, t.text, Align::Left);
         let field = Rect::new(ix + 150, row, 220, 34);
-        let resp = ui.text_input(field, "agent-name", &mut self.name, "Vera");
+        let resp = ui.text_input(field, "agent-name", &mut self.name, "Veda");
         let trimmed = self.name.trim().to_string();
         if (resp.submitted || (!resp.focused && trimmed != c.name))
             && !trimmed.is_empty()
@@ -946,7 +946,7 @@ impl AgentPage {
 fn default_config() -> AgentConfig {
     AgentConfig {
         enabled: true,
-        name: "Vera".into(),
+        name: "Veda".into(),
         listen_model: "flux-general-en".into(),
         think_provider: "open_ai".into(),
         think_model: "gpt-4.1-mini".into(),

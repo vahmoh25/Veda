@@ -24,8 +24,8 @@ pub const HHDM_BASE: u64 = 0xFFFF_8000_0000_0000;
 /// Link address of the kernel image.
 pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 
-/// `BootInfo::magic` value (`"VINDBOOT"` in little-endian).
-pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VINDBOOT");
+/// `BootInfo::magic` value (`"VEDABOOT"` in little-endian).
+pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VEDABOOT");
 
 /// Version of this protocol. Bump on any layout change.
 pub const BOOTINFO_VERSION: u32 = 2;

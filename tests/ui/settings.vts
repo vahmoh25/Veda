@@ -9,11 +9,11 @@ wait 4
 # second wallpaper (Dunes) is at (0.492, 0.616).
 key meta_l-up
 wait 4
-shot target/vindows/settings-1-personalization.png
+shot target/veda/settings-1-personalization.png
 click 0.492 0.616
 wait-serial "settings: wallpaper changed to /system/wallpapers/Dunes.jpg" 40
 wait 2
-shot target/vindows/settings-2-dunes.png
+shot target/veda/settings-2-dunes.png
 # The keyboard: Right moves to the next wallpaper, Enter applies it.
 key right
 wait 1
@@ -23,17 +23,17 @@ wait 2
 # Up and Down switch between the pages.
 key down
 wait 3
-shot target/vindows/settings-3-agent.png
+shot target/veda/settings-3-agent.png
 key down
 wait 3
-shot target/vindows/settings-3-network.png
+shot target/veda/settings-3-network.png
 key down
 wait 2
-shot target/vindows/settings-3-display.png
+shot target/veda/settings-3-display.png
 key down
 wait 2
-shot target/vindows/settings-4-system.png
+shot target/veda/settings-4-system.png
 key down
 wait 2
-shot target/vindows/settings-5-about.png
+shot target/veda/settings-5-about.png
 reject-serial "cannot change the wallpaper"

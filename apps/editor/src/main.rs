@@ -821,7 +821,7 @@ impl Editor {
             Modal::About => ui
                 .message_box(
                     "Text Editor",
-                    "Vindows Text Editor 0.1 \u{2014} tabs, syntax highlighting for Rust, C/C++, TOML and Markdown, find and replace, word wrap and unlimited undo.",
+                    "Veda Text Editor 0.1 \u{2014} tabs, syntax highlighting for Rust, C/C++, TOML and Markdown, find and replace, word wrap and unlimited undo.",
                     &["OK"],
                 )
                 .is_none(),

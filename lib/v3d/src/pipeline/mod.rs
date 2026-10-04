@@ -4,7 +4,7 @@
 //! rendered image ([`post`]).
 //!
 //! Everything after the per-draw matrix set-up is integer arithmetic.
-//! Vindows usually runs under QEMU's TCG emulator, where scalar integer
+//! Veda usually runs under QEMU's TCG emulator, where scalar integer
 //! operations cost ~0.5 ns and an integer division ~1 ns, but every
 //! floating-point instruction ~6-30 ns. Fixed-point formats used here:
 //!

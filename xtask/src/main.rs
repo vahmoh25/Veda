@@ -1,4 +1,4 @@
-//! `cargo xtask` — the Vindows developer tool.
+//! `cargo xtask` — the Veda developer tool.
 //!
 //! Run `cargo xtask help` for the list of commands.
 
@@ -21,14 +21,14 @@ use components::Profile;
 use util::Result;
 
 const HELP: &str = "\
-Vindows developer tool
+Veda developer tool
 
 USAGE:
     cargo xtask <COMMAND> [OPTIONS]
 
 COMMANDS:
-    build       Build every component and assemble target/vindows/vindows.img
-    run         Build, then boot Vindows in QEMU
+    build       Build every component and assemble target/veda/veda.img
+    run         Build, then boot Veda in QEMU
     shot        Boot headless, wait, and save a screenshot (dev aid)
     script FILE Boot headless and run an automation script (see automate.rs)
     test        Run host unit tests, then the in-system integration tests
@@ -58,7 +58,7 @@ RUN OPTIONS:
     --serial FILE       Write the serial console to FILE instead of the terminal
     --gdb               Wait for a debugger on localhost:1234
     --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
-    --fresh-home        Start with a new home directory (deletes target/vindows/home.img)
+    --fresh-home        Start with a new home directory (deletes target/veda/home.img)
     --net MODE          Network: ethernet (default, the hypervisor's NAT), wifi (QEMU: the
                         virtual Wi-Fi radio and the airsim access points), both (QEMU),
                         bridged (VirtualBox: the host's real network), or none
@@ -70,7 +70,7 @@ RUN OPTIONS:
 SHOT OPTIONS:
     --wait SECS         Seconds to wait before the screenshot (default 10)
     --until TEXT        Instead, wait until the serial log contains TEXT
-    --out FILE          Output PNG (default target/vindows/screen.png)
+    --out FILE          Output PNG (default target/veda/screen.png)
 ";
 
 /// Options shared by the build-related commands.
@@ -97,7 +97,7 @@ struct Options {
     scale: Option<f64>,
 }
 
-/// Which hypervisor runs Vindows.
+/// Which hypervisor runs Veda.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Hypervisor {
     Qemu,
@@ -279,7 +279,7 @@ fn build_system(o: &Options) -> Result<System> {
     for (program, path) in &artifacts.programs {
         initrd.add(&format!("bin/{}.exe", program.binary), util::read(path)?);
     }
-    initrd.add("etc/version", format!("Vindows {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
+    initrd.add("etc/version", format!("Veda {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
     // Everything under assets/ is installed at the same relative path
     // (assets/fonts/X -> /system/fonts/X); README files are documentation.
     for assets in [util::workspace_root().join("assets"), util::generated_dir()] {
@@ -319,12 +319,12 @@ fn write_image(o: &Options, system: &System) -> Result<(PathBuf, u64)> {
         cmdline = format!("{cmdline} tz={tz}").trim().to_string();
     }
     let boot_cfg = format!(
-        "# Vindows boot configuration (read by the UEFI loader)\nresolution={}\ncmdline={}\n",
+        "# Veda boot configuration (read by the UEFI loader)\nresolution={}\ncmdline={}\n",
         o.resolution, cmdline
     );
     let out = util::out_dir();
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    let disk = out.join("vindows.img");
+    let disk = out.join("veda.img");
     util::status("Imaging", disk.display());
     let size = image::write_disk_image(
         &disk,
@@ -524,13 +524,13 @@ fn test(o: &Options) -> Result {
     let system = build_system(o)?;
     util::status("Built", format!("the system in {:.1}s", started.elapsed().as_secs_f32()));
     let hv_name = if o.hypervisor == Hypervisor::VirtualBox { "VirtualBox" } else { "QEMU" };
-    util::status("Testing", format!("integration tests inside Vindows ({hv_name})"));
+    util::status("Testing", format!("integration tests inside Veda ({hv_name})"));
     let mut o = o.clone();
     o.cmdline = format!("{} systest", o.cmdline).trim().to_string();
     // The last test restarts the window system; give the desktop a moment
     // to come back before the screenshot.
     let checks =
-        "fail-on \"systest: FAIL\"\nwait-serial \"systest: PASS\" 240\nwait 3\nshot target/vindows/test-desktop.png\n";
+        "fail-on \"systest: FAIL\"\nwait-serial \"systest: PASS\" 240\nwait 3\nshot target/veda/test-desktop.png\n";
     script_on(&o, checks, Some(&system))?;
     if o.ui {
         // The GUI scripts, then the agent's (with the stand-in for Deepgram;
@@ -575,7 +575,7 @@ fn doctor() -> Result {
             println!("  [FAIL] {name}: {e}")
         }
     };
-    println!("Checking the Vindows build environment...");
+    println!("Checking the Veda build environment...");
     let rustc = std::process::Command::new("rustc").arg("--version").output();
     check("rustc", rustc.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).map_err(|e| e.to_string()));
     let targets = std::process::Command::new("rustup").args(["target", "list", "--installed"]).output();

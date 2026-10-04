@@ -1,4 +1,4 @@
-//! `agent` — the voice agent that lives in Vindows.
+//! `agent` — the voice agent that lives in Veda.
 //!
 //! A system service, started at boot and restarted if it fails. It is the
 //! presence the user talks to: it listens (or sleeps until called), holds
@@ -596,11 +596,11 @@ impl Agent {
                     Some(v) => {
                         let why = v.str("error").unwrap_or("it failed").to_string();
                         println!("approved action failed: {why}");
-                        format!("[Vindows] The user allowed \"{label}\", but it failed: {why}")
+                        format!("[System] The user allowed \"{label}\", but it failed: {why}")
                     }
-                    None => format!("[Vindows] The user allowed \"{label}\" and it was done. Result: {r}"),
+                    None => format!("[System] The user allowed \"{label}\" and it was done. Result: {r}"),
                 },
-                _ => format!("[Vindows] The user allowed \"{label}\", but it could not be done."),
+                _ => format!("[System] The user allowed \"{label}\", but it could not be done."),
             };
             self.notice(&text);
             return;
@@ -656,7 +656,7 @@ impl Agent {
         object! {
             "ok" => false,
             "waiting_for_approval" => true,
-            "message" => format!("Vindows is asking the user to allow \"{label}\" on screen. Tell them briefly; the outcome will follow."),
+            "message" => format!("The system is asking the user to allow \"{label}\" on screen. Tell them briefly; the outcome will follow."),
         }
         .to_string()
     }
@@ -671,7 +671,7 @@ impl Agent {
         let label = a.pending.action.clone();
         println!("approval {} {}: {}", id, if allow { "allowed" } else { "declined" }, label);
         if !allow {
-            self.notice(&format!("[Vindows] The user declined \"{label}\". It was not done."));
+            self.notice(&format!("[System] The user declined \"{label}\". It was not done."));
             return Ok(());
         }
         if always && a.pending.risk == Risk::Sensitive {
@@ -701,7 +701,7 @@ impl Agent {
                 }
                 if self.session.is_some() {
                     self.notice(&format!(
-                        "[Vindows] The request to \"{}\" expired without an answer.",
+                        "[System] The request to \"{}\" expired without an answer.",
                         a.pending.action
                     ));
                 }
@@ -920,7 +920,7 @@ impl Agent {
             {
                 let _ = shell.notify(t.label.clone(), "Your reminder is due.".into(), "agent".into());
             }
-            self.notice(&format!("[Vindows] The timer \"{}\" is due now. Tell the user.", t.label));
+            self.notice(&format!("[System] The timer \"{}\" is due now. Tell the user.", t.label));
         }
     }
 

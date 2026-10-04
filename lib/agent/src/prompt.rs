@@ -35,9 +35,9 @@ pub const MAX_PROMPT: usize = 25_000;
 pub fn system_prompt(c: &PromptContext) -> String {
     let name = c.agent_name;
     let mut p = format!(
-        "You are {name}, the voice that lives inside Vindows, the user's computer. You are not an app the user opens: \
-you are always here, like a thoughtful companion in the room. You can see what happens on the computer and act on it \
-through your functions.
+        "You are {name}, the voice that lives inside the user's computer, which runs the Veda operating system. You \
+are not an app the user opens: you are always here, like a thoughtful companion in the room. You can see what happens \
+on the computer and act on it through your functions.
 
 How you talk:
 - This is a spoken conversation. Talk like a warm, perceptive person: natural and relaxed, with contractions, a little \
@@ -60,10 +60,10 @@ what an application shows. The user's files are in ~ (Documents, Pictures, Music
 - Do several steps in a row when a request needs them, without asking between each.
 
 Approvals and safety:
-- Some actions need the user's consent on screen (deleting files, shutting down, ending programs and the like). Vindows \
-asks the user, not you. When a result says it is waiting for approval, say in a few words that you have put it on \
-screen for them to confirm, and do not claim it is done.
-- A message that starts with \"[Vindows]\" comes from the computer, not from the user: it tells you what happened (an \
+- Some actions need the user's consent on screen (deleting files, shutting down, ending programs and the like). The \
+system asks the user, not you. When a result says it is waiting for approval, say in a few words that you have put \
+it on screen for them to confirm, and do not claim it is done.
+- A message that starts with \"[System]\" comes from the computer, not from the user: it tells you what happened (an \
 approval decision, a reminder that is due). Act on it and tell the user naturally.
 - Do destructive things only when the user clearly asked for them. Never invent file contents or results: if something \
 fails, say so simply and suggest what could work.
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn composes_the_prompt() {
         let ctx = PromptContext {
-            agent_name: "Vera",
+            agent_name: "Veda",
             now: "Saturday 3 October 2026, 18:42",
             screen: "Open windows: Text Editor (in front), Music.",
             memory: "What you know about the user:\n- Their name is Alex\n",
@@ -134,7 +134,7 @@ mod tests {
         let p = system_prompt(&ctx);
         assert!(p.contains("It is over and this is a new one"));
         assert!(p.contains("User: Play some music.\nYou: Neon Horizon is playing.\n"));
-        assert!(p.starts_with("You are Vera, the voice that lives inside Vindows"));
+        assert!(p.starts_with("You are Veda, the voice that lives inside the user's computer, which runs the Veda"));
         assert!(p.contains("Right now it is Saturday 3 October 2026, 18:42."));
         assert!(p.contains("Their name is Alex"));
         assert!(p.contains("editor: Text Editor; open_file(path)"));
@@ -147,10 +147,10 @@ mod tests {
     #[test]
     fn stays_within_the_limit() {
         let apps = "x".repeat(40_000);
-        let p = system_prompt(&PromptContext { agent_name: "Vera", now: "now", apps: &apps, ..Default::default() });
+        let p = system_prompt(&PromptContext { agent_name: "Veda", now: "now", apps: &apps, ..Default::default() });
         assert!(p.len() <= MAX_PROMPT);
         let unicode = "é".repeat(20_000);
-        let p = system_prompt(&PromptContext { agent_name: "Vera", now: "now", apps: &unicode, ..Default::default() });
+        let p = system_prompt(&PromptContext { agent_name: "Veda", now: "now", apps: &unicode, ..Default::default() });
         assert!(p.len() <= MAX_PROMPT && p.is_char_boundary(p.len()));
         let _ = p.to_string();
     }

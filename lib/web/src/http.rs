@@ -65,7 +65,7 @@ pub fn write_request<C: Connection>(
         head.push_str(&format!("{k}: {v}\r\n"));
     }
     if !has_agent {
-        head.push_str("User-Agent: Vindows/0.1\r\n");
+        head.push_str("User-Agent: Veda/0.1\r\n");
     }
     if !body.is_empty() || matches!(method, "POST" | "PUT" | "PATCH") {
         head.push_str(&format!("Content-Length: {}\r\n", body.len()));

@@ -7,19 +7,19 @@ wait 2
 double-click 0.0469 0.4425
 wait-serial "started editor" 30
 wait 6
-shot target/vindows/editor-1-open.png
+shot target/veda/editor-1-open.png
 key ctrl-end
 type "Edited by the automated test."
 key ret
 key ctrl-home
 wait 2
-shot target/vindows/editor-2-typed.png
+shot target/veda/editor-2-typed.png
 key ctrl-f
 type "shortcuts"
 wait 3
-shot target/vindows/editor-3-find.png
+shot target/veda/editor-3-find.png
 key esc
 key ctrl-s
 wait 3
-shot target/vindows/editor-4-saved.png
+shot target/veda/editor-4-saved.png
 reject-serial "editor crashed"

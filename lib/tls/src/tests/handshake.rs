@@ -173,7 +173,7 @@ fn rejected_certificates() {
             AlertDescription::CertificateExpired,
         ),
         (&["leaf-future"], "it is only valid from 2030-01-01", AlertDescription::CertificateExpired),
-        (&["leaf-other-name"], "it is not valid for test.vindows.local", AlertDescription::BadCertificate),
+        (&["leaf-other-name"], "it is not valid for test.veda.local", AlertDescription::BadCertificate),
         (&["leaf-untrusted"], "not issued by a trusted certificate authority", AlertDescription::UnknownCA),
         (&["leaf-client-only"], "not meant for TLS servers", AlertDescription::UnsupportedCertificate),
     ];
@@ -377,7 +377,8 @@ fn damaged_server_flights() {
 
     for versions in [TLS13, TLS12] {
         let mut damaged = 0;
-        // The first flight of the P-256 server is under 800 bytes.
+        // The first flight of the P-256 server is under 800 bytes (about 690
+        // with TLS 1.2, 760 with TLS 1.3).
         for offset in 0..800 {
             let mut server = ServerSetup::new().versions(versions).start();
             let damage = alloc::rc::Rc::new(core::cell::Cell::new(Damage::None));
@@ -398,7 +399,7 @@ fn damaged_server_flights() {
                 (Ok(mut tls), _) => exercise(&mut tls, 100),
             }
         }
-        assert!(damaged > 700, "only {damaged} runs failed");
+        assert!(damaged > 600, "only {damaged} runs failed");
     }
 }
 

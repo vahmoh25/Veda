@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use crate::tests::ALL;
 use crate::*;
 
-pub(crate) const SAMPLE: &str = "The quick brown fox jumps over the lazy dog 0123456789 — Vindows €$@&!?";
+pub(crate) const SAMPLE: &str = "The quick brown fox jumps over the lazy dog 0123456789 — Veda €$@&!?";
 pub(crate) const UI_SAMPLE: &str = "File  Edit  View  Settings  Music  Photos";
 
 /// Minimal PNG encoder (RGB8, stored deflate blocks).
@@ -274,7 +274,7 @@ fn render_showcase_png() {
         draw_line(cv, &mut cache, &st, text, 10.0, b, color);
         *y += vraster::math::ceil(st.line_height());
     };
-    let kern = "AVATAR Toyota Te Ta We Yo LT P. F. Vindows";
+    let kern = "AVATAR Toyota Te Ta We Yo LT P. F. Veda";
     for f in [inter, lato] {
         line(&mut cv, fonts.scaled(f, 26.0), kern, ink, &mut y);
         line(&mut cv, fonts.scaled(f, 26.0).with_kerning(false), kern, blue, &mut y);

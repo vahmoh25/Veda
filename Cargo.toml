@@ -73,7 +73,7 @@ members = [
 # tests and dev-dependencies stay out of this workspace). See third_party/.
 exclude = ["third_party"]
 # Plain `cargo build` only builds the host-side build tool. Everything that runs
-# inside Vindows is cross-built by `cargo xtask build`, which knows the correct
+# inside Veda is cross-built by `cargo xtask build`, which knows the correct
 # target for every component.
 default-members = ["xtask"]
 
@@ -82,7 +82,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 authors = ["Vahid Mohammadi"]
-repository = "https://github.com/vahmoh25/Vindows"
+repository = "https://github.com/vahmoh25/Veda"
 
 [workspace.dependencies]
 vabi = { path = "lib/abi" }
@@ -179,7 +179,7 @@ new_without_default = "allow"
 too_many_arguments = "allow"
 
 # The OS is always built with `panic = "abort"`: there is no unwinder in
-# Vindows. (Cargo ignores this for `cargo test`, which needs unwinding.)
+# Veda. (Cargo ignores this for `cargo test`, which needs unwinding.)
 [profile.dev]
 panic = "abort"
 # Unoptimised code is unusably slow under QEMU's TCG emulation.

@@ -1,25 +1,25 @@
-//! Helpers for the `build.rs` scripts of Vindows user-space crates.
+//! Helpers for the `build.rs` scripts of Veda user-space crates.
 //!
 //! * [`user_program`] emits the linker options that turn a `no_std` binary
-//!   into a Vindows PE executable (fixed base, custom entry point, no CRT).
+//!   into a Veda PE executable (fixed base, custom entry point, no CRT).
 //! * [`find_msvc`] locates the Microsoft linker, which Rust's
 //!   `x86_64-pc-windows-msvc` target links with (`cargo xtask doctor`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Image base of every Vindows executable.
+/// Image base of every Veda executable.
 pub const IMAGE_BASE: &str = "0x140000000";
 
-fn is_vindows_target() -> bool {
+fn is_veda_target() -> bool {
     std::env::var("TARGET").is_ok_and(|t| t == "x86_64-pc-windows-msvc")
 }
 
-/// Emits the linker arguments for a Vindows user-space executable. Call this
+/// Emits the linker arguments for a Veda user-space executable. Call this
 /// from the `build.rs` of every program crate.
 pub fn user_program() {
     println!("cargo:rerun-if-changed=build.rs");
-    if !is_vindows_target() {
+    if !is_veda_target() {
         return;
     }
     for arg in [
@@ -36,7 +36,7 @@ pub fn user_program() {
     }
 }
 
-/// The MSVC tools Vindows needs.
+/// The MSVC tools Veda needs.
 pub struct Msvc {
     /// The linker, `link.exe`.
     pub link: PathBuf,

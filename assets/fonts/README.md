@@ -1,6 +1,6 @@
 # Fonts
 
-Vindows ships the following open-source fonts. They are unmodified and are
+Veda ships the following open-source fonts. They are unmodified and are
 redistributed under the SIL Open Font License 1.1 (see `OFL.txt`).
 
 | File | Family | Copyright | License |

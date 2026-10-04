@@ -1,7 +1,7 @@
 //! A small, allocation-free parser for PE32+ (x86-64 Portable Executable)
 //! images.
 //!
-//! Vindows uses PE as its executable format for the kernel and for every
+//! Veda uses PE as its executable format for the kernel and for every
 //! user-space program. Images are linked at a fixed base without imports, so a
 //! loader only has to:
 //!
@@ -31,7 +31,7 @@ pub enum PeError {
     NotPe32Plus,
     /// A section or data directory points outside the file or image.
     BadSection,
-    /// The image imports symbols from DLLs, which Vindows does not support.
+    /// The image imports symbols from DLLs, which Veda does not support.
     HasImports,
     /// Malformed base relocation block.
     BadRelocation,

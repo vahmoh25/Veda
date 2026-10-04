@@ -1,4 +1,4 @@
-//! Files: the Vindows file manager.
+//! Files: the Veda file manager.
 //!
 //! Browses the virtual file system with a places sidebar, a breadcrumb
 //! path bar with back/forward/up, a sortable list view and an icon grid
@@ -1028,7 +1028,7 @@ impl Files {
                 let what = if ext.is_empty() { "this file".to_string() } else { format!("“.{ext}” files") };
                 match ui.message_box(
                     "No app for this file",
-                    &format!("Vindows doesn't have an app for {what}. Open “{}” in the Text Editor?", file_name(path)),
+                    &format!("Veda doesn't have an app for {what}. Open “{}” in the Text Editor?", file_name(path)),
                     &["Open in Text Editor", "Cancel"],
                 ) {
                     Some(0) => {

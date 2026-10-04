@@ -1,6 +1,6 @@
 [package]
 name = "bootinfo"
-description = "Boot handoff protocol between the Vindows UEFI loader and the kernel"
+description = "Boot handoff protocol between the Veda UEFI loader and the kernel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

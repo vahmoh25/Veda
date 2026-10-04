@@ -9,4 +9,4 @@ key ret
 wait-serial "systest crashed" 20
 wait-serial "shell: systest closed unexpectedly" 10
 wait 1
-shot target/vindows/crash-report.png
+shot target/veda/crash-report.png

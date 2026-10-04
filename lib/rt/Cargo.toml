@@ -1,6 +1,6 @@
 [package]
 name = "vrt"
-description = "The Vindows user-space runtime: process entry, system calls, heap, threads, synchronisation and I/O"
+description = "The Veda user-space runtime: process entry, system calls, heap, threads, synchronisation and I/O"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

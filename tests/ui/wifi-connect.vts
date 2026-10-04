@@ -12,33 +12,33 @@ wait 8
 # Open the network flyout (taskbar icon left of the volume icon).
 click 0.859 0.97
 wait 4
-shot target/vindows/wifi-1-flyout.png
-# Expand "Vindows Home" (first row), type a wrong password and press Enter.
+shot target/veda/wifi-1-flyout.png
+# Expand "Veda Home" (first row), type a wrong password and press Enter.
 click 0.85 0.4113
 wait 2
 click 0.8383 0.4713
 wait 1
 type "not-the-password"
 key ret
-wait-serial "could not join Vindows Home: the password is incorrect" 90
+wait-serial "could not join Veda Home: the password is incorrect" 90
 wait 2
-shot target/vindows/wifi-2-wrong-password.png
+shot target/veda/wifi-2-wrong-password.png
 # Now the right one.
 click 0.8383 0.4713
 wait 1
-type "vindows-wifi"
+type "veda-wifi"
 key ret
-wait-serial "connected to Vindows Home (WPA2, protected management frames)" 90
+wait-serial "connected to Veda Home (WPA2, protected management frames)" 90
 wait-serial "Routable via wlan0" 60
 wait 3
-shot target/vindows/wifi-3-connected.png
+shot target/veda/wifi-3-connected.png
 air-expect "list" "1 joined"
 
 # "Network settings" opens the network page of Settings.
 click 0.9117 0.8925
 wait-serial "started settings" 60
 wait 8
-shot target/vindows/wifi-4-settings.png
+shot target/veda/wifi-4-settings.png
 key alt-f4
 wait 3
 
@@ -52,25 +52,25 @@ wait 4
 type "wifi status; ifconfig; ping -c 2 10.0.3.2"
 key ret
 wait 6
-shot target/vindows/wifi-5-terminal.png
-type "clear; wifi connect 'Vindows WPA3' vindows-wifi"
+shot target/veda/wifi-5-terminal.png
+type "clear; wifi connect 'Veda WPA3' veda-wifi"
 key ret
-wait-serial "connected to Vindows WPA3 (WPA3, protected management frames)" 120
-type "wifi connect 'Vindows Hidden' vindows-wifi"
+wait-serial "connected to Veda WPA3 (WPA3, protected management frames)" 120
+type "wifi connect 'Veda Hidden' veda-wifi"
 key ret
-wait-serial "connected to Vindows Hidden (WPA2" 120
-type "wifi connect 'Vindows Guest'"
+wait-serial "connected to Veda Hidden (WPA2" 120
+type "wifi connect 'Veda Guest'"
 key ret
-wait-serial "connected to Vindows Guest (open)" 120
-type "wifi connect 'Vindows Corp' some-password"
+wait-serial "connected to Veda Guest (open)" 120
+type "wifi connect 'Veda Corp' some-password"
 key ret
 wait 3
-type "wifi connect 'Vindows Mixed' vindows-wifi"
+type "wifi connect 'Veda Mixed' veda-wifi"
 key ret
-wait-serial "connected to Vindows Mixed (WPA3 (transition mode)" 120
+wait-serial "connected to Veda Mixed (WPA3 (transition mode)" 120
 type "wifi saved; wifi list"
 key ret
 wait 4
-shot target/vindows/wifi-6-terminal-networks.png
-reject-serial "joining Vindows Corp"
+shot target/veda/wifi-6-terminal-networks.png
+reject-serial "joining Veda Corp"
 reject-serial "panicked"

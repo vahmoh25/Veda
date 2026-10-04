@@ -6,7 +6,7 @@
 net both
 boot-cmdline "run=nettest:route-watch"
 fail-on "nettest: FAIL"
-wait-serial "connected to Vindows Home" 300
+wait-serial "connected to Veda Home" 300
 wait-serial "watch: route=eth0 ping=ok dns=ok" 120
 
 # 1. Unplug the cable: Wi-Fi takes over.
@@ -24,7 +24,7 @@ wait-serial "watch: route=eth0 ping=ok dns=ok" 90
 checkpoint
 air "ap home off"
 air "ap home2 off"
-wait-serial "lost the connection to Vindows Home" 60
+wait-serial "lost the connection to Veda Home" 60
 wait 10
 reject-serial "watch: route="
 

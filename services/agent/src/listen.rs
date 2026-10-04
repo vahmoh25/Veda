@@ -274,7 +274,7 @@ impl Listener {
                             // This piece on its own (other words may come
                             // before it: a song, someone else), or with what
                             // came before it since the last pause ("Hey" ...
-                            // "Vera").
+                            // "Veda").
                             let call = wake::call(piece, &self.name).or_else(|| wake::call(&self.heard, &self.name));
                             if let Some(call) = call {
                                 addressed = Some(call);

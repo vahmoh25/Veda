@@ -10,13 +10,13 @@ wait-serial "started settings" 60
 wait 4
 key meta_l-up
 wait 4
-shot target/vindows/agent-settings-1.png
+shot target/veda/agent-settings-1.png
 # The key field, then a key with the wrong shape.
 click 0.38 0.315
 type "not-a-key"
 key ret
 wait 2
-shot target/vindows/agent-settings-2-refused.png
+shot target/veda/agent-settings-2-refused.png
 reject-serial "Deepgram key stored"
 # A key of the right shape is stored.
 key ctrl-a
@@ -24,9 +24,9 @@ type "0123456789abcdef0123456789abcdef01234567"
 key ret
 wait-serial "Deepgram key stored" 20
 wait 3
-shot target/vindows/agent-settings-3-stored.png
+shot target/veda/agent-settings-3-stored.png
 reject-serial "0123456789abcdef0123456789abcdef01234567"
 # The rest of the page (dragging the scroll bar to the end).
 drag 0.9935 0.2 0.9935 0.95
 wait 2
-shot target/vindows/agent-settings-4-end.png
+shot target/veda/agent-settings-4-end.png

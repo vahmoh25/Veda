@@ -1,4 +1,4 @@
-//! `vagent` — the logic of the voice agent that lives in Vindows.
+//! `vagent` — the logic of the voice agent that lives in Veda.
 //!
 //! The agent service (`services/agent`) does the I/O — audio, the network,
 //! talking to applications — and uses this crate for everything that can be

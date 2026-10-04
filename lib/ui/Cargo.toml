@@ -1,6 +1,6 @@
 [package]
 name = "vui"
-description = "The Vindows GUI toolkit: windows, event loop, widgets, icons and dialogs"
+description = "The Veda GUI toolkit: windows, event loop, widgets, icons and dialogs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

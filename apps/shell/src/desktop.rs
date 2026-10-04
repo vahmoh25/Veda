@@ -158,7 +158,7 @@ impl Desktop {
             MenuItem::new("Open Home folder"),
             MenuItem::separator(),
             MenuItem::new("Refresh"),
-            MenuItem::new("About Vindows"),
+            MenuItem::new("About Veda"),
         ];
         let chosen = ui.context_menu("desktop", &menu);
         let action = match chosen {

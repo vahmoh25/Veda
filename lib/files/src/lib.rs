@@ -1,4 +1,4 @@
-//! `vfiles` — working with files in Vindows applications.
+//! `vfiles` — working with files in Veda applications.
 //!
 //! * [`path`]: absolute, `/`-separated paths as the VFS uses them —
 //!   normalising, resolving against a working directory and `~`, joining and

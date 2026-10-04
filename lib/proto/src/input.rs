@@ -56,7 +56,7 @@ impl InputSink {
     }
 }
 
-/// Linux evdev key codes used throughout Vindows.
+/// Linux evdev key codes used throughout Veda.
 pub mod keys {
     pub const ESC: u16 = 1;
     pub const KEY_1: u16 = 2;

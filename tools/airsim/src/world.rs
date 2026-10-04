@@ -1,5 +1,5 @@
 //! The simulated Wi-Fi environment: access points, the radio of the
-//! Vindows guest, and the wired network behind the access points.
+//! Veda guest, and the wired network behind the access points.
 //!
 //! [`World`] has no I/O. `main.rs` feeds it messages from the guest's radio
 //! (over the QEMU virtio-serial port), Ethernet frames from QEMU's user-mode
@@ -164,29 +164,29 @@ fn config(n: u8, ssid: &str, channel: u8, security: Security, password: &str) ->
 /// The networks of the default environment. Every secured network uses
 /// `password`.
 ///
-/// | name    | SSID             | security           | channel | signal  |
-/// |---------|------------------|--------------------|---------|---------|
-/// | home    | Vindows Home     | WPA2-Personal      | 1       | -48 dBm |
-/// | home2   | Vindows Home     | WPA2-Personal      | 11      | -66 dBm |
-/// | wpa3    | Vindows WPA3     | WPA3-Personal      | 6       | -55 dBm |
-/// | mixed   | Vindows Mixed    | WPA2/WPA3-Personal | 44      | -60 dBm |
-/// | guest   | Vindows Guest    | Open               | 36      | -71 dBm |
-/// | hidden  | (Vindows Hidden) | WPA2-Personal      | 6       | -63 dBm |
-/// | corp    | Vindows Corp     | Enterprise         | 11      | -78 dBm |
+/// | name    | SSID          | security           | channel | signal  |
+/// |---------|---------------|--------------------|---------|---------|
+/// | home    | Veda Home     | WPA2-Personal      | 1       | -48 dBm |
+/// | home2   | Veda Home     | WPA2-Personal      | 11      | -66 dBm |
+/// | wpa3    | Veda WPA3     | WPA3-Personal      | 6       | -55 dBm |
+/// | mixed   | Veda Mixed    | WPA2/WPA3-Personal | 44      | -60 dBm |
+/// | guest   | Veda Guest    | Open               | 36      | -71 dBm |
+/// | hidden  | (Veda Hidden) | WPA2-Personal      | 6       | -63 dBm |
+/// | corp    | Veda Corp     | Enterprise         | 11      | -78 dBm |
 ///
 /// `home` and `home2` are two access points of one network, so a station
 /// can move to `home2` when `home` disappears.
 pub fn default_networks(now: u64, rng: &mut SimRandom, password: &str) -> Vec<Network> {
-    let mut hidden = config(6, "Vindows Hidden", 6, Security::Wpa2Personal, password);
+    let mut hidden = config(6, "Veda Hidden", 6, Security::Wpa2Personal, password);
     hidden.hidden = true;
     vec![
-        Network::new("home", config(1, "Vindows Home", 1, Security::Wpa2Personal, password), -48, now, rng),
-        Network::new("home2", config(2, "Vindows Home", 11, Security::Wpa2Personal, password), -66, now, rng),
-        Network::new("wpa3", config(3, "Vindows WPA3", 6, Security::Wpa3Personal, password), -55, now, rng),
-        Network::new("mixed", config(4, "Vindows Mixed", 44, Security::Wpa2Wpa3Personal, password), -60, now, rng),
-        Network::new("guest", config(5, "Vindows Guest", 36, Security::Open, password), -71, now, rng),
+        Network::new("home", config(1, "Veda Home", 1, Security::Wpa2Personal, password), -48, now, rng),
+        Network::new("home2", config(2, "Veda Home", 11, Security::Wpa2Personal, password), -66, now, rng),
+        Network::new("wpa3", config(3, "Veda WPA3", 6, Security::Wpa3Personal, password), -55, now, rng),
+        Network::new("mixed", config(4, "Veda Mixed", 44, Security::Wpa2Wpa3Personal, password), -60, now, rng),
+        Network::new("guest", config(5, "Veda Guest", 36, Security::Open, password), -71, now, rng),
         Network::new("hidden", hidden, -63, now, rng),
-        Network::new("corp", config(7, "Vindows Corp", 11, Security::Enterprise, password), -78, now, rng),
+        Network::new("corp", config(7, "Veda Corp", 11, Security::Enterprise, password), -78, now, rng),
     ]
 }
 

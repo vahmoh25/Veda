@@ -194,7 +194,7 @@ impl Racer {
                 hud::ACCENT,
             )),
             boards: vec![
-                r.add_texture(world::text_texture(&mut text, bold, "VINDOWS", 0xFF1E5AD8, 0xFFFFFFFF, 0xFFFFFFFF)),
+                r.add_texture(world::text_texture(&mut text, bold, "VEDA", 0xFF1E5AD8, 0xFFFFFFFF, 0xFFFFFFFF)),
                 r.add_texture(world::text_texture(&mut text, bold, "V3D ENGINE", 0xFFD83A2A, 0xFFFFFFFF, 0xFFF2C23A)),
                 r.add_texture(world::text_texture(&mut text, bold, "100% RUST", 0xFF1A1C20, 0xFFF2C23A, 0xFFF2C23A)),
                 r.add_texture(world::text_texture(&mut text, bold, "FIXED POINT", 0xFF26A85A, 0xFFFFFFFF, 0xFFFFFFFF)),

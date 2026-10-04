@@ -1,7 +1,7 @@
-Welcome to Vindows
-==================
+Welcome to Veda
+===============
 
-Vindows is a modern x86-64 operating system written from scratch in Rust
+Veda is a modern x86-64 operating system written from scratch in Rust
 (with a little C++). It runs on a small microkernel; everything else —
 drivers, the file system, the window compositor and this desktop — runs as
 isolated user-space programs that talk to each other over IPC channels.
@@ -50,6 +50,6 @@ Your files
 
 Your home folder is /home/user, with Documents, Pictures, Music and Desktop
 folders. Everything you save there is kept on the home disk, so it is still
-there after you restart Vindows.
+there after you restart Veda.
 
 Have fun exploring!

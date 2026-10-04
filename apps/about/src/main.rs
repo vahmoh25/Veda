@@ -1,4 +1,4 @@
-//! About Vindows: the system's version, hardware and licences. The voice
+//! About Veda: the system's version, hardware and licences. The voice
 //! agent reads what the window shows and can show the licences.
 
 #![no_std]
@@ -16,7 +16,7 @@ use vui::{Align, App, Font, Icon, Rect, Ui, WindowSpec};
 vrt::entry!(main);
 
 /// What "Show licences" shows.
-const LICENCES: &str = "Vindows is written from scratch in Rust and released under the MIT license. \
+const LICENCES: &str = "Veda is written from scratch in Rust and released under the MIT license. \
                         Fonts: Inter (© The Inter Project Authors), \
                         Lato (© tyPoland Lukasz Dziedzic) and JetBrains Mono (© The JetBrains Mono Project Authors), \
                         all under the SIL Open Font License 1.1.";
@@ -53,14 +53,7 @@ impl App for About {
         let area = ui.rect().inset(32, 28, 32, 24);
 
         vui::draw_logo(&mut ui.canvas, Rect::new(area.x, area.y + 4, 64, 64));
-        ui.label(
-            Rect::new(area.x + 88, area.y, 400, 40),
-            "Vindows",
-            Font::Bold,
-            t.title_size + 6.0,
-            t.text,
-            Align::Left,
-        );
+        ui.label(Rect::new(area.x + 88, area.y, 400, 40), "Veda", Font::Bold, t.title_size + 6.0, t.text, Align::Left);
         let version = cstr(&self.info.version);
         ui.label(
             Rect::new(area.x + 90, area.y + 40, 400, 24),
@@ -107,7 +100,7 @@ impl App for About {
 
     fn agent_info(&self) -> Option<AppAgentInfo> {
         Some(agent::info(
-            "The About Vindows window: the version of Vindows, the processor, memory and uptime, and the licences.",
+            "The About Veda window: the version of Veda, the processor, memory and uptime, and the licences.",
             vec![
                 Action::new("show_licences", "Shows the licences in the window (or hides them)")
                     .param("show", "boolean", "Show them (the default) or hide them", false)
@@ -146,7 +139,7 @@ impl App for About {
                 }
                 Ok(v)
             }
-            other => Err(format!("About Vindows has no action called {other}")),
+            other => Err(format!("About Veda has no action called {other}")),
         }
     }
 }
@@ -158,7 +151,7 @@ fn fmt_uptime(ns: u64) -> String {
 }
 
 fn main() -> i32 {
-    let mut spec = WindowSpec::new("About Vindows", 560, 500);
+    let mut spec = WindowSpec::new("About Veda", 560, 500);
     spec.resizable = false;
     spec.app_id = "about".into();
     vui::run(spec, About { info: vabi::SystemInfo::default(), last_refresh: 0, show_details: false })

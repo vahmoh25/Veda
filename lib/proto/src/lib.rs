@@ -1,4 +1,4 @@
-//! Protocols of the Vindows system services.
+//! Protocols of the Veda system services.
 //!
 //! Each submodule declares one service protocol with `vipc::protocol!`,
 //! together with its wire types. Clients connect to a service by name through

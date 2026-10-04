@@ -1,6 +1,6 @@
 //! Symbols that compiled Rust code expects from a C runtime.
 //!
-//! Vindows programs link no CRT, so the runtime provides the memory
+//! Veda programs link no CRT, so the runtime provides the memory
 //! primitives LLVM emits calls to, the stack probe and floating-point
 //! marker of the MSVC target, and a stub exception personality (we always
 //! build with `panic = "abort"`, so it is never called).
@@ -195,7 +195,7 @@ strlen:
 pub static _fltused: i32 = 0;
 
 /// Exception personality referenced by unwind tables in the precompiled
-/// `core`/`alloc`. Vindows builds with `panic = "abort"`, so it never runs.
+/// `core`/`alloc`. Veda builds with `panic = "abort"`, so it never runs.
 #[unsafe(no_mangle)]
 pub extern "C" fn __CxxFrameHandler3() -> ! {
     crate::sys::process_exit(-1)

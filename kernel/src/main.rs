@@ -1,4 +1,4 @@
-//! `vkernel` — the Vindows microkernel.
+//! `vkernel` — the Veda microkernel.
 //!
 //! The kernel provides only what cannot safely live in user space:
 //! scheduling, address spaces, capability-based kernel objects (processes,
@@ -75,7 +75,7 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
     }
     let features = cpu::detect_features();
     let opts = parse_cmdline(boot.cmdline());
-    kinfo!("Vindows kernel {} starting", env!("CARGO_PKG_VERSION"));
+    kinfo!("Veda kernel {} starting", env!("CARGO_PKG_VERSION"));
     kinfo!(
         "cpu: xsave={} avx={} x2apic={} tsc-deadline={} invariant-tsc={} smep={} smap={} 1g-pages={}",
         features.xsave,

@@ -1,6 +1,6 @@
 [package]
 name = "vtls"
-description = "TLS for Vindows applications: HTTPS and secure WebSockets with rustls and a pure-Rust cryptography provider"
+description = "TLS for Veda applications: HTTPS and secure WebSockets with rustls and a pure-Rust cryptography provider"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,6 +1,6 @@
 //! Color helpers: sRGB transfer functions, HSV conversion and packed ARGB.
 //!
-//! Packed colors are `u32` in `0xAARRGGBB` order (Vindows' pixel format:
+//! Packed colors are `u32` in `0xAARRGGBB` order (Veda's pixel format:
 //! bytes B, G, R, A in memory). Float components are in `[0, 1]`; functions
 //! say whether they expect sRGB-encoded or linear values. Blending and
 //! lighting should happen in linear space: decode with [`srgb_to_linear`]

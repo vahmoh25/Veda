@@ -11,14 +11,14 @@ pub fn workspace_root() -> PathBuf {
 }
 
 /// Directory that receives the assembled image and QEMU state
-/// (`$VINDOWS_OUT` overrides it, so several builds can run side by side).
+/// (`$VEDA_OUT` overrides it, so several builds can run side by side).
 pub fn out_dir() -> PathBuf {
-    match std::env::var_os("VINDOWS_OUT") {
+    match std::env::var_os("VEDA_OUT") {
         Some(p) => {
             let p = PathBuf::from(p);
             if p.is_absolute() { p } else { workspace_root().join(p) }
         }
-        None => workspace_root().join("target").join("vindows"),
+        None => workspace_root().join("target").join("veda"),
     }
 }
 

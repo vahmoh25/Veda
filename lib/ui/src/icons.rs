@@ -1,4 +1,4 @@
-//! The Vindows icon set: simple line icons designed on a 24x24 grid, drawn
+//! The Veda icon set: simple line icons designed on a 24x24 grid, drawn
 //! as vector paths so they are crisp at any size.
 
 use vgfx::{Canvas, Color, FillRule, LineCap, LineJoin, Path, Rect, StrokeStyle, Transform};
@@ -521,7 +521,7 @@ fn build(icon: Icon) -> Builder {
     b
 }
 
-/// Draws the Vindows logo filling the square `r`: OS1's white ring from
+/// Draws the Veda logo filling the square `r`: OS1's white ring from
 /// Spike Jonze's "Her", a quarter of its radius wide (the agent's ring).
 pub fn draw_logo(c: &mut Canvas, r: Rect) {
     let (cx, cy) = (r.x as f32 + r.w as f32 / 2.0, r.y as f32 + r.h as f32 / 2.0);

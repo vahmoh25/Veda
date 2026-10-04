@@ -1,4 +1,4 @@
-//! `vipc` — typed inter-process communication for Vindows.
+//! `vipc` — typed inter-process communication for Veda.
 //!
 //! * [`codec`]: the binary encoding (`Encode`/`Decode`) plus the `message!`,
 //!   `enumeration!` and `union!` macros for declaring wire types.
@@ -10,7 +10,7 @@
 //! Every message starts with a 12-byte [`Header`]: method ordinal,
 //! transaction id and flags. Requests and their responses share a
 //! transaction id; events (server → client notifications) use a separate
-//! channel in Vindows protocols, which keeps clients simple.
+//! channel in Veda protocols, which keeps clients simple.
 
 #![no_std]
 

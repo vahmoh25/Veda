@@ -1,4 +1,4 @@
-//! `v3d` — Vindows 3D: a multi-threaded fixed-point software renderer.
+//! `v3d` — Veda 3D: a multi-threaded fixed-point software renderer.
 //!
 //! There is no GPU: everything runs on the CPU, usually under QEMU's TCG
 //! emulator, where integer instructions are cheap and floating point is

@@ -6,7 +6,7 @@
 //! closure is divided by participant index or with an atomic counter.
 //!
 //! Threads come from `vrt::thread` and synchronise with the futex-based
-//! `vrt::sync` primitives, so a pool only works inside Vindows; with one
+//! `vrt::sync` primitives, so a pool only works inside Veda; with one
 //! participant no thread is created and no system call is made (host tests).
 //!
 //! Workers are started as a chain: the caller wakes worker 1, which wakes

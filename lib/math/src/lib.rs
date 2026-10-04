@@ -1,4 +1,4 @@
-//! Vindows math: a `no_std` libm replacement, linear algebra, noise and random
+//! Veda math: a `no_std` libm replacement, linear algebra, noise and random
 //! numbers for graphics and games.
 //!
 //! `core` on stable Rust has no `sqrt`, `sin`, `floor`, `powf`, ... This crate

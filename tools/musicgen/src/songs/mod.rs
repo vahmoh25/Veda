@@ -1,4 +1,4 @@
-//! The album "First Light" by Vindows Studio.
+//! The album "First Light" by Veda Studio.
 
 mod aurora;
 pub mod chime;
@@ -21,7 +21,7 @@ pub struct Track {
     pub song: Song,
 }
 
-pub const ARTIST: &str = "Vindows Studio";
+pub const ARTIST: &str = "Veda Studio";
 pub const ALBUM: &str = "First Light";
 pub const YEAR: u32 = 2026;
 

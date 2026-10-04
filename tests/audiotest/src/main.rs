@@ -1,4 +1,4 @@
-//! `audiotest` — audio checks that run inside Vindows.
+//! `audiotest` — audio checks that run inside Veda.
 //!
 //! * `audiotest record SECS`: records SECS seconds from the microphone
 //!   (16 kHz mono) and logs the level of every second as

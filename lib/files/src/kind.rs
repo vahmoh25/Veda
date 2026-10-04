@@ -22,7 +22,7 @@ pub enum FileKind {
     Image,
     /// Sound or music (not every audio format can be played).
     Audio,
-    /// A Vindows program (`.exe`).
+    /// A Veda program (`.exe`).
     Program,
     Other,
 }
@@ -93,7 +93,7 @@ pub const TYPES: &[FileType] = &[
     image(&["qoi"], "QOI image"),
     audio(&["wav", "wave"], "WAV audio", Some(MUSIC)),
     audio(&["qoa"], "QOA audio", Some(MUSIC)),
-    // Audio formats Vindows cannot play yet.
+    // Audio formats Veda cannot play yet.
     audio(&["mp3"], "MP3 audio", None),
     audio(&["ogg", "opus"], "Ogg audio", None),
     audio(&["flac"], "FLAC audio", None),
@@ -125,12 +125,12 @@ pub fn default_app(name: &str) -> Option<App> {
     file_type(name).and_then(|t| t.app)
 }
 
-/// True for pictures Vindows can decode — the files Photos opens.
+/// True for pictures Veda can decode — the files Photos opens.
 pub fn is_image(name: &str) -> bool {
     default_app(name) == Some(PHOTOS)
 }
 
-/// True for sound files Vindows can play — the files Music opens.
+/// True for sound files Veda can play — the files Music opens.
 pub fn is_playable_audio(name: &str) -> bool {
     default_app(name) == Some(MUSIC)
 }

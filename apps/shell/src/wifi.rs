@@ -286,7 +286,7 @@ impl WifiFlyout {
             return;
         }
         if !n.security.supported() {
-            let msg = "Vindows cannot join networks with this security.";
+            let msg = "Veda cannot join networks with this security.";
             ui.label(Rect::new(x, y, right - x, 40), msg, Font::Regular, 12.0, t.text_faint, Align::Left);
             return;
         }

@@ -18,4 +18,4 @@ expect-serial "home directory restored from the home disk"
 double-click 0.0469 0.4425
 wait-serial "started editor" 30
 wait 5
-shot target/vindows/persist-after-reboot.png
+shot target/veda/persist-after-reboot.png

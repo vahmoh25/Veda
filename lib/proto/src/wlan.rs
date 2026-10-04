@@ -78,7 +78,7 @@ message! {
     pub struct PhyInfo {
         /// Driver name, e.g. `vwifi`.
         pub driver: String,
-        /// Where the radio is, e.g. `virtio-serial port org.vindows.wlan.0`.
+        /// Where the radio is, e.g. `virtio-serial port org.veda.wlan.0`.
         pub location: String,
         /// The radio's permanent MAC address.
         pub mac: [u8; 6],
@@ -175,7 +175,7 @@ enumeration! {
 }
 
 impl Security {
-    /// Whether Vindows can connect to networks with this security.
+    /// Whether Veda can connect to networks with this security.
     pub const fn supported(self) -> bool {
         matches!(self, Security::Open | Security::Wpa2Personal | Security::Wpa3Personal | Security::Wpa2Wpa3Personal)
     }
@@ -563,7 +563,7 @@ mod tests {
     #[test]
     fn requests_round_trip() {
         let r = ConnectRequest {
-            ssid: Bytes(b"VindowsNet".to_vec()),
+            ssid: Bytes(b"VedaNet".to_vec()),
             security: Some(Security::Wpa3Personal),
             passphrase: Some("correct horse".into()),
             save: true,

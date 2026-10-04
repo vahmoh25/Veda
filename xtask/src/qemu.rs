@@ -69,7 +69,7 @@ pub enum NetMode {
     /// Both the wired card and the Wi-Fi radio.
     Both,
     /// The wired card bridged to a host network adapter (VirtualBox only):
-    /// Vindows joins the host's real network (its router's DHCP, DNS and
+    /// Veda joins the host's real network (its router's DHCP, DNS and
     /// Internet).
     Bridged,
 }
@@ -147,7 +147,7 @@ pub struct VmConfig {
     pub gdb: bool,
     /// Allow the guest to terminate QEMU with an exit code (tests).
     pub debug_exit: bool,
-    /// Disk image holding the user's home directory (serial `vindows-home`).
+    /// Disk image holding the user's home directory (serial `veda-home`).
     pub home_disk: Option<PathBuf>,
     /// How the boot and home disks are attached.
     pub disk_bus: DiskBus,
@@ -201,7 +201,7 @@ pub const WIRED_NIC_ID: &str = "nic0";
 const HOME_DISK_BYTES: u64 = 64 << 20;
 
 /// Creates an empty home disk at `path` (replacing any existing one when
-/// `fresh`). An empty disk makes Vindows start a new home directory.
+/// `fresh`). An empty disk makes Veda start a new home directory.
 pub fn prepare_home_disk(path: &Path, fresh: bool) -> Result {
     if fresh || !path.exists() {
         if let Some(dir) = path.parent() {
@@ -224,7 +224,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
             file.display()
         )
     };
-    cmd.args(["-name", "Vindows"]);
+    cmd.args(["-name", "Veda"]);
     cmd.args(["-machine", "q35"]);
     // Prefer hardware virtualisation when the host offers it; fall back to
     // the TCG emulator (multi-threaded, one host thread per vCPU) otherwise.
@@ -243,14 +243,14 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,file={}", disk.display())]);
     // q35's built-in AHCI controller has six ports, ide.0 to ide.5.
     match cfg.disk_bus {
-        DiskBus::Virtio => cmd.args(["-device", "virtio-blk-pci,drive=disk0,bootindex=0,serial=vindows-boot"]),
-        DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.0,drive=disk0,bootindex=0,serial=vindows-boot"]),
+        DiskBus::Virtio => cmd.args(["-device", "virtio-blk-pci,drive=disk0,bootindex=0,serial=veda-boot"]),
+        DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.0,drive=disk0,bootindex=0,serial=veda-boot"]),
     };
     if let Some(home) = &cfg.home_disk {
         cmd.args(["-drive", &format!("id=home,if=none,format=raw,file={}", home.display())]);
         match cfg.disk_bus {
-            DiskBus::Virtio => cmd.args(["-device", "virtio-blk-pci,drive=home,serial=vindows-home"]),
-            DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.1,drive=home,serial=vindows-home"]),
+            DiskBus::Virtio => cmd.args(["-device", "virtio-blk-pci,drive=home,serial=veda-home"]),
+            DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.1,drive=home,serial=veda-home"]),
         };
     }
     cmd.args(["-device", "virtio-tablet-pci"]);
@@ -322,7 +322,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
 }
 
 /// QEMU arguments for the virtual Wi-Fi radio: a virtio-serial port named
-/// `org.vindows.wlan.0` that `airsim` connects to, and a NAT (`user`
+/// `org.veda.wlan.0` that `airsim` connects to, and a NAT (`user`
 /// network) joined through a hub to a UDP link with `airsim`, whose access
 /// points bridge their stations onto it.
 pub fn wifi_args(p: &WifiPorts) -> Vec<String> {
@@ -332,7 +332,7 @@ pub fn wifi_args(p: &WifiPorts) -> Vec<String> {
         "-chardev",
         &format!("socket,id=wlanradio,host=127.0.0.1,port={},server=on,wait=off", p.radio),
         "-device",
-        "virtserialport,bus=vser0.0,nr=1,chardev=wlanradio,name=org.vindows.wlan.0",
+        "virtserialport,bus=vser0.0,nr=1,chardev=wlanradio,name=org.veda.wlan.0",
         "-netdev",
         "user,id=wlanwan,net=10.0.3.0/24",
         "-netdev",

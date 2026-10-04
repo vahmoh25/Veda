@@ -1,4 +1,4 @@
-//! `vweb` — web clients for Vindows applications.
+//! `vweb` — web clients for Veda applications.
 //!
 //! * [`Url`]: `http`, `https`, `ws` and `wss` URLs, with percent-encoding
 //!   for query strings ([`url::encode_component`]).

@@ -1,5 +1,5 @@
 //! Control commands: tests (and people) change the simulated environment
-//! while Vindows runs, over a line-based TCP connection.
+//! while Veda runs, over a line-based TCP connection.
 //!
 //! Every command is one line; the answer is zero or more lines followed by
 //! `ok` or `error: <why>`.

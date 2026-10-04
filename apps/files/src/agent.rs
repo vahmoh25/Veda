@@ -455,7 +455,7 @@ impl Files {
                     let ext = extension(&path);
                     let what = if ext.is_empty() { "this file".to_string() } else { format!(".{ext} files") };
                     return Err(format!(
-                        "Vindows has no app for {what}; if it is text, it can be opened with in_text_editor"
+                        "Veda has no app for {what}; if it is text, it can be opened with in_text_editor"
                     ));
                 }
                 self.failed()?;

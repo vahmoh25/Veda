@@ -1,6 +1,6 @@
 [package]
 name = "vwlan"
-description = "IEEE 802.11 for Vindows: frames, information elements, RSN, WPA2 handshakes, WPA3 SAE, CCMP, BIP, and the station and access point state machines"
+description = "IEEE 802.11 for Veda: frames, information elements, RSN, WPA2 handshakes, WPA3 SAE, CCMP, BIP, and the station and access point state machines"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

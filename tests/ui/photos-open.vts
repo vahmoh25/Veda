@@ -11,16 +11,16 @@ wait 4
 double-click 0.293 0.31
 wait-serial "opened Lighthouse" 90
 wait 5
-shot target/vindows/photos-open-1.png
+shot target/veda/photos-open-1.png
 # The details show the EXIF orientation; the previous picture is a keypress away.
 key i
 wait 3
-shot target/vindows/photos-open-2.png
+shot target/veda/photos-open-2.png
 key left
 wait-serial "opened Glass Orb" 60
 wait 3
-shot target/vindows/photos-open-3.png
+shot target/veda/photos-open-3.png
 key esc
 wait 4
-shot target/vindows/photos-open-4.png
+shot target/veda/photos-open-4.png
 reject-serial "cannot open"

@@ -63,7 +63,7 @@ impl Generator {
     pub fn reseed(&mut self) {
         let pool_digest = self.pool.clone().finalize();
         let mut h = Blake2s::new();
-        h.update(b"vindows reseed");
+        h.update(b"veda reseed");
         h.update(&self.key);
         h.update(&pool_digest);
         h.update(&self.reseeds.to_le_bytes());

@@ -27,7 +27,7 @@ agent-result '"layout":"icons","sort_by":"size","order":"descending"'
 agent-call use_app '{"app":"files","action":"select","arguments":{"names":"Glass Orb.png\nlighthouse"}}' 30
 agent-result '"selected":["Glass Orb.png","Lighthouse.jpg"]'
 wait 5
-shot target/vindows/agent-app-files-1-icons.png
+shot target/veda/agent-app-files-1-icons.png
 # The search box filters the folder.
 agent-call use_app '{"app":"files","action":"search","arguments":{"text":"sun"}}' 30
 agent-result '"matches":1,"names":["Retro Sunset.bmp"]'
@@ -46,7 +46,7 @@ agent-result waiting_for_approval
 wait-serial "approval 1 requested" 10
 click 0.825 0.97
 wait 2
-shot target/vindows/agent-app-files-2-approval.png
+shot target/veda/agent-app-files-2-approval.png
 agent-mark
 click 0.9375 0.8275
 wait-serial "approval 1 allowed" 10
@@ -107,7 +107,7 @@ agent-expect "give the full path" 20
 # The tray's circle closes the agent's window again.
 click 0.825 0.97
 wait 2
-shot target/vindows/agent-app-files-3-after.png
+shot target/veda/agent-app-files-3-after.png
 # Back to Documents, and a document opens in the Text Editor.
 agent-call use_app '{"app":"files","action":"go","arguments":{"to":"back"}}' 30
 agent-result '"showing":"~"'

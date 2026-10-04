@@ -13,10 +13,10 @@ type "open /home/user/Pictures/Broken.png"
 key ret
 wait-serial "cannot open Broken.png" 60
 wait 5
-shot target/vindows/photos-errors-1-viewer.png
+shot target/veda/photos-errors-1-viewer.png
 key esc
 wait 4
-shot target/vindows/photos-errors-2-library.png
+shot target/veda/photos-errors-2-library.png
 key alt-f4
 wait 3
 type "rm /home/user/Pictures/Broken.png"
@@ -29,4 +29,4 @@ type "run photos /tmp/empty"
 key ret
 wait-serial "pictures in /tmp/empty" 60
 wait 5
-shot target/vindows/photos-errors-3-empty.png
+shot target/veda/photos-errors-3-empty.png

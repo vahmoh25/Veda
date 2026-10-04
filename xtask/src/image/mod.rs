@@ -1,4 +1,4 @@
-//! Assembly of the bootable Vindows disk image.
+//! Assembly of the bootable Veda disk image.
 
 pub mod fat32;
 pub mod gpt;
@@ -19,14 +19,14 @@ pub struct EspContents<'a> {
 /// Builds a GPT disk with a single FAT32 EFI system partition and writes it to
 /// `out`. The partition is sized to fit its contents with ample headroom.
 pub fn write_disk_image(out: &Path, esp: &EspContents) -> Result<u64, String> {
-    let mut fat = Fat32Builder::new("VINDOWS");
+    let mut fat = Fat32Builder::new("VEDA");
     fat.add_file("EFI/BOOT/BOOTX64.EFI", esp.bootloader.to_vec())?;
-    fat.add_file("VINDOWS/VKERNEL.EXE", esp.kernel.to_vec())?;
-    fat.add_file("VINDOWS/INITRD.IMG", esp.initrd.to_vec())?;
+    fat.add_file("VEDA/VKERNEL.EXE", esp.kernel.to_vec())?;
+    fat.add_file("VEDA/INITRD.IMG", esp.initrd.to_vec())?;
     if !esp.symbols.is_empty() {
-        fat.add_file("VINDOWS/VKERNEL.SYM", esp.symbols.to_vec())?;
+        fat.add_file("VEDA/VKERNEL.SYM", esp.symbols.to_vec())?;
     }
-    fat.add_file("VINDOWS/BOOT.CFG", esp.boot_cfg.as_bytes().to_vec())?;
+    fat.add_file("VEDA/BOOT.CFG", esp.boot_cfg.as_bytes().to_vec())?;
 
     let payload = esp.bootloader.len() + esp.kernel.len() + esp.initrd.len() + esp.symbols.len();
     // FAT32 needs >= 65525 clusters; 128 MiB is the smallest comfortable size.

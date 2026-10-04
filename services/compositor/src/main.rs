@@ -1,4 +1,4 @@
-//! `compositor` — the Vindows window system.
+//! `compositor` — the Veda window system.
 //!
 //! Owns the framebuffer and composes client windows into it. It provides two
 //! services:

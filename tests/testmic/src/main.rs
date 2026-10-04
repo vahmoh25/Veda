@@ -3,7 +3,7 @@
 //! `testmic HOST,PORT,RATE` (started with `run=testmic:10.0.2.2,5555,16000`)
 //! connects to a TCP server on the host and attaches to the audio service
 //! as the input device. The server sends mono 16-bit little-endian PCM at
-//! `RATE` in real time — speech that a test wants Vindows to hear, and
+//! `RATE` in real time — speech that a test wants Veda to hear, and
 //! silence in between — and every frame goes into the device ring as if a
 //! microphone had recorded it just now. If the connection drops, the
 //! microphone records silence and the program reconnects.

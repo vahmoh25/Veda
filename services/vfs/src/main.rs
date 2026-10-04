@@ -1,4 +1,4 @@
-//! `vfs` — the Vindows file system service.
+//! `vfs` — the Veda file system service.
 //!
 //! Namespace:
 //! * `/system` — the read-only system image (the initrd), and

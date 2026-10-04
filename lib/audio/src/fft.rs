@@ -8,7 +8,7 @@
 //!   levels (0..=1) for a spectrum visualiser — Hann window, real FFT,
 //!   magnitudes in decibels.
 //!
-//! The transforms run inside Vindows for the echo canceller and the music
+//! The transforms run inside Veda for the echo canceller and the music
 //! visualiser, usually under CPU emulation. Real and imaginary parts are
 //! kept in separate arrays and every stage's twiddles are contiguous, so the
 //! butterfly loops are plain element-wise arithmetic without shuffles (which

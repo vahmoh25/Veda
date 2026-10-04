@@ -175,7 +175,7 @@ impl Session {
         self.ws.send_binary(&bytes)
     }
 
-    /// Asks the agent to respond to a notice from Vindows (sent once the
+    /// Asks the agent to respond to a notice from the system (sent once the
     /// conversation is ready).
     pub fn inject(&mut self, text: &str) -> Result<(), WebError> {
         if self.ready {

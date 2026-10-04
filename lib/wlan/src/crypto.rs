@@ -13,7 +13,7 @@ use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
 /// A source of cryptographic randomness (the kernel's generator on
-/// Vindows; a seeded generator in tests).
+/// Veda; a seeded generator in tests).
 pub trait Random {
     fn fill(&mut self, buf: &mut [u8]);
 }

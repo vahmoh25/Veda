@@ -1,8 +1,8 @@
-# Vindows changes to smoltcp 0.14.0
+# Veda changes to smoltcp 0.14.0
 
 This directory holds smoltcp 0.14.0 as published on crates.io (0BSD
 license, see `LICENSE-0BSD.txt`), with the changes below. Everything else is
-unmodified. Every changed spot is marked with a `VINDOWS PATCH` comment.
+unmodified. Every changed spot is marked with a `VEDA PATCH` comment.
 
 ## Unpredictable protocol numbers (`src/rand.rs`, `src/iface/interface/mod.rs`)
 
@@ -15,7 +15,7 @@ inject data into them off-path (RFC 6528 explains the attack).
 
 * `Config` gains `random_key: Option<[u8; 32]>`.
 * With a key, `Rand` produces a ChaCha20 keystream (RFC 8439 block function,
-  64-bit block counter, zero nonce). The Vindows network service keys every
+  64-bit block counter, zero nonce). The Veda network service keys every
   interface with 32 bytes from the kernel's CSPRNG.
 * Without a key, `Rand` is upstream's sPCG32 exactly, so the upstream test
   suite still passes byte for byte.
@@ -33,11 +33,11 @@ cd third_party/smoltcp
 cargo test --lib
 ```
 
-(The crate is excluded from the Vindows workspace, so this resolves its
+(The crate is excluded from the Veda workspace, so this resolves its
 dev-dependencies separately.)
 
 ## Updating
 
 Copy the new release's `src/`, `build.rs`, `Cargo.toml`, `README.md`,
 `CHANGELOG.md` and license over this directory, re-apply the changes above
-(search for `VINDOWS PATCH` in this version), and run the tests.
+(search for `VEDA PATCH` in this version), and run the tests.

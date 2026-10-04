@@ -35,7 +35,7 @@ agent-call read_app '{"app":"photos"}' 30
 agent-result '"name":"Lighthouse.jpg","path":"~/Pictures/Lighthouse.jpg","number":4,"status":"shown","width":1200,"height":1600,"format":"JPEG"'
 agent-result '"fitted":true,"rotation":270,"full_screen":false,"details_panel":true'
 wait 4
-shot target/vindows/agent-app-photos-1-viewer.png
+shot target/veda/agent-app-photos-1-viewer.png
 # The next picture, then a slideshow from it: two seconds a picture, full
 # screen. Each picture after the next is decoded only when the slideshow
 # reaches its neighbour.
@@ -50,7 +50,7 @@ wait-serial "opened Still Life" 60
 agent-call read_app '{"app":"photos"}' 30
 agent-result '"full_screen":true'
 agent-result '"slideshow":{"seconds":2.0}'
-shot target/vindows/agent-app-photos-2-slideshow.png
+shot target/veda/agent-app-photos-2-slideshow.png
 agent-call use_app '{"app":"photos","action":"slideshow","arguments":{"on":false}}' 30
 agent-result '"showing":'
 wait-serial "slideshow stopped" 10
@@ -97,5 +97,5 @@ agent-call read_app '{"app":"photos"}' 30
 agent-result '"pictures":["Alpine Lake.jpg","City Lights.jpg","Glass Orb.png","Lighthouse.jpg","Misty Forest.jpg","Retro Sunset.bmp","Still Life.qoi"]'
 click 0.825 0.97
 wait 4
-shot target/vindows/agent-app-photos-3-library.png
+shot target/veda/agent-app-photos-3-library.png
 reject-serial "cannot open"

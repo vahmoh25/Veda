@@ -1,8 +1,8 @@
-//! `vboot` — the Vindows UEFI boot loader.
+//! `vboot` — the Veda UEFI boot loader.
 //!
 //! Responsibilities, in order:
 //!
-//! 1. read `\VINDOWS\BOOT.CFG`, `VKERNEL.EXE`, `INITRD.IMG` (and the optional
+//! 1. read `\VEDA\BOOT.CFG`, `VKERNEL.EXE`, `INITRD.IMG` (and the optional
 //!    `VKERNEL.SYM`) from the boot volume,
 //! 2. pick and set a graphics mode and paint the boot splash,
 //! 3. load the kernel's PE sections into fresh physical pages,
@@ -389,7 +389,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     unsafe { (fw.bs.set_watchdog_timer)(0, 0, 0, ptr::null()) };
 
     let root = fw.boot_volume()?;
-    let cfg = match fw.read_file(root, "\\VINDOWS\\BOOT.CFG", None)? {
+    let cfg = match fw.read_file(root, "\\VEDA\\BOOT.CFG", None)? {
         Some(r) => {
             // SAFETY: the file was read into r.base with r.size bytes.
             let bytes = unsafe { core::slice::from_raw_parts(r.base as *const u8, r.size as usize) };
@@ -414,17 +414,16 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
         rgb: framebuffer.format == PixelFormat::Rgbx,
     });
 
-    let kernel_file = fw.read_file(root, "\\VINDOWS\\VKERNEL.EXE", None)?.ok_or("\\VINDOWS\\VKERNEL.EXE not found")?;
+    let kernel_file = fw.read_file(root, "\\VEDA\\VKERNEL.EXE", None)?.ok_or("\\VEDA\\VKERNEL.EXE not found")?;
     // SAFETY: the kernel file was read into kernel_file.base.
     let kernel_bytes = unsafe { core::slice::from_raw_parts(kernel_file.base as *const u8, kernel_file.size as usize) };
     let (pe, kernel) = load_kernel(fw, kernel_bytes)?;
     log!("kernel: {} KiB at phys {:#x}, entry {:#x}", kernel.size / 1024, kernel.phys_base, pe.entry_point());
 
-    let initrd = fw
-        .read_file(root, "\\VINDOWS\\INITRD.IMG", Some(MemoryKind::Initrd))?
-        .ok_or("\\VINDOWS\\INITRD.IMG not found")?;
+    let initrd =
+        fw.read_file(root, "\\VEDA\\INITRD.IMG", Some(MemoryKind::Initrd))?.ok_or("\\VEDA\\INITRD.IMG not found")?;
     log!("initrd: {} KiB at {:#x}", initrd.size / 1024, initrd.base);
-    let symbols = fw.read_file(root, "\\VINDOWS\\VKERNEL.SYM", Some(MemoryKind::Symbols))?.unwrap_or(PhysRegion::EMPTY);
+    let symbols = fw.read_file(root, "\\VEDA\\VKERNEL.SYM", Some(MemoryKind::Symbols))?.unwrap_or(PhysRegion::EMPTY);
 
     let rsdp_phys = fw.config_table(&ACPI_20_TABLE).or_else(|| fw.config_table(&ACPI_10_TABLE)).unwrap_or(0);
     let boot_time = fw.boot_time();
@@ -620,7 +619,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
 #[unsafe(export_name = "efi_main")]
 extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
     serial::init();
-    log!("Vindows boot loader {}", env!("CARGO_PKG_VERSION"));
+    log!("Veda boot loader {}", env!("CARGO_PKG_VERSION"));
     // SAFETY: the firmware passes a valid system table.
     let st: &'static SystemTable = unsafe { &*st };
     // SAFETY: boot services are valid until ExitBootServices.
@@ -632,7 +631,7 @@ extern "efiapi" fn efi_main(image: Handle, st: *mut SystemTable) -> Status {
     };
     let Err(err) = boot(&fw);
     log!("fatal: {err}");
-    fw.print("\nVindows could not start: ");
+    fw.print("\nVeda could not start: ");
     fw.print(err);
     fw.print("\n");
     loop {

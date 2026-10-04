@@ -1,6 +1,6 @@
 [package]
 name = "v3d"
-description = "Vindows 3D: a multi-threaded fixed-point software renderer"
+description = "Veda 3D: a multi-threaded fixed-point software renderer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

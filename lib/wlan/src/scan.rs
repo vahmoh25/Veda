@@ -111,8 +111,8 @@ mod tests {
     #[test]
     fn beacons_become_bss_descriptions() {
         let rsne = ap_rsne(Security::Wpa3Personal, false).unwrap().element();
-        let b = parse_bss(&beacon(b"VindowsNet", 6, Some(rsne.clone())), 1, -50, 10).unwrap();
-        assert_eq!(b.ssid, b"VindowsNet");
+        let b = parse_bss(&beacon(b"VedaNet", 6, Some(rsne.clone())), 1, -50, 10).unwrap();
+        assert_eq!(b.ssid, b"VedaNet");
         assert_eq!((b.channel, b.signal_dbm, b.security, b.pmf), (6, -50, Security::Wpa3Personal, 2));
         assert_eq!(b.rsne, Some(rsne));
         let open = parse_bss(&beacon(b"Cafe", 11, None), 11, -70, 0).unwrap();

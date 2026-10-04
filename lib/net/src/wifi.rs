@@ -7,7 +7,7 @@
 //! for n in vnet::wifi::networks()? {
 //!     println!("{} {} {} bars", n.name, n.security.label(), n.bars);
 //! }
-//! vnet::wifi::connect("Vindows Home", Some("password"), true)?;
+//! vnet::wifi::connect("Veda Home", Some("password"), true)?;
 //! ```
 //!
 //! Joining happens in the background: `connect` returns once the attempt

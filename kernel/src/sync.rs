@@ -2,7 +2,7 @@
 //!
 //! # Concurrency model
 //!
-//! Vindows uses a *big kernel lock* (BKL), like seL4 on SMP: a CPU must hold
+//! Veda uses a *big kernel lock* (BKL), like seL4 on SMP: a CPU must hold
 //! the BKL whenever it executes kernel code that touches shared state. Kernel
 //! code runs with interrupts disabled and is never preempted, so the kernel is
 //! effectively single-threaded and kernel operations are short. User code runs

@@ -3,7 +3,7 @@
 //! The file is plain text, one `key=value` per line, one block per network:
 //!
 //! ```text
-//! # Vindows saved Wi-Fi networks
+//! # Veda saved Wi-Fi networks
 //! version=1
 //! network
 //! ssid=56696e646f777320486f6d65
@@ -118,7 +118,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 
 /// Writes the file for `profiles`.
 pub fn serialize(profiles: &[Profile]) -> String {
-    let mut s = String::from("# Vindows saved Wi-Fi networks\nversion=1\n");
+    let mut s = String::from("# Veda saved Wi-Fi networks\nversion=1\n");
     for p in profiles.iter().take(MAX_PROFILES) {
         s.push_str("network\nssid=");
         hex(&mut s, &p.ssid);
@@ -221,7 +221,7 @@ mod tests {
     fn sample() -> Vec<Profile> {
         vec![
             Profile {
-                ssid: b"Vindows Home".to_vec(),
+                ssid: b"Veda Home".to_vec(),
                 security: Security::Wpa2Personal,
                 passphrase: Some("correct horse battery".into()),
                 auto_connect: true,

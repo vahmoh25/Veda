@@ -1,4 +1,4 @@
-//! The radio link: messages between the virtual Wi-Fi radio of a Vindows
+//! The radio link: messages between the virtual Wi-Fi radio of a Veda
 //! guest (the `vwifi` driver) and the radio medium simulated on the host
 //! (`airsim`).
 //!

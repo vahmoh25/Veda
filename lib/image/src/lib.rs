@@ -1,4 +1,4 @@
-//! Image codecs and resampling for Vindows.
+//! Image codecs and resampling for Veda.
 //!
 //! `vimage` decodes and encodes the image formats used by the photo viewer, wallpapers, icons and
 //! screenshots, and provides the image operations those applications need.
@@ -17,7 +17,7 @@
 //!
 //! Every decoder produces an [`Image`]: `width * height` pixels in row-major order without
 //! padding, each a `u32` in `0xAARRGGBB` order with straight (non-premultiplied) alpha. That is
-//! the byte order `B, G, R, A` in memory, which matches the Vindows framebuffer.
+//! the byte order `B, G, R, A` in memory, which matches the Veda framebuffer.
 //!
 //! # Entry points
 //!

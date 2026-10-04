@@ -1,6 +1,6 @@
 [package]
 name = "musicgen"
-description = "Composes and renders the sample music shipped with Vindows"
+description = "Composes and renders the sample music shipped with Veda"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

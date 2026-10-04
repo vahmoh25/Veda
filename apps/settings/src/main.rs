@@ -1,4 +1,4 @@
-//! Settings: personalise Vindows and look up system details.
+//! Settings: personalise Veda and look up system details.
 //!
 //! * **Personalization**: a gallery of the system wallpapers (from the desktop
 //!   shell, or `/system/wallpapers` when the shell is not running) and of the
@@ -747,7 +747,7 @@ impl Settings {
         ui.icon(Rect::new(note_r.x, note_r.y, 20, 24), Icon::Info, 16.0, t.text_faint);
         ui.paragraph(
             Rect::new(note_r.x + 30, note_r.y + 3, note_r.w - 30, 60),
-            "The screen mode is chosen by the boot loader (resolution= in \\VINDOWS\\BOOT.CFG, or --resolution when building). Maximised windows fill the work area.",
+            "The screen mode is chosen by the boot loader (resolution= in \\VEDA\\BOOT.CFG, or --resolution when building). Maximised windows fill the work area.",
             t.font_size - 1.0,
             t.text_dim,
         );
@@ -764,7 +764,7 @@ impl Settings {
         let mut ry = card.y + 16;
         let used = i.total_memory.saturating_sub(i.free_memory);
         let rows: [(Icon, &str, String); 6] = [
-            (Icon::Monitor, "Device name", "vindows".to_string()),
+            (Icon::Monitor, "Device name", "veda".to_string()),
             (Icon::Info, "Version", cstr(&i.version)),
             (Icon::Cpu, "Processor", cstr(&i.cpu_brand)),
             (Icon::Grid, "Cores", format!("{} logical processors", i.cpu_count)),
@@ -801,9 +801,9 @@ impl Settings {
     fn about(&mut self, ui: &mut Ui, r: Rect) -> i32 {
         let t = ui.theme().clone();
         let mut y = r.y;
-        // The Vindows logo: the ring.
+        // The Veda logo: the ring.
         vui::draw_logo(&mut ui.canvas, Rect::new(r.x, y + 4, 64, 64));
-        ui.label(Rect::new(r.x + 88, y, r.w - 88, 40), "Vindows", Font::Bold, t.title_size + 4.0, t.text, Align::Left);
+        ui.label(Rect::new(r.x + 88, y, r.w - 88, 40), "Veda", Font::Bold, t.title_size + 4.0, t.text, Align::Left);
         let version = cstr(&self.info.version);
         ui.label(
             Rect::new(r.x + 90, y + 40, r.w - 90, 22),
@@ -814,7 +814,7 @@ impl Settings {
             Align::Left,
         );
         y += 92;
-        let blurb = "Vindows is an x86-64 operating system written from scratch in Rust: a capability-based microkernel, with drivers, file systems, the window system and every application running as isolated user-space processes.";
+        let blurb = "Veda is an x86-64 operating system written from scratch in Rust: a capability-based microkernel, with drivers, file systems, the window system and every application running as isolated user-space processes.";
         y += ui.paragraph(Rect::new(r.x, y, r.w, 80), blurb, t.font_size, t.text_dim) + 22;
         let card = Rect::new(r.x, y, r.w, 168);
         ui.card(card);
@@ -822,7 +822,7 @@ impl Settings {
         let w = card.w - 44;
         let mut ry = card.y + 14;
         let rows: [(&str, &str); 4] = [
-            ("Vindows", "MIT License · © Vahid Mohammadi"),
+            ("Veda", "MIT License · © Vahid Mohammadi"),
             ("Inter", "SIL Open Font License 1.1 · © The Inter Project Authors"),
             ("JetBrains Mono", "SIL Open Font License 1.1 · © The JetBrains Mono Project Authors"),
             ("Lato", "SIL Open Font License 1.1 · © tyPoland Łukasz Dziedzic"),

@@ -23,7 +23,7 @@ wait-serial "racer: track Highland Loop" 30
 agent-call use_app '{"app":"racer","action":"change_settings","arguments":{"laps":20}}' 30
 agent-result "1 to 9 laps"
 wait 2
-shot target/vindows/agent-games-1-settings.png
+shot target/veda/agent-games-1-settings.png
 # A race, driven by the computer.
 agent-call use_app '{"app":"racer","action":"start_race"}' 30
 agent-result '"started":true,"track":"Highland Loop","laps":2,"opponents":2'
@@ -34,7 +34,7 @@ agent-call read_app '{"app":"racer"}' 30
 agent-result '"screen":"racing"'
 agent-result '"race":{"position":'
 agent-result '"cars":3,"lap":1'
-shot target/vindows/agent-games-2-race.png
+shot target/veda/agent-games-2-race.png
 # start_race does not abandon the race in progress.
 agent-call use_app '{"app":"racer","action":"start_race"}' 30
 agent-result "A race is in progress (lap 1 of 2"
@@ -42,7 +42,7 @@ agent-result "A race is in progress (lap 1 of 2"
 agent-call use_app '{"app":"racer","action":"pause"}' 30
 agent-result '"paused":true'
 wait 2
-shot target/vindows/agent-games-3-paused.png
+shot target/veda/agent-games-3-paused.png
 agent-call read_app '{"app":"racer"}' 30
 agent-result '"screen":"paused"'
 agent-call use_app '{"app":"racer","action":"resume"}' 30
@@ -54,7 +54,7 @@ agent-call use_app '{"app":"racer","action":"restart_race"}' 30
 agent-result '"started":true'
 agent-call read_app '{"app":"racer"}' 30
 agent-result '"screen":"countdown"'
-shot target/vindows/agent-games-4-restarted.png
+shot target/veda/agent-games-4-restarted.png
 agent-call use_app '{"app":"racer","action":"quit_to_menu"}' 30
 agent-result '"abandoned_race":true'
 agent-call use_app '{"app":"racer","action":"pause"}' 30
@@ -75,7 +75,7 @@ agent-result "A game is in progress (level 1"
 agent-call use_app '{"app":"starfall","action":"pause"}' 30
 agent-result '"paused":true'
 wait 2
-shot target/vindows/agent-games-5-starfall-paused.png
+shot target/veda/agent-games-5-starfall-paused.png
 agent-call read_app '{"app":"starfall"}' 30
 agent-result '"screen":"paused"'
 agent-call use_app '{"app":"starfall","action":"restart_game"}' 30
@@ -99,7 +99,7 @@ wait 1
 agent-call use_app '{"app":"racer","action":"resume"}' 30
 agent-result '"paused":false'
 wait 3
-shot target/vindows/agent-games-6-racer-in-front.png
+shot target/veda/agent-games-6-racer-in-front.png
 # Starfall lost the keyboard in turn and paused itself.
 agent-call read_app '{"app":"starfall"}' 30
 agent-result '"screen":"paused"'
@@ -109,12 +109,12 @@ agent-call read_app '{"app":"starfall"}' 30
 agent-result '"screen":"title","high_score":'
 agent-call use_app '{"app":"racer","action":"quit_to_menu"}' 30
 agent-result '"screen":"menu"'
-# About Vindows shows its licences for the agent and says what it shows.
+# About Veda shows its licences for the agent and says what it shows.
 agent-call use_app '{"app":"about","action":"show_licences"}' 60
 agent-result "MIT license"
 wait-serial "about offers 1 action(s)" 10
 agent-call read_app '{"app":"about"}' 30
-agent-result '"version":"Vindows 0.1.0"'
+agent-result '"version":"Veda 0.1.0"'
 agent-result '"licences_shown":true'
 wait 2
-shot target/vindows/agent-games-7-about.png
+shot target/veda/agent-games-7-about.png

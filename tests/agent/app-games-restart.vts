@@ -31,5 +31,5 @@ wait 1
 agent-call use_app '{"app":"racer","action":"resume"}' 30
 agent-result '"paused":false'
 wait 2
-shot target/vindows/agent-games-restart.png
+shot target/veda/agent-games-restart.png
 reject-serial "started racer"

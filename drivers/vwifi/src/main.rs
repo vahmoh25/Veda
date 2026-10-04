@@ -1,7 +1,7 @@
-//! `vwifi` — the driver for Vindows' virtual Wi-Fi radio.
+//! `vwifi` — the driver for Veda's virtual Wi-Fi radio.
 //!
 //! QEMU has no Wi-Fi adapter. Under QEMU the radio is a virtio-serial port
-//! named `org.vindows.wlan.0` whose other end is `airsim` on the host (see
+//! named `org.veda.wlan.0` whose other end is `airsim` on the host (see
 //! `tools/airsim`). This driver exchanges raw 802.11 frames with it using
 //! the radio link protocol ([`vradiolink`]) and offers the radio to the
 //! Wi-Fi service through the `wlanphy` protocol, as a driver for real
@@ -42,7 +42,7 @@ vrt::entry!(main);
 /// Handle role of the PCI device channel from `devmgr`.
 const PCIDEV_ROLE: u32 = vabi::startup::role::USER + 10;
 /// The virtio-serial port that carries the radio link.
-const PORT_NAME: &str = "org.vindows.wlan.0";
+const PORT_NAME: &str = "org.veda.wlan.0";
 /// Slots per direction of the link to the Wi-Fi service, and their size
 /// (an 802.11 frame is at most 2346 bytes without aggregation).
 const LINK_SLOTS: u32 = 256;

@@ -126,7 +126,7 @@ pub fn settings(s: &SessionSettings) -> Value {
     }
     object! {
         "type" => "Settings",
-        "tags" => vjson::array!["vindows"],
+        "tags" => vjson::array!["veda"],
         // Do not let Deepgram keep the user's conversations to improve its
         // models.
         "mip_opt_out" => true,
@@ -144,7 +144,7 @@ pub fn function_response(id: &str, name: &str, content: &str) -> Value {
     object! { "type" => "FunctionCallResponse", "id" => id, "name" => name, "content" => content }
 }
 
-/// Text the agent should treat as the user's turn (Vindows uses it for
+/// Text the agent should treat as the user's turn (Veda uses it for
 /// system notices such as an approval decision or a fired reminder).
 pub fn inject_user_message(content: &str) -> Value {
     object! { "type" => "InjectUserMessage", "content" => content }
@@ -541,10 +541,10 @@ mod tests {
     fn sample() -> SessionSettings {
         SessionSettings {
             listen_model: "flux-general-en".into(),
-            keyterms: vec!["Vera".into()],
+            keyterms: vec!["Veda".into()],
             think_provider: "open_ai".into(),
             think_model: "gpt-4.1-mini".into(),
-            prompt: "You are Vera.".into(),
+            prompt: "You are Veda.".into(),
             functions: vec![
                 object! { "name" => "open_app", "description" => "Opens an app", "parameters" => object! {} },
             ],
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(v.pointer("/audio/input/sample_rate").and_then(Value::as_u64), Some(16_000));
         assert_eq!(v.pointer("/audio/output/sample_rate").and_then(Value::as_u64), Some(24_000));
         assert_eq!(v.pointer("/agent/listen/provider/version").and_then(Value::as_str), Some("v2"));
-        assert_eq!(v.pointer("/agent/listen/provider/keyterms/0").and_then(Value::as_str), Some("Vera"));
+        assert_eq!(v.pointer("/agent/listen/provider/keyterms/0").and_then(Value::as_str), Some("Veda"));
         assert!(v.pointer("/agent/listen/provider/language").is_none());
         assert_eq!(v.pointer("/agent/think/provider/model").and_then(Value::as_str), Some("gpt-4.1-mini"));
         assert_eq!(v.pointer("/agent/think/functions/0/name").and_then(Value::as_str), Some("open_app"));
@@ -657,9 +657,9 @@ mod tests {
         assert_eq!((voices[0].name.as_str(), voices[0].description.as_str()), ("Helena", "feminine, caring"));
         assert_eq!(
             parse_listen_result(
-                r#"{"type":"Results","is_final":true,"channel":{"alternatives":[{"transcript":"hey vera"}]}}"#
+                r#"{"type":"Results","is_final":true,"channel":{"alternatives":[{"transcript":"hey veda"}]}}"#
             ),
-            Some(Heard { text: "hey vera".into(), is_final: true, speech_final: false })
+            Some(Heard { text: "hey veda".into(), is_final: true, speech_final: false })
         );
         assert_eq!(
             parse_listen_result(
@@ -669,7 +669,7 @@ mod tests {
             Some((true, true))
         );
         assert_eq!(parse_listen_result(r#"{"type":"Metadata","duration":1.5}"#), None);
-        assert!(listen_url(&["Vera"]).ends_with("&keyterm=Vera"));
+        assert!(listen_url(&["Veda"]).ends_with("&keyterm=Veda"));
         assert_eq!(
             speak_url("aura-2-helena-en"),
             "https://api.deepgram.com/v1/speak?model=aura-2-helena-en&encoding=linear16&sample_rate=24000&container=none"

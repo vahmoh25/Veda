@@ -1,4 +1,4 @@
-//! `vjson` — JSON for Vindows.
+//! `vjson` — JSON for Veda.
 //!
 //! * [`Value`]: a JSON document in memory. Objects keep their members in
 //!   insertion order ([`Map`]), so what a program builds is written back

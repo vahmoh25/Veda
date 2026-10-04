@@ -456,7 +456,7 @@ fn scaled_metrics_and_measuring() {
     assert!((st.measure("a\t") - tab).abs() < 1e-3);
     assert!((st.measure("a\tb") - tab - st.advance('b')).abs() < 1e-3);
     // Layout positions match the measurements.
-    let text = "Type AVATAR to Vindows";
+    let text = "Type AVATAR to Veda";
     let glyphs = st.layout_line(text, Point::new(10.0, 50.0));
     assert_eq!(glyphs.len(), text.chars().filter(|c| !c.is_whitespace()).count());
     for w in glyphs.windows(2) {
@@ -567,7 +567,7 @@ fn word_wrapping() {
     assert_eq!(check_wrap(&st, "", 100.0), vec![0..0]);
     // Random texts and widths keep the invariants.
     let mut seed = 12345u32;
-    let words = ["a", "Vindows", "kernel", "€", "—", "wörld", "x", "supercalifragilistic", "\n", "  "];
+    let words = ["a", "Veda", "kernel", "€", "—", "wörld", "x", "supercalifragilistic", "\n", "  "];
     for _ in 0..200 {
         let mut text = String::new();
         for _ in 0..(seed % 20) {

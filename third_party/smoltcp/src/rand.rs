@@ -4,7 +4,7 @@
 //! Random numbers for protocol fields: TCP initial sequence numbers, DHCP
 //! transaction ids, IPv4 identification, DNS ids, ephemeral ports.
 //!
-//! VINDOWS PATCH (see `VINDOWS-PATCHES.md`): upstream smoltcp uses an
+//! VEDA PATCH (see `VEDA-PATCHES.md`): upstream smoltcp uses an
 //! sPCG32 generator here. Its 64-bit state can be recovered from a few
 //! outputs (for example the initial sequence numbers a server sees), which
 //! makes the sequence numbers of other connections predictable. This

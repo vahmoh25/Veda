@@ -1,6 +1,6 @@
 [package]
 name = "vproto"
-description = "Protocol definitions of the Vindows system services"
+description = "Protocol definitions of the Veda system services"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

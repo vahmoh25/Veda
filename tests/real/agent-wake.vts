@@ -23,12 +23,12 @@ say "I think the weather will be nice tomorrow."
 wait-serial "someone is speaking" 20
 mic-silence 5
 reject-serial "woken by its name"
-say "Hey Vera, what day is it today?"
+say "Hey Veda, what day is it today?"
 wait-serial "woken by its name" 30
 wait-serial "agent: agent: " 30
 wait 6
-shot target/vindows/real-wake-1.png
-say "Thanks Vera, that's all."
+shot target/veda/real-wake-1.png
+say "Thanks Veda, that's all."
 wait-serial "conversation ended" 60
 wait-serial-count "listening for its name" 2 20
 reject-serial "cannot listen for its name"

@@ -1,4 +1,4 @@
-//! Scripted, headless runs of Vindows in QEMU.
+//! Scripted, headless runs of Veda in QEMU.
 //!
 //! Automation scripts drive the virtual machine through QMP and inspect its
 //! serial console. They power `cargo xtask shot` and the integration tests.
@@ -8,7 +8,7 @@
 //! wait-serial "desktop ready" 60   # wait for a log line (timeout in s)
 //! wait-serial-count "joined" 3 60  # wait until the text has appeared 3 times
 //! wait 2                           # sleep
-//! shot target/vindows/desktop.png  # save a screenshot
+//! shot target/veda/desktop.png     # save a screenshot
 //! move 0.5 0.5                     # move the pointer (fractions of screen)
 //! click 0.1 0.97 [left|right]      # move + press + release
 //! drag 0.3 0.3 0.6 0.6             # press at A, move to B, release
@@ -51,7 +51,7 @@
 //! agent-send '{"type":"..."}'       # any message from the simulated service
 //! agent-audio 3200                 # fail unless the agent streamed at least this many bytes of microphone audio
 //! agent-asleep                     # boot with the agent asleep (no conversation at start)
-//! agent-hear "Hey Vera, hello" 30  # the simulated recogniser hears this, once the agent streams speech to it
+//! agent-hear "Hey Veda, hello" 30  # the simulated recogniser hears this, once the agent streams speech to it
 //! agent-listens 1                  # fail unless the agent opened exactly this many recognition streams
 //! agent-listens-at-most 2          # fail if the agent opened more recognition streams than this
 //! agent-mic-quiet -60              # fail if the agent sent microphone audio this loud (dBFS) since agent-mark

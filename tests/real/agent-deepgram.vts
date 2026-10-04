@@ -21,25 +21,25 @@ type-env DEEPGRAM_API_KEY
 key ret
 wait-serial "Deepgram key stored" 20
 wait 10
-shot target/vindows/real-agent-1-key.png
+shot target/veda/real-agent-1-key.png
 reject-serial "cannot reach Deepgram"
 # Deepgram's voices.
 click 0.917 0.566
 wait 12
-shot target/vindows/real-agent-2-voices.png
+shot target/veda/real-agent-2-voices.png
 # The circle in the tray starts a conversation.
 click 0.825 0.97
 wait-serial "state: Listening" 60
 wait 2
-shot target/vindows/real-agent-3-listening.png
+shot target/veda/real-agent-3-listening.png
 say "Hi! What's your name, and what can you do for me?"
 wait-serial "agent: agent: " 60
 wait 8
-shot target/vindows/real-agent-4-answer.png
+shot target/veda/real-agent-4-answer.png
 say "Please open the text editor."
 wait-serial "started editor" 60
 wait 6
-shot target/vindows/real-agent-5-editor.png
+shot target/veda/real-agent-5-editor.png
 say "Okay, that's all for now. Goodbye!"
 wait-serial "call end_conversation" 60
 # It ends once the goodbye has been said, not when it times out.

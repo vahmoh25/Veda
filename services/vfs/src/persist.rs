@@ -20,7 +20,7 @@ use vrt::println;
 use crate::tree::{self, Data, Kind, NodeId, Tree};
 
 /// Serial number of the disk that holds the home directory.
-pub const HOME_DISK_SERIAL: &str = "vindows-home";
+pub const HOME_DISK_SERIAL: &str = "veda-home";
 const MAGIC: [u8; 8] = *b"VHOMEFS1";
 const SECTOR: usize = 512;
 /// First sector of slot 0 (the start of the disk is left alone).

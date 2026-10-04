@@ -34,7 +34,7 @@ const MAX_READ_LINES: i64 = 200;
 
 pub fn info() -> AppAgentInfo {
     agent::info(
-        "A terminal with vsh, the Vindows command shell: it runs commands for files, programs, the network and the \
+        "A terminal with vsh, the Veda command shell: it runs commands for files, programs, the network and the \
          system, and shows what they print.",
         vec![
             Action::new("run_command", "Runs a command in the terminal")

@@ -1,4 +1,4 @@
-//! The Vindows kernel ABI.
+//! The Veda kernel ABI.
 //!
 //! This crate is the single source of truth for the interface between the
 //! microkernel and user space: system call numbers and calling convention,
@@ -390,7 +390,7 @@ pub mod clock {
     /// Nanoseconds since boot; never goes backwards.
     pub const MONOTONIC: usize = 0;
     /// Nanoseconds since 1970-01-01 00:00:00 in the machine's local time zone
-    /// (the RTC time Vindows was booted with, advanced by the monotonic clock).
+    /// (the RTC time Veda was booted with, advanced by the monotonic clock).
     pub const REALTIME: usize = 1;
     /// Nanoseconds since 1970-01-01 00:00:00 UTC.
     pub const UTC: usize = 2;

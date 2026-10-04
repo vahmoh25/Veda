@@ -13,15 +13,15 @@ mic-silence 3
 agent-listens 0
 mic-tone 1.5
 wait-serial "someone is speaking" 20
-agent-hear "I was telling Anna about Vera yesterday." 30
+agent-hear "I was telling Anna about Veda yesterday." 30
 mic-silence 6
 wait 1
 reject-serial "woken by its name"
 mic-tone 1.5
 wait-serial-count "someone is speaking" 2 20
-agent-hear "Hey Vera, what time is it?" 30
+agent-hear "Hey Veda, what time is it?" 30
 wait-serial "woken by its name" 20
 agent-connected 60
-agent-expect "Hey Vera, what time is it?" 20
+agent-expect "Hey Veda, what time is it?" 20
 agent-expect InjectUserMessage 5
 agent-listens 2

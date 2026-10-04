@@ -1,4 +1,4 @@
-//! `vnet` — networking for Vindows applications.
+//! `vnet` — networking for Veda applications.
 //!
 //! Blocking, `std::net`-like types on top of the network service's socket
 //! protocol (`vproto::net`):

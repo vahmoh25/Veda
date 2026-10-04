@@ -200,7 +200,7 @@ impl Volume {
         let g = self.g;
         let mut bs = [0u8; SECTOR];
         bs[0..3].copy_from_slice(&[0xEB, 0x58, 0x90]);
-        bs[3..11].copy_from_slice(b"VINDOWS ");
+        bs[3..11].copy_from_slice(b"VEDA    ");
         bs[11..13].copy_from_slice(&(SECTOR as u16).to_le_bytes());
         bs[13] = g.sectors_per_cluster as u8;
         bs[14..16].copy_from_slice(&(RESERVED_SECTORS as u16).to_le_bytes());
@@ -216,7 +216,7 @@ impl Volume {
         bs[50..52].copy_from_slice(&6u16.to_le_bytes()); // backup boot sector
         bs[64] = 0x80;
         bs[66] = 0x29;
-        bs[67..71].copy_from_slice(&0x5649_4E44u32.to_le_bytes()); // volume id "VIND"
+        bs[67..71].copy_from_slice(&0x5645_4441u32.to_le_bytes()); // volume id "VEDA"
         let mut lab = [b' '; 11];
         for (i, b) in label.bytes().take(11).enumerate() {
             lab[i] = b;
@@ -280,9 +280,9 @@ mod tests {
 
     #[test]
     fn builds_volume_with_files() {
-        let mut b = Fat32Builder::new("VINDOWS");
+        let mut b = Fat32Builder::new("VEDA");
         b.add_file("EFI/BOOT/BOOTX64.EFI", vec![0xAB; 10_000]).unwrap();
-        b.add_file("VINDOWS/BOOT.CFG", b"hello".to_vec()).unwrap();
+        b.add_file("VEDA/BOOT.CFG", b"hello".to_vec()).unwrap();
         let sectors = 128 * 1024 * 1024 / SECTOR as u32;
         let img = b.build(sectors, 2048).unwrap();
         assert_eq!(img.len(), sectors as usize * SECTOR);

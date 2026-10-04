@@ -11,7 +11,7 @@ set -e
 export MSYS_NO_PATHCONV=1
 NB=20260101000000Z
 NA=20360101000000Z
-NAME=test.vindows.local
+NAME=test.veda.local
 
 cat > ext-ca.cnf <<EOF
 basicConstraints = critical, CA:TRUE
@@ -29,7 +29,7 @@ cat > ext-other-name.cnf <<EOF
 basicConstraints = critical, CA:FALSE
 keyUsage = critical, digitalSignature
 extendedKeyUsage = serverAuth
-subjectAltName = DNS:other.vindows.local
+subjectAltName = DNS:other.veda.local
 EOF
 cat > ext-client-only.cnf <<EOF
 basicConstraints = critical, CA:FALSE
@@ -66,10 +66,10 @@ key leaf-p384 EC ec_paramgen_curve:P-384
 key leaf-ed25519 ED25519
 key leaf-rsa RSA rsa_keygen_bits:2048
 
-root ca-ecdsa "Vindows Test ECDSA Root"
-root ca-rsa "Vindows Test RSA Root"
-root untrusted-ca "Vindows Untrusted Root"
-issue int-ecdsa int-ecdsa "Vindows Test ECDSA Intermediate" ca-ecdsa ext-ca.cnf $NB $NA -sha256
+root ca-ecdsa "Veda Test ECDSA Root"
+root ca-rsa "Veda Test RSA Root"
+root untrusted-ca "Veda Untrusted Root"
+issue int-ecdsa int-ecdsa "Veda Test ECDSA Intermediate" ca-ecdsa ext-ca.cnf $NB $NA -sha256
 
 # Signature algorithms of the certificates (issuer key, hash):
 issue leaf-p256 leaf-p256 $NAME ca-ecdsa ext-leaf.cnf $NB $NA -sha256              # P-256, SHA-256
@@ -83,7 +83,7 @@ issue leaf-rsa-pss leaf-rsa $NAME ca-rsa ext-leaf.cnf $NB $NA -sha256 \
 # Certificates the client must reject.
 issue leaf-expired leaf-p256 $NAME ca-ecdsa ext-leaf.cnf 20240101000000Z 20250101000000Z -sha256
 issue leaf-future leaf-p256 $NAME ca-ecdsa ext-leaf.cnf 20300101000000Z 20310101000000Z -sha256
-issue leaf-other-name leaf-p256 other.vindows.local ca-ecdsa ext-other-name.cnf $NB $NA -sha256
+issue leaf-other-name leaf-p256 other.veda.local ca-ecdsa ext-other-name.cnf $NB $NA -sha256
 issue leaf-untrusted leaf-p256 $NAME untrusted-ca ext-leaf.cnf $NB $NA -sha256
 issue leaf-client-only leaf-p256 $NAME ca-ecdsa ext-client-only.cnf $NB $NA -sha256
 

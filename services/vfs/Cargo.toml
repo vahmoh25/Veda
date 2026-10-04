@@ -1,6 +1,6 @@
 [package]
 name = "vfs"
-description = "The Vindows virtual file system service"
+description = "The Veda virtual file system service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

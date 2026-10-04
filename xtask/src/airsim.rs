@@ -11,7 +11,7 @@ use crate::qemu::WifiPorts;
 use crate::util::{self, Result};
 
 /// The password of the simulated secured networks (see `tools/airsim`).
-pub const PASSWORD: &str = "vindows-wifi";
+pub const PASSWORD: &str = "veda-wifi";
 
 /// Builds the simulator for the host; returns the executable.
 pub fn build() -> Result<PathBuf> {

@@ -850,7 +850,7 @@ impl Ctx {
             "info" => {
                 let info = vrt::object::system_info().map_err(|_| "no system information")?;
                 Ok(object! {
-                    "os" => "Vindows 0.1",
+                    "os" => "Veda 0.1",
                     "cpus" => info.cpu_count,
                     "memory_total" => vfiles::format::human_size(info.total_memory),
                     "memory_free" => vfiles::format::human_size(info.free_memory),

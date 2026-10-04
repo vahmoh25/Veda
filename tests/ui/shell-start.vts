@@ -6,12 +6,12 @@ wait 3
 # The start button is the first slot of the centred taskbar group.
 click 0.3555 0.97
 wait 2
-shot target/vindows/shell-1-start.png
+shot target/veda/shell-1-start.png
 type "term"
 wait 2
-shot target/vindows/shell-2-search.png
+shot target/veda/shell-2-search.png
 key ret
 wait 5
-shot target/vindows/shell-3-launched.png
+shot target/veda/shell-3-launched.png
 expect-serial "started terminal"
 reject-serial "shell: bad request"

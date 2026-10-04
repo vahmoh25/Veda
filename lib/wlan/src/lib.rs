@@ -1,4 +1,4 @@
-//! `vwlan` — IEEE 802.11 for Vindows.
+//! `vwlan` — IEEE 802.11 for Veda.
 //!
 //! The protocol side of Wi-Fi, independent of any radio:
 //!
@@ -17,7 +17,7 @@
 //! Everything here parses untrusted frames: parsers return errors instead
 //! of panicking, and the cryptographic checks of the standard are applied
 //! before any received key material is used. The code is `no_std` and runs
-//! both inside Vindows and in host tests, which use the published
+//! both inside Veda and in host tests, which use the published
 //! IEEE 802.11 test vectors.
 
 #![no_std]

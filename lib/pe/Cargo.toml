@@ -1,6 +1,6 @@
 [package]
 name = "vpe"
-description = "Minimal, allocation-free PE32+ image parser used to load Vindows executables"
+description = "Minimal, allocation-free PE32+ image parser used to load Veda executables"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1637,8 +1637,8 @@ fn cmd_sysinfo(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
     let version = cstr(&i.version);
     let used = i.total_memory.saturating_sub(i.free_memory);
     let mut info: Vec<(&str, String)> = vec![
-        ("OS", format!("Vindows {} x86_64", version.trim_start_matches("Vindows").trim())),
-        ("Kernel", format!("vkernel {} (microkernel)", version.trim_start_matches("Vindows").trim())),
+        ("OS", format!("Veda {} x86_64", version.trim_start_matches("Veda").trim())),
+        ("Kernel", format!("vkernel {} (microkernel)", version.trim_start_matches("Veda").trim())),
         ("Uptime", format_duration(i.uptime_ns)),
         ("CPU", format!("{} ({} cores)", cstr(&i.cpu_brand), i.cpu_count)),
         ("Memory", format!("{} MiB / {} MiB", used >> 20, i.total_memory >> 20)),
@@ -1648,7 +1648,7 @@ fn cmd_sysinfo(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
         info.push(("Display", format!("{}x{}", s.width, s.height)));
     }
     info.push(("Shell", "vsh 0.1".to_string()));
-    info.push(("Terminal", "Vindows Terminal".to_string()));
+    info.push(("Terminal", "Veda Terminal".to_string()));
     info.push(("Font", "JetBrains Mono".to_string()));
     // The logo: the ring, like the About window's (round in cells about
     // twice as tall as they are wide).
@@ -1673,9 +1673,9 @@ fn cmd_sysinfo(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
             0 => {
                 io.styled("user", Style::fg(color::BRIGHT_GREEN).bold());
                 io.print("@");
-                io.styled("vindows", Style::fg(color::BRIGHT_GREEN).bold());
+                io.styled("veda", Style::fg(color::BRIGHT_GREEN).bold());
             }
-            1 => io.styled("────────────", Style::DIM),
+            1 => io.styled("─────────", Style::DIM),
             r if r - 2 < info.len() => {
                 let (k, v) = &info[r - 2];
                 io.styled(&format!("{k}: "), Style::fg(color::BRIGHT_BLUE).bold());
@@ -1815,7 +1815,7 @@ fn cmd_whoami(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
 }
 
 fn cmd_hostname(_sh: &mut Shell, io: &mut Io, _args: &[String]) -> i32 {
-    io.println("vindows");
+    io.println("veda");
     0
 }
 
@@ -1832,7 +1832,7 @@ fn cmd_help(_sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
         }
         return 0;
     }
-    io.styled("Vindows Terminal", Style::fg(color::BRIGHT_BLUE).bold());
+    io.styled("Veda Terminal", Style::fg(color::BRIGHT_BLUE).bold());
     io.styled(" — built-in commands\n", Style::DIM);
     let label = |b: &Builtin| {
         let mut names = String::from(b.name);

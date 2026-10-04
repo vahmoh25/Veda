@@ -1,6 +1,6 @@
 [package]
 name = "vgfx"
-description = "Vindows 2D graphics: blending, shapes, shadows, images and text on pixel surfaces"
+description = "Veda 2D graphics: blending, shapes, shadows, images and text on pixel surfaces"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

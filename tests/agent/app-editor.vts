@@ -27,7 +27,7 @@ agent-result "~/Documents/shopping.txt"
 agent-call files '{"operation":"read","path":"~/Documents/shopping.txt"}' 30
 agent-result "Butter"
 wait 2
-shot target/vindows/agent-app-editor.png
+shot target/veda/agent-app-editor.png
 # A second save under the same name does not replace the file silently.
 agent-call use_app '{"app":"editor","action":"new_document","arguments":{"text":"Other"}}' 30
 agent-call use_app '{"app":"editor","action":"save","arguments":{"path":"~/Documents/shopping.txt"}}' 30

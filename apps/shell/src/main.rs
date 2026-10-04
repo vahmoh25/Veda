@@ -1,4 +1,4 @@
-//! The Vindows desktop shell.
+//! The Veda desktop shell.
 //!
 //! The shell owns the compositor's shell surfaces:
 //!

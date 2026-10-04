@@ -1,6 +1,6 @@
 [package]
 name = "vabi"
-description = "The Vindows kernel ABI: system call numbers, error codes, rights, signals and shared structures"
+description = "The Veda kernel ABI: system call numbers, error codes, rights, signals and shared structures"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

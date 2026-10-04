@@ -10,7 +10,7 @@
 //!   P-384), Ed25519, and RSA PKCS#1 v1.5 and PSS (`rsa`).
 //! * [`RandomSource`] — where the random numbers come from.
 //!
-//! The provider has no private-key support: Vindows is a TLS client without
+//! The provider has no private-key support: Veda is a TLS client without
 //! client certificates.
 
 pub(crate) mod aead;

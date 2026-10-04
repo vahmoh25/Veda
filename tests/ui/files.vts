@@ -13,7 +13,7 @@ wait 3
 # list rows: 0.18, 0.22, 0.26, ...
 key meta_l-up
 wait 2
-shot target/vindows/files-1-home.png
+shot target/veda/files-1-home.png
 # Copy a picture (selected by typing the start of its name) and paste it
 # into Documents.
 click 0.08 0.3213
@@ -51,7 +51,7 @@ key backspace
 wait 1
 key delete
 wait 1
-shot target/vindows/files-2-confirm.png
+shot target/veda/files-2-confirm.png
 key ret
 wait-serial "files: deleted 1 item from /home/user/Documents" 20
 # The system image is read-only: creating a folder there is refused.
@@ -60,7 +60,7 @@ wait 1
 key ctrl-shift-n
 wait-serial "files: Can't create folder: /system is part of the read-only system image." 20
 wait 1
-shot target/vindows/files-3-readonly.png
+shot target/veda/files-3-readonly.png
 key ret
 # Type a path (Ctrl+L), then drag the first picture onto Music, slowly
 # enough that Files sees the drag even on a busy host.
@@ -85,12 +85,12 @@ wait 1
 key up
 key ret
 wait 2
-shot target/vindows/files-4-properties.png
+shot target/veda/files-4-properties.png
 key esc
 # Icon view with thumbnails.
 key ctrl-2
 wait 5
-shot target/vindows/files-5-icons.png
+shot target/veda/files-5-icons.png
 # Search, then open the match with its default app (Photos).
 key ctrl-f
 wait 1

@@ -1,4 +1,4 @@
-//! `musicgen` — composes and renders the sample music shipped with Vindows.
+//! `musicgen` — composes and renders the sample music shipped with Veda.
 //!
 //! ```text
 //! musicgen OUT_DIR [--wav] [--only N]

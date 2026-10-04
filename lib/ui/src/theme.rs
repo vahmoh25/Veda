@@ -1,4 +1,4 @@
-//! The Vindows visual theme (dark).
+//! The Veda visual theme (dark).
 
 use vgfx::Color;
 

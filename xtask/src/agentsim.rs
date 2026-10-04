@@ -1,6 +1,6 @@
 //! A stand-in for the Deepgram Voice Agent API, for deterministic tests.
 //!
-//! [`AgentSim`] listens on a local port; the agent in Vindows connects to
+//! [`AgentSim`] listens on a local port; the agent in Veda connects to
 //! it (QEMU's NAT makes the host 10.0.2.2) when booted with the argument
 //! from [`AgentSim::boot_arg`]. It speaks the same WebSocket protocol as
 //! Deepgram: it answers the `Settings` message with `Welcome` and

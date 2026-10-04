@@ -91,7 +91,7 @@ fn enter_panic() -> bool {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     enter_panic();
-    emergency(format_args!("\n\n*** VINDOWS KERNEL PANIC on CPU {} ***\n{}\n", percpu::cpu_id_or_boot(), info));
+    emergency(format_args!("\n\n*** VEDA KERNEL PANIC on CPU {} ***\n{}\n", percpu::cpu_id_or_boot(), info));
     if let Some(t) = crate::sched::try_current() {
         emergency(format_args!("current thread: {} of {}\n", t.koid, t.process_name()));
     }
@@ -136,7 +136,7 @@ pub fn kernel_exception(frame: &TrapFrame) -> ! {
     enter_panic();
     let v = frame.vector as usize;
     emergency(format_args!(
-        "\n\n*** VINDOWS KERNEL PANIC: {} (vector {}) in kernel mode on CPU {} rip={:#x} cr2={:#x} rsp={:#x} err={:#x} ***\n",
+        "\n\n*** VEDA KERNEL PANIC: {} (vector {}) in kernel mode on CPU {} rip={:#x} cr2={:#x} rsp={:#x} err={:#x} ***\n",
         idt::EXCEPTION_NAMES.get(v).copied().unwrap_or("?"),
         v,
         percpu::cpu_id_or_boot(),
@@ -161,7 +161,7 @@ pub fn nmi(frame: &TrapFrame) -> ! {
         cpu::halt_forever();
     }
     enter_panic();
-    emergency(format_args!("\n\n*** VINDOWS KERNEL PANIC: unexpected NMI ***\n"));
+    emergency(format_args!("\n\n*** VEDA KERNEL PANIC: unexpected NMI ***\n"));
     dump_frame(frame);
     paint_stop_screen();
     cpu::halt_forever();

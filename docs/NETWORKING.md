@@ -1,6 +1,6 @@
 # Networking and Wi-Fi
 
-Vindows reaches the Internet over Ethernet and Wi-Fi. As everywhere else
+Veda reaches the Internet over Ethernet and Wi-Fi. As everywhere else
 in the system, the work is split into isolated user-space processes that
 talk over kernel channels; the kernel knows nothing about networks.
 
@@ -22,7 +22,7 @@ talk over kernel channels; the kernel knows nothing about networks.
  | virtio-net   |                               | raw 802.11 frames
  | (driver)     |                        +--------------+
  +--------------+                        | vwifi        |  virtio-serial port
-                                         | (driver)     |  org.vindows.wlan.0
+                                         | (driver)     |  org.veda.wlan.0
                                          +--------------+
 ```
 
@@ -142,7 +142,7 @@ out, and a system call only when the other side is asleep.
 
 QEMU cannot emulate a Wi-Fi adapter, and a Windows host cannot pass its own
 adapter through. Under QEMU the radio is therefore a virtio-serial port
-named `org.vindows.wlan.0` whose other end is **airsim**
+named `org.veda.wlan.0` whose other end is **airsim**
 (`tools/airsim`), a host program that simulates the radio medium and a set
 of access points built on `vwlan`'s access point state machine. airsim
 bridges the access points to a QEMU user-mode network (NAT) through a hub
@@ -152,15 +152,15 @@ do with the host's own Wi-Fi.
 
 | Name | SSID | Security | Channel | Signal |
 |------|------|----------|---------|--------|
-| home | Vindows Home | WPA2-Personal | 1 | -48 dBm |
-| home2 | Vindows Home | WPA2-Personal | 11 | -66 dBm |
-| wpa3 | Vindows WPA3 | WPA3-Personal (H2E, PMF required) | 6 | -55 dBm |
-| mixed | Vindows Mixed | WPA2/WPA3 transition | 44 | -60 dBm |
-| guest | Vindows Guest | open | 36 | -71 dBm |
-| hidden | (Vindows Hidden) | WPA2-Personal, hidden | 6 | -63 dBm |
-| corp | Vindows Corp | Enterprise (not supported) | 11 | -78 dBm |
+| home | Veda Home | WPA2-Personal | 1 | -48 dBm |
+| home2 | Veda Home | WPA2-Personal | 11 | -66 dBm |
+| wpa3 | Veda WPA3 | WPA3-Personal (H2E, PMF required) | 6 | -55 dBm |
+| mixed | Veda Mixed | WPA2/WPA3 transition | 44 | -60 dBm |
+| guest | Veda Guest | open | 36 | -71 dBm |
+| hidden | (Veda Hidden) | WPA2-Personal, hidden | 6 | -63 dBm |
+| corp | Veda Corp | Enterprise (not supported) | 11 | -78 dBm |
 
-The password of every secured network is `vindows-wifi`. The Wi-Fi NAT is
+The password of every secured network is `veda-wifi`. The Wi-Fi NAT is
 10.0.3.0/24 (gateway 10.0.3.2, DNS 10.0.3.3), distinct from the wired
 NAT's 10.0.2.0/24 so both can be used at once.
 
@@ -169,7 +169,7 @@ cargo xtask run --net wifi
 ```
 
 boots with the Wi-Fi radio only (`--net both` adds the wired card). airsim
-logs to `target/vindows/airsim.log` and accepts commands on the control
+logs to `target/veda/airsim.log` and accepts commands on the control
 port printed at startup — one per line, answered by `ok` or `error: ...`:
 
 ```text
@@ -199,13 +199,13 @@ port).
 cargo xtask run --vm virtualbox --net bridged
 ```
 
-bridges Vindows' network card (VirtualBox's Intel PRO/1000, driven by
+bridges Veda's network card (VirtualBox's Intel PRO/1000, driven by
 `e1000`) to a host adapter (`--bridge NAME`, by default the first one
-connected, preferring a wired one), so Vindows is a machine on your real
+connected, preferring a wired one), so Veda is a machine on your real
 network: it gets its address, gateway and DNS server from your router by
 DHCP and reaches the Internet through it. This works over the host's Wi-Fi
 too (VirtualBox translates MAC addresses there); the host's adapter does
-the Wi-Fi part. For Vindows itself to run Wi-Fi against a real router, it
+the Wi-Fi part. For Veda itself to run Wi-Fi against a real router, it
 needs a radio of its own: a USB Wi-Fi adapter passed through to the
 virtual machine, with drivers for the USB controller and the adapter's
 chip.
@@ -219,23 +219,23 @@ checksum of merged ones again (the host checked every segment before
 merging them). Dropping them, as it once did, made every download crawl
 through retransmissions.
 
-To check it from inside Vindows:
+To check it from inside Veda:
 
 ```bash
 cargo xtask script tests/real/bridged.vts --vm virtualbox
 ```
 
-On this machine (bridged over the laptop's Wi-Fi) Vindows got
+On this machine (bridged over the laptop's Wi-Fi) Veda got
 192.168.1.124/24 from the router, DNS through it, and passed the DNS, UDP,
 TCP, HTTP and ping checks. It also gets a global IPv6 address from the
 router, but VirtualBox's bridge over a Wi-Fi adapter only learns guests'
 IPv4 addresses (from ARP and DHCP), so IPv6 traffic beyond the link does
-not come back; the check reports it without failing. Vindows' IPv6 itself
+not come back; the check reports it without failing. Veda's IPv6 itself
 reaches the Internet: through QEMU's NAT, `run=nettest:ipv6` connects to
 example.com over IPv6. A wired adapter has no such limitation.
 
 The default `--net ethernet` uses VirtualBox's NAT (10.0.2.15, gateway
-10.0.2.2), which passes the host's DNS server to Vindows.
+10.0.2.2), which passes the host's DNS server to Veda.
 
 ## Using the network
 
@@ -264,7 +264,7 @@ vnet::wifi::scan()?;
 for n in vnet::wifi::networks()? {
     // n.name, n.security, n.signal_dbm, n.bars, n.saved, n.connected
 }
-vnet::wifi::connect("Vindows Home", Some("vindows-wifi"), true)?;
+vnet::wifi::connect("Veda Home", Some("veda-wifi"), true)?;
 let events = vnet::wifi::Watcher::new()?; // status changes, scans, failures
 
 let config = vtls::ClientConfig::with_alpn(&[b"http/1.1"]); // share it
@@ -275,7 +275,7 @@ let n = tls.read(&mut buf)?; // Ok(0): the server closed the connection
 
 ## TLS
 
-`vtls` (`lib/tls`) is the TLS client of Vindows applications: HTTPS,
+`vtls` (`lib/tls`) is the TLS client of Veda applications: HTTPS,
 secure WebSockets, anything else over TLS 1.3 or TLS 1.2. It runs in the
 application's process, on top of a `vnet::TcpStream`.
 
@@ -315,7 +315,7 @@ Under QEMU's TCG emulation a full TLS 1.3 handshake with example.com
 included. Every connection is a full handshake (there is no session cache
 yet).
 
-`run=nettest:https` checks it from inside Vindows (see Testing).
+`run=nettest:https` checks it from inside Veda (see Testing).
 
 ## Dependencies
 
@@ -325,7 +325,7 @@ built `no_std`:
 * **smoltcp 0.14** (TCP/IP), vendored with one patch: its random numbers
   (TCP initial sequence numbers, DHCP and DNS ids, source ports) come from
   a ChaCha20 stream keyed from the kernel's generator instead of the
-  predictable upstream sPCG32 (`third_party/smoltcp/VINDOWS-PATCHES.md`).
+  predictable upstream sPCG32 (`third_party/smoltcp/VEDA-PATCHES.md`).
 * **RustCrypto**: `sha1`, `sha2`, `hmac`, `pbkdf2`, `aes`, `ccm`, `cmac`,
   `aes-kw`, `p256` (SAE), plus `subtle` (constant-time comparisons) and
   `zeroize`.
@@ -356,7 +356,7 @@ built `no_std`:
   LLVM cannot build the SIMD code (AES-NI, SSE2, AVX2) of the RustCrypto
   and dalek crates for the soft-float UEFI target, which only the `no_std`
   check of the libraries uses: `.cargo/config.toml` selects their portable
-  code for that target (Vindows' user space keeps the fast code, chosen at
+  code for that target (Veda's user space keeps the fast code, chosen at
   run time from the processor's features).
 
 Everything else — the 802.11 protocol, the handshakes, SAE's protocol
@@ -400,7 +400,7 @@ and RSA signatures made by OpenSSL.
   the Terminal; `tests/ui/wifi-recovery.vts` breaks the network through
   airsim — access point gone, disconnection, wired side down, DNS failure,
   out of range, the radio vanishing, rekeying and loss, the Wi-Fi service
-  killed — and checks that Vindows recovers by itself each time;
+  killed — and checks that Veda recovers by itself each time;
   `tests/ui/network-failover.vts` unplugs and replugs the wired card's
   cable (QMP `set_link`) with Wi-Fi connected and checks that traffic moves
   between the interfaces; `tests/ui/e1000.vts` and `e1000e.vts` run the

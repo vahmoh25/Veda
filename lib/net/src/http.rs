@@ -156,7 +156,7 @@ fn fetch(url: &Url, timeout: Duration, limit: usize) -> Result<Response, HttpErr
     s.set_read_timeout(Some(timeout));
     s.set_write_timeout(Some(timeout));
     let request = alloc::format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: Vindows/{}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: Veda/{}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
         url.path,
         url.host_header(),
         env!("CARGO_PKG_VERSION")

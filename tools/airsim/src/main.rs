@@ -1,6 +1,6 @@
-//! airsim — the simulated Wi-Fi environment for Vindows under QEMU.
+//! airsim — the simulated Wi-Fi environment for Veda under QEMU.
 //!
-//! QEMU cannot emulate a Wi-Fi adapter, so Vindows' virtual radio (the
+//! QEMU cannot emulate a Wi-Fi adapter, so Veda's virtual radio (the
 //! `vwifi` driver) exchanges raw 802.11 frames with the host over a
 //! virtio-serial port. `cargo xtask run --net wifi` starts QEMU with that
 //! port as a TCP server on the loopback interface and starts airsim, which
@@ -38,7 +38,7 @@ use vradiolink::{LinkError, Reader, msg};
 use world::{Output, SimRandom, World, default_networks};
 
 /// The password of the default secured networks.
-const DEFAULT_PASSWORD: &str = "vindows-wifi";
+const DEFAULT_PASSWORD: &str = "veda-wifi";
 /// Messages waiting for the guest before newer ones are dropped (the guest
 /// may not be reading, for example while it boots).
 const GUEST_QUEUE: usize = 1024;

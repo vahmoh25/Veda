@@ -372,7 +372,7 @@ impl Init {
 }
 
 fn main() -> i32 {
-    println!("starting Vindows {}", env!("CARGO_PKG_VERSION"));
+    println!("starting Veda {}", env!("CARGO_PKG_VERSION"));
     let root = Resource::from_handle(vrt::env::take_handle(role::ROOT_RESOURCE).expect("init: no root resource"));
     let initrd_vmo = Vmo::from_handle(vrt::env::take_handle(role::INITRD).expect("init: no initrd"));
     let size = initrd_vmo.size().expect("init: initrd size");

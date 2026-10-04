@@ -168,7 +168,7 @@ pub struct Config {
     /// The seed doesn't have to be cryptographically secure.
     pub random_seed: u64,
 
-    /// VINDOWS PATCH: a 256-bit key for the generator behind TCP initial
+    /// VEDA PATCH: a 256-bit key for the generator behind TCP initial
     /// sequence numbers, DHCP transaction ids and the like. Supply 32 bytes
     /// from a cryptographically secure source to make those values
     /// unpredictable; when `None`, `random_seed` seeds the generator.
@@ -231,7 +231,7 @@ impl Interface {
             )
         }
 
-        // VINDOWS PATCH: prefer the cryptographic key (see rand.rs).
+        // VEDA PATCH: prefer the cryptographic key (see rand.rs).
         let mut rand = match config.random_key {
             Some(key) => Rand::with_key(key),
             None => Rand::new(config.random_seed),

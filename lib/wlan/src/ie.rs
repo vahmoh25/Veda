@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn parses_known_elements() {
         let list = Builder::new()
-            .ssid(b"VindowsNet")
+            .ssid(b"VedaNet")
             .rates(&RATES_G)
             .ds_channel(6)
             .element(id::RSN, &[1, 0, 0, 0x0F, 0xAC, 4])
@@ -220,7 +220,7 @@ mod tests {
             .extension(ext::ANTI_CLOGGING_TOKEN, b"token")
             .build();
         let e = Elements::parse(&list).unwrap();
-        assert_eq!(e.ssid, Some(&b"VindowsNet"[..]));
+        assert_eq!(e.ssid, Some(&b"VedaNet"[..]));
         assert_eq!(e.rates, RATES_G.to_vec());
         assert_eq!(e.channel(), Some(6));
         assert_eq!(e.rsn, Some(&[1, 0, 0, 0x0F, 0xAC, 4][..]));

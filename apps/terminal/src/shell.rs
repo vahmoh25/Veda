@@ -175,11 +175,11 @@ impl Shell {
         let env = alloc::vec![
             ("HOME".to_string(), HOME.to_string()),
             ("USER".to_string(), "user".to_string()),
-            ("HOSTNAME".to_string(), "vindows".to_string()),
+            ("HOSTNAME".to_string(), "veda".to_string()),
             ("SHELL".to_string(), "vsh".to_string()),
             ("PATH".to_string(), "/system/bin".to_string()),
             ("PWD".to_string(), cwd.clone()),
-            ("TERM".to_string(), "vindows-terminal".to_string()),
+            ("TERM".to_string(), "veda-terminal".to_string()),
         ];
         Shell {
             cwd,
@@ -201,9 +201,9 @@ impl Shell {
         self.interrupt.load(Ordering::Relaxed)
     }
 
-    /// The prompt: `user@vindows:~/Documents$ `.
+    /// The prompt: `user@veda:~/Documents$ `.
     pub fn prompt(&self) -> Vec<Cell> {
-        let mut c = cells("user@vindows", Style::fg(color::BRIGHT_GREEN).bold());
+        let mut c = cells("user@veda", Style::fg(color::BRIGHT_GREEN).bold());
         c.extend(cells(":", Style::PLAIN));
         c.extend(cells(&display_path(&self.cwd), Style::fg(color::BRIGHT_BLUE).bold()));
         c.extend(cells("$ ", Style::PLAIN));
@@ -759,7 +759,7 @@ fn launch_result(r: Result<Result<u64, LaunchError>, vipc::IpcError>) -> Result<
 pub fn launch_error(e: LaunchError) -> &'static str {
     match e {
         LaunchError::NotFound => "program not found",
-        LaunchError::BadImage => "not a valid Vindows program",
+        LaunchError::BadImage => "not a valid Veda program",
         LaunchError::NoMemory => "not enough memory",
         LaunchError::Denied => "permission denied",
         LaunchError::Failed => "the program could not be started",

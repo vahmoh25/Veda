@@ -76,7 +76,7 @@ pub fn sqrt(x: f32) -> f32 {
 
 /// `f64` square root. Returns 0 for negative inputs and NaN.
 ///
-/// Uses the SSE2 `sqrtsd` instruction when the target has SSE2 enabled (Vindows user space) and
+/// Uses the SSE2 `sqrtsd` instruction when the target has SSE2 enabled (Veda user space) and
 /// Newton-Raphson iteration otherwise (soft-float targets such as UEFI).
 #[inline]
 pub fn sqrt64(x: f64) -> f64 {

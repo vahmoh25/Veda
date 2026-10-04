@@ -1,7 +1,7 @@
 # Wi-Fi failure recovery. nettest joins (and saves) the simulated network
-# "Vindows Home", then reports every change it notices (Wi-Fi state and
+# "Veda Home", then reports every change it notices (Wi-Fi state and
 # access point, ping to the gateway, DNS). The script breaks the network
-# through airsim in different ways; each time Vindows must recover on its
+# through airsim in different ways; each time Veda must recover on its
 # own, without anyone touching it. `checkpoint` makes the following waits
 # look only at what is logged after it.
 net wifi
@@ -14,11 +14,11 @@ air-expect "list" "1 joined"
 #    takes over.
 checkpoint
 air "ap home off"
-wait-serial "lost the connection to Vindows Home" 60
+wait-serial "lost the connection to Veda Home" 60
 wait-serial "watch: wifi=connected ap=02:56:57:00:00:02 ping=ok dns=ok" 120
 air "ap home on"
 
-# 2. The access point disconnects us: Vindows joins again, after looking
+# 2. The access point disconnects us: Veda joins again, after looking
 #    around, through the stronger first access point (back on).
 checkpoint
 air "ap home2 deauth 3"
@@ -83,5 +83,5 @@ key ret
 wait-serial "restarting wlan" 30
 wait-serial "attached to the network service as wlan0" 60
 wait-serial "watch: wifi=connected ap=02:56:57:00:00:01 ping=ok dns=ok" 120
-shot target/vindows/wifi-recovery.png
+shot target/veda/wifi-recovery.png
 reject-serial "panicked"

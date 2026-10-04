@@ -1,4 +1,4 @@
-# Vindows on the host's real network (VirtualBox, bridged to the host's
+# Veda on the host's real network (VirtualBox, bridged to the host's
 # adapter): its address, gateway and DNS server come from the real router
 # by DHCP, and nettest checks DNS, UDP, TCP, HTTP and ping through it on
 # the real Internet. Depends on the host's network, so it is not part of

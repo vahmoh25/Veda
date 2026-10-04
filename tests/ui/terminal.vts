@@ -49,7 +49,7 @@ key ret
 key ctrl-r
 type "pwd >"
 wait 1
-shot target/vindows/terminal-1-search.png
+shot target/veda/terminal-1-search.png
 key ret
 type "grep system /tmp/h.txt && logger vsh-search-ok"
 key ret
@@ -74,7 +74,7 @@ key ret
 wait 2
 double-click 0.031 0.093
 wait 1
-shot target/vindows/terminal-2-selection.png
+shot target/veda/terminal-2-selection.png
 key ctrl-shift-c
 type "logger "
 key ctrl-shift-v
@@ -87,10 +87,10 @@ wait 2
 click 0.5 0.5 wheel-up
 click 0.5 0.5 wheel-up
 wait 1
-shot target/vindows/terminal-3-scrolled.png
+shot target/veda/terminal-3-scrolled.png
 click 0.6 0.5 right
 wait 1
-shot target/vindows/terminal-4-menu.png
+shot target/veda/terminal-4-menu.png
 key esc
 wait 1
 type "exit"

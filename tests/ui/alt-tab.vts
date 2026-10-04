@@ -15,8 +15,8 @@ wait 5
 key-down alt
 key tab
 wait 2
-shot target/vindows/alttab-1-switcher.png
+shot target/veda/alttab-1-switcher.png
 key-up alt
 wait 2
-shot target/vindows/alttab-2-switched.png
+shot target/veda/alttab-2-switched.png
 reject-serial "crashed"

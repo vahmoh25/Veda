@@ -193,7 +193,7 @@ impl Harness {
             .found(ssid)
             .first()
             .map(|b| (*b).clone())
-            .or_else(|| self.heard.values().find(|b| b.hidden()).cloned().filter(|_| ssid == "Vindows Hidden"))
+            .or_else(|| self.heard.values().find(|b| b.hidden()).cloned().filter(|_| ssid == "Veda Hidden"))
             .unwrap_or_else(|| panic!("{ssid} not heard"));
         Target {
             bss,
@@ -335,14 +335,14 @@ fn scanning_finds_the_default_networks() {
     let mut h = Harness::new();
     h.scan();
     let sec = |h: &Harness, ssid: &str| h.found(ssid).first().map(|b| b.security);
-    assert_eq!(h.found("Vindows Home").len(), 2, "two access points of Vindows Home");
-    assert_eq!(sec(&h, "Vindows Home"), Some(Security::Wpa2Personal));
-    assert_eq!(sec(&h, "Vindows WPA3"), Some(Security::Wpa3Personal));
-    assert_eq!(sec(&h, "Vindows Mixed"), Some(Security::Wpa2Wpa3Personal));
-    assert_eq!(sec(&h, "Vindows Guest"), Some(Security::Open));
-    assert_eq!(sec(&h, "Vindows Corp"), Some(Security::Enterprise));
-    assert_eq!(h.found("Vindows Home")[0].signal_dbm, -48);
-    assert_eq!(h.found("Vindows Home")[0].channel, 1);
+    assert_eq!(h.found("Veda Home").len(), 2, "two access points of Veda Home");
+    assert_eq!(sec(&h, "Veda Home"), Some(Security::Wpa2Personal));
+    assert_eq!(sec(&h, "Veda WPA3"), Some(Security::Wpa3Personal));
+    assert_eq!(sec(&h, "Veda Mixed"), Some(Security::Wpa2Wpa3Personal));
+    assert_eq!(sec(&h, "Veda Guest"), Some(Security::Open));
+    assert_eq!(sec(&h, "Veda Corp"), Some(Security::Enterprise));
+    assert_eq!(h.found("Veda Home")[0].signal_dbm, -48);
+    assert_eq!(h.found("Veda Home")[0].channel, 1);
     // The hidden network beacons without its name.
     let hidden: Vec<_> = h.heard.values().filter(|b| b.hidden()).collect();
     assert_eq!(hidden.len(), 1);
@@ -353,11 +353,11 @@ fn scanning_finds_the_default_networks() {
 #[test]
 fn joins_every_supported_network_and_passes_traffic() {
     for (ssid, password, expected) in [
-        ("Vindows Home", PASSWORD, Security::Wpa2Personal),
-        ("Vindows WPA3", PASSWORD, Security::Wpa3Personal),
-        ("Vindows Mixed", PASSWORD, Security::Wpa2Wpa3Personal),
-        ("Vindows Guest", "", Security::Open),
-        ("Vindows Hidden", PASSWORD, Security::Wpa2Personal),
+        ("Veda Home", PASSWORD, Security::Wpa2Personal),
+        ("Veda WPA3", PASSWORD, Security::Wpa3Personal),
+        ("Veda Mixed", PASSWORD, Security::Wpa2Wpa3Personal),
+        ("Veda Guest", "", Security::Open),
+        ("Veda Hidden", PASSWORD, Security::Wpa2Personal),
     ] {
         let mut h = Harness::new();
         let (_, security) = h.joined(ssid, password);
@@ -378,7 +378,7 @@ fn joins_every_supported_network_and_passes_traffic() {
 
 #[test]
 fn a_wrong_password_is_reported() {
-    for ssid in ["Vindows Home", "Vindows WPA3"] {
+    for ssid in ["Veda Home", "Veda WPA3"] {
         let mut h = Harness::new();
         assert_eq!(h.join(ssid, "not-the-password"), StaEvent::JoinFailed(Failure::WrongPassword), "{ssid}");
         // The right one still works afterwards.
@@ -391,7 +391,7 @@ fn enterprise_networks_are_declined_without_transmitting() {
     let mut h = Harness::new();
     h.scan();
     let sent = h.world.stats.guest_tx;
-    assert_eq!(h.join("Vindows Corp", PASSWORD), StaEvent::JoinFailed(Failure::Unsupported));
+    assert_eq!(h.join("Veda Corp", PASSWORD), StaEvent::JoinFailed(Failure::Unsupported));
     assert_eq!(h.world.stats.guest_tx, sent);
 }
 
@@ -400,7 +400,7 @@ fn transmit_status_reports_acknowledgements() {
     let mut h = Harness::new();
     h.tune(1);
     h.run(200);
-    let home = h.found("Vindows Home")[0].bssid;
+    let home = h.found("Veda Home")[0].bssid;
     // A unicast frame to a reachable access point is acknowledged...
     let null = frame::management(frame::mgmt::ACTION, &home, &h.mac, &home, 1, &[127, 0, 0, 0]);
     h.send(Message::Tx { id: 900, no_ack: false, frame: null.clone() });
@@ -421,42 +421,42 @@ fn transmit_status_reports_acknowledgements() {
 #[test]
 fn an_access_point_switched_off_is_noticed_and_its_twin_takes_over() {
     let mut h = Harness::new();
-    let (first, _) = h.joined("Vindows Home", PASSWORD);
+    let (first, _) = h.joined("Veda Home", PASSWORD);
     assert_eq!(first, [0x02, 0x56, 0x57, 0, 0, 1], "the stronger access point is chosen");
     h.control("ap home off");
     assert!(h.run_until(15_000, |h| h.disconnected().is_some()), "{:?}", h.events);
     assert_eq!(h.disconnected(), Some(Failure::SignalLost));
     // A new scan only finds the second access point of the network.
     h.scan();
-    assert_eq!(h.found("Vindows Home").len(), 1);
-    let (second, _) = h.joined("Vindows Home", PASSWORD);
+    assert_eq!(h.found("Veda Home").len(), 1);
+    let (second, _) = h.joined("Veda Home", PASSWORD);
     assert_eq!(second, [0x02, 0x56, 0x57, 0, 0, 2]);
     let up = h.frame_to_gateway(&udp4(40000, 443, b"hello"));
     assert!(h.send_ethernet(&up));
     // The first one comes back, freshly started.
     h.control("ap home on");
     h.scan();
-    assert_eq!(h.found("Vindows Home").len(), 2);
+    assert_eq!(h.found("Veda Home").len(), 2);
 }
 
 #[test]
 fn moving_out_of_range_ends_the_connection() {
     let mut h = Harness::new();
-    h.joined("Vindows WPA3", PASSWORD);
+    h.joined("Veda WPA3", PASSWORD);
     h.control("ap wpa3 signal -95");
     assert!(h.run_until(15_000, |h| h.disconnected().is_some()));
     assert_eq!(h.disconnected(), Some(Failure::SignalLost));
     h.scan();
-    assert!(h.found("Vindows WPA3").is_empty());
+    assert!(h.found("Veda WPA3").is_empty());
     h.control("ap wpa3 signal -70");
     h.scan();
-    assert_eq!(h.found("Vindows WPA3")[0].signal_dbm, -70);
-    h.joined("Vindows WPA3", PASSWORD);
+    assert_eq!(h.found("Veda WPA3")[0].signal_dbm, -70);
+    h.joined("Veda WPA3", PASSWORD);
 }
 
 #[test]
 fn deauthentication_reaches_the_guest_with_its_reason() {
-    for (ssid, name) in [("Vindows Home", "home"), ("Vindows WPA3", "wpa3")] {
+    for (ssid, name) in [("Veda Home", "home"), ("Veda WPA3", "wpa3")] {
         let mut h = Harness::new();
         h.joined(ssid, PASSWORD);
         h.control(&format!("ap {name} deauth 3"));
@@ -469,7 +469,7 @@ fn deauthentication_reaches_the_guest_with_its_reason() {
 #[test]
 fn group_rekeying_keeps_broadcasts_flowing() {
     let mut h = Harness::new();
-    h.joined("Vindows Home", PASSWORD);
+    h.joined("Veda Home", PASSWORD);
     let mut arp = frame::BROADCAST.to_vec();
     arp.extend_from_slice(&GATEWAY_MAC);
     arp.extend_from_slice(&0x0806u16.to_be_bytes());
@@ -485,7 +485,7 @@ fn group_rekeying_keeps_broadcasts_flowing() {
 #[test]
 fn a_changed_password_requires_the_new_one() {
     let mut h = Harness::new();
-    h.joined("Vindows Home", PASSWORD);
+    h.joined("Veda Home", PASSWORD);
     h.control("ap home password brand-new-password");
     // The restarted access point no longer knows the guest: it answers the
     // guest's next frame with an (unprotected) deauthentication, which the
@@ -495,14 +495,14 @@ fn a_changed_password_requires_the_new_one() {
     assert!(h.run_until(15_000, |h| h.disconnected().is_some()), "{:?}", h.events);
     h.control("ap home2 off");
     h.scan();
-    assert_eq!(h.join("Vindows Home", PASSWORD), StaEvent::JoinFailed(Failure::WrongPassword));
-    h.joined("Vindows Home", "brand-new-password");
+    assert_eq!(h.join("Veda Home", PASSWORD), StaEvent::JoinFailed(Failure::WrongPassword));
+    h.joined("Veda Home", "brand-new-password");
 }
 
 #[test]
 fn the_wired_side_can_go_down_and_come_back() {
     let mut h = Harness::new();
-    h.joined("Vindows Guest", "");
+    h.joined("Veda Guest", "");
     let up = h.frame_to_gateway(&udp4(40000, 80, b"request"));
     let down = h.frame_from_gateway(&udp4(80, 40000, b"answer"));
     h.control("wired down");
@@ -519,7 +519,7 @@ fn the_wired_side_can_go_down_and_come_back() {
 #[test]
 fn dhcp_can_be_withheld() {
     let mut h = Harness::new();
-    h.joined("Vindows Home", PASSWORD);
+    h.joined("Veda Home", PASSWORD);
     let mut discover = frame::BROADCAST.to_vec();
     discover.extend_from_slice(&h.mac);
     discover.extend_from_slice(&0x0800u16.to_be_bytes());
@@ -541,7 +541,7 @@ fn dhcp_can_be_withheld() {
 #[test]
 fn dns_conditions() {
     let mut h = Harness::new();
-    h.joined("Vindows Home", PASSWORD);
+    h.joined("Veda Home", PASSWORD);
     let query = h.frame_to_gateway(&udp4(50000, 53, &dns_query()));
     assert!(h.send_ethernet(&query), "queries pass normally");
     h.control("dns unanswered");
@@ -564,18 +564,27 @@ fn dns_conditions() {
 #[test]
 fn joining_succeeds_on_a_lossy_link() {
     // Retransmissions on both sides carry the handshakes through moderate
-    // frame loss.
+    // frame loss. A join can be lucky and lose nothing, so the station
+    // leaves and joins again until frames were lost on the way.
     let mut h = Harness::new();
     h.scan();
     h.control("ap home loss 15");
-    let mut connected = false;
-    for _ in 0..4 {
-        if matches!(h.join("Vindows Home", PASSWORD), StaEvent::Connected { .. }) {
-            connected = true;
+    for _ in 0..10 {
+        let mut connected = false;
+        for _ in 0..4 {
+            if matches!(h.join("Veda Home", PASSWORD), StaEvent::Connected { .. }) {
+                connected = true;
+                break;
+            }
+        }
+        assert!(connected, "{:?}", h.events);
+        if h.world.stats.lost > 0 {
             break;
         }
+        let a = h.sta.disconnect(h.now);
+        h.actions(a);
+        h.pump();
     }
-    assert!(connected, "{:?}", h.events);
     assert!(h.world.stats.lost > 0);
     // Total loss is noticed as a lost signal.
     h.control("ap home loss 100");
@@ -586,7 +595,7 @@ fn joining_succeeds_on_a_lossy_link() {
 #[test]
 fn a_guest_that_goes_away_is_dropped_by_its_access_point() {
     let mut h = Harness::new();
-    h.joined("Vindows Mixed", PASSWORD);
+    h.joined("Veda Mixed", PASSWORD);
     let i = h.world.find("mixed").unwrap();
     assert_eq!(h.world.networks[i].ap.authorized(), vec![h.mac]);
     h.world.guest_disconnected(h.now);
@@ -597,7 +606,7 @@ fn a_guest_that_goes_away_is_dropped_by_its_access_point() {
     h.send(Message::Hello { version: VERSION, mac: [0; 6] });
     h.send(Message::SetPower { on: true });
     h.sta = Station::new(h.mac);
-    h.joined("Vindows Mixed", PASSWORD);
+    h.joined("Veda Mixed", PASSWORD);
 }
 
 #[test]
@@ -616,7 +625,7 @@ fn control_commands_are_validated() {
     assert!(err("ap home").contains("unknown access point command"));
     let list = h.control("list");
     assert_eq!(list.lines().count(), 7);
-    assert!(list.contains("Vindows Hidden") && list.contains("hidden"));
+    assert!(list.contains("Veda Hidden") && list.contains("hidden"));
     assert!(h.control("status").contains("radio connected"));
     assert!(h.control("help").contains("dns normal"));
     assert_eq!(h.control("ap HOME loss 5%"), "");
@@ -626,7 +635,7 @@ fn control_commands_are_validated() {
 #[test]
 fn malformed_frames_from_the_guest_are_harmless() {
     let mut h = Harness::new();
-    h.joined("Vindows Home", PASSWORD);
+    h.joined("Veda Home", PASSWORD);
     let mut s = 0x2545_F491u32;
     for i in 0..3000u32 {
         let len = (s % 300) as usize;

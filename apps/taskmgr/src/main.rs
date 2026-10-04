@@ -300,7 +300,8 @@ impl TaskManager {
                 let (heading, message) = if *system {
                     (
                         alloc::format!("End system process “{title}”?"),
-                        "This process is part of Vindows. Ending it can make the system unstable or stop it from working.".to_string(),
+                        "This process is part of Veda. Ending it can make the system unstable or stop it from working."
+                            .to_string(),
                     )
                 } else {
                     (alloc::format!("End “{title}”?"), "Unsaved work in this app will be lost.".to_string())

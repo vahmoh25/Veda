@@ -1,6 +1,6 @@
 [package]
 name = "vweb"
-description = "Web clients for Vindows applications: URLs, HTTP/1.1 and WebSocket over TCP or TLS"
+description = "Web clients for Veda applications: URLs, HTTP/1.1 and WebSocket over TCP or TLS"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

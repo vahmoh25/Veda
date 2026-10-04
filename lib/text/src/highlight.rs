@@ -645,12 +645,9 @@ mod tests {
 
     #[test]
     fn toml_and_markdown() {
-        let t = spans(Language::Toml, &["[package]", "name = \"vindows\" # comment", "debug = true", "level = 3"]);
+        let t = spans(Language::Toml, &["[package]", "name = \"veda\" # comment", "debug = true", "level = 3"]);
         assert_eq!(t[0], [tok("[package]", Token::Heading)]);
-        assert_eq!(
-            t[1],
-            [tok("name", Token::Type), tok("\"vindows\"", Token::String), tok("# comment", Token::Comment)]
-        );
+        assert_eq!(t[1], [tok("name", Token::Type), tok("\"veda\"", Token::String), tok("# comment", Token::Comment)]);
         assert_eq!(t[2], [tok("debug", Token::Type), tok("true", Token::Keyword)]);
         assert_eq!(t[3], [tok("level", Token::Type), tok("3", Token::Number)]);
         let m = spans(

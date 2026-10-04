@@ -1,6 +1,6 @@
 [package]
 name = "about"
-description = "About Vindows: version and system information"
+description = "About Veda: version and system information"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

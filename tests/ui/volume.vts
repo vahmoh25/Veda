@@ -4,10 +4,10 @@ wait-serial "desktop ready" 90
 wait 2
 click 0.8938 0.97
 wait 2
-shot target/vindows/volume-1-open.png
+shot target/veda/volume-1-open.png
 click 0.8203 0.86
 wait 2
-shot target/vindows/volume-2-changed.png
+shot target/veda/volume-2-changed.png
 key esc
 wait 1
 reject-serial "crashed"

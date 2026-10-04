@@ -259,10 +259,10 @@ impl Terminal {
                 let n = i.version.iter().position(|&c| c == 0).unwrap_or(i.version.len());
                 String::from_utf8_lossy(&i.version[..n]).trim().into()
             })
-            .unwrap_or_else(|_| String::from("Vindows"));
+            .unwrap_or_else(|_| String::from("Veda"));
         screen.write_styled("Welcome to ", Style::PLAIN);
         screen.write_styled(&version, Style::fg(color::BRIGHT_BLUE).bold());
-        screen.write_styled(" — vsh, the Vindows shell\n", Style::PLAIN);
+        screen.write_styled(" — vsh, the Veda shell\n", Style::PLAIN);
         screen.write_styled("Type ", Style::DIM);
         screen.write_styled("help", Style::fg(color::BRIGHT_GREEN));
         screen.write_styled(" to list the commands, or ", Style::DIM);

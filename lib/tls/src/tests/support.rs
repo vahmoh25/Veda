@@ -69,7 +69,7 @@ pub(crate) static TLS13: &[&SupportedProtocolVersion] = &[&rustls::version::TLS1
 pub(crate) static TLS12: &[&SupportedProtocolVersion] = &[&rustls::version::TLS12];
 
 /// The name in the test certificates.
-pub(crate) const TEST_NAME: &str = "test.vindows.local";
+pub(crate) const TEST_NAME: &str = "test.veda.local";
 /// 2026-06-01: the test certificates are valid from 2026 to 2036.
 pub(crate) const TEST_TIME: u64 = 1_780_272_000;
 

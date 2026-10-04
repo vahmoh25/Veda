@@ -1,6 +1,6 @@
-# Vindows architecture
+# Veda architecture
 
-Vindows is an x86-64 operating system built around a capability-based
+Veda is an x86-64 operating system built around a capability-based
 microkernel. The kernel implements only isolation, scheduling, memory
 management and inter-process communication; device drivers, file systems,
 the window system and every application are ordinary user-space processes
@@ -26,7 +26,7 @@ that communicate over kernel channels.
 
 1. OVMF loads `\EFI\BOOT\BOOTX64.EFI` (`boot/`, the `vboot` loader) from the
    FAT32 EFI system partition built by `cargo xtask build`.
-2. `vboot` reads `\VINDOWS\BOOT.CFG`, `VKERNEL.EXE` and `INITRD.IMG`, picks a
+2. `vboot` reads `\VEDA\BOOT.CFG`, `VKERNEL.EXE` and `INITRD.IMG`, picks a
    GOP graphics mode, paints the splash screen, loads the kernel's PE
    sections, builds page tables (identity map, direct map at
    `0xFFFF800000000000`, kernel at `0xFFFFFFFF80000000`), exits boot services
@@ -108,7 +108,7 @@ eager FPU/SSE/AVX state switching with XSAVE.
   whatever the controller. `devmgr` matches drivers by vendor and device,
   and AHCI controllers by their PCI class.
 * `vfs` serves `/system` straight from the initrd and keeps `/home` and
-  `/tmp` in memory. If a disk with serial `vindows-home` is attached, `/home`
+  `/tmp` in memory. If a disk with serial `veda-home` is attached, `/home`
   is restored from it at boot and written back half a second after changes
   stop (and before a shutdown from the start menu). The disk holds two
   snapshot slots with checksums; saves alternate between them, so an
@@ -305,7 +305,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
   heap, IPC codec, service protocols, math, rasteriser, fonts, image
   codecs, 2D graphics, text editing, paths and file types, audio, build
   tool).
-* `systest`, a program that runs inside Vindows and exercises kernel objects,
+* `systest`, a program that runs inside Veda and exercises kernel objects,
   threads, the file system, the launcher, crash reports and the restart of
   the window system; `nettest` checks DNS, UDP, TCP, HTTP, HTTPS and ping
   over Ethernet or Wi-Fi.

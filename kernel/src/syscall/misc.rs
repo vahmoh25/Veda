@@ -49,7 +49,7 @@ pub fn sleep(d: usize) -> SysResult {
 pub fn system_info(ptr: usize) -> SysResult {
     let (total, free) = crate::mm::phys::stats();
     let mut version = [0u8; 32];
-    let v = concat!("Vindows ", env!("CARGO_PKG_VERSION"));
+    let v = concat!("Veda ", env!("CARGO_PKG_VERSION"));
     version[..v.len()].copy_from_slice(v.as_bytes());
     let procs = crate::object::process::all();
     let info = SystemInfo {

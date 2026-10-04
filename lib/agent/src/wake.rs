@@ -1,16 +1,16 @@
 //! Recognising that someone is talking to the agent.
 //!
 //! While asleep the agent hears transcripts of what is said near the
-//! computer. It wakes when it is addressed by name — "Vera, play some
-//! music", "Hey Vera", "what time is it, Vera?" — but not when it is only
-//! mentioned ("I was telling Anna about Vera yesterday").
+//! computer. It wakes when it is addressed by name — "Veda, play some
+//! music", "Hey Veda", "what time is it, Veda?" — but not when it is only
+//! mentioned ("I was telling Anna about Veda yesterday").
 //!
 //! A call starts or ends a sentence (or a clause: the recogniser
 //! punctuates), so a transcript that also holds other things — a song's
 //! words, someone else talking — still wakes it when the name starts or
 //! ends one of its sentences. The recogniser does not always spell the name
-//! the same way: one letter off counts too ("Vira"), except for common
-//! words ("very").
+//! the same way: one letter off counts too ("Vida"), except for common
+//! words ("very" does not call an agent named Vera).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -81,14 +81,14 @@ pub fn resembles(transcript: &str, name: &str) -> bool {
 }
 
 /// If `transcript` addresses the agent called `name`, what was asked
-/// (possibly nothing: "Hey Vera" just wakes it).
+/// (possibly nothing: "Hey Veda" just wakes it).
 pub fn addressed(transcript: &str, name: &str) -> Option<String> {
     find_call(transcript, name).map(|(_, request)| request)
 }
 
 /// If `transcript` addresses the agent called `name`, the transcript from
 /// the call on: what comes before it (a song's words, someone else) is
-/// left out ("... moonlight. Vera, turn it down." is "Vera, turn it down.").
+/// left out ("... moonlight. Veda, turn it down." is "Veda, turn it down.").
 pub fn call(transcript: &str, name: &str) -> Option<String> {
     find_call(transcript, name).map(|(at, _)| String::from(transcript[at..].trim()))
 }
@@ -105,7 +105,7 @@ fn find_call(transcript: &str, name: &str) -> Option<(usize, String)> {
     let mut joined: Option<(usize, Vec<String>)> = None;
     for piece in transcript.split_inclusive(is_break) {
         let w = words(piece);
-        // Called at the start, after an opener or two: "Hey Vera, ..."
+        // Called at the start, after an opener or two: "Hey Veda, ..."
         let start = w.iter().take_while(|x| OPENERS.contains(&x.as_str())).count();
         if start <= 2 && w.get(start).is_some_and(|x| is_name(x, name)) {
             let rest = after_words(transcript, before + start + name_words.len());
@@ -113,7 +113,7 @@ fn find_call(transcript: &str, name: &str) -> Option<(usize, String)> {
                 && let Some((joined_at, joined)) = joined
             {
                 // Only the name, after the request in the same sentence:
-                // "What time is it, Vera?"
+                // "What time is it, Veda?"
                 return Some((joined_at, request_before(&joined)));
             }
             if !rest.chars().any(char::is_alphanumeric) {
@@ -121,7 +121,7 @@ fn find_call(transcript: &str, name: &str) -> Option<(usize, String)> {
             }
             return Some((at, rest));
         }
-        // Called at the end: "... what time is it Vera"
+        // Called at the end: "... what time is it Veda"
         if w.len() >= 2 && w.last().is_some_and(|x| is_name(x, name)) {
             return Some((at, request_before(&w[..w.len() - 1])));
         }
@@ -161,56 +161,56 @@ mod tests {
 
     #[test]
     fn wakes_when_called() {
-        assert_eq!(addressed("Vera, play some music.", "Vera").as_deref(), Some("play some music."));
-        assert_eq!(addressed("Hey Vera!", "Vera").as_deref(), Some(""));
-        assert_eq!(addressed("hey vera what's the weather like", "Vera").as_deref(), Some("what's the weather like"));
-        assert_eq!(addressed("Okay so um Vera open my notes", "Vera"), None, "three openers is not calling");
-        assert_eq!(addressed("OK Vera, open my notes", "Vera").as_deref(), Some("open my notes"));
-        assert_eq!(addressed("What time is it, Vera?", "Vera").as_deref(), Some("what time is it"));
+        assert_eq!(addressed("Veda, play some music.", "Veda").as_deref(), Some("play some music."));
+        assert_eq!(addressed("Hey Veda!", "Veda").as_deref(), Some(""));
+        assert_eq!(addressed("hey veda what's the weather like", "Veda").as_deref(), Some("what's the weather like"));
+        assert_eq!(addressed("Okay so um Veda open my notes", "Veda"), None, "three openers is not calling");
+        assert_eq!(addressed("OK Veda, open my notes", "Veda").as_deref(), Some("open my notes"));
+        assert_eq!(addressed("What time is it, Veda?", "Veda").as_deref(), Some("what time is it"));
         assert_eq!(addressed("Hey Samantha, hi", "Samantha").as_deref(), Some("hi"));
         // The recogniser may be one letter off.
         assert_eq!(addressed("Hey Samanta, lights", "Samantha").as_deref(), Some("lights"));
-        assert_eq!(addressed("Vira, stop the music.", "Vera").as_deref(), Some("stop the music."));
-        assert_eq!(addressed("Hey, Bera.", "Vera").as_deref(), Some(""));
+        assert_eq!(addressed("Vida, stop the music.", "Veda").as_deref(), Some("stop the music."));
+        assert_eq!(addressed("Hey, Beda.", "Veda").as_deref(), Some(""));
     }
 
     #[test]
     fn wakes_amid_other_words() {
         // A song or someone else before the call, in the same transcript.
         assert_eq!(
-            addressed("Dancing in the moonlight. Vera, turn it down.", "Vera").as_deref(),
+            addressed("Dancing in the moonlight. Veda, turn it down.", "Veda").as_deref(),
             Some("turn it down.")
         );
-        assert_eq!(addressed("and then we went home. Hey Vera.", "Vera").as_deref(), Some(""));
-        assert_eq!(addressed("Play some music, hey Vera?", "Vera").as_deref(), Some("play some music"));
-        assert_eq!(addressed("I mean it. What's the time Vera", "Vera").as_deref(), Some("what's the time"));
+        assert_eq!(addressed("and then we went home. Hey Veda.", "Veda").as_deref(), Some(""));
+        assert_eq!(addressed("Play some music, hey Veda?", "Veda").as_deref(), Some("play some music"));
+        assert_eq!(addressed("I mean it. What's the time Veda", "Veda").as_deref(), Some("what's the time"));
     }
 
     #[test]
     fn the_call_without_what_came_before() {
-        let call = |t| super::call(t, "Vera");
-        assert_eq!(call("Dancing in the moonlight. Vera, turn it down.").as_deref(), Some("Vera, turn it down."));
-        assert_eq!(call("Hey Vera, what time is it?").as_deref(), Some("Hey Vera, what time is it?"));
-        assert_eq!(call("Oh well. What time is it, Vera?").as_deref(), Some("What time is it, Vera?"));
-        assert_eq!(call("I mean it. What's the time Vera").as_deref(), Some("What's the time Vera"));
-        assert_eq!(call("I was telling Anna about Vera yesterday"), None);
+        let call = |t| super::call(t, "Veda");
+        assert_eq!(call("Dancing in the moonlight. Veda, turn it down.").as_deref(), Some("Veda, turn it down."));
+        assert_eq!(call("Hey Veda, what time is it?").as_deref(), Some("Hey Veda, what time is it?"));
+        assert_eq!(call("Oh well. What time is it, Veda?").as_deref(), Some("What time is it, Veda?"));
+        assert_eq!(call("I mean it. What's the time Veda").as_deref(), Some("What's the time Veda"));
+        assert_eq!(call("I was telling Anna about Veda yesterday"), None);
     }
 
     #[test]
     fn ignores_mentions() {
-        assert_eq!(addressed("I was telling Anna about Vera yesterday", "Vera"), None);
-        assert_eq!(addressed("Vera's voice is nice, isn't it", "Vera").as_deref(), Some("voice is nice, isn't it"));
-        assert_eq!(addressed("", "Vera"), None);
+        assert_eq!(addressed("I was telling Anna about Veda yesterday", "Veda"), None);
+        assert_eq!(addressed("Veda's voice is nice, isn't it", "Veda").as_deref(), Some("voice is nice, isn't it"));
+        assert_eq!(addressed("", "Veda"), None);
         assert_eq!(addressed("very nice", "Vera"), None, "a common word is not the name");
         assert_eq!(addressed("Very good. Very nice.", "Vera"), None);
         assert_eq!(addressed("Now play it", "Nova"), None);
-        assert_eq!(addressed("Vera", ""), None);
+        assert_eq!(addressed("Veda", ""), None);
     }
 
     #[test]
     fn notices_near_misses() {
-        assert!(resembles("Hi Mara, how are you", "Vera"));
+        assert!(resembles("Hi Vita, how are you", "Veda"));
         assert!(!resembles("very nice indeed", "Vera"));
-        assert!(!resembles("play some music", "Vera"));
+        assert!(!resembles("play some music", "Veda"));
     }
 }

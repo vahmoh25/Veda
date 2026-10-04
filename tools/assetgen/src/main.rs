@@ -1,4 +1,4 @@
-//! `assetgen` — generates the Vindows wallpapers and sample pictures at build time.
+//! `assetgen` — generates the Veda wallpapers and sample pictures at build time.
 //!
 //! ```text
 //! assetgen OUT_DIR [FILTER]

@@ -1,4 +1,4 @@
-//! `vui` — the Vindows GUI toolkit.
+//! `vui` — the Veda GUI toolkit.
 //!
 //! * [`window`]: client-side windows on top of the display protocol.
 //! * [`app`]: the event loop ([`run`]) driving an [`App`].

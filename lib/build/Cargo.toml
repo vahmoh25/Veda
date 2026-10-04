@@ -1,6 +1,6 @@
 [package]
 name = "vbuild"
-description = "Build-script helper for Vindows user-space programs (linker options)"
+description = "Build-script helper for Veda user-space programs (linker options)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

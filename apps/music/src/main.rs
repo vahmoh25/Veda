@@ -1,4 +1,4 @@
-//! Music — the Vindows music player.
+//! Music — the Veda music player.
 //!
 //! * A library of the tracks in `/home/user/Music` (QOA and WAV), plus any
 //!   file passed on the command line, which starts playing at once.

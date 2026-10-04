@@ -1,9 +1,9 @@
 # The voice agent
 
-Vindows has a voice that lives in it. The agent — Vera, until you rename
-it — is not an application you open: it is always there, a small ring at
-the right of the taskbar, asleep until you call it. You talk to it as you would to a
-person in the room; it answers in its own voice and does things on the
+Veda has a voice that lives in it. The agent — called Veda too, until you
+rename it — is not an application you open: it is always there, a small
+ring at the right of the taskbar, asleep until you call it. You talk to it
+as you would to a person in the room; it answers in its own voice and does things on the
 computer for you — opens and arranges applications, writes in the Text
 Editor, works with files, plays music, changes settings, sets timers —
 through the same operations the keyboard and mouse use. It remembers what
@@ -37,8 +37,8 @@ the models and the voice are system settings (Settings → Agent).
 
 ## Talking to it
 
-* **Say its name**: "Hey Vera, open my shopping list", "Vera, play some
-  music", "what time is it, Vera?". Whatever you said with its name is the
+* **Say its name**: "Hey Veda, open my shopping list", "Veda, play some
+  music", "what time is it, Veda?". Whatever you said with its name is the
   first thing it hears.
 * **Click its ring** at the right of the taskbar, or press **Win+Space**:
   the agent's window opens and it listens.
@@ -73,10 +73,11 @@ is closed.
   peaks starts recognition again, so music playing does not keep the recogniser
   busy, while calling over it still works. The detector learns the room
   for 1.6 s whenever listening starts, and speech must last 0.2 s. `vagent::wake`
-  decides whether a transcript calls the agent ("Hey Vera, …", "… Vera?")
-  or only mentions it ("I told Anna about Vera"): the name starts or ends
+  decides whether a transcript calls the agent ("Hey Veda, …", "… Veda?")
+  or only mentions it ("I told Anna about Veda"): the name starts or ends
   one of its sentences, so other words before it (a song) do not matter,
-  and one letter off counts ("Vira"), common words aside ("very"). What
+  and one letter off counts ("Vida"), common words aside (an agent called
+  Vera does not answer to "very"). What
   came close without being a call is logged ("heard something like its
   name"). Recognition is capped at ten minutes an hour, so a television or
   music playing all day cannot run up the bill.
@@ -124,7 +125,7 @@ is closed.
 * **Doing.** The language model calls functions (below); the agent service
   runs them on a worker thread and answers with JSON results. A function
   that needs your consent answers "waiting for approval", and the outcome
-  comes back later as a notice (`[Vindows] The user allowed …`).
+  comes back later as a notice (`[System] The user allowed …`).
 * **Ending.** `end_conversation` (after a goodbye) closes the conversation
   once the goodbye has been played — unless you talk over it or ask for
   something else — and the agent falls asleep and listens for its name
@@ -211,7 +212,7 @@ The agent can change its own voice and speaking rate through Settings' own
 agent interface ("talk a bit slower"); its name and language model only
 with your OK, and the key not at all.
 
-Defaults: Vera, Aura-2 Helena, Flux, OpenAI's gpt-4.1-mini (Standard tier).
+Defaults: the name Veda, Aura-2 Helena, Flux, OpenAI's gpt-4.1-mini (Standard tier).
 
 ## Making an application agent-compatible
 

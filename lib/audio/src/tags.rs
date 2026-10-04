@@ -2,7 +2,7 @@
 //!
 //! [`Tags`] holds the descriptive fields a music player shows. They come
 //! from a WAV file's `LIST/INFO` chunk (see [`crate::wav`]) or from the
-//! `VTAG` trailer that Vindows appends to QOA files:
+//! `VTAG` trailer that Veda appends to QOA files:
 //!
 //! ```text
 //! ... QOA frames ... | "key=value\n" lines (UTF-8) | u32 LE text length | "VTAG"
@@ -180,7 +180,7 @@ mod tests {
     fn trailer_roundtrip() {
         let mut t = Tags {
             title: "Neon\nHorizon".into(),
-            artist: "Vindows Studio".into(),
+            artist: "Veda Studio".into(),
             album: "First Light".into(),
             genre: "Synthwave".into(),
             year: 2026,
@@ -194,7 +194,7 @@ mod tests {
         file.extend(t.encode_trailer());
         let back = Tags::from_trailer(&file).unwrap();
         assert_eq!(back.title, "Neon Horizon");
-        assert_eq!(back.artist, "Vindows Studio");
+        assert_eq!(back.artist, "Veda Studio");
         assert_eq!(back.duration_ms, 123_456);
         assert_eq!(back.year, 2026);
         assert_eq!(back.get("bpm"), Some("100"));

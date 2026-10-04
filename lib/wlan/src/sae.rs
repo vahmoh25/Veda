@@ -427,8 +427,8 @@ mod tests {
         let (a, b) = ([2u8, 0, 0, 0, 0, 1], [2u8, 0, 0, 0, 0, 2]);
         let mut rng = TestRandom(42);
         let (pwe_a, pwe_b) = if h2e {
-            let pa = derive_pt(b"VindowsNet", pw_a, None);
-            let pb = derive_pt(b"VindowsNet", pw_b, None);
+            let pa = derive_pt(b"VedaNet", pw_a, None);
+            let pb = derive_pt(b"VedaNet", pw_b, None);
             (pwe_from_pt(&pa, &a, &b)?, pwe_from_pt(&pb, &b, &a)?)
         } else {
             (pwe_hunting_and_pecking(&a, &b, pw_a, None)?, pwe_hunting_and_pecking(&b, &a, pw_b, None)?)

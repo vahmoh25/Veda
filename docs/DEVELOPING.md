@@ -1,22 +1,22 @@
-# Developing Vindows
+# Developing Veda
 
-This guide explains how to build, run and test Vindows, and how to write
+This guide explains how to build, run and test Veda, and how to write
 programs for it. Read `docs/CODING.md` (conventions) and
 `docs/ARCHITECTURE.md` (design) first.
 
 ## Everyday commands
 
 ```text
-cargo xtask build              # build everything -> target/vindows/vindows.img
+cargo xtask build              # build everything -> target/veda/veda.img
 cargo xtask run                # build and boot in a QEMU window
 cargo xtask run --smp 2 --memory 2048
-cargo xtask shot --wait 15     # boot headless, save target/vindows/screen.png
+cargo xtask shot --wait 15     # boot headless, save target/veda/screen.png
 cargo xtask shot --cmdline "run=about"   # also start bin/about.exe at boot
 cargo xtask script tests/ui/about-interaction.vts   # scripted GUI test
 cargo xtask test               # host unit tests + in-system integration tests
 cargo xtask test --ui          # ... plus every GUI script in tests/ui
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
-cargo xtask run --vm virtualbox            # the same in VirtualBox (VM "Vindows")
+cargo xtask run --vm virtualbox            # the same in VirtualBox (VM "Veda")
 cargo xtask run --vm virtualbox --net bridged   # ... on the host's real network
 cargo xtask run --vm virtualbox --resolution 1600x1000 --scale 2   # larger desktop, window at 2x
 cargo xtask test --ui --vm virtualbox      # the test suite in VirtualBox
@@ -30,10 +30,10 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
 ```
 
 * The serial console (kernel log plus every program's `println!`) is saved
-  to `target/vindows/serial.log` by `shot`/`script`/`test`.
+  to `target/veda/serial.log` by `shot`/`script`/`test`.
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
-* Headless runs record audio to `target/vindows/audio.wav`.
+* Headless runs record audio to `target/veda/audio.wav`.
 * The agent's scripts (`tests/agent/`) talk to a stand-in for Deepgram
   that xtask starts on the host, and feed the agent's microphone from the
   host (`testmic`). The scripts in `tests/real/` talk to the real Deepgram
@@ -41,12 +41,12 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
   `$env:DEEPGRAM_API_KEY = "..."`); they type it into Settings with
   `type-env`, so it is in neither the script nor the logs. See
   [The agent](AGENT.md#testing).
-* With `--vm virtualbox`, xtask creates the VirtualBox machine "Vindows"
-  (files in `target/vindows/vbox`) on first use and updates it from the
-  options on every run. Its disks are VMDK descriptors (`vindows.vmdk`,
+* With `--vm virtualbox`, xtask creates the VirtualBox machine "Veda"
+  (files in `target/veda/vbox`) on first use and updates it from the
+  options on every run. Its disks are VMDK descriptors (`veda.vmdk`,
   `home.vmdk`) that point at the raw images, so VirtualBox and QEMU use the
   same files (not at the same time). The serial console goes to
-  `target/vindows/serial-vbox.log` and the terminal; Ctrl+C powers the
+  `target/veda/serial-vbox.log` and the terminal; Ctrl+C powers the
   machine off. The window enlarges the screen by the whole part of the
   host's display scaling, as QEMU's window (GTK) does, lowered until the
   window fits on the screen, and opens in the middle of the screen when the
@@ -59,26 +59,26 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
   screenshots) and its COM API (the mouse, through a helper PowerShell
   process); `test` skips scripts that need QEMU's simulated Wi-Fi.
 * With `--net wifi`, xtask builds and starts `airsim` (the simulated Wi-Fi
-  environment) next to QEMU; it logs to `target/vindows/airsim.log` and
+  environment) next to QEMU; it logs to `target/veda/airsim.log` and
   prints its control port, which takes commands such as `ap home off`,
   `ap home signal -80`, `wired down` or `dns servfail` (see
   [NETWORKING.md](NETWORKING.md)). Scripts use the same commands with
   `air`, `air-expect` and `air-wait` after a `net wifi` line.
 * `--cmdline "run=nettest"` checks the Internet connection from inside
-  Vindows; `run=nettest:wifi` first joins the simulated "Vindows Home"
+  Veda; `run=nettest:wifi` first joins the simulated "Veda Home"
   network (`run=NAME:ARG1,ARG2` passes arguments).
-* The home directory is kept on its own disk, `target/vindows/home.img`,
+* The home directory is kept on its own disk, `target/veda/home.img`,
   across builds and runs; `--fresh-home` starts over with a new one.
   Scripted runs (`shot`, `script`, `test`) always use a fresh home disk.
 * `--no-generate` reuses the media in `target/generated` instead of running
   the generators; `--skip PROGRAM` leaves a program out of the image (both
   help while a component is being worked on).
 * Several builds can run concurrently if each uses its own directories:
-  set `CARGO_TARGET_DIR` (cargo output) and `VINDOWS_OUT` (disk image, serial
+  set `CARGO_TARGET_DIR` (cargo output) and `VEDA_OUT` (disk image, serial
   log, screenshots) to private paths, e.g. in PowerShell
-  `$env:CARGO_TARGET_DIR="target/agent-x"; $env:VINDOWS_OUT="target/agent-x/vindows"`.
+  `$env:CARGO_TARGET_DIR="target/agent-x"; $env:VEDA_OUT="target/agent-x/veda"`.
   With `--vm virtualbox`, each output directory also gets its own machine
-  (here "Vindows-target-agent-x-vindows").
+  (here "Veda-target-agent-x-veda").
   Paths in automation scripts (`shot FILE`) are relative to the repository.
 
 ## The system image
@@ -179,7 +179,7 @@ directly: `begin_frame()` returns a `Canvas` for the back buffer,
 
 ## Performance notes
 
-Vindows usually runs under QEMU's TCG emulator (no hardware
+Veda usually runs under QEMU's TCG emulator (no hardware
 virtualisation), which is several times slower than native code. Keep
 per-frame work proportional to what changed, avoid per-pixel floating point
 in hot loops, and render 3D scenes at a modest internal resolution.

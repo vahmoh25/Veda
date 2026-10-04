@@ -1,4 +1,4 @@
-//! `nettest` — network checks that run inside Vindows.
+//! `nettest` — network checks that run inside Veda.
 //!
 //! * `nettest` / `nettest online`: waits for a network connection, then
 //!   checks Internet access end to end — DNS, TCP and HTTP to public
@@ -16,7 +16,7 @@
 //!   api.deepgram.com without a key (expects 401), reporting the TLS
 //!   version, cipher suite, key exchange and the handshake time.
 //! * `nettest wifi [SSID [PASSWORD]]`: joins a Wi-Fi network through the
-//!   Wi-Fi service (by default the simulated "Vindows Home" network of
+//!   Wi-Fi service (by default the simulated "Veda Home" network of
 //!   `cargo xtask run --net wifi`), then runs the online checks over it.
 //! * `nettest wifi-watch [SSID [PASSWORD]]`: joins (and saves) the network,
 //!   then reports every change of what a user would notice — the Wi-Fi
@@ -289,7 +289,7 @@ fn check_https(host: &str, path: &str, status: u16, text: Option<&str>, how: Con
         }
     };
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Vindows-nettest\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Veda-nettest\r\nAccept: */*\r\nConnection: close\r\n\r\n"
     );
     tls.write_all(request.as_bytes()).map_err(|e| format!("sending the request: {e}"))?;
     tls.transport_mut().set_read_timeout(Some(Duration::from_secs(30)));
@@ -560,18 +560,18 @@ fn main() -> i32 {
             ])
         }
         "wifi-watch" => {
-            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Vindows Home"));
-            let password = args.get(3).cloned().unwrap_or_else(|| String::from("vindows-wifi"));
+            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Veda Home"));
+            let password = args.get(3).cloned().unwrap_or_else(|| String::from("veda-wifi"));
             watch(&ssid, &password, false)
         }
         "route-watch" => {
-            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Vindows Home"));
-            let password = args.get(3).cloned().unwrap_or_else(|| String::from("vindows-wifi"));
+            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Veda Home"));
+            let password = args.get(3).cloned().unwrap_or_else(|| String::from("veda-wifi"));
             watch(&ssid, &password, true)
         }
         "wifi" => {
-            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Vindows Home"));
-            let password = args.get(3).cloned().unwrap_or_else(|| String::from("vindows-wifi"));
+            let ssid = args.get(2).map(|s| s.replace('+', " ")).unwrap_or_else(|| String::from("Veda Home"));
+            let password = args.get(3).cloned().unwrap_or_else(|| String::from("veda-wifi"));
             let gateway = || -> Check {
                 let st = vnet::status().map_err(net)?;
                 let gw = st.default_gateway.ok_or("no gateway")?;

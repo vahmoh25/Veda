@@ -1,4 +1,4 @@
-//! Parser for `\VINDOWS\BOOT.CFG`, a tiny `key=value` file:
+//! Parser for `\VEDA\BOOT.CFG`, a tiny `key=value` file:
 //!
 //! ```text
 //! # comment

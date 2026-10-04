@@ -1,6 +1,6 @@
 [package]
 name = "compositor"
-description = "The Vindows window system: compositor, window manager and input router"
+description = "The Veda window system: compositor, window manager and input router"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

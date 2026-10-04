@@ -1,7 +1,7 @@
 //! Minimal ACPI table parsing: CPUs and interrupt controllers (MADT), HPET,
 //! PCI Express configuration space (MCFG) and power control (FADT, `\_S5`).
 //! There is no AML interpreter; `\_S5` is located with a byte-pattern scan,
-//! which is reliable for the firmware Vindows targets.
+//! which is reliable for the firmware Veda targets.
 
 use alloc::vec::Vec;
 

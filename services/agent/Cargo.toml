@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-description = "The voice agent that lives in Vindows: conversations through Deepgram, actions on the system and its applications, memory and approvals"
+description = "The voice agent that lives in Veda: conversations through Deepgram, actions on the system and its applications, memory and approvals"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

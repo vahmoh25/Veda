@@ -1,4 +1,4 @@
-name=About Vindows
+name=About Veda
 exe=/system/bin/about.exe
 icon=info
 category=System

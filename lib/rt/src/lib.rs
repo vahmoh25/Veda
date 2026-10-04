@@ -1,6 +1,6 @@
-//! `vrt` — the Vindows user-space runtime.
+//! `vrt` — the Veda user-space runtime.
 //!
-//! Every Vindows program links this crate. It provides:
+//! Every Veda program links this crate. It provides:
 //!
 //! * the process entry point and startup protocol ([`entry!`], [`env`]),
 //! * safe wrappers for kernel objects and system calls ([`object`], [`vm`]),
@@ -9,7 +9,7 @@
 //! * process creation from PE images ([`process`]),
 //! * the few C runtime symbols compiled code relies on.
 //!
-//! The runtime pieces that only make sense in a real Vindows program (entry
+//! The runtime pieces that only make sense in a real Veda program (entry
 //! point, allocator, panic handler, C symbols) are behind the default
 //! `runtime` feature. Libraries depend on `vrt` with
 //! `default-features = false`, which keeps them unit-testable on the host.

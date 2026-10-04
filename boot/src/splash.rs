@@ -1,4 +1,4 @@
-//! The boot splash: a dark gradient with the Vindows logo (OS1's white
+//! The boot splash: a dark gradient with the Veda logo (OS1's white
 //! ring from "Her"), drawn directly into the GOP framebuffer while the
 //! system loads.
 

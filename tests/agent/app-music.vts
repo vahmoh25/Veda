@@ -14,7 +14,7 @@ agent-call app_actions '{"app":"music"}' 60
 agent-result list_songs
 wait-serial "music offers" 10
 wait-serial "music: library: 7 track(s)" 60
-# The library: the album that comes with Vindows.
+# The library: the album that comes with Veda.
 agent-call use_app '{"app":"music","action":"list_songs","arguments":{"query":"ambient"}}' 30
 agent-result '"title":"Aurora Drift"'
 agent-result '"total":2'
@@ -58,7 +58,7 @@ agent-result '"shuffle":true,"repeat":"one","volume":40,"muted":false'
 agent-result '"up_next":[{"title":"Aurora Drift"'
 agent-result '"library":{"songs":7,"albums":1,"artists":1'
 wait 3
-shot target/vindows/agent-app-music.png
+shot target/veda/agent-app-music.png
 # An album starts from its first song; a song that is not there is refused.
 agent-call use_app '{"app":"music","action":"play","arguments":{"query":"first light","kind":"album"}}' 30
 agent-result '"from":{"album":"First Light"}'

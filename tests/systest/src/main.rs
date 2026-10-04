@@ -1,4 +1,4 @@
-//! `systest` — integration tests that run inside Vindows.
+//! `systest` — integration tests that run inside Veda.
 //!
 //! Each test prints `<name> ... ok|FAILED: reason` and the final line is `PASS`
 //! or `FAIL (n failed)`; the kernel log prefixes every line with the program
@@ -45,7 +45,7 @@ fn test_vfs_system_image() -> TestResult {
         fs.read_file("/system/etc/version".into()).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     let mut buf = alloc::vec![0u8; len as usize];
     vmo.read(0, &mut buf).map_err(|e| e.to_string())?;
-    check(buf.starts_with(b"Vindows"), "version file contents")?;
+    check(buf.starts_with(b"Veda"), "version file contents")?;
     let denied = fs.open("/system/etc/version".into(), open_flags::WRITE).map_err(|e| e.to_string())?;
     check(denied == Err(FsError::ReadOnly), "system image is read-only")
 }

@@ -14,7 +14,7 @@ wait-serial "desktop ready" 90
 wait-serial "attached to the network service as wlan0" 120
 wait 6
 
-# Join the simulated home network from the network flyout: "Vindows Home",
+# Join the simulated home network from the network flyout: "Veda Home",
 # its password, Enter.
 click 0.859 0.97
 wait 4
@@ -22,7 +22,7 @@ click 0.85 0.4113
 wait 2
 click 0.8383 0.4713
 wait 1
-type "vindows-wifi"
+type "veda-wifi"
 key ret
 wait-serial "Routable via wlan0" 90
 wait 2

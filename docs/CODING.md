@@ -1,4 +1,4 @@
-# Vindows coding conventions
+# Veda coding conventions
 
 These rules apply to every crate in the repository.
 
@@ -32,7 +32,7 @@ These rules apply to every crate in the repository.
 ## Library crates
 
 * Libraries are `#![no_std]` (plus `extern crate alloc;` when they allocate)
-  so they can run inside Vindows **and** be unit-tested on the host.
+  so they can run inside Veda **and** be unit-tested on the host.
   Tests use `#[cfg(test)] extern crate std;` — never `cfg_attr(not(test), no_std)`.
 * Floating-point functions such as `sqrt`, `sin`, `floor` or `powf` are **not**
   available in `core` on stable. Use `vmath` (`use vmath::FloatExt;` gives
@@ -53,7 +53,7 @@ These rules apply to every crate in the repository.
 
 ## Performance
 
-Vindows usually runs under QEMU's TCG emulator, which is roughly 5-20x
+Veda usually runs under QEMU's TCG emulator, which is roughly 5-20x
 slower than native code. Hot loops (pixel processing, rasterisation, codecs)
 should avoid per-pixel divisions, allocation and bounds-check-heavy indexing,
 prefer integer/fixed-point arithmetic where it is natural, and process data in

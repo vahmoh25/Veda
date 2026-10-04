@@ -8,7 +8,7 @@ use vjson::{Value, object};
 
 /// Defaults: Deepgram's turn-aware recognition, a fast language model of
 /// the lower price tier, and a warm voice.
-pub const DEFAULT_NAME: &str = "Vera";
+pub const DEFAULT_NAME: &str = "Veda";
 pub const DEFAULT_LISTEN: &str = "flux-general-en";
 pub const DEFAULT_PROVIDER: &str = "open_ai";
 pub const DEFAULT_THINK: &str = "gpt-4.1-mini";

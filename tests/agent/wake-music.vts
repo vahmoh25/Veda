@@ -22,8 +22,8 @@ reject-serial "much speech this hour"
 checkpoint
 mic-tone 2 16000
 wait-serial "someone is speaking" 20
-agent-hear "Na na na. Hey Vera, stop the music." 30
+agent-hear "Na na na. Hey Veda, stop the music." 30
 wait-serial "woken by its name" 20
 agent-connected 60
-agent-expect "Hey Vera, stop the music." 20
+agent-expect "Hey Veda, stop the music." 20
 wait-serial "ducking the other sound" 10

@@ -1,6 +1,6 @@
-# Vindows
+# Veda
 
-Vindows is a modern x86-64 operating system written from scratch,
+Veda is a modern x86-64 operating system written from scratch,
 entirely in Rust. It is built around a capability-based microkernel and
 ships a polished graphical desktop and everyday applications, and reaches
 the Internet over Ethernet and Wi-Fi. And it has a voice: an agent that
@@ -10,11 +10,11 @@ drivers, services, toolkit, applications — is in this repository; the
 TCP/IP engine, the TLS protocol and the cryptographic primitives come from
 a few mature Rust crates (smoltcp, rustls, RustCrypto).
 
-![The Vindows desktop, with the agent's window open](docs/images/desktop.png)
+![The Veda desktop, with the agent's window open](docs/images/desktop.png)
 
 ## Highlights
 
-* **A voice that lives in it.** Say "Hey Vera" (or click the small ring at
+* **A voice that lives in it.** Say "Hey Veda" (or click the small ring at
   the right of the taskbar) and talk: the agent answers in its own voice, can be
   interrupted at any moment, and acts on the whole system — it opens and
   arranges applications, writes in the Text Editor, works with files,
@@ -68,7 +68,7 @@ a few mature Rust crates (smoltcp, rustls, RustCrypto).
 
 All screenshots are taken in QEMU by `cargo xtask script docs/screenshots.vts`
 (the agent talking to the stand-in for Deepgram).
-Vindows also runs in VirtualBox (see below).
+Veda also runs in VirtualBox (see below).
 
 ## Quick start
 
@@ -98,7 +98,7 @@ cargo xtask run
 ```
 
 This builds every component, writes the disk image
-`target/vindows/vindows.img` and boots it in a QEMU window. The first build
+`target/veda/veda.img` and boots it in a QEMU window. The first build
 takes one to two minutes on a recent PC (it also renders the sample pictures
 and music); later builds are incremental. Useful options:
 
@@ -115,7 +115,7 @@ cargo xtask run --net wifi
 ```
 
 This also starts `airsim`, a simulated Wi-Fi environment whose networks
-("Vindows Home", "Vindows WPA3", ...; password `vindows-wifi`) lead to the
+("Veda Home", "Veda WPA3", ...; password `veda-wifi`) lead to the
 Internet. `--net both` adds the wired card. See `cargo xtask help` for all
 commands and options.
 
@@ -129,7 +129,7 @@ cargo xtask run --vm virtualbox
 ```
 
 xtask creates (and on every run updates) a VirtualBox machine named
-"Vindows" whose disks are the same images QEMU uses, so builds need no
+"Veda" whose disks are the same images QEMU uses, so builds need no
 conversion and the home directory is shared between the two. VirtualBox
 uses the CPU's hardware virtualization (QEMU on Windows emulates the CPU
 in software). The machine is closer to a real
@@ -142,13 +142,13 @@ On a high-DPI display the window enlarges the screen as QEMU's does, by the
 whole part of the display scaling (2x at 250%), or less if the window
 would not fit on the screen. `--scale` sets the factor (`--scale 2.5`
 matches other programs at 250%; whole numbers look sharpest) and
-`--resolution` gives Vindows a larger desktop:
+`--resolution` gives Veda a larger desktop:
 
 ```bash
 cargo xtask run --vm virtualbox --resolution 1600x1000 --scale 2
 ```
 
-To put Vindows on your real network (your router's DHCP and DNS, the real
+To put Veda on your real network (your router's DHCP and DNS, the real
 Internet) through the host's network adapter, Wi-Fi included:
 
 ```bash
@@ -161,7 +161,7 @@ need QEMU (the simulated Wi-Fi) are skipped.
 ### Using the desktop
 
 * Talk to the agent: add your Deepgram API key in **Settings → Agent**
-  (also its voice, language model and memory), then say "Hey Vera", click
+  (also its voice, language model and memory), then say "Hey Veda", click
   the small ring at the right of the taskbar or press **Super+Space**. Talk naturally and
   interrupt whenever you like; say goodbye when you are done.
 * Click the logo (the ring in the middle of the taskbar) or tap the
@@ -178,7 +178,7 @@ need QEMU (the simulated Wi-Fi) are skipped.
   to change the volume). The network icon next to it shows the Wi-Fi
   signal and opens the list of networks to join.
 
-Your files live in `/home/user`, kept on `target/vindows/home.img` across
+Your files live in `/home/user`, kept on `target/veda/home.img` across
 restarts and rebuilds (`--fresh-home` starts over).
 
 ## Applications
@@ -207,7 +207,7 @@ cargo xtask test
 
 runs the host unit tests of the libraries (kernel ABI, heap, IPC, service
 protocols, math, rasterizer, fonts, image codecs, 2D graphics, text editing,
-paths and file types, audio, build tool) and then boots Vindows headless with the `systest`
+paths and file types, audio, build tool) and then boots Veda headless with the `systest`
 integration tests (IPC, threads, file system, launcher, crash reports and
 recovery of the window system after it is killed), failing on any panic.
 
@@ -215,7 +215,7 @@ Networking has its own host tests (the 802.11 protocol and cryptography
 against published test vectors, station against access point, TCP/IP stacks
 over a simulated cable, the Wi-Fi simulator, TLS handshakes against a
 rustls server and real certificate chains), and `nettest` checks DNS,
-TCP, HTTP, HTTPS and ping from inside Vindows.
+TCP, HTTP, HTTPS and ping from inside Veda.
 
 The agent is tested against a stand-in for Deepgram that runs on the host
 (`tests/agent/`: conversations, functions, interruptions, approvals in the
@@ -227,7 +227,7 @@ GUI automation scripts in `tests/ui/` click through the desktop and
 applications, check the log and save screenshots. The Wi-Fi scripts join
 networks through the desktop and break the simulated network in many ways
 (access point gone, disconnection, outages, the radio or the Wi-Fi service
-vanishing) to check that Vindows recovers by itself. Run them all with the
+vanishing) to check that Veda recovers by itself. Run them all with the
 unit and integration tests, or one at a time:
 
 ```bash
@@ -242,10 +242,10 @@ cargo xtask script tests/ui/editor.vts
 cargo xtask shot --wait 20
 ```
 
-(`shot` boots headless and saves `target/vindows/screen.png`.)
+(`shot` boots headless and saves `target/veda/screen.png`.)
 
 The serial console (kernel log plus every program's output) is saved to
-`target/vindows/serial.log`.
+`target/veda/serial.log`.
 
 ## Repository layout
 
@@ -259,7 +259,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `apps/` | the desktop `shell` and the applications, including `racer` (*Velocity*) and `starfall` |
 | `tests/` | `systest` and `nettest` (in-system tests), GUI automation scripts, the agent's scripts (`agent/`, and `real/` for the real services) |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
-| `third_party/` | vendored crates with Vindows patches (smoltcp) |
+| `third_party/` | vendored crates with Veda patches (smoltcp) |
 | `xtask/` | the build system: cross-compilation, disk image, QEMU, automation |
 | `assets/` | fonts, application manifests, sample documents |
 
@@ -276,6 +276,6 @@ The serial console (kernel log plus every program's output) is saved to
 
 ## License
 
-Vindows is released under the MIT license. The bundled fonts (Inter, Lato,
+Veda is released under the MIT license. The bundled fonts (Inter, Lato,
 JetBrains Mono) are under the SIL Open Font License 1.1; see
 `assets/fonts/`.

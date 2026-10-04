@@ -15,7 +15,7 @@ type "about"
 key ret
 wait-serial "started about" 30
 wait 3
-shot target/vindows/taskmgr-1-processes.png
+shot target/veda/taskmgr-1-processes.png
 # Search for it (the search box is right of About's window), select it with
 # Enter, end it with Delete and confirm.
 click 0.795 0.081
@@ -25,7 +25,7 @@ key ret
 wait 1
 key delete
 wait 1
-shot target/vindows/taskmgr-2-confirm.png
+shot target/veda/taskmgr-2-confirm.png
 key ret
 wait-serial "about exited with code -1002" 30
 # A system process asks with a stronger warning; Esc cancels.
@@ -37,7 +37,7 @@ key ret
 wait 1
 key delete
 wait 1
-shot target/vindows/taskmgr-3-system.png
+shot target/veda/taskmgr-3-system.png
 key esc
 wait 1
 reject-serial "vfs exited"
@@ -48,15 +48,15 @@ key esc
 wait 1
 click 0.8375 0.1375
 wait 2
-shot target/vindows/taskmgr-4-by-memory.png
+shot target/veda/taskmgr-4-by-memory.png
 click 0.2 0.224 right
 wait 1
-shot target/vindows/taskmgr-5-menu.png
+shot target/veda/taskmgr-5-menu.png
 key esc
 # The Performance tab: CPU, then Memory.
 key ctrl-2
 wait 5
-shot target/vindows/taskmgr-6-cpu.png
+shot target/veda/taskmgr-6-cpu.png
 click 0.098 0.275
 wait 2
-shot target/vindows/taskmgr-7-memory.png
+shot target/veda/taskmgr-7-memory.png

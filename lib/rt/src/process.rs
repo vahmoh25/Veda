@@ -67,7 +67,7 @@ impl<'a> Spawn<'a> {
         self
     }
 
-    /// Loads `image` (a Vindows PE executable) into a new process and starts it.
+    /// Loads `image` (a Veda PE executable) into a new process and starts it.
     pub fn start(self, image: &[u8]) -> Result<Process, SpawnError> {
         let pe = vpe::PeImage::parse(image).map_err(SpawnError::BadImage)?;
         pe.check_no_imports().map_err(SpawnError::BadImage)?;

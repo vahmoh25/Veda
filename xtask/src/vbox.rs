@@ -1,9 +1,9 @@
-//! Running Vindows in VirtualBox with the same options as QEMU
+//! Running Veda in VirtualBox with the same options as QEMU
 //! (`cargo xtask run --vm virtualbox`).
 //!
-//! The virtual machine ("Vindows", its files under `target/vindows/vbox`) is
+//! The virtual machine ("Veda", its files under `target/veda/vbox`) is
 //! created on first use and brought in line with the options on every run;
-//! an output directory moved with `$VINDOWS_OUT` gets a machine of its own.
+//! an output directory moved with `$VEDA_OUT` gets a machine of its own.
 //! Its disks are the very raw images QEMU uses, described by small VMDK
 //! files ("monolithicFlat"), so a rebuild needs no conversion and the home
 //! directory is shared between both hypervisors. The machine is closer to a
@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use crate::qemu::{NetMode, VmConfig};
 use crate::util::{self, Result};
 
-/// The VirtualBox installation (`VBoxManage`) and the machine Vindows runs
+/// The VirtualBox installation (`VBoxManage`) and the machine Veda runs
 /// in.
 #[derive(Clone)]
 pub struct VBox {
@@ -217,7 +217,7 @@ impl VBox {
     }
 
     /// The firmware's display mode, which the boot loader then uses, and the
-    /// window's scale (`GUI/ScaleFactor`: at 2, each pixel of Vindows covers
+    /// window's scale (`GUI/ScaleFactor`: at 2, each pixel of Veda covers
     /// 2x2 pixels of the host's screen). When either changes, the window is
     /// placed in the middle of the screen again: VirtualBox would keep its
     /// old corner and let the larger window run off the screen.
@@ -307,7 +307,7 @@ impl VBox {
     }
 
     /// Attaches the boot disk (port 0) and the home disk (port 1) to the SATA
-    /// controller, with the serial numbers Vindows looks for.
+    /// controller, with the serial numbers Veda looks for.
     fn attach_disks(&self, boot: &Path, home: Option<&Path>) -> Result {
         let vm = self.name();
         let info = self.info().ok_or("cannot read the machine's settings")?;
@@ -327,7 +327,7 @@ impl VBox {
                 "on",
             ])?;
         }
-        for (port, image, serial) in [(0, Some(boot), "vindows-boot"), (1, home, "vindows-home")] {
+        for (port, image, serial) in [(0, Some(boot), "veda-boot"), (1, home, "veda-home")] {
             let key = format!("VBoxInternal/Devices/ahci/0/Config/Port{port}/SerialNumber");
             let p = port.to_string();
             match image {
@@ -429,16 +429,16 @@ impl VBox {
     }
 }
 
-/// Name of the virtual machine for an output directory: "Vindows" for the
+/// Name of the virtual machine for an output directory: "Veda" for the
 /// usual one, and one derived from the directory for others, so that builds
-/// side by side (`$VINDOWS_OUT`) get machines of their own.
+/// side by side (`$VEDA_OUT`) get machines of their own.
 fn machine_name(root: &Path, out: &Path) -> String {
-    if out == root.join("target").join("vindows") {
-        return "Vindows".into();
+    if out == root.join("target").join("veda") {
+        return "Veda".into();
     }
     let rel = out.strip_prefix(root).unwrap_or(out).to_string_lossy().to_string();
     let words: Vec<&str> = rel.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    format!("Vindows-{}", words.join("-"))
+    format!("Veda-{}", words.join("-"))
 }
 
 /// The window scale when none is asked for: the whole part of the host's
@@ -670,9 +670,9 @@ mod tests {
 
     #[test]
     fn uuids_are_stable_and_well_formed() {
-        let a = path_uuid(Path::new(r"C:\x\target\vindows\vindows.img"));
-        assert_eq!(a, path_uuid(Path::new(r"c:\X\TARGET\vindows\vindows.img")));
-        assert_ne!(a, path_uuid(Path::new(r"C:\x\target\vindows\home.img")));
+        let a = path_uuid(Path::new(r"C:\x\target\veda\veda.img"));
+        assert_eq!(a, path_uuid(Path::new(r"c:\X\TARGET\veda\veda.img")));
+        assert_ne!(a, path_uuid(Path::new(r"C:\x\target\veda\home.img")));
         assert_eq!(a.len(), 36);
         assert_eq!(&a[14..15], "4");
         assert!("89ab".contains(&a[19..20]));
@@ -680,10 +680,10 @@ mod tests {
 
     #[test]
     fn machines_follow_the_output_directory() {
-        let root = Path::new(r"C:\src\vindows");
-        assert_eq!(machine_name(root, &root.join("target").join("vindows")), "Vindows");
-        assert_eq!(machine_name(root, &root.join(r"target\agent-x\vindows")), "Vindows-target-agent-x-vindows");
-        assert_eq!(machine_name(root, Path::new(r"D:\vm out")), "Vindows-D-vm-out");
+        let root = Path::new(r"C:\src\veda");
+        assert_eq!(machine_name(root, &root.join("target").join("veda")), "Veda");
+        assert_eq!(machine_name(root, &root.join(r"target\agent-x\veda")), "Veda-target-agent-x-veda");
+        assert_eq!(machine_name(root, Path::new(r"D:\vm out")), "Veda-D-vm-out");
     }
 
     fn display(scale: f64, width: u32, height: u32) -> HostDisplay {

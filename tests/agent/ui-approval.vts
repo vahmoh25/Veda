@@ -7,14 +7,14 @@ mic-silence 1
 agent-connected 120
 wait-serial "interface attached" 30
 wait 2
-shot target/vindows/agent-1-tray.png
+shot target/veda/agent-1-tray.png
 # The tray's circle opens the agent's window.
 click 0.825 0.97
 wait 2
-shot target/vindows/agent-2-window.png
+shot target/veda/agent-2-window.png
 agent-speak 3
 wait 1
-shot target/vindows/agent-3-speaking.png
+shot target/veda/agent-3-speaking.png
 wait 3
 # Deleting a file needs consent: the request appears in the window.
 agent-call files '{"operation":"write","path":"~/Documents/note.txt","text":"hello"}' 30
@@ -23,7 +23,7 @@ agent-call files '{"operation":"delete","path":"~/Documents/note.txt"}' 30
 agent-result waiting_for_approval
 wait-serial "approval 1 requested" 10
 wait 2
-shot target/vindows/agent-4-approval.png
+shot target/veda/agent-4-approval.png
 agent-mark
 click 0.867 0.8275
 wait-serial "approval 1 declined" 10

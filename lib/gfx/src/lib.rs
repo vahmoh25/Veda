@@ -1,4 +1,4 @@
-//! `vgfx` — Vindows 2D graphics.
+//! `vgfx` — Veda 2D graphics.
 //!
 //! * [`Canvas`]: drawing on a borrowed buffer of premultiplied `0xAARRGGBB`
 //!   pixels — rectangles, gradients, anti-aliased rounded rectangles and
@@ -8,7 +8,7 @@
 //! * [`ShadowTemplate`]: fast soft shadows.
 //! * [`Text`]: fonts and cached glyph rendering (through `vfont`).
 //!
-//! Everything is integer- and cache-friendly because Vindows usually runs
+//! Everything is integer- and cache-friendly because Veda usually runs
 //! under CPU emulation.
 
 #![no_std]

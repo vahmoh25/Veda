@@ -1,4 +1,4 @@
-//! The agent protocols: how the voice agent that lives in Vindows reaches
+//! The agent protocols: how the voice agent that lives in Veda reaches
 //! applications, and how the desktop and Settings reach the agent.
 //!
 //! * [`agentapp`]: served by an **application** on a channel it hands the

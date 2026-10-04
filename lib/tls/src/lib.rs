@@ -1,4 +1,4 @@
-//! `vtls` — TLS for Vindows applications: HTTPS, secure WebSockets and any
+//! `vtls` — TLS for Veda applications: HTTPS, secure WebSockets and any
 //! other protocol over TLS 1.3 or TLS 1.2.
 //!
 //! ```ignore

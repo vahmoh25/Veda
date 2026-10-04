@@ -1,6 +1,6 @@
 [package]
 name = "initrd"
-description = "The VINITRD archive format: the Vindows initial ramdisk"
+description = "The VINITRD archive format: the Veda initial ramdisk"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

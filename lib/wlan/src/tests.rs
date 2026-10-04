@@ -39,7 +39,7 @@ struct Sim {
 fn ap_config(security: Security, pass: &str) -> ApConfig {
     ApConfig {
         bssid: AP_MAC,
-        ssid: b"VindowsNet".to_vec(),
+        ssid: b"VedaNet".to_vec(),
         channel: 6,
         security,
         passphrase: if pass.is_empty() { None } else { Some(String::from(pass)) },

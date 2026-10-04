@@ -281,7 +281,7 @@ impl TaskManager {
         let (koid, title) = (t.koid, self.title_of(t));
         if !t.is_app {
             return Err(format!(
-                "{title} is a system process: ending it can stop Vindows from working, so Task Manager ends only \
+                "{title} is a system process: ending it can stop Veda from working, so Task Manager ends only \
                  applications for the agent"
             ));
         }

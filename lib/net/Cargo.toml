@@ -1,6 +1,6 @@
 [package]
 name = "vnet"
-description = "Networking for Vindows applications: TCP streams, UDP sockets, name resolution, ping and a small HTTP client"
+description = "Networking for Veda applications: TCP streams, UDP sockets, name resolution, ping and a small HTTP client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

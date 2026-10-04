@@ -1,6 +1,6 @@
 [package]
 name = "vkernel"
-description = "The Vindows microkernel"
+description = "The Veda microkernel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
