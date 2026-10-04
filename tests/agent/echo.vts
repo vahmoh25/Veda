@@ -25,3 +25,16 @@ mic-tone 2.5 16000
 wait-serial "the user talks over the agent" 10
 wait 3
 agent-mic-heard -30
+# Once the agent is done (and its echo is over), the microphone goes
+# through as it is: even quiet speech, far below what talking over the
+# agent takes. (The gate once kept the level of the agent's last syllable
+# after it stopped, and held the microphone back between its answers.)
+wait 5
+checkpoint
+agent-mark
+agent-speak 2
+wait 4
+mic-tone 1.5 600
+wait 2.5
+agent-mic-heard -45
+reject-serial "the user talks over the agent"

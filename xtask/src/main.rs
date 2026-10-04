@@ -433,7 +433,7 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
         None => build(o)?,
     };
     let mut vm = o.vm.clone();
-    vm.audio_wav = Some(util::out_dir().join("audio.wav"));
+    vm.audio_wav = (!automate::host_audio(script)).then(|| util::out_dir().join("audio.wav"));
     // Scripts that reboot the machine need QEMU to stay up across it.
     vm.allow_reboot = script.lines().any(|l| l.trim() == "reset");
     if let Some(net) = automate::net_mode(script)? {

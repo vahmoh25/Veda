@@ -28,6 +28,7 @@
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
 //! nic e1000                        # QEMU model of the wired card for this run, applied before boot
 //! sound ac97                       # QEMU's sound card for this run (virtio or ac97), applied before boot
+//! audio host                       # the host's loudspeakers and microphone instead of a WAV file (echo on real hardware)
 //! expect-audio                     # fail unless the recorded sound output holds more than silence
 //! requires qemu                    # only for QEMU (or `virtualbox`); `test` skips it elsewhere
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
@@ -396,6 +397,12 @@ pub fn sound_card(script: &str) -> Option<String> {
     script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "sound")).find_map(|w| w.get(1).cloned())
 }
 
+/// Whether a script plays through the host's loudspeakers and records its
+/// microphone (`audio host`) instead of recording the output to a file.
+pub fn host_audio(script: &str) -> bool {
+    script.lines().map(words).any(|w| w.len() == 2 && w[0] == "audio" && w[1] == "host")
+}
+
 /// The wired card model a script asks for with `nic`.
 pub fn nic_model(script: &str) -> Option<String> {
     script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "nic")).find_map(|w| w.get(1).cloned())
@@ -487,7 +494,7 @@ pub fn run_script(
                     s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "sound" | "requires" => {}
+                "boot-cmdline" | "net" | "nic" | "sound" | "audio" | "requires" => {}
                 "air" => {
                     let line = w.get(1).ok_or("missing command")?;
                     s.sim().and_then(|sim| sim.command(line)).map_err(ctx)?;

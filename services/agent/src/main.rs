@@ -111,8 +111,14 @@ struct Agent {
     /// Calls the language model is waiting on.
     calls_in_flight: usize,
     mic_buf: Vec<i16>,
-    /// Microphone audio short of a whole packet.
+    /// What was playing while `mic_buf` was recorded, and `mic_buf` before
+    /// echo cancellation (empty if the audio service does not say).
+    playing_buf: Vec<i16>,
+    recorded_buf: Vec<i16>,
+    /// Microphone audio short of a whole packet (and what goes with it).
     mic_pending: Vec<i16>,
+    playing_pending: Vec<i16>,
+    recorded_pending: Vec<i16>,
     /// Keeps the agent's own voice from the recogniser.
     gate: EchoGate,
     /// Packets the gate held back, the newest last (sent if the user turns
@@ -340,10 +346,12 @@ impl Agent {
             println!("conversation ended after {} s", (vrt::time::now_ns() - s.started_ns) / 1_000_000_000);
             let g = &mut self.gate;
             if g.held > 0 {
+                let (cancelled, recorded) = g.coupling_db();
                 println!(
-                    "kept {:.1} s of the agent's own voice from the recogniser (its echo up to {:.0} dB), talked over {} time(s)",
+                    "kept {:.1} s of the agent's own voice from the recogniser (its echo up to {:.0} dB after cancellation, {:.0} dB before), the user talked over it {} time(s)",
                     g.held as f32 * 0.02,
-                    g.coupling_db(),
+                    cancelled,
+                    recorded,
                     g.openings
                 );
                 g.held = 0;
@@ -351,6 +359,8 @@ impl Agent {
             }
         }
         self.mic_pending.clear();
+        self.playing_pending.clear();
+        self.recorded_pending.clear();
         self.preroll.clear();
         self.connector = None;
         self.calls_in_flight = 0;
@@ -418,7 +428,14 @@ impl Agent {
                 if let Some(v) = &mut self.voice
                     && v.speaking()
                 {
-                    println!("interrupted: voice stopped");
+                    let gate = if self.gate.is_open() {
+                        "open"
+                    } else if self.gate.echoing() {
+                        "holding"
+                    } else {
+                        "passing"
+                    };
+                    println!("interrupted: voice stopped (echo gate {gate})");
                     v.stop_speaking();
                 }
                 if let Some(s) = &mut self.session {
@@ -460,6 +477,9 @@ impl Agent {
                 self.agent_speaks();
             }
             ServerMessage::AgentAudioDone => {
+                if let Some(v) = &mut self.voice {
+                    v.answer_complete();
+                }
                 if let Some(s) = &mut self.session {
                     s.audio_done = true;
                     s.last_activity_ns = now;
@@ -585,7 +605,9 @@ impl Agent {
         println!("result {} {}", name, content.chars().take(200).collect::<String>());
         self.send(&deepgram::function_response(&id, &name, &content));
         if self.calls_in_flight == 0 && self.state == AgentState::Thinking {
-            self.set_state(AgentState::Listening, "");
+            // What the agent said before the call may still be playing.
+            let speaking = self.voice.as_ref().is_some_and(Voice::speaking);
+            self.set_state(if speaking { AgentState::Speaking } else { AgentState::Listening }, "");
         }
     }
 
@@ -703,7 +725,9 @@ impl Agent {
     fn mic(&mut self) {
         let Some(v) = &mut self.voice else { return };
         self.mic_buf.clear();
-        if v.read_mic(&mut self.mic_buf) == 0 {
+        self.playing_buf.clear();
+        self.recorded_buf.clear();
+        if v.read_mic(&mut self.mic_buf, &mut self.playing_buf, &mut self.recorded_buf) == 0 {
             return;
         }
         if self.muted {
@@ -732,12 +756,22 @@ impl Agent {
     /// the echo gate, so that what is left of the agent's own voice after
     /// echo cancellation is silence to the recogniser (see `vagent::gate`).
     fn gate_mic(&mut self) -> Vec<i16> {
+        use vaudio::level::rms_dbfs;
         self.mic_pending.extend_from_slice(&self.mic_buf);
+        self.playing_pending.extend_from_slice(&self.playing_buf);
+        self.recorded_pending.extend_from_slice(&self.recorded_buf);
         let whole = self.mic_pending.len() / MIC_PACKET * MIC_PACKET;
+        // The gate works while the agent's voice is audible (and against the
+        // echo of everything playing; of the voice alone if the audio
+        // service does not say what plays).
         let voice_db = self.voice.as_ref().map_or(-100.0, Voice::output_db);
         let mut out = Vec::with_capacity(whole + gate::PREROLL_PACKETS * MIC_PACKET);
-        for p in self.mic_pending[..whole].chunks(MIC_PACKET) {
-            match self.gate.packet(vaudio::level::rms_dbfs(p), voice_db) {
+        for (k, p) in self.mic_pending[..whole].chunks(MIC_PACKET).enumerate() {
+            let at = k * MIC_PACKET..(k + 1) * MIC_PACKET;
+            let mic_db = rms_dbfs(p);
+            let playing_db = self.playing_pending.get(at.clone()).map_or(voice_db, rms_dbfs);
+            let recorded_db = self.recorded_pending.get(at).map_or(mic_db, rms_dbfs);
+            match self.gate.packet(mic_db, recorded_db, playing_db, voice_db) {
                 Verdict::Pass => {
                     self.preroll.clear();
                     out.extend_from_slice(p);
@@ -751,7 +785,11 @@ impl Agent {
                     out.extend(core::iter::repeat_n(0i16, p.len()));
                 }
                 Verdict::Open => {
-                    println!("the user talks over the agent");
+                    println!(
+                        "the user talks over the agent (microphone at {:.0} dBFS, its echo at most {:.0})",
+                        mic_db,
+                        self.gate.expected_db()
+                    );
                     for q in self.preroll.drain(..) {
                         out.extend_from_slice(&q);
                     }
@@ -760,6 +798,10 @@ impl Agent {
             }
         }
         self.mic_pending.drain(..whole);
+        let side = whole.min(self.playing_pending.len());
+        self.playing_pending.drain(..side);
+        let side = whole.min(self.recorded_pending.len());
+        self.recorded_pending.drain(..side);
         out
     }
 
@@ -1244,7 +1286,11 @@ fn main() -> i32 {
         approved: BTreeMap::new(),
         calls_in_flight: 0,
         mic_buf: Vec::new(),
+        playing_buf: Vec::new(),
+        recorded_buf: Vec::new(),
         mic_pending: Vec::new(),
+        playing_pending: Vec::new(),
+        recorded_pending: Vec::new(),
         gate: EchoGate::new(),
         preroll: VecDeque::new(),
         on_wake: Vec::new(),

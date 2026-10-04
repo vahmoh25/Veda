@@ -79,7 +79,12 @@ is closed.
 * **Listening and speaking.** The microphone streams in 20 ms packets.
   Deepgram's voice arrives faster than real time and queues behind what is
   playing; when you start talking (`UserStartedSpeaking`) the queue and the
-  stream are flushed at once.
+  stream are flushed at once. An answer starts playing once some of it has
+  arrived (or all of it, `AgentAudioDone`): speech crossing a network comes
+  in bursts, and starting on the first packet would turn every late one
+  into a gap. A quarter of a second at first; each time the voice runs dry
+  in the middle of an answer, more (up to three quarters), coming back
+  down as answers play through: a jitter buffer.
 * **Not hearing itself.** The microphone is echo-cancelled in the audio
   service (`vaudio::aec`, with the mixed speaker output as the
   reference). No canceller removes everything — loudspeakers a hand away
@@ -89,10 +94,17 @@ is closed.
   would stop mid-sentence and answer words nobody said. So while the
   agent's voice is audible (and for its echo's length after), an echo
   gate (`vagent::gate`) sends silence instead of the microphone, unless
-  the microphone is clearly louder than the agent's echo could be — you
-  talking over it — and then it sends the last 300 ms too, so your first
-  words are not lost. The gate learns how loud the echo is as the agent
-  speaks.
+  the microphone is clearly louder than the echo could be — you talking
+  over it — and then it sends the last 300 ms too, so your first words are
+  not lost. Beside the cleaned microphone the audio service delivers what
+  was playing when it was recorded (the voice, and music under it, say)
+  and the microphone as recorded. The gate learns how loud the echo is in
+  both, remembering the loudest across sentences (a laptop that cancels
+  echo itself lets bursts through at the start of a sentence), and opens
+  only when both are louder than their echo: a canceller that loses track
+  of the echo for a moment makes the cleaned microphone louder, but only
+  someone talking makes the recorded one louder. Music on its own is not
+  held back.
 * **Doing.** The language model calls functions (below); the agent service
   runs them on a worker thread and answers with JSON results. A function
   that needs your consent answers "waiting for approval", and the outcome
@@ -280,6 +292,9 @@ sleep between events.
   `mic-wav FILE`) feeds the agent's microphone through `testmic`;
   `mic-echo GAIN DELAY` brings the machine's own sound output back into
   it, as loudspeakers next to a microphone would (`tests/agent/echo.vts`).
+  To see how a real machine echoes, a script with `audio host` plays
+  through the host's loudspeakers and records its microphone instead
+  (QEMU or VirtualBox; not part of the tests, it is audible).
 * `tests/real/agent-deepgram.vts` and `tests/real/agent-wake.vts` talk to
   the real Deepgram with the key in `$DEEPGRAM_API_KEY` (typed into
   Settings by `type-env`, so it appears in neither scripts nor logs); `say`
@@ -294,9 +309,9 @@ sleep between events.
 * English only (Flux and the name detector's key term are English).
 * Speech recognition can mishear; the agent is told so and asks when a
   word seems out of place, but a misheard name can wake it, or not.
-* To talk over the agent you need to be louder at the microphone than its
-  echo: with loud speakers right next to it, speak up (or use
-  headphones).
+* To talk over the agent (or music playing) you need to be louder at the
+  microphone than its echo: with loud speakers right next to it, speak up
+  (or use headphones).
 * The agent needs the Internet and a Deepgram account; asleep, only the
   name listener's short recognitions are billed, but every conversation
   minute is.
