@@ -210,6 +210,15 @@ needs a radio of its own: a USB Wi-Fi adapter passed through to the
 virtual machine, with drivers for the USB controller and the adapter's
 chip.
 
+On a Windows host, the host's network adapter may merge received TCP
+segments into one frame (receive segment coalescing), and VirtualBox
+passes these on to the bridged guest: frames several times the MTU long,
+carrying the first segment's TCP checksum. `e1000` accepts long frames,
+puts together frames spread over several receive buffers and sets the
+checksum of merged ones again (the host checked every segment before
+merging them). Dropping them, as it once did, made every download crawl
+through retransmissions.
+
 To check it from inside Vindows:
 
 ```bash

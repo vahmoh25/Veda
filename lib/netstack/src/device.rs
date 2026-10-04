@@ -25,14 +25,21 @@ pub struct QueueDevice {
     pub tx_dropped: u64,
 }
 
+/// The largest received frame accepted (what a device link slot holds).
+const MAX_RX_FRAME: usize = 16384;
+
 impl QueueDevice {
     pub fn new(medium: Medium, mtu: usize, loopback: bool) -> QueueDevice {
         QueueDevice { rx: VecDeque::new(), tx: VecDeque::new(), medium, mtu, loopback, rx_dropped: 0, tx_dropped: 0 }
     }
 
     /// Queues a received frame. Returns `false` if it was dropped.
+    ///
+    /// Frames may exceed the MTU: a hypervisor bridged to a host whose
+    /// network adapter merges TCP segments (receive segment coalescing)
+    /// passes on frames several times the MTU, valid in every other way.
     pub fn push_rx(&mut self, frame: &[u8]) -> bool {
-        if self.rx.len() >= QUEUE_LIMIT || frame.len() > self.mtu {
+        if self.rx.len() >= QUEUE_LIMIT || frame.len() > self.mtu.max(MAX_RX_FRAME) {
             self.rx_dropped += 1;
             return false;
         }

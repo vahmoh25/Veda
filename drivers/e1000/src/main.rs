@@ -8,6 +8,16 @@
 //! family understands, one receive and one transmit ring of 2 KiB buffers,
 //! no offloads, an MSI interrupt when the card has one (polling otherwise).
 //! If the network service restarts, the driver attaches again.
+//!
+//! Received frames may be larger than the MTU: bridged to a Windows host,
+//! VirtualBox passes on TCP segments that the host's network adapter merged
+//! (receive segment coalescing), up to several times the MTU. Long packets
+//! are enabled and a frame spread over several buffers is put back
+//! together; dropping them made every such download crawl through
+//! retransmissions. The adapter checked each segment before merging them
+//! but leaves the merged frame's TCP checksum stale, so the driver sets it
+//! again ([`fix_merged_checksum`]); ordinary frames keep being checked end
+//! to end by the network stack.
 
 #![no_std]
 #![no_main]
@@ -20,7 +30,7 @@ use core::ptr::{read_volatile, write_volatile};
 
 use vabi::{WaitItem, map_flags, signals};
 use vproto::net::{DeviceAttachment, DeviceInfo, InterfaceKind};
-use vproto::netring::{Link, SlotMeta, kind};
+use vproto::netring::{self, Link, SlotMeta, kind};
 use vproto::pci::pcidev;
 use vrt::object::{Channel, Interrupt};
 use vrt::println;
@@ -68,6 +78,8 @@ const STATUS_LU: u32 = 1 << 1;
 const RCTL_EN: u32 = 1 << 1;
 /// Multicast promiscuous (IPv6 neighbour discovery needs multicast).
 const RCTL_MPE: u32 = 1 << 4;
+/// Long packet enable: frames over 1522 bytes.
+const RCTL_LPE: u32 = 1 << 5;
 const RCTL_BAM: u32 = 1 << 15;
 const RCTL_SECRC: u32 = 1 << 26;
 const TCTL_EN: u32 = 1 << 1;
@@ -88,11 +100,76 @@ const RING: usize = 128;
 const DESC: usize = 16;
 const BUF: usize = 2048;
 const MIN_FRAME: usize = 14;
-const MAX_FRAME: usize = 1518;
+/// The largest frame received: what one link slot holds (frames this size
+/// span several buffers).
+const MAX_FRAME: usize = LINK_SLOT_SIZE as usize - netring::layout::SLOT_HEADER;
+/// Link slots carry merged frames too (see the module documentation).
+const LINK_SLOT_SIZE: u32 = netring::layout::MAX_SLOT_SIZE;
+/// The longest frame a single Ethernet frame can be (without its CRC):
+/// anything longer was merged by the host.
+const STANDARD_FRAME: usize = 1518;
 /// Slots per direction of the link to the stack.
-const LINK_SLOTS: u32 = 256;
+const LINK_SLOTS: u32 = 128;
 const POLL_NS: u64 = 5_000_000;
 const IDLE_POLL_NS: u64 = 1_000_000_000;
+
+/// One's-complement sum of 16-bit words (an odd last byte is padded).
+fn sum16(mut acc: u32, bytes: &[u8]) -> u32 {
+    let (pairs, rest) = bytes.as_chunks::<2>();
+    for p in pairs {
+        acc += u16::from_be_bytes(*p) as u32;
+    }
+    if let [last] = rest {
+        acc += (*last as u32) << 8;
+    }
+    acc
+}
+
+fn fold(mut acc: u32) -> u16 {
+    while acc >> 16 != 0 {
+        acc = (acc & 0xFFFF) + (acc >> 16);
+    }
+    !(acc as u16)
+}
+
+/// Sets the TCP checksum of a frame the host merged from segments it had
+/// already checked (see the module documentation). IPv4 and IPv6; other
+/// frames are left alone.
+fn fix_merged_checksum(frame: &mut [u8]) {
+    if frame.len() < 14 {
+        return;
+    }
+    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    let ip = &mut frame[14..];
+    let (tcp_start, tcp_len, pseudo) = match ethertype {
+        0x0800 if ip.len() >= 20 && ip[9] == 6 => {
+            let ihl = (ip[0] & 0x0F) as usize * 4;
+            let total = u16::from_be_bytes([ip[2], ip[3]]) as usize;
+            if ihl < 20 || total > ip.len() || total < ihl + 20 {
+                return;
+            }
+            let len = total - ihl;
+            let mut acc = sum16(0, &ip[12..20]);
+            acc += 6 + len as u32;
+            (ihl, len, acc)
+        }
+        0x86DD if ip.len() >= 40 && ip[6] == 6 => {
+            let len = u16::from_be_bytes([ip[4], ip[5]]) as usize;
+            if 40 + len > ip.len() || len < 20 {
+                return;
+            }
+            let mut acc = sum16(0, &ip[8..40]);
+            acc += 6 + len as u32;
+            (40, len, acc)
+        }
+        _ => return,
+    };
+    let tcp = &mut ip[tcp_start..tcp_start + tcp_len];
+    tcp[16] = 0;
+    tcp[17] = 0;
+    let sum = fold(sum16(pseudo, tcp));
+    tcp[16..18].copy_from_slice(&sum.to_be_bytes());
+}
 
 struct Card {
     /// The channel to devmgr, kept open while the driver runs (closing it
@@ -115,6 +192,10 @@ struct Card {
     rx_frames: u64,
     tx_frames: u64,
     rx_dropped: u64,
+    /// A frame spread over several receive buffers, being put together.
+    rx_frame: alloc::vec::Vec<u8>,
+    /// A buffer of the frame was bad or it grew too long: drop it.
+    rx_broken: bool,
 }
 
 impl Card {
@@ -148,7 +229,9 @@ impl Card {
         d
     }
 
-    /// Moves received frames to the stack and gives the buffers back.
+    /// Moves received frames to the stack and gives the buffers back. A
+    /// frame larger than one buffer arrives in several, the last one
+    /// marked end-of-packet.
     fn receive(&mut self, link: &Link) {
         let mut returned = None;
         for _ in 0..RING {
@@ -160,18 +243,26 @@ impl Card {
             let len =
                 u16::from_le_bytes([Self::desc_u8(&self.rx_ring, i, 8), Self::desc_u8(&self.rx_ring, i, 9)]) as usize;
             let errors = Self::desc_u8(&self.rx_ring, i, 13);
-            // Frames larger than one buffer (never sent with these settings)
-            // and frames with errors are dropped.
-            if status & RX_EOP != 0 && errors == 0 && (MIN_FRAME..=MAX_FRAME).contains(&len) {
+            if errors != 0 || len > BUF || self.rx_frame.len() + len > MAX_FRAME {
+                self.rx_broken = true;
+            } else {
                 // SAFETY: the device has finished writing this buffer.
-                let frame = unsafe { self.rx_buf.bytes(i * BUF, len) };
-                if link.send(SlotMeta::ethernet(), frame) {
+                self.rx_frame.extend_from_slice(unsafe { self.rx_buf.bytes(i * BUF, len) });
+            }
+            if status & RX_EOP != 0 {
+                if self.rx_frame.len() > STANDARD_FRAME {
+                    fix_merged_checksum(&mut self.rx_frame);
+                }
+                if !self.rx_broken
+                    && self.rx_frame.len() >= MIN_FRAME
+                    && link.send(SlotMeta::ethernet(), &self.rx_frame)
+                {
                     self.rx_frames += 1;
                 } else {
                     self.rx_dropped += 1;
                 }
-            } else {
-                self.rx_dropped += 1;
+                self.rx_frame.clear();
+                self.rx_broken = false;
             }
             let d = self.rx_desc(i);
             Self::set_desc(&self.rx_ring, i, &d);
@@ -260,6 +351,8 @@ fn setup() -> Result<Card, String> {
         rx_frames: 0,
         tx_frames: 0,
         rx_dropped: 0,
+        rx_frame: alloc::vec::Vec::with_capacity(MAX_FRAME),
+        rx_broken: false,
     };
 
     // Reset, with every interrupt masked.
@@ -307,7 +400,7 @@ fn setup() -> Result<Card, String> {
     card.w(reg::RDH, 0);
     card.w(reg::RDT, (RING - 1) as u32);
     // 2 KiB buffers (size bits 0), CRC stripped, broadcasts and multicasts.
-    card.w(reg::RCTL, RCTL_EN | RCTL_BAM | RCTL_MPE | RCTL_SECRC);
+    card.w(reg::RCTL, RCTL_EN | RCTL_BAM | RCTL_MPE | RCTL_SECRC | RCTL_LPE);
 
     // Transmit ring, empty.
     let tx = card.tx_ring.phys();
@@ -400,7 +493,7 @@ fn main() -> i32 {
             driver: "e1000".into(),
             location: card.location.clone(),
         };
-        match DeviceAttachment::attach(info, LINK_SLOTS, BUF as u32, card.link_up()) {
+        match DeviceAttachment::attach(info, LINK_SLOTS, LINK_SLOT_SIZE, card.link_up()) {
             Ok(att) => {
                 println!("attached as {}", att.name);
                 run(&mut card, &att);
