@@ -1,0 +1,27 @@
+# The agent does not hear itself. The machine's sound output comes back
+# into the test microphone a quarter of a second later and only 6 dB
+# quieter — loudspeakers right next to the microphone, as on a laptop —
+# and while the agent speaks nothing of it reaches the recogniser (which
+# would take it for the user and interrupt the agent). Talking over the
+# agent, louder than its echo, still does.
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-echo -6 250
+mic-silence 1
+agent-connected 120
+wait-serial "state: Listening" 30
+wait 1
+# The agent talks; its echo is held back from its first word to the end.
+agent-mark
+agent-speak 5
+wait 7
+agent-mic-quiet -70
+reject-serial "the user talks over the agent"
+# Again, and the user talks over it.
+agent-mark
+agent-speak 6
+wait 1.5
+mic-tone 2.5 16000
+wait-serial "the user talks over the agent" 10
+wait 3
+agent-mic-heard -30

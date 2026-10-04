@@ -24,8 +24,12 @@ pub const MIC_RATE: u32 = 16_000;
 pub const VOICE_RATE: u32 = 24_000;
 /// Microphone audio goes out in 20 ms packets.
 pub const MIC_PACKET: usize = (MIC_RATE / 50) as usize;
-/// Voice samples kept to measure the audible level.
-const RECENT: usize = VOICE_RATE as usize;
+/// The voice stream's buffer (Deepgram's voice arrives faster than real
+/// time and is written ahead).
+const STREAM_FRAMES: u32 = VOICE_RATE * 4;
+/// Voice samples kept to measure the audible level: everything the stream
+/// may still be playing, and a little more.
+const RECENT: usize = (STREAM_FRAMES + VOICE_RATE) as usize;
 
 pub struct Voice {
     client: audio::Client,
@@ -142,7 +146,7 @@ impl Voice {
         let spec = StreamSpec {
             rate: VOICE_RATE,
             channels: 1,
-            buffer_frames: VOICE_RATE * 4,
+            buffer_frames: STREAM_FRAMES,
             notify_frames: VOICE_RATE / 10,
             name: "Agent".into(),
             paused: false,
@@ -238,6 +242,24 @@ impl Voice {
         }
         let from = (played - window - start) as usize;
         loudness(self.recent.range(from..from + window as usize).copied())
+    }
+
+    /// Level of the voice audible right now, over 20 ms (dBFS; -100 when
+    /// nothing plays): what the echo gate compares the microphone with.
+    pub fn output_db(&self) -> f32 {
+        let Some(s) = &self.speaker else { return -100.0 };
+        let played = s.played_now();
+        let window = (VOICE_RATE / 50) as u64;
+        let start = self.recent_end.saturating_sub(self.recent.len() as u64);
+        if played < start + window || played > self.recent_end {
+            return -100.0;
+        }
+        let from = (played - window - start) as usize;
+        let mut buf = [0i16; (VOICE_RATE / 50) as usize];
+        for (dst, &src) in buf.iter_mut().zip(self.recent.range(from..from + window as usize)) {
+            *dst = src;
+        }
+        vaudio::level::rms_dbfs(&buf)
     }
 
     /// What to wait on: the microphone's event, and the speaker's while

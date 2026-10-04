@@ -79,9 +79,20 @@ is closed.
 * **Listening and speaking.** The microphone streams in 20 ms packets.
   Deepgram's voice arrives faster than real time and queues behind what is
   playing; when you start talking (`UserStartedSpeaking`) the queue and the
-  stream are flushed at once. The microphone is echo-cancelled in the
-  audio service (`vaudio::aec`, with the mixed speaker output as the
-  reference), so the agent does not hear itself.
+  stream are flushed at once.
+* **Not hearing itself.** The microphone is echo-cancelled in the audio
+  service (`vaudio::aec`, with the mixed speaker output as the
+  reference). No canceller removes everything — loudspeakers a hand away
+  from the microphone, a hypervisor's long audio path, the first second
+  before it has learnt the room — and what is left of the agent's voice is
+  still speech to the recogniser, which would take it for you: the agent
+  would stop mid-sentence and answer words nobody said. So while the
+  agent's voice is audible (and for its echo's length after), an echo
+  gate (`vagent::gate`) sends silence instead of the microphone, unless
+  the microphone is clearly louder than the agent's echo could be — you
+  talking over it — and then it sends the last 300 ms too, so your first
+  words are not lost. The gate learns how loud the echo is as the agent
+  speaks.
 * **Doing.** The language model calls functions (below); the agent service
   runs them on a worker thread and answers with JSON results. A function
   that needs your consent answers "waiting for approval", and the outcome
@@ -263,24 +274,29 @@ sleep between events.
   `agent-connected`, `agent-call FUNCTION 'ARGS'`, `agent-result TEXT` (in
   the function's result), `agent-mark` and `agent-expect TEXT` (in what the
   agent sent), `agent-speak SECONDS`, `agent-interrupt`, `agent-hear TEXT`,
-  `agent-listens N`, `agent-asleep` (start asleep). The test microphone
-  (`mic-silence`, `mic-tone`, `say TEXT`, `mic-wav FILE`) feeds the agent's
-  microphone through `testmic`.
+  `agent-listens N`, `agent-asleep` (start asleep), `agent-mic-quiet DB`
+  and `agent-mic-heard DB` (how loud the microphone audio the agent sent
+  was). The test microphone (`mic-silence`, `mic-tone`, `say TEXT`,
+  `mic-wav FILE`) feeds the agent's microphone through `testmic`;
+  `mic-echo GAIN DELAY` brings the machine's own sound output back into
+  it, as loudspeakers next to a microphone would (`tests/agent/echo.vts`).
 * `tests/real/agent-deepgram.vts` and `tests/real/agent-wake.vts` talk to
   the real Deepgram with the key in `$DEEPGRAM_API_KEY` (typed into
   Settings by `type-env`, so it appears in neither scripts nor logs); `say`
   synthesises the user's sentences with Deepgram's text to speech on the
   host. They are billed, so they are not part of `cargo xtask test`.
-* `vagent` (protocol, tools, prompt, memory, policy, wake word) has host
-  unit tests, and so has `vaudio`'s echo canceller and voice detector.
+* `vagent` (protocol, tools, prompt, memory, policy, wake word, echo
+  gate) has host unit tests, and so has `vaudio`'s echo canceller and
+  voice detector.
 
 ## Limitations
 
 * English only (Flux and the name detector's key term are English).
 * Speech recognition can mishear; the agent is told so and asks when a
   word seems out of place, but a misheard name can wake it, or not.
-* The echo canceller is tuned on synthetic rooms; with loud speakers close
-  to the microphone, use headphones if the agent hears itself.
+* To talk over the agent you need to be louder at the microphone than its
+  echo: with loud speakers right next to it, speak up (or use
+  headphones).
 * The agent needs the Internet and a Deepgram account; asleep, only the
   name listener's short recognitions are billed, but every conversation
   minute is.

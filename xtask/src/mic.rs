@@ -6,6 +6,11 @@
 //! service as the microphone. The server streams 16 kHz mono 16-bit PCM in
 //! real time: queued audio when there is some, silence otherwise.
 //!
+//! With `mic-echo GAIN DELAY`, the machine's own sound output (the WAV
+//! file QEMU records) comes back into the microphone, delayed and quieter,
+//! as loudspeakers next to a microphone would: the agent must not hear
+//! itself.
+//!
 //! Scripts queue speech with `say "..."`, synthesised by Deepgram's
 //! text-to-speech REST API on the host ([`synthesize`], with the key from
 //! `$DEEPGRAM_API_KEY`). Results are cached under
@@ -33,6 +38,66 @@ struct Shared {
     queue: Mutex<VecDeque<i16>>,
     connected: AtomicBool,
     stop: AtomicBool,
+    echo: Mutex<Option<Echo>>,
+}
+
+/// The machine's sound output, coming back into the microphone.
+struct Echo {
+    wav: PathBuf,
+    gain: f64,
+    /// Bytes of the file read so far.
+    offset: u64,
+    /// The WAV's format, once its header has been read.
+    rate: u32,
+    channels: usize,
+    /// Mono source frames not yet resampled, and the position in them.
+    src: Vec<f64>,
+    pos: f64,
+    /// The output at 16 kHz, delayed: what the microphone hears next.
+    delay_line: VecDeque<i16>,
+}
+
+impl Echo {
+    /// Reads what QEMU has written since last time.
+    fn refill(&mut self) {
+        let Ok(mut f) = std::fs::File::open(&self.wav) else { return };
+        use std::io::{Read, Seek, SeekFrom};
+        if self.rate == 0 {
+            let mut header = [0u8; 44];
+            if f.read_exact(&mut header).is_err() {
+                return;
+            }
+            self.channels = u16::from_le_bytes([header[22], header[23]]).max(1) as usize;
+            self.rate = u32::from_le_bytes([header[24], header[25], header[26], header[27]]);
+            self.offset = 44;
+        }
+        if f.seek(SeekFrom::Start(self.offset)).is_err() {
+            return;
+        }
+        let mut bytes = Vec::new();
+        if f.read_to_end(&mut bytes).is_err() {
+            return;
+        }
+        let frame = 2 * self.channels;
+        let whole = bytes.len() / frame * frame;
+        self.offset += whole as u64;
+        for fr in bytes[..whole].chunks_exact(frame) {
+            let sum: f64 = fr.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b) as f64).sum();
+            self.src.push(sum / self.channels as f64);
+        }
+        // Linear interpolation down to 16 kHz.
+        let step = self.rate as f64 / RATE as f64;
+        while self.pos + 1.0 < self.src.len() as f64 {
+            let i = self.pos as usize;
+            let frac = self.pos - i as f64;
+            let y = self.src[i] * (1.0 - frac) + self.src[i + 1] * frac;
+            self.delay_line.push_back((y * self.gain).clamp(-32768.0, 32767.0) as i16);
+            self.pos += step;
+        }
+        let used = (self.pos as usize).min(self.src.len());
+        self.src.drain(..used);
+        self.pos -= used as f64;
+    }
 }
 
 /// The host side of the test microphone.
@@ -50,6 +115,7 @@ impl MicServer {
             queue: Mutex::new(VecDeque::new()),
             connected: AtomicBool::new(false),
             stop: AtomicBool::new(false),
+            echo: Mutex::new(None),
         });
         let s = shared.clone();
         std::thread::Builder::new()
@@ -69,11 +135,31 @@ impl MicServer {
         self.shared.queue.lock().unwrap().extend(samples.iter().copied());
     }
 
-    /// Queues `secs` of silence.
+    /// From now on the machine's sound output (QEMU's WAV recording)
+    /// comes back into the microphone `delay_ms` later and `gain_db`
+    /// louder (negative: quieter).
+    pub fn echo(&self, wav: PathBuf, gain_db: f64, delay_ms: f64) {
+        let delay = (delay_ms / 1000.0 * RATE as f64) as usize;
+        let mut echo = Echo {
+            wav,
+            gain: 10f64.powf(gain_db / 20.0),
+            offset: 0,
+            rate: 0,
+            channels: 2,
+            src: Vec::new(),
+            pos: 0.0,
+            delay_line: VecDeque::from(vec![0i16; delay]),
+        };
+        // Only what plays from now on comes back.
+        echo.refill();
+        echo.delay_line = VecDeque::from(vec![0i16; delay]);
+        *self.shared.echo.lock().unwrap() = Some(echo);
+    }
+
     /// Something like a voice: a buzz rich in harmonics (like vocal cords)
     /// with a wandering pitch, in syllables four times a second. Enough for
     /// a voice detector, though no recogniser would make words of it.
-    pub fn tone(&self, secs: f64) {
+    pub fn tone(&self, secs: f64, peak: f64) {
         use std::f64::consts::TAU;
         let n = (secs * RATE as f64) as usize;
         let mut phase = 0.0f64;
@@ -89,7 +175,7 @@ impl MicServer {
                     k += 1.0;
                 }
                 let syllable = (t * 4.0 * TAU).sin().max(0.0).sqrt();
-                (buzz * (0.1 + 0.9 * syllable) * 6000.0) as i16
+                (buzz * (0.1 + 0.9 * syllable) * peak) as i16
             })
             .collect();
         self.enqueue(&samples);
@@ -159,9 +245,14 @@ fn stream_to(mut stream: TcpStream, shared: &Shared) {
         }
         packet.clear();
         {
+            let mut echo = shared.echo.lock().unwrap();
+            if let Some(e) = echo.as_mut() {
+                e.refill();
+            }
             let mut q = shared.queue.lock().unwrap();
             for _ in 0..CHUNK {
-                let s = q.pop_front().unwrap_or(0);
+                let back = echo.as_mut().and_then(|e| e.delay_line.pop_front()).unwrap_or(0);
+                let s = q.pop_front().unwrap_or(0).saturating_add(back);
                 packet.extend_from_slice(&s.to_le_bytes());
             }
         }

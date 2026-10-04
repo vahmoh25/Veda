@@ -37,7 +37,8 @@
 //! say-async "stop"                 # the same without waiting (to talk over the agent)
 //! mic-wav tests/audio/hello.wav    # play a WAV file into the microphone and wait
 //! mic-silence 2                    # queue seconds of silence
-//! mic-tone 1.5                     # queue seconds of a voice-like buzz (for voice detection)
+//! mic-tone 1.5 [6000]              # queue seconds of a voice-like buzz (peak amplitude), for voice detection
+//! mic-echo -6 250                  # the machine's sound output comes back into the microphone (gain dB, delay ms)
 //! mic-wait 30                      # wait until everything queued has been heard
 //! agent-connected 120              # wait until the agent opened a conversation with the simulator
 //! agent-call open_app '{"app":"editor"}'  # the simulated model calls a function; waits for the result
@@ -51,6 +52,8 @@
 //! agent-asleep                     # boot with the agent asleep (no conversation at start)
 //! agent-hear "Hey Vera, hello" 30  # the simulated recogniser hears this, once the agent streams speech to it
 //! agent-listens 1                  # fail unless the agent opened exactly this many recognition streams
+//! agent-mic-quiet -60              # fail if the agent sent microphone audio this loud (dBFS) since agent-mark
+//! agent-mic-heard -30              # fail unless it sent microphone audio at least this loud since agent-mark
 //! ```
 //!
 //! Scripts that use the microphone commands boot with `testmic`, which
@@ -378,7 +381,7 @@ pub fn needs_agentsim(script: &str) -> bool {
 pub fn needs_mic(script: &str) -> bool {
     script.lines().map(words).any(|w| {
         w.first().is_some_and(|c| {
-            matches!(c.as_str(), "say" | "say-async" | "mic-wav" | "mic-silence" | "mic-tone" | "mic-wait")
+            matches!(c.as_str(), "say" | "say-async" | "mic-wav" | "mic-silence" | "mic-tone" | "mic-echo" | "mic-wait")
         })
     })
 }
@@ -417,6 +420,7 @@ pub fn run_script(
     let mic_ref = || mic.as_ref().ok_or_else(|| "this run has no test microphone".to_string());
     let mut agent_result = String::new();
     let mut agent_mark = 0usize;
+    let mut mic_mark = 0usize;
     let result = (|| -> Result {
         for (lineno, line) in script.lines().enumerate() {
             let w = words(line);
@@ -607,7 +611,12 @@ pub fn run_script(
                     m.wait_drained(Duration::from_secs_f64(secs)).map_err(ctx)?;
                 }
                 "mic-silence" => mic_ref().map_err(ctx)?.silence(num(&w, 1).map_err(ctx)?),
-                "mic-tone" => mic_ref().map_err(ctx)?.tone(num(&w, 1).map_err(ctx)?),
+                "mic-tone" => mic_ref().map_err(ctx)?.tone(num(&w, 1).map_err(ctx)?, num(&w, 2).unwrap_or(6000.0)),
+                "mic-echo" => mic_ref().map_err(ctx)?.echo(
+                    util::out_dir().join("audio.wav"),
+                    num(&w, 1).map_err(ctx)?,
+                    num(&w, 2).map_err(ctx)?,
+                ),
                 c if c.starts_with("agent-") => {
                     let a = agent.as_mut().ok_or_else(|| ctx("this run has no agent simulator".into()))?;
                     match c {
@@ -629,7 +638,28 @@ pub fn run_script(
                                 )));
                             }
                         }
-                        "agent-mark" => agent_mark = a.texts().len(),
+                        "agent-mark" => {
+                            agent_mark = a.texts().len();
+                            mic_mark = a.mic_levels_len();
+                        }
+                        // What the agent sent of the microphone since the
+                        // mark: never louder than (quiet) or at least (heard)
+                        // this level in dBFS.
+                        "agent-mic-quiet" | "agent-mic-heard" => {
+                            let limit = num(&w, 1).map_err(ctx)? as f32;
+                            let peak = a.mic_peak_since(mic_mark);
+                            let quiet = c == "agent-mic-quiet";
+                            if quiet && peak >= limit {
+                                return Err(ctx(format!(
+                                    "the agent sent microphone audio at {peak:.1} dBFS (limit {limit})"
+                                )));
+                            }
+                            if !quiet && peak < limit {
+                                return Err(ctx(format!(
+                                    "the agent sent no microphone audio louder than {peak:.1} dBFS (wanted {limit})"
+                                )));
+                            }
+                        }
                         "agent-expect" => {
                             let needle = w.get(1).ok_or("missing text")?;
                             let timeout = Duration::from_secs_f64(num(&w, 2).unwrap_or(60.0));

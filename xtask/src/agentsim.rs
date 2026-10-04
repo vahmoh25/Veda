@@ -33,6 +33,8 @@ struct Log {
     texts: Vec<String>,
     /// Bytes of microphone audio received.
     audio_bytes: usize,
+    /// The level of each piece of microphone audio received (dBFS).
+    mic_levels: Vec<f32>,
     connections: u32,
     /// Speech recognition: connections, audio received, text messages.
     listen_connections: u32,
@@ -147,6 +149,17 @@ impl AgentSim {
         self.shared.log.lock().unwrap().texts.clone()
     }
 
+    /// How many pieces of microphone audio have arrived.
+    pub fn mic_levels_len(&self) -> usize {
+        self.shared.log.lock().unwrap().mic_levels.len()
+    }
+
+    /// The loudest microphone audio received after the first `skip`
+    /// pieces (dBFS, 20 ms windows).
+    pub fn mic_peak_since(&self, skip: usize) -> f32 {
+        self.shared.log.lock().unwrap().mic_levels.iter().skip(skip).copied().fold(-120.0, f32::max)
+    }
+
     pub fn audio_bytes(&self) -> usize {
         self.shared.log.lock().unwrap().audio_bytes
     }
@@ -182,16 +195,29 @@ impl AgentSim {
         Ok(string_field(&response, "content").unwrap_or(response))
     }
 
-    /// The agent "speaks" for `secs` seconds (a tone at 24 kHz).
+    /// The agent "speaks" for `secs` seconds: a voice-like buzz at
+    /// 24 kHz (harmonics, a wandering pitch, syllables four times a
+    /// second).
     pub fn speak(&self, secs: f64) -> Result {
+        use std::f64::consts::TAU;
         self.send_json(
             r#"{"type":"AgentStartedSpeaking","total_latency":"0.5","tts_latency":"0.1","ttt_latency":"0.4"}"#,
         )?;
         let n = (secs * 24_000.0) as usize;
         let mut pcm = Vec::with_capacity(n * 2);
+        let mut phase = 0.0f64;
         for i in 0..n {
             let t = i as f64 / 24_000.0;
-            let s = ((t * 220.0 * std::f64::consts::TAU).sin() * 6000.0) as i16;
+            let pitch = 190.0 + 30.0 * (t * 1.1 * TAU).sin();
+            phase += TAU * pitch / 24_000.0;
+            let mut buzz = 0.0;
+            let mut k = 1.0;
+            while k * pitch < 5000.0 {
+                buzz += (phase * k).sin() / k;
+                k += 1.0;
+            }
+            let syllable = (t * 4.0 * TAU + 1.0).sin().max(0.0).sqrt();
+            let s = (buzz * (0.1 + 0.9 * syllable) * 6000.0) as i16;
             pcm.extend_from_slice(&s.to_le_bytes());
         }
         for chunk in pcm.chunks(4800) {
@@ -347,7 +373,28 @@ fn serve(mut stream: TcpStream, shared: &Shared) -> Result {
                     stream.write_all(&frame(1, br#"{"type":"SettingsApplied"}"#)).map_err(|e| e.to_string())?;
                 }
             }
-            2 => shared.log.lock().unwrap().audio_bytes += payload.len(),
+            2 => {
+                let mut log = shared.log.lock().unwrap();
+                log.audio_bytes += payload.len();
+                // 20 ms at a time (16 kHz, 16-bit).
+                for chunk in payload.chunks(640) {
+                    let n = chunk.len() / 2;
+                    if n == 0 {
+                        continue;
+                    }
+                    let sum: f64 = chunk
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|b| {
+                            let x = i16::from_le_bytes(*b) as f64 / 32768.0;
+                            x * x
+                        })
+                        .sum();
+                    let db = if sum <= 0.0 { -120.0 } else { (10.0 * (sum / n as f64).log10()) as f32 };
+                    log.mic_levels.push(db);
+                }
+            }
             8 => {
                 let _ = stream.write_all(&frame(8, &payload));
                 break;

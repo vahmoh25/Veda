@@ -37,7 +37,7 @@ mod ui;
 mod voice;
 mod worker;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -45,6 +45,7 @@ use alloc::vec::Vec;
 
 use vabi::{WaitItem, signals};
 use vagent::deepgram::{self, Role, ServerMessage};
+use vagent::gate::{self, EchoGate, Verdict};
 use vagent::prompt::{self, PromptContext};
 use vagent::tools;
 use vjson::object;
@@ -60,7 +61,7 @@ use vrt::sync::Mutex;
 use session::{Connector, Incoming, Session};
 use shared::Shared;
 use ui::Ui;
-use voice::Voice;
+use voice::{MIC_PACKET, Voice};
 use worker::{Done, Job, Outcome, Pending, Worker};
 
 vrt::entry!(main);
@@ -110,6 +111,13 @@ struct Agent {
     /// Calls the language model is waiting on.
     calls_in_flight: usize,
     mic_buf: Vec<i16>,
+    /// Microphone audio short of a whole packet.
+    mic_pending: Vec<i16>,
+    /// Keeps the agent's own voice from the recogniser.
+    gate: EchoGate,
+    /// Packets the gate held back, the newest last (sent if the user turns
+    /// out to be talking).
+    preroll: VecDeque<Vec<i16>>,
     /// Notices to give the agent when the next conversation starts.
     on_wake: Vec<String>,
     seen_config: u64,
@@ -330,7 +338,20 @@ impl Agent {
         if let Some(mut s) = self.session.take() {
             s.close();
             println!("conversation ended after {} s", (vrt::time::now_ns() - s.started_ns) / 1_000_000_000);
+            let g = &mut self.gate;
+            if g.held > 0 {
+                println!(
+                    "kept {:.1} s of the agent's own voice from the recogniser (its echo up to {:.0} dB), talked over {} time(s)",
+                    g.held as f32 * 0.02,
+                    g.coupling_db(),
+                    g.openings
+                );
+                g.held = 0;
+                g.openings = 0;
+            }
         }
+        self.mic_pending.clear();
+        self.preroll.clear();
         self.connector = None;
         self.calls_in_flight = 0;
         if let Some(v) = &mut self.voice {
@@ -694,13 +715,52 @@ impl Agent {
             l.hear(&self.mic_buf, vrt::time::now_ns());
             return;
         }
+        if self.session.is_none() {
+            return;
+        }
+        let out = self.gate_mic();
         let failed = match &mut self.session {
-            Some(s) => s.send_mic(&self.mic_buf).is_err(),
+            Some(s) => s.send_mic(&out).is_err(),
             None => false,
         };
         if failed {
             self.end_conversation(Some("The connection to Deepgram was lost."));
         }
+    }
+
+    /// The microphone as Deepgram should hear it: 20 ms at a time, through
+    /// the echo gate, so that what is left of the agent's own voice after
+    /// echo cancellation is silence to the recogniser (see `vagent::gate`).
+    fn gate_mic(&mut self) -> Vec<i16> {
+        self.mic_pending.extend_from_slice(&self.mic_buf);
+        let whole = self.mic_pending.len() / MIC_PACKET * MIC_PACKET;
+        let voice_db = self.voice.as_ref().map_or(-100.0, Voice::output_db);
+        let mut out = Vec::with_capacity(whole + gate::PREROLL_PACKETS * MIC_PACKET);
+        for p in self.mic_pending[..whole].chunks(MIC_PACKET) {
+            match self.gate.packet(vaudio::level::rms_dbfs(p), voice_db) {
+                Verdict::Pass => {
+                    self.preroll.clear();
+                    out.extend_from_slice(p);
+                }
+                Verdict::Through => out.extend_from_slice(p),
+                Verdict::Hold => {
+                    if self.preroll.len() == gate::PREROLL_PACKETS {
+                        self.preroll.pop_front();
+                    }
+                    self.preroll.push_back(p.to_vec());
+                    out.extend(core::iter::repeat_n(0i16, p.len()));
+                }
+                Verdict::Open => {
+                    println!("the user talks over the agent");
+                    for q in self.preroll.drain(..) {
+                        out.extend_from_slice(&q);
+                    }
+                    out.extend_from_slice(p);
+                }
+            }
+        }
+        self.mic_pending.drain(..whole);
+        out
     }
 
     /// Ends quiet conversations; finishes the agent's turns.
@@ -1184,6 +1244,9 @@ fn main() -> i32 {
         approved: BTreeMap::new(),
         calls_in_flight: 0,
         mic_buf: Vec::new(),
+        mic_pending: Vec::new(),
+        gate: EchoGate::new(),
+        preroll: VecDeque::new(),
         on_wake: Vec::new(),
         seen_config: 0,
         seen_apps: 0,

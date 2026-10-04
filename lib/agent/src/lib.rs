@@ -15,6 +15,7 @@
 //! * [`policy`]: which actions need the user's approval, and the actions
 //!   the user always allows.
 //! * [`wake`]: recognising the agent's name in what it hears.
+//! * [`gate`]: keeping the agent from hearing its own voice.
 
 #![no_std]
 
@@ -22,6 +23,7 @@ extern crate alloc;
 
 pub mod config;
 pub mod deepgram;
+pub mod gate;
 pub mod memory;
 pub mod policy;
 pub mod prompt;
