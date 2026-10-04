@@ -8,6 +8,7 @@ the taskbar's dark indigo (`#171325`), in a rounded square.
 | `veda.svg` | the master, for any size |
 | `veda-16.png` ... `veda-1024.png` | ready-made sizes |
 | `veda.ico` | Windows (16 to 256 px) |
+| `veda-social-preview.png` | GitHub's social preview (1280x640): the ring above the name and "The Agentic-Native Operating System" |
 
 On a 32-unit grid the square's corners have a radius of 8 and the ring's
 centre line too, with a stroke of 2 (outer radius 9, inner 7). Below 32 px
