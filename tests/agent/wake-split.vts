@@ -1,0 +1,18 @@
+# A call the recogniser finishes before the rest of the sentence ("Hey
+# Veda." ... "What time is it?", as Deepgram does when the speaker pauses
+# after the name): the agent wakes once the sentence is over, and all of it
+# is the first thing said in the conversation.
+agent-asleep
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+mic-silence 3
+wait-serial "listening for its name" 30
+mic-silence 3
+mic-tone 1.5
+wait-serial "someone is speaking" 20
+agent-hear "Hey Veda. | What time is it?" 30
+wait-serial "woken by its name" 20
+agent-connected 60
+agent-expect "Hey Veda. What time is it?" 20
+agent-expect InjectUserMessage 5
+agent-listens 1

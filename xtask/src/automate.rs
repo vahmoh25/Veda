@@ -52,6 +52,7 @@
 //! agent-audio 3200                 # fail unless the agent streamed at least this many bytes of microphone audio
 //! agent-asleep                     # boot with the agent asleep (no conversation at start)
 //! agent-hear "Hey Veda, hello" 30  # the simulated recogniser hears this, once the agent streams speech to it
+//! agent-hear "Hey Veda. | Hi" 30   # " | " splits it into final transcripts 0.3 s apart (the last ends the utterance)
 //! agent-listens 1                  # fail unless the agent opened exactly this many recognition streams
 //! agent-listens-at-most 2          # fail if the agent opened more recognition streams than this
 //! agent-mic-quiet -60              # fail if the agent sent microphone audio this loud (dBFS) since agent-mark

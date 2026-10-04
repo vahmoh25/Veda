@@ -94,7 +94,10 @@ impl AgentSim {
     }
 
     /// Once the agent streams audio for recognition, says that `text` was
-    /// heard (a final transcript at the end of an utterance).
+    /// heard (a final transcript at the end of an utterance). Pieces split
+    /// by " | " come as final transcripts of their own, 0.3 s apart, and
+    /// only the last ends the utterance (like "Hey Veda," | "what time is
+    /// it?" from Deepgram).
     pub fn hear(&self, text: &str, timeout: Duration) -> Result {
         let start = Instant::now();
         loop {
@@ -108,13 +111,21 @@ impl AgentSim {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        let msg = format!(
-            "{{\"type\":\"Results\",\"is_final\":true,\"speech_final\":true,\"channel\":{{\"alternatives\":[{{\"transcript\":{},\"confidence\":0.98}}]}}}}",
-            json_string(text)
-        );
-        let mut w = self.shared.listen_writer.lock().unwrap();
-        let s = w.as_mut().ok_or("the recognition stream closed")?;
-        s.write_all(&frame(1, msg.as_bytes())).map_err(|e| format!("agent simulator: {e}"))
+        let pieces: Vec<&str> = text.split(" | ").collect();
+        for (i, piece) in pieces.iter().enumerate() {
+            if i > 0 {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            let msg = format!(
+                "{{\"type\":\"Results\",\"is_final\":true,\"speech_final\":{},\"channel\":{{\"alternatives\":[{{\"transcript\":{},\"confidence\":0.98}}]}}}}",
+                i + 1 == pieces.len(),
+                json_string(piece)
+            );
+            let mut w = self.shared.listen_writer.lock().unwrap();
+            let s = w.as_mut().ok_or("the recognition stream closed")?;
+            s.write_all(&frame(1, msg.as_bytes())).map_err(|e| format!("agent simulator: {e}"))?;
+        }
+        Ok(())
     }
 
     /// How many recognition streams the agent opened.

@@ -7,8 +7,10 @@
 //! as a key term), until they have been quiet for a few seconds, or nothing
 //! was said in words for a while. Each piece of transcript, and what was
 //! said since the last pause, is checked for the agent's name
-//! ([`vagent::wake::call`]): a call wakes it and becomes the first
-//! thing the user said in the conversation.
+//! ([`vagent::wake::call`]). A call wakes it once the sentence is over (the
+//! recogniser may finish "Hey Veda," before the rest of it), and with the
+//! rest of the sentence becomes the first thing the user said in the
+//! conversation.
 //!
 //! The detector is [`vaudio::vad::Vad`]; music or a television can seem
 //! like speech to it. When recognition heard no words for a while, the
@@ -68,6 +70,25 @@ const START_MS: u32 = 200;
 const WARM_UP_NS: u64 = 1_600_000_000;
 /// Near misses are logged with this many words at most.
 const LOG_WORDS: usize = 8;
+/// After a call, the rest of the sentence is awaited until the speaker
+/// pauses, or no words came for this long ...
+const CALL_REST_NS: u64 = 1_500_000_000;
+/// ... and at most this long.
+const CALL_MAX_NS: u64 = 6_000_000_000;
+
+/// A call heard while the speaker may still be talking ("Hey Veda," ...
+/// "what time is it?").
+struct Call {
+    /// What was said, from the call on.
+    said: String,
+    /// Something was asked, with the name or after it.
+    asked: bool,
+    /// The recogniser heard the speaker pause after the latest words.
+    ended: bool,
+    /// When the call was heard, and the latest words after it.
+    at: u64,
+    words_ns: u64,
+}
 
 pub struct Listener {
     name: String,
@@ -90,6 +111,8 @@ pub struct Listener {
     wordless: bool,
     /// What was said in this stretch of speech (final transcripts).
     heard: String,
+    /// A call waiting for the rest of its sentence.
+    call: Option<Call>,
     retry_at: u64,
     /// When listening began.
     since_ns: u64,
@@ -120,6 +143,7 @@ impl Listener {
             levels: VecDeque::with_capacity(BACKGROUND_FRAMES),
             wordless: false,
             heard: String::new(),
+            call: None,
             retry_at: 0,
             since_ns: now,
             hour_start: now,
@@ -228,6 +252,7 @@ impl Listener {
         self.connector = None;
         self.held.clear();
         self.heard.clear();
+        self.call = None;
     }
 
     /// Moves recognition along; returns what was said if it addressed the
@@ -247,7 +272,6 @@ impl Listener {
                 }
             }
         }
-        let mut addressed = None;
         let mut failed = false;
         let mut near_misses = Vec::new();
         if let Some(ws) = &mut self.stream {
@@ -265,6 +289,21 @@ impl Listener {
                     Ok(Some(Message::Text(t))) => {
                         let Some(h) = deepgram::parse_listen_result(&t) else { continue };
                         let piece = h.text.trim();
+                        if let Some(c) = &mut self.call {
+                            // The rest of the sentence (interim words say
+                            // that the speaker goes on).
+                            if !piece.is_empty() {
+                                c.asked = true;
+                                c.ended = false;
+                                c.words_ns = now;
+                                if h.is_final {
+                                    c.said.push(' ');
+                                    c.said.push_str(piece);
+                                }
+                            }
+                            c.ended |= h.speech_final;
+                            continue;
+                        }
                         if h.is_final && !piece.is_empty() {
                             self.last_words_ns = now;
                             if !self.heard.is_empty() {
@@ -276,9 +315,10 @@ impl Listener {
                             // came before it since the last pause ("Hey" ...
                             // "Veda").
                             let call = wake::call(piece, &self.name).or_else(|| wake::call(&self.heard, &self.name));
-                            if let Some(call) = call {
-                                addressed = Some(call);
-                                break;
+                            if let Some(said) = call {
+                                let asked = wake::addressed(&said, &self.name).is_some_and(|r| !r.is_empty());
+                                self.call = Some(Call { said, asked, ended: h.speech_final, at: now, words_ns: now });
+                                continue;
                             }
                             if wake::resembles(piece, &self.name) {
                                 near_misses
@@ -301,16 +341,26 @@ impl Listener {
         for m in near_misses {
             vrt::println!("heard something like its name, not a call: \"{}\"", m);
         }
-        if addressed.is_some() {
+        // A call wakes the agent once the speaker has finished the sentence:
+        // the recogniser heard them pause (after just the name, the detector
+        // must hear them stop too), or no words came for a moment.
+        let finished = self.call.as_ref().is_some_and(|c| {
+            failed
+                || (c.ended && (c.asked || !self.vad.speaking()))
+                || now.saturating_sub(c.words_ns) > CALL_REST_NS
+                || now.saturating_sub(c.at) > CALL_MAX_NS
+        });
+        if finished {
+            let said = self.call.take().map(|c| c.said);
             self.stop(now);
             vrt::println!("woken by its name");
-            return addressed;
+            return said;
         }
         if failed {
             vrt::println!("listening for its name: the connection ended");
             self.stop(now);
             self.retry_at = now + RETRY_NS / 6;
-        } else if self.recognising() {
+        } else if self.recognising() && self.call.is_none() {
             let wordless = self.stream.is_some() && now.saturating_sub(self.last_words_ns) > WORDLESS_NS;
             if wordless && !self.wordless {
                 vrt::println!("sound without words; listening for its name over it");

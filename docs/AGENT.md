@@ -77,9 +77,13 @@ is closed.
   or only mentions it ("I told Anna about Veda"): the name starts or ends
   one of its sentences, so other words before it (a song) do not matter,
   and one letter off counts ("Vida"), common words aside (an agent called
-  Vera does not answer to "very"). What
-  came close without being a call is logged ("heard something like its
-  name"). Recognition is capped at ten minutes an hour, so a television or
+  Vera does not answer to "very"). A call wakes the agent once the
+  sentence is over: the recogniser often finishes "Hey Veda," on its own,
+  so the listener goes on until the speaker pauses after the rest (after
+  just the name, until the detector hears them stop too), or no words came
+  for 1.5 s, or 6 s at most, and what came after the name comes with the
+  call. What came close without being a call is logged ("heard something
+  like its name"). Recognition is capped at ten minutes an hour, so a television or
   music playing all day cannot run up the bill.
 * **Waking** opens a Voice Agent conversation
   (`wss://agent.deepgram.com/v1/agent/converse`) and sends its `Settings`:
