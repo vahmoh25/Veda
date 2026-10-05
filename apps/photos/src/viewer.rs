@@ -405,6 +405,10 @@ impl Photos {
                 }
             }
         }
+        // The stage takes a press before the buttons drawn over it (Try again, the arrows), so
+        // that they can take it from the stage.
+        let id = ui.id("stage");
+        let resp = ui.interact(id, stage);
         let t = ui.theme().clone();
         if loading {
             let (cx, cy) = stage.center();
@@ -452,8 +456,6 @@ impl Photos {
 
         // Zooming with the wheel, panning by dragging, full screen with a double-click. A click
         // ends a slideshow.
-        let id = ui.id("stage");
-        let resp = ui.interact(id, stage);
         let pointer = ui.input.pointer;
         if resp.pressed {
             self.stop_slideshow();
