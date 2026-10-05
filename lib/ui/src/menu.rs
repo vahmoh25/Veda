@@ -153,8 +153,16 @@ pub(crate) fn draw_dropdown(ui: &mut Ui, rect: Rect, items: &[MenuItem], hovered
 }
 
 impl<'a> Ui<'a> {
-    /// Handles and schedules drawing of an open dropdown at `rect`; returns
-    /// the chosen item. Clicking outside or pressing Esc closes it.
+    /// Schedules drawing a dropdown at `rect`, which also takes the pointer
+    /// in the next frame.
+    fn show_dropdown(&mut self, rect: Rect, items: &[MenuItem], hovered: Option<usize>) {
+        self.new_overlay_rects.push(rect);
+        self.overlays.push(Overlay::Menu { rect, items: items.to_vec(), hovered });
+    }
+
+    /// Handles an open dropdown at `rect` and schedules drawing it unless it
+    /// closes; returns the chosen item. Clicking outside or pressing Esc
+    /// closes it.
     fn run_dropdown(&mut self, rect: Rect, items: &[MenuItem], close: &mut bool) -> Option<usize> {
         let input = self.menu_input;
         let p = input.pointer;
@@ -189,8 +197,11 @@ impl<'a> Ui<'a> {
             *close = true;
         }
         self.state.menu_key = if *close { None } else { key.map(|i| (i, p)) };
-        self.new_overlay_rects.push(rect);
-        self.overlays.push(Overlay::Menu { rect, items: items.to_vec(), hovered: key.or(pointed) });
+        // A menu that closes is not drawn in this frame: the frame may stay
+        // on screen (see `Ui::skip_present`).
+        if !*close {
+            self.show_dropdown(rect, items, key.or(pointed));
+        }
         chosen
     }
 
@@ -258,11 +269,11 @@ impl<'a> Ui<'a> {
                     && result.is_none()
                 {
                     close = false;
+                    self.show_dropdown(rect, &menus[i].items, None);
                 }
             } else {
                 let hovered = self.state.menu_key.map(|(item, _)| item);
-                self.new_overlay_rects.push(rect);
-                self.overlays.push(Overlay::Menu { rect, items: menus[i].items.clone(), hovered });
+                self.show_dropdown(rect, &menus[i].items, hovered);
             }
             new_open = if close { None } else { Some(i) };
         }
