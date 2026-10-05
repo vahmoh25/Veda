@@ -19,7 +19,8 @@ pub fn seek_bar(ui: &mut Ui, r: Rect, fraction: f32, accent: Color, drag: &mut O
     } else if let Some(f) = drag.take() {
         commit = Some(under.unwrap_or(f));
     }
-    let f = drag.unwrap_or(fraction).clamp(0.0, 1.0);
+    // On release the bar shows where the song is going already.
+    let f = commit.or(*drag).unwrap_or(fraction).clamp(0.0, 1.0);
     if resp.hovered {
         ui.set_cursor(Cursor::Hand);
     }

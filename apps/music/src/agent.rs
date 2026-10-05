@@ -13,7 +13,7 @@ use vui::agent::{
     self, Action, AppAgentInfo, Value, arg_bool, arg_f64, arg_opt_int, arg_opt_str, arg_str, object, show_path,
 };
 
-use crate::engine::{Command, PlayState};
+use crate::engine::PlayState;
 use crate::library::{Track, format_time};
 use crate::{Player, Repeat};
 
@@ -260,11 +260,12 @@ impl Player {
 
     /// Where the current song is (ms), as of now: the engine's position
     /// (the window's copy is updated once a frame), unless a song the
-    /// player asked for is still loading.
+    /// player asked for is still loading or a seek is not done yet.
     fn position_ms(&self) -> u64 {
         let now = vrt::time::now_ns();
         let engine = self.shared.status();
-        if self.requested.is_none() && engine.path == self.status.path {
+        let seeked = self.seeking.is_none_or(|id| engine.seek_id == id);
+        if self.requested.is_none() && seeked && engine.path == self.status.path {
             engine.position_ms(now)
         } else {
             self.status.position_ms(now)
@@ -380,9 +381,7 @@ impl Player {
                 if self.status.state == PlayState::Playing {
                     self.toggle_play();
                 }
-                self.shared.send(Command::Seek { ms: 0 });
-                self.status.pos_frames = 0;
-                self.status.pos_ns = vrt::time::now_ns();
+                self.seek_to(0);
                 // The engine is told; the song is at its start.
                 let mut v = self.now_playing();
                 v.set("position", format_time(0));
@@ -416,9 +415,7 @@ impl Player {
                     return Err(format!("{title} is only {} long", format_time(duration)));
                 }
                 let ms = (target.max(0.0) as u64).min(duration.saturating_sub(500));
-                self.shared.send(Command::Seek { ms });
-                self.status.pos_frames = ms * self.status.rate as u64 / 1000;
-                self.status.pos_ns = vrt::time::now_ns();
+                self.seek_to(ms);
                 Ok(object! {
                     "title" => title,
                     "position" => format_time(ms),

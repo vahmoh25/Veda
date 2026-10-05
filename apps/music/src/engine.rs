@@ -47,6 +47,8 @@ pub enum Command {
     /// Seeks within the current track.
     Seek {
         ms: u64,
+        /// Echoed in [`Status::seek_id`] once done.
+        id: u32,
     },
     /// Stream volume, linear 0..=1.
     Volume(f32),
@@ -95,6 +97,8 @@ pub struct Status {
     pub device: String,
     /// The id of the last `Load` command handled.
     pub load_id: u32,
+    /// The id of the last `Seek` command handled.
+    pub seek_id: u32,
 }
 
 impl Status {
@@ -197,6 +201,7 @@ impl Shared {
                 error: String::new(),
                 device: String::new(),
                 load_id: 0,
+                seek_id: 0,
             }),
             library: Mutex::new(Library::default()),
             viz: Mutex::new(VizHistory::new()),
@@ -464,7 +469,17 @@ impl Engine {
                     self.set_status(|s| s.state = PlayState::Paused);
                 }
             }
-            Command::Seek { ms } => self.seek(ms),
+            Command::Seek { ms, id } => {
+                self.seek(ms);
+                // The new position goes out with the id: the UI must never
+                // take the old one for the answer.
+                let (pos, now) = (self.track_position(), vrt::time::now_ns());
+                self.set_status(|s| {
+                    s.pos_frames = pos;
+                    s.pos_ns = now;
+                    s.seek_id = id;
+                });
+            }
             Command::Volume(v) => {
                 self.volume = v.clamp(0.0, 1.0);
                 if let (Some(a), Some(s)) = (&self.audio, &self.stream) {

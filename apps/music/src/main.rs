@@ -184,6 +184,9 @@ struct Player {
     /// A track we asked the engine to load that it has not confirmed yet.
     requested: Option<u32>,
     load_seq: u32,
+    /// A seek we asked the engine for that it has not done yet.
+    seeking: Option<u32>,
+    seek_seq: u32,
     rng: vmath::Rng,
     /// Another Music process handed us a file: come to the front.
     activate: bool,
@@ -225,6 +228,7 @@ impl Player {
                 error: String::new(),
                 device: String::new(),
                 load_id: 0,
+                seek_id: 0,
             },
             last_ended: 0,
             analyzer: Analyzer::new(FFT_SIZE, 44_100, BANDS, 40.0, 16_000.0),
@@ -242,6 +246,8 @@ impl Player {
             volume_logged: -1,
             requested: None,
             load_seq: 0,
+            seeking: None,
+            seek_seq: 0,
             rng: vmath::Rng::new(seed),
             activate: false,
             perf_frames: 0,
@@ -385,7 +391,7 @@ impl Player {
     fn previous(&mut self) {
         let now = vrt::time::now_ns();
         if self.status.position_ms(now) > 3000 || self.order.len() <= 1 {
-            self.shared.send(Command::Seek { ms: 0 });
+            self.seek_to(0);
         } else if let Some(i) = self.neighbour(-1, true) {
             self.play_index(i);
         }
@@ -415,9 +421,18 @@ impl Player {
         let now = vrt::time::now_ns();
         let pos = self.status.position_ms(now) as i64 + delta_ms;
         let ms = pos.clamp(0, self.status.duration_ms().saturating_sub(500) as i64) as u64;
-        self.shared.send(Command::Seek { ms });
+        self.seek_to(ms);
+    }
+
+    /// Jumps to `ms` in the current track. The new position shows at once
+    /// and stays until the engine has done the seek: its reports until then
+    /// still have the old one.
+    fn seek_to(&mut self, ms: u64) {
+        self.seek_seq = self.seek_seq.wrapping_add(1).max(1);
+        self.shared.send(Command::Seek { ms, id: self.seek_seq });
+        self.seeking = Some(self.seek_seq);
         self.status.pos_frames = ms * self.status.rate as u64 / 1000;
-        self.status.pos_ns = now;
+        self.status.pos_ns = vrt::time::now_ns();
     }
 
     fn set_volume(&mut self, v: f32) {
@@ -493,7 +508,7 @@ impl Player {
 
     /// Reacts to engine status changes (a track ended, errors).
     fn sync_status(&mut self) {
-        let s = self.shared.status();
+        let mut s = self.shared.status();
         // Until the engine has loaded the track we asked for, keep the
         // optimistic local state (and ignore the end of the old track).
         if let Some(req) = self.requested {
@@ -502,6 +517,16 @@ impl Player {
                 return;
             }
             self.requested = None;
+        }
+        // Until it has done the seek we asked for, it reports the old
+        // position: keep ours.
+        if let Some(id) = self.seeking {
+            if s.seek_id == id {
+                self.seeking = None;
+            } else {
+                s.pos_frames = self.status.pos_frames;
+                s.pos_ns = self.status.pos_ns;
+            }
         }
         if s.ended != self.last_ended {
             self.last_ended = s.ended;
@@ -802,9 +827,7 @@ impl Player {
             && dur_ms > 0
         {
             let ms = ((f * dur_ms as f32) as u64).min(dur_ms.saturating_sub(250));
-            self.shared.send(Command::Seek { ms });
-            self.status.pos_frames = ms * self.status.rate as u64 / 1000;
-            self.status.pos_ns = now;
+            self.seek_to(ms);
         }
         let time_color = t.text_dim;
         ui.label(
