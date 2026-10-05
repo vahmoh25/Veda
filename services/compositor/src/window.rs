@@ -105,9 +105,9 @@ pub struct Window {
     pub closing: bool,
     /// Snapped to half of the screen (dragging restores `restore_rect`).
     pub snapped: Option<Snap>,
-    /// Placed automatically in this cascade slot and not moved by the user
-    /// since: the window is placed again when the work area changes.
-    pub auto_slot: Option<i32>,
+    /// Placed automatically (centred) and not moved by the user since: the
+    /// window is placed again when the work area changes.
+    pub auto_placed: bool,
 }
 
 impl Window {

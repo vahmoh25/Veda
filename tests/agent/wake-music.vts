@@ -13,7 +13,7 @@ wait-serial "listening for its name" 30
 wait-serial "music: library: 7 track(s)" 90
 wait-serial "music: covers: 7 ready" 60
 wait 1
-click 0.5641 0.79
+click 0.6188 0.8125
 wait-serial "music: playing Neon Horizon" 30
 wait 30
 agent-listens-at-most 2

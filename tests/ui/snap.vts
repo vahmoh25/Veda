@@ -4,8 +4,8 @@ boot-cmdline "run=editor"
 fail-on "PANIC"
 wait-serial "started editor" 60
 wait 6
-# Grab the title bar (top of the screen) and move to the right edge.
-mouse-down 0.3125 0.0225
+# Grab the title bar (y = 36) and move to the right edge.
+mouse-down 0.3125 0.045
 move 0.6 0.3
 move 1.0 0.4
 wait 1

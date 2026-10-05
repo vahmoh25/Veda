@@ -1,7 +1,7 @@
 # Music player (1280x800 with the taskbar): play, pause and resume, seek
 # (keyboard and seek bar), next track, volume (keyboard and slider),
 # shuffle/repeat, and playing a track from the library by double-clicking
-# it. The window's client area starts at (40, 36); the log lines checked
+# it. The window's client area starts at (110, 54); the log lines checked
 # are printed by the player ("music: ...").
 boot-cmdline "run=music"
 wait-serial "music: library: 7 track(s)" 90
@@ -9,7 +9,7 @@ wait-serial "music: covers: 7 ready" 60
 wait 1
 shot target/veda/music-1-library.png
 # Play the first track with the play button.
-click 0.5641 0.79
+click 0.6188 0.8125
 wait-serial "music: playing Neon Horizon" 30
 wait 4
 shot target/veda/music-2-playing.png
@@ -26,17 +26,17 @@ wait-serial "music: resumed at 0:0" 10
 key right
 key right
 wait-serial "music: seek to 0:1" 10
-click 0.5641 0.7238
+click 0.6188 0.7463
 wait-serial "music: seek to 0:5" 10
 wait 2
 shot target/veda/music-4-seek.png
 # Next track with the button.
-click 0.6203 0.79
+click 0.675 0.8125
 wait-serial "music: playing Rainy Window" 30
 # Volume: one step down with the keyboard, then about 25% on the slider.
 key down
 wait-serial "music: volume 80%" 10
-click 0.7586 0.79
+click 0.8133 0.8125
 wait-serial "music: volume 2" 10
 # Shuffle on and off, repeat (all -> one).
 key s
@@ -48,7 +48,7 @@ wait-serial "music: repeat one" 10
 wait 2
 shot target/veda/music-5-next.png
 # Play the fourth track of the library by double-clicking it.
-double-click 0.1172 0.4075
+double-click 0.1719 0.43
 wait-serial "music: playing Pixel Quest" 30
 wait 4
 shot target/veda/music-6-library-pick.png

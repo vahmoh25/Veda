@@ -4,16 +4,16 @@ boot-cmdline "run=about"
 fail-on "PANIC"
 wait-serial "started about" 60
 wait 6
-# Drag the title bar (y = 56) 200 px to the right and 60 px down.
-drag 0.3516 0.07 0.5078 0.145
+# Drag the title bar (y = 106) 200 px to the right and 60 px down.
+drag 0.4063 0.1325 0.5625 0.2075
 wait 1
 shot target/veda/ui-1-dragged.png
-# Toggle "Show licences" (moved with the window to x = 543, y = 457).
-click 0.4242 0.5713
+# Toggle "Show licences" (moved with the window to x = 613, y = 508).
+click 0.4789 0.635
 wait 2
 shot target/veda/ui-2-toggled.png
-# Click OK (x = 963, y = 631): the window should close.
-click 0.7523 0.7888
+# Click OK (x = 1033, y = 682): the window should close.
+click 0.807 0.8525
 wait 2
 shot target/veda/ui-3-closed.png
 expect-serial "about exited with code 0"

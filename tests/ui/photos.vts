@@ -1,7 +1,7 @@
 # Photos smoke test (1280x800 screen with the taskbar): the library, the viewer
 # (next picture, details, wheel zoom, panning, rotation), full screen, setting
 # the wallpaper and keyboard navigation. The window's client area starts at
-# (20, 36).
+# (90, 74).
 boot-cmdline "run=photos"
 fail-on "PANIC"
 wait-serial "pictures in" 90
@@ -10,7 +10,7 @@ wait-serial "thumbnail of Still Life" 90
 wait 3
 shot target/veda/photos-1-library.png
 # Open the first card (Alpine Lake).
-click 0.1266 0.2588
+click 0.1813 0.3063
 wait-serial "opened Alpine Lake" 60
 wait 4
 shot target/veda/photos-2-viewer.png
@@ -23,12 +23,12 @@ wait 4
 shot target/veda/photos-3-details.png
 key i
 # Zoom in with the wheel over the picture, then pan by dragging.
-click 0.45 0.47 wheel-up
-click 0.45 0.47 wheel-up
-click 0.45 0.47 wheel-up
+click 0.5047 0.5175 wheel-up
+click 0.5047 0.5175 wheel-up
+click 0.5047 0.5175 wheel-up
 wait 4
 shot target/veda/photos-4-zoomed.png
-drag 0.45 0.47 0.62 0.57
+drag 0.5047 0.5175 0.675 0.6175
 wait 4
 shot target/veda/photos-5-panned.png
 # Back to fitting, rotate a quarter turn, and full screen (controls showing,
@@ -47,7 +47,7 @@ shot target/veda/photos-8-fullscreen-idle.png
 key esc
 wait 5
 # Make the picture the wallpaper (toolbar button).
-click 0.789 0.079
+click 0.8438 0.1263
 wait 2
 shot target/veda/photos-9-wallpaper.png
 wait 15

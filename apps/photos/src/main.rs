@@ -45,7 +45,7 @@ vrt::entry!(main);
 /// At most this many pictures keep their thumbnails in memory (about 0.6 MB each).
 const MAX_THUMBS: usize = 240;
 /// The window's size when it opens.
-const WINDOW_SIZE: (i32, i32) = (1100, 720);
+const WINDOW_SIZE: (i32, i32) = (1100, 640);
 
 /// What the window shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

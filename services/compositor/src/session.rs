@@ -48,7 +48,7 @@ impl display::Server for Session<'_> {
         let (ours, theirs) = Channel::create().map_err(|_| DisplayError::NoMemory)?;
         let id = self.comp.next_id;
         self.comp.next_id += 1;
-        let (rect, auto_slot) = self.comp.place_new_window(&spec);
+        let (rect, auto_placed) = self.comp.place_new_window(&spec);
         let animate = spec.kind == WindowKind::Normal || spec.kind == WindowKind::Popup;
         let win = Window {
             id,
@@ -70,7 +70,7 @@ impl display::Server for Session<'_> {
             anim: animate.then(|| Anim { kind: AnimKind::Open, start: vrt::time::now_ns(), duration: 180_000_000 }),
             closing: false,
             snapped: None,
-            auto_slot,
+            auto_placed,
         };
         let kind = win.kind;
         self.comp.windows.insert(id, win);
@@ -220,7 +220,7 @@ impl display::Server for Session<'_> {
         let w = self.comp.windows.get_mut(&id).unwrap();
         let tb = if w.decorated() { TITLE_HEIGHT } else { 0 };
         w.client_rect = Rect::new(x, y + tb, w.client_rect.w, w.client_rect.h);
-        w.auto_slot = None;
+        w.auto_placed = false;
         self.comp.damage_window(id);
         if self.comp.windows[&id].kind == WindowKind::Panel {
             self.comp.update_work_area();

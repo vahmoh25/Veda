@@ -63,7 +63,7 @@ impl Compositor {
                     let before = w.paint_bounds();
                     let ny = (y - dy).max(area.y + TITLE_HEIGHT).min(area.bottom() - 8);
                     w.client_rect = Rect::new(x - dx, ny, w.client_rect.w, w.client_rect.h);
-                    w.auto_slot = None;
+                    w.auto_placed = false;
                     let after = w.paint_bounds();
                     self.damage.add(before);
                     self.damage.add(after);
@@ -91,7 +91,7 @@ impl Compositor {
                     }
                     if r != w.client_rect {
                         w.client_rect = r;
-                        w.auto_slot = None;
+                        w.auto_placed = false;
                         let after = w.paint_bounds();
                         self.damage.add(before);
                         self.damage.add(after);

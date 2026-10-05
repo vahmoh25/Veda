@@ -107,11 +107,12 @@ pub(crate) struct Compositor {
 }
 
 /// The client rectangle of an automatically placed `w` x `h` window, with a
-/// title bar `tb` high, in cascade slot `slot` of the work area `area`.
-fn auto_rect(area: Rect, w: i32, h: i32, tb: i32, slot: i32) -> Rect {
-    let x = area.x + (area.w - w) / 2 + slot * 28 - 70;
-    let y = area.y + (area.h - h - tb) / 2 + slot * 28 - 50;
-    Rect::new(x.clamp(area.x, (area.right() - w).max(area.x)), y.max(area.y) + tb, w, h)
+/// title bar `tb` high: centred in the work area `area`, its top-left corner
+/// kept inside when the window is larger than the area.
+fn auto_rect(area: Rect, w: i32, h: i32, tb: i32) -> Rect {
+    let x = area.x + (area.w - w) / 2;
+    let y = area.y + (area.h - h - tb) / 2;
+    Rect::new(x.max(area.x), y.max(area.y) + tb, w, h)
 }
 
 /// The stacking layer of a window (higher layers are drawn on top). The
@@ -190,8 +191,8 @@ impl Compositor {
                 continue;
             }
             let tb = if w.kind == WindowKind::Normal { TITLE_HEIGHT } else { 0 };
-            if let Some(slot) = w.auto_slot {
-                w.restore_rect = auto_rect(area, w.restore_rect.w, w.restore_rect.h, tb, slot);
+            if w.auto_placed {
+                w.restore_rect = auto_rect(area, w.restore_rect.w, w.restore_rect.h, tb);
             }
             let target = match (w.state, w.snapped) {
                 (WindowState::Maximized, _) => Rect::new(area.x, area.y + TITLE_HEIGHT, area.w, area.h - TITLE_HEIGHT),
@@ -199,7 +200,7 @@ impl Compositor {
                     let r = snap.rect(area);
                     Rect::new(r.x, r.y + TITLE_HEIGHT, r.w, r.h - TITLE_HEIGHT)
                 }
-                (WindowState::Normal, None) if w.auto_slot.is_some() => w.restore_rect,
+                (WindowState::Normal, None) if w.auto_placed => w.restore_rect,
                 _ => continue,
             };
             if target == w.client_rect {
@@ -268,21 +269,18 @@ impl Compositor {
         self.focus(top);
     }
 
-    /// Where a new window goes: where the client asked, or cascaded around
-    /// the centre of the work area. Returns the client rectangle and, for
-    /// automatically placed windows, their cascade slot.
-    pub(crate) fn place_new_window(&self, spec: &WindowSpec) -> (Rect, Option<i32>) {
+    /// Where a new window goes: where the client asked, or in the centre of
+    /// the work area. Returns the client rectangle and whether the window
+    /// was placed automatically.
+    pub(crate) fn place_new_window(&self, spec: &WindowSpec) -> (Rect, bool) {
         let (w, h) = (spec.width as i32, spec.height as i32);
         let tb = if spec.kind == WindowKind::Normal { TITLE_HEIGHT } else { 0 };
         if spec.x != i32::MIN && spec.y != i32::MIN {
-            return (Rect::new(spec.x, spec.y + tb, w, h), None);
+            return (Rect::new(spec.x, spec.y + tb, w, h), false);
         }
         match spec.kind {
-            WindowKind::Desktop => (self.screen_rect(), None),
-            _ => {
-                let slot = self.windows.values().filter(|w| w.kind == WindowKind::Normal).count() as i32 % 6;
-                (auto_rect(self.work_area, w, h, tb, slot), Some(slot))
-            }
+            WindowKind::Desktop => (self.screen_rect(), false),
+            _ => (auto_rect(self.work_area, w, h, tb), true),
         }
     }
 
@@ -358,7 +356,7 @@ impl Compositor {
         let Some(w) = self.windows.get_mut(&id) else { return };
         let before = w.paint_bounds();
         w.snapped = None;
-        w.auto_slot = None;
+        w.auto_placed = false;
         w.client_rect = Rect::new(x - (rest.w as f32 * frac) as i32, y + TITLE_HEIGHT / 2, rest.w, rest.h);
         let (c, st) = (w.client_rect, w.state);
         let after = w.paint_bounds();
@@ -399,7 +397,7 @@ impl Compositor {
             w.restore_rect = w.client_rect;
         }
         w.snapped = Some(snap);
-        w.auto_slot = None;
+        w.auto_placed = false;
         let before = w.paint_bounds();
         w.client_rect = Rect::new(r.x, r.y + TITLE_HEIGHT, r.w, r.h - TITLE_HEIGHT);
         let (c, st) = (w.client_rect, w.state);

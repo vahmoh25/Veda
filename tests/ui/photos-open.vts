@@ -6,9 +6,9 @@ wait-serial "desktop ready" 90
 wait 8
 # "Pictures" in the Files sidebar, then double-click the fourth file
 # (Lighthouse.jpg, stored rotated with EXIF orientation 6).
-click 0.1383 0.33
+click 0.193 0.3925
 wait 4
-double-click 0.293 0.31
+double-click 0.3477 0.3725
 wait-serial "opened Lighthouse" 90
 wait 5
 shot target/veda/photos-open-1.png
