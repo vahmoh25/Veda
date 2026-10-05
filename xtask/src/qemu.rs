@@ -149,6 +149,9 @@ pub struct VmConfig {
     pub debug_exit: bool,
     /// Disk image holding the user's home directory (serial `veda-home`).
     pub home_disk: Option<PathBuf>,
+    /// The boot image is the live system's ISO on a USB stick (read-only),
+    /// not the boot disk.
+    pub usb_stick: bool,
     /// How the boot and home disks are attached.
     pub disk_bus: DiskBus,
     /// Let the guest reboot (otherwise a reset, e.g. after a triple fault,
@@ -183,6 +186,7 @@ impl Default for VmConfig {
             gdb: false,
             debug_exit: false,
             home_disk: None,
+            usb_stick: false,
             disk_bus: DiskBus::Virtio,
             allow_reboot: false,
             net: NetMode::Ethernet,
@@ -240,12 +244,19 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-m", &format!("{}M", cfg.memory_mib)]);
     cmd.args(["-drive", &flash(&install.ovmf_code, true)]);
     cmd.args(["-drive", &flash(vars, false)]);
-    cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,file={}", disk.display())]);
-    // q35's built-in AHCI controller has six ports, ide.0 to ide.5.
-    match cfg.disk_bus {
-        DiskBus::Virtio => cmd.args(["-device", "virtio-blk-pci,drive=disk0,bootindex=0,serial=veda-boot"]),
-        DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.0,drive=disk0,bootindex=0,serial=veda-boot"]),
-    };
+    if cfg.usb_stick {
+        // As a PC sees a stick the ISO was written to.
+        cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,readonly=on,file={}", disk.display())]);
+        cmd.args(["-device", "qemu-xhci,id=xhci"]);
+        cmd.args(["-device", "usb-storage,bus=xhci.0,drive=disk0,bootindex=0,removable=on"]);
+    } else {
+        cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,file={}", disk.display())]);
+        // q35's built-in AHCI controller has six ports, ide.0 to ide.5.
+        match cfg.disk_bus {
+            DiskBus::Virtio => cmd.args(["-device", "virtio-blk-pci,drive=disk0,bootindex=0,serial=veda-boot"]),
+            DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.0,drive=disk0,bootindex=0,serial=veda-boot"]),
+        };
+    }
     if let Some(home) = &cfg.home_disk {
         cmd.args(["-drive", &format!("id=home,if=none,format=raw,file={}", home.display())]);
         match cfg.disk_bus {

@@ -39,6 +39,16 @@ that communicate over kernel channels.
    restarted compositor through the registry, which queues connections
    until a service registers again.
 
+The live system (`cargo xtask iso`) starts the same way from a USB stick or
+a disc. Its image is a hybrid ISO 9660 image: the boot files in the ISO 9660
+tree (what Rufus copies onto a stick), and a FAT file system with the same
+files, which is both the El Torito UEFI boot image and, through an MBR
+partition table in the system area, the EFI system partition of a stick the
+image is written to as it is. Its `BOOT.CFG` puts `live` on the kernel
+command line; `init` passes it on to `devmgr`, which then starts no disk
+driver, and to `vfs`, which keeps `/home` in memory, so the computer's disks
+are never read or written.
+
 ## The kernel (`kernel/`)
 
 | Module | Responsibility |
@@ -106,7 +116,8 @@ eager FPU/SSE/AVX state switching with XSAVE.
   controller, most PCs) serve each disk through the `block` protocol under
   the name `block/<serial>`, so clients find a disk by its serial number
   whatever the controller. `devmgr` matches drivers by vendor and device,
-  and AHCI controllers by their PCI class.
+  and AHCI controllers by their PCI class. The live system starts neither
+  (see Boot).
 * `vfs` serves `/system` straight from the initrd and keeps `/home` and
   `/tmp` in memory. If a disk with serial `veda-home` is attached, `/home`
   is restored from it at boot and written back half a second after changes

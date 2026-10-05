@@ -245,6 +245,31 @@ cargo xtask run --vm virtualbox --net bridged
 `shot`, `script` and `test` work with `--vm virtualbox` too; scripts that
 need QEMU (the simulated Wi-Fi) are skipped.
 
+### A real PC, from a USB stick
+
+```bash
+cargo xtask iso
+```
+
+writes `target/veda/veda.iso`, a live system. Write it to a USB stick with
+[Rufus](https://rufus.ie) (partition scheme GPT, target system UEFI, ISO
+mode), or as it is with any image writer, and start the PC from the stick
+(usually from the firmware's boot menu: F12, F11 or Esc at power-on) in
+UEFI mode with Secure Boot off, as Veda's loader is not signed. Veda runs
+from memory and leaves the PC alone: no disk driver starts, so it never
+reads or writes the PC's disks or the systems installed on them, and its
+home directory lasts until the PC is turned off. To try the stick in QEMU
+first:
+
+```bash
+cargo xtask run --live
+```
+
+On real hardware this is a first step: the desktop appears in the screen
+mode the firmware provides (1920x1080, or the largest below it), but Veda
+has no USB driver yet, so USB keyboards and mice do not work, and few PCs
+have network or sound hardware it supports.
+
 ## Talking to Veda
 
 1. Open **Settings → Agent** and add your Deepgram API key. The agent's

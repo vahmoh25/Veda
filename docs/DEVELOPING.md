@@ -8,7 +8,9 @@ programs for it. Read `docs/CODING.md` (conventions) and
 
 ```text
 cargo xtask build              # build everything -> target/veda/veda.img
+cargo xtask iso                # the live system for a USB stick -> target/veda/veda.iso
 cargo xtask run                # build and boot in a QEMU window
+cargo xtask run --live         # boot the live system in QEMU from a virtual USB stick
 cargo xtask run --smp 2 --memory 2048
 cargo xtask shot --wait 15     # boot headless, save target/veda/screen.png
 cargo xtask shot --cmdline "run=about"   # also start bin/about.exe at boot
@@ -33,6 +35,14 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
   to `target/veda/serial.log` by `shot`/`script`/`test`.
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
+* `cargo xtask iso` writes a hybrid ISO image (`xtask/src/image/iso9660.rs`)
+  that boots with UEFI from a disc, from a stick Rufus made from it in ISO
+  mode, and from a stick it was written to as it is. Its boot configuration
+  puts `live` on the kernel command line (no disk driver starts; `/home`
+  stays in memory), asks for 1920x1080 or the screen's largest mode below
+  it (`--resolution` changes it), and adds no time zone, as a PC's clock
+  keeps local time under Windows. Scripts boot it with a `live` line
+  (`tests/ui/live-usb.vts`); `--out FILE` writes it elsewhere.
 * Headless runs record audio to `target/veda/audio.wav`.
 * The agent's scripts (`tests/agent/`) talk to a stand-in for Deepgram
   that xtask starts on the host, and feed the agent's microphone from the

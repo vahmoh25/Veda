@@ -28,6 +28,7 @@
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
 //! nic e1000                        # QEMU model of the wired card for this run, applied before boot
 //! sound ac97                       # QEMU's sound card for this run (virtio or ac97), applied before boot
+//! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot (QEMU)
 //! audio host                       # the host's loudspeakers and microphone instead of a WAV file (echo on real hardware)
 //! expect-audio                     # fail unless the recorded sound output holds more than silence
 //! requires qemu                    # only for QEMU (or `virtualbox`); `test` skips it elsewhere
@@ -355,13 +356,15 @@ pub fn net_mode(script: &str) -> Result<Option<NetMode>> {
 }
 
 /// Why a script can only run under QEMU, if it can: the simulated Wi-Fi
-/// (virtio-serial and airsim), QEMU's 82574L card, or `requires qemu`.
+/// (virtio-serial and airsim), QEMU's 82574L card, the live system's USB
+/// stick, or `requires qemu`.
 pub fn needs_qemu(script: &str) -> Option<&'static str> {
     for w in script.lines().map(words) {
         match w.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
             ["net", "wifi" | "both", ..] => return Some("simulated Wi-Fi"),
             ["nic", "e1000e", ..] => return Some("the 82574L card"),
             ["air" | "air-expect" | "air-wait", ..] => return Some("the Wi-Fi simulator"),
+            ["live", ..] => return Some("the live system's USB stick"),
             ["requires", "qemu", ..] => return Some("marked as QEMU only"),
             _ => {}
         }
@@ -373,6 +376,11 @@ pub fn needs_qemu(script: &str) -> Option<&'static str> {
 /// than in a conversation.
 pub fn agent_asleep(script: &str) -> bool {
     script.lines().map(words).any(|w| w.first().is_some_and(|c| c == "agent-asleep"))
+}
+
+/// Whether a script boots the live system from a USB stick (`live`).
+pub fn live(script: &str) -> bool {
+    script.lines().map(words).any(|w| w.first().is_some_and(|c| c == "live"))
 }
 
 /// Whether a script talks to the simulated Voice Agent service.
@@ -496,7 +504,7 @@ pub fn run_script(
                     s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "sound" | "audio" | "requires" => {}
+                "boot-cmdline" | "net" | "nic" | "sound" | "audio" | "requires" | "live" => {}
                 "air" => {
                     let line = w.get(1).ok_or("missing command")?;
                     s.sim().and_then(|sim| sim.command(line)).map_err(ctx)?;

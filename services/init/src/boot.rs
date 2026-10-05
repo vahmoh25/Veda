@@ -92,11 +92,14 @@ pub fn start_service(init: &mut Init, name: &str) {
     }
     let handles = handles_for(init, name);
     // The agent takes its test options (`agent.endpoint=...`) from the
-    // kernel command line.
-    let args: Vec<alloc::string::String> = if name == "agent" {
-        cmdline(init).split_whitespace().filter(|a| a.starts_with("agent.")).map(Into::into).collect()
-    } else {
-        Vec::new()
+    // kernel command line. A live system (`live`, booted from a USB stick)
+    // tells the file system and the device manager to leave the computer's
+    // disks alone.
+    let cmdline = cmdline(init);
+    let args: Vec<alloc::string::String> = match name {
+        "agent" => cmdline.split_whitespace().filter(|a| a.starts_with("agent.")).map(Into::into).collect(),
+        "vfs" | "devmgr" if cmdline.split_whitespace().any(|a| a == "live") => alloc::vec!["live".into()],
+        _ => Vec::new(),
     };
     if let Err(e) = init.spawn(name, &path, &args, handles, true) {
         println!("could not start {}: {:?}", name, e);

@@ -28,6 +28,10 @@ USAGE:
 
 COMMANDS:
     build       Build every component and assemble target/veda/veda.img
+    iso         Build every component and write target/veda/veda.iso: a live system
+                that boots a PC from a USB stick (write it with Rufus, or as it is
+                with any image writer); it runs from memory and leaves the PC's
+                disks alone
     run         Build, then boot Veda in QEMU
     shot        Boot headless, wait, and save a screenshot (dev aid)
     script FILE Boot headless and run an automation script (see automate.rs)
@@ -40,7 +44,8 @@ COMMANDS:
 
 BUILD OPTIONS:
     --debug             Build without optimisations (slow under emulation)
-    --resolution WxH    Preferred screen resolution (default 1280x800)
+    --resolution WxH    Preferred screen resolution (default 1280x800; iso: 1920x1080, or
+                        the largest the screen offers below it)
     --cmdline \"...\"     Extra kernel command line arguments
     --no-generate       Reuse the media in target/generated instead of regenerating it
     --skip PROGRAM      Leave a program out of the image (repeatable)
@@ -66,11 +71,15 @@ RUN OPTIONS:
                         VirtualBox: e1000 (82540EM, default), 82545EM, virtio)
     --bridge ADAPTER    VirtualBox host adapter for --net bridged (default: the first connected)
     --disk-bus BUS      How QEMU attaches the disks: virtio (default) or ahci (SATA)
+    --live              Boot the live system (iso) from a USB stick, as a PC would (QEMU)
 
 SHOT OPTIONS:
     --wait SECS         Seconds to wait before the screenshot (default 10)
     --until TEXT        Instead, wait until the serial log contains TEXT
     --out FILE          Output PNG (default target/veda/screen.png)
+
+ISO OPTIONS:
+    --out FILE          The ISO image (default target/veda/veda.iso)
 ";
 
 /// Options shared by the build-related commands.
@@ -78,6 +87,8 @@ SHOT OPTIONS:
 struct Options {
     profile: Profile,
     resolution: String,
+    /// `--resolution` was given (otherwise the live system has its own).
+    resolution_set: bool,
     cmdline: String,
     vm: qemu::VmConfig,
     wait: f64,
@@ -95,6 +106,8 @@ struct Options {
     hypervisor: Hypervisor,
     /// VirtualBox: the window's scale (`None`: from the host's display).
     scale: Option<f64>,
+    /// `run`, `shot`, `script`: boot the live system from a USB stick.
+    live: bool,
 }
 
 /// Which hypervisor runs Veda.
@@ -108,6 +121,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
     let mut o = Options {
         profile: Profile::Release,
         resolution: "1280x800".into(),
+        resolution_set: false,
         cmdline: String::new(),
         vm: qemu::VmConfig::default(),
         wait: 10.0,
@@ -119,6 +133,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         fresh_home: false,
         hypervisor: Hypervisor::Qemu,
         scale: None,
+        live: false,
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -131,7 +146,9 @@ fn parse_options(args: &[String]) -> Result<Options> {
                 let (w, h) =
                     resolution_size(&v).ok_or("--resolution expects WxH, at least 640x480 (such as 1920x1080)")?;
                 o.resolution = format!("{w}x{h}");
+                o.resolution_set = true;
             }
+            "--live" => o.live = true,
             "--cmdline" => o.cmdline = value(arg)?,
             "--smp" => o.vm.cpus = value(arg)?.parse().map_err(|_| "--smp expects a number")?,
             "--memory" => o.vm.memory_mib = value(arg)?.parse().map_err(|_| "--memory expects MiB")?,
@@ -309,40 +326,95 @@ fn build_system(o: &Options) -> Result<System> {
     Ok(System { bootloader, kernel, initrd })
 }
 
+/// The boot configuration of `o` (screen resolution and kernel command
+/// line), for the disk image or for the live system.
+fn boot_config(o: &Options, live: bool) -> String {
+    let mut cmdline = o.cmdline.clone();
+    let resolution = if live {
+        // The live system runs from memory and leaves the PC's disks alone.
+        // A PC's clock keeps local time under Windows, so it shows no time
+        // zone; and it takes the screen's largest mode up to 1080p.
+        cmdline = format!("live {cmdline}").trim().to_string();
+        if o.resolution_set { o.resolution.as_str() } else { "1920x1080" }
+    } else {
+        // The machine's clock keeps UTC; local time is the host's, unless the
+        // command line says otherwise.
+        if !cmdline.split_whitespace().any(|a| a.starts_with("tz="))
+            && let Some(tz) = util::host_utc_offset()
+        {
+            cmdline = format!("{cmdline} tz={tz}").trim().to_string();
+        }
+        o.resolution.as_str()
+    };
+    format!("# Veda boot configuration (read by the UEFI loader)\nresolution={resolution}\ncmdline={cmdline}\n")
+}
+
+/// The boot partition's files for `system` with `boot_cfg`.
+fn esp_contents<'a>(system: &'a System, boot_cfg: &'a str) -> image::EspContents<'a> {
+    image::EspContents {
+        bootloader: &system.bootloader,
+        kernel: &system.kernel,
+        initrd: &system.initrd,
+        symbols: &[],
+        boot_cfg,
+    }
+}
+
 /// Writes the disk image of `system` with the boot configuration of `o`
 /// (resolution and kernel command line); returns its path and size.
 fn write_image(o: &Options, system: &System) -> Result<(PathBuf, u64)> {
-    // The machine's clock keeps UTC; local time is the host's, unless the
-    // command line says otherwise.
-    let mut cmdline = o.cmdline.clone();
-    if !cmdline.split_whitespace().any(|a| a.starts_with("tz="))
-        && let Some(tz) = util::host_utc_offset()
-    {
-        cmdline = format!("{cmdline} tz={tz}").trim().to_string();
-    }
-    let boot_cfg = format!(
-        "# Veda boot configuration (read by the UEFI loader)\nresolution={}\ncmdline={}\n",
-        o.resolution, cmdline
-    );
+    let boot_cfg = boot_config(o, false);
     let out = util::out_dir();
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     let disk = out.join("veda.img");
     util::status("Imaging", disk.display());
-    let size = image::write_disk_image(
-        &disk,
-        &image::EspContents {
-            bootloader: &system.bootloader,
-            kernel: &system.kernel,
-            initrd: &system.initrd,
-            symbols: &[],
-            boot_cfg: &boot_cfg,
-        },
-    )?;
+    let size = image::write_disk_image(&disk, &esp_contents(system, &boot_cfg))?;
     Ok((disk, size))
+}
+
+/// Where `run`, `shot` and `script` keep the live system's ISO image.
+fn live_iso() -> PathBuf {
+    util::out_dir().join("veda.iso")
+}
+
+/// Writes the live system's ISO image of `system` to `path` (see
+/// `image::iso9660`); returns its size.
+fn write_iso(o: &Options, system: &System, path: &std::path::Path) -> Result<u64> {
+    let boot_cfg = boot_config(o, true);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    util::status("Imaging", path.display());
+    image::write_iso_image(path, &esp_contents(system, &boot_cfg))
+}
+
+/// Builds all components and writes the live system's ISO image to `path`.
+fn build_iso(o: &Options, path: &std::path::Path) -> Result {
+    let started = std::time::Instant::now();
+    let system = build_system(o)?;
+    let size = write_iso(o, &system, path)?;
+    util::status("Finished", format!("{} in {:.1}s", util::human_size(size), started.elapsed().as_secs_f32()));
+    Ok(())
+}
+
+/// `iso`: the live system, for a USB stick.
+fn iso(o: &Options) -> Result {
+    let path = o.out.clone().unwrap_or_else(live_iso);
+    build_iso(o, &path)?;
+    println!(
+        "\nWrite it to a USB stick with Rufus (partition scheme GPT, target system UEFI,\n\
+         ISO mode), or as it is with any image writer. Start the PC from the stick\n\
+         with UEFI, with Secure Boot off: Veda runs from memory and leaves the PC's\n\
+         disks alone. `cargo xtask run --live` tries it in QEMU first."
+    );
+    Ok(())
 }
 
 fn run(o: &Options) -> Result {
     if o.hypervisor == Hypervisor::VirtualBox {
+        if o.live {
+            return Err("--live boots the live system in QEMU (--vm qemu)".into());
+        }
         return run_vbox(o);
     }
     if o.vm.net == qemu::NetMode::Bridged {
@@ -352,13 +424,22 @@ fn run(o: &Options) -> Result {
         return Err("--scale is for VirtualBox (--vm virtualbox); QEMU's window zooms from its View menu".into());
     }
     let install = qemu::QemuInstall::locate()?;
-    let disk = build(o)?;
-    let vars = qemu::vars_file(&install)?;
-    // The home directory lives on its own disk, kept across builds and runs.
-    let home = util::out_dir().join("home.img");
-    qemu::prepare_home_disk(&home, o.fresh_home)?;
     let mut vm = o.vm.clone();
-    vm.home_disk = Some(home);
+    let disk = if o.live {
+        // A stick with the ISO on it, and no home disk.
+        let iso = live_iso();
+        build_iso(o, &iso)?;
+        vm.usb_stick = true;
+        iso
+    } else {
+        let disk = build(o)?;
+        // The home directory lives on its own disk, kept across builds and runs.
+        let home = util::out_dir().join("home.img");
+        qemu::prepare_home_disk(&home, o.fresh_home)?;
+        vm.home_disk = Some(home);
+        disk
+    };
+    let vars = qemu::vars_file(&install)?;
     // The simulated Wi-Fi environment runs while QEMU does.
     let _sim = if vm.net.wireless() {
         let sim = airsim::AirSim::start(&airsim::build()?, &util::out_dir().join("airsim.log"))?;
@@ -434,9 +515,24 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
         o.cmdline = format!("{} {extra}", o.cmdline).trim().to_string();
     }
     let o = &o;
-    let disk = match system {
-        Some(system) => write_image(o, system)?.0,
-        None => build(o)?,
+    let live = o.live || automate::live(script);
+    if live && o.hypervisor == Hypervisor::VirtualBox {
+        return Err("the live system boots in QEMU (--vm qemu)".into());
+    }
+    let disk = if live {
+        let iso = live_iso();
+        match system {
+            Some(system) => {
+                write_iso(o, system, &iso)?;
+            }
+            None => build_iso(o, &iso)?,
+        }
+        iso
+    } else {
+        match system {
+            Some(system) => write_image(o, system)?.0,
+            None => build(o)?,
+        }
     };
     let mut vm = o.vm.clone();
     vm.audio_wav = (!automate::host_audio(script)).then(|| util::out_dir().join("audio.wav"));
@@ -460,10 +556,15 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     if let Some(model) = automate::nic_model(script) {
         vm.nic_model = Some(model);
     }
-    // Every scripted run starts with a new, empty home directory.
-    let home = util::out_dir().join("test-home.img");
-    qemu::prepare_home_disk(&home, true)?;
-    vm.home_disk = Some(home);
+    if live {
+        // A stick with the ISO on it, and no home disk.
+        vm.usb_stick = true;
+    } else {
+        // Every scripted run starts with a new, empty home directory.
+        let home = util::out_dir().join("test-home.img");
+        qemu::prepare_home_disk(&home, true)?;
+        vm.home_disk = Some(home);
+    }
     let hv = match &install {
         Some(install) => automate::Hypervisor::Qemu(install),
         None => automate::Hypervisor::VirtualBox { resolution: &o.resolution },
@@ -611,6 +712,7 @@ fn main() -> ExitCode {
     };
     let result = match cmd {
         "build" => parse_options(rest).and_then(|o| build(&o).map(|_| ())),
+        "iso" => parse_options(rest).and_then(|o| iso(&o)),
         "run" => parse_options(rest).and_then(|o| run(&o)),
         "shot" => parse_options(rest).and_then(|o| shot(&o)),
         "test" => parse_options(rest).and_then(|o| test(&o)),

@@ -444,15 +444,16 @@ fn fresh_ram() -> Tree {
 }
 
 /// Builds the file systems: the system image from the initrd, and the home
-/// directory from the home disk or, failing that, the samples.
-fn build(archive: &initrd::Archive<'static>) -> Fs {
+/// directory from the home disk or, failing that, the samples. A `live`
+/// system keeps the home directory in memory without looking for a disk.
+fn build(archive: &initrd::Archive<'static>, live: bool) -> Fs {
     let mut system = Tree::new(true);
     for f in archive.files() {
         let comps = tree::components(f.path).unwrap_or_default();
         let _ = system.add_file(&comps, Data::Static(f.data));
     }
     let samples = Samples::new(archive);
-    let mut store = Store::connect();
+    let mut store = if live { None } else { Store::connect() };
     let mut ram = fresh_ram();
     let restored = match store.as_mut().and_then(|s| s.load()) {
         Some(snapshot) => {
@@ -474,6 +475,7 @@ fn build(archive: &initrd::Archive<'static>) -> Fs {
         let _ = ram.mkdir_all(&comps);
     }
     let home = match (&store, restored) {
+        (None, _) if live => "in memory (live system)",
         (None, _) => "in memory (no home disk)",
         (Some(_), true) => "restored from the home disk",
         (Some(_), false) => "new, on the home disk",
@@ -498,7 +500,7 @@ fn main() -> i32 {
         println!("the initrd is corrupt");
         return 1;
     };
-    let mut fs = build(&archive);
+    let mut fs = build(&archive, vrt::env::args().iter().any(|a| a == "live"));
 
     let Ok(listener) = vproto::register(vfs::NAME) else {
         println!("cannot register the vfs service");

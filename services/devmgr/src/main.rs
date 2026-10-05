@@ -67,6 +67,10 @@ const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
     (0x01, 0x06, 0x01, "ahci"),
 ];
 
+/// Disk drivers. A live system (started with `live`) starts none of them:
+/// it runs from memory and never touches the computer's disks.
+const DISK_DRIVERS: [&str; 2] = ["virtio-blk", "ahci"];
+
 /// The driver for a device, if any.
 fn driver_for(info: &DeviceInfo) -> Option<&'static str> {
     DRIVERS.iter().find(|m| m.vendor == info.vendor && m.devices.contains(&info.device)).map(|m| m.driver).or_else(
@@ -230,6 +234,7 @@ fn main() -> i32 {
         return 1;
     };
     let mgr = Manager { config: ConfigSpace::new(ports), io, mmio, dma };
+    let live = vrt::env::args().iter().any(|a| a == "live");
 
     let mut bound: BTreeMap<u64, Bound> = BTreeMap::new();
     let mut next = 1u64;
@@ -247,6 +252,13 @@ fn main() -> i32 {
         let Some(driver) = driver_for(&info) else {
             continue;
         };
+        if live && DISK_DRIVERS.contains(&driver) {
+            println!(
+                "live system: {} not started for {:04x}:{:04x} at {:02x}:{:02x}.{}",
+                driver, info.vendor, info.device, a.bus, a.slot, a.function
+            );
+            continue;
+        }
         if let Some(ch) = start_driver(&boot, driver, &info) {
             bound.insert(next, Bound { address: a, info, channel: ch });
             next += 1;
