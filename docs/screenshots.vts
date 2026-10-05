@@ -43,13 +43,24 @@ wait-serial "state: Asleep" 20
 click 0.825 0.97
 wait 2
 
-# A Rust program in the Text Editor, opened from the Terminal.
+# A Rust program in the Text Editor: the Terminal writes it and opens it.
 key meta_l
 wait 2
 type "terminal"
 key ret
 wait-serial "started terminal" 30
 wait 4
+type "echo -e '//! The prime numbers below a limit, by the sieve of Eratosthenes.\n' > Documents/primes.rs"
+key ret
+type "echo -e '/// Returns every prime number smaller than `limit`.\npub fn primes_below(limit: usize) -> Vec<usize> {\n    let mut composite = vec![false; limit];\n    let mut primes = Vec::new();' >> Documents/primes.rs"
+key ret
+type "echo -e '    for n in 2..limit {\n        if composite[n] {\n            continue;\n        }\n        primes.push(n);' >> Documents/primes.rs"
+key ret
+type "echo -e '        // Every multiple of a prime is composite.\n        for multiple in (n * n..limit).step_by(n) {\n            composite[multiple] = true;\n        }\n    }\n    primes\n}\n' >> Documents/primes.rs"
+key ret
+type "echo -e '#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn small_primes() {\n        assert_eq!(primes_below(20), [2, 3, 5, 7, 11, 13, 17, 19]);\n    }\n}' >> Documents/primes.rs"
+key ret
+wait 1
 type "edit Documents/primes.rs && exit"
 key ret
 wait-serial "started editor" 30

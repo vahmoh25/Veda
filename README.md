@@ -267,7 +267,7 @@ Things to ask:
 * "Remind me to stretch in twenty minutes."
 * "What's using the most memory?"
 * "Start a race in Velocity."
-* "Delete Notes.md" — and see it ask you first.
+* "Delete the City Lights photo" — and see it ask you first.
 * "What do you know about me?"
 
 ## Using the desktop
@@ -431,7 +431,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
 | `third_party/` | vendored crates with Veda patches (smoltcp) |
 | `xtask/` | the build system: cross-compilation, disk image, QEMU and VirtualBox, automation, the stand-in for Deepgram |
-| `assets/` | fonts, application manifests, sample documents |
+| `assets/` | fonts and application manifests |
 | `docs/` | documentation, the README's screenshots, and the icon and social preview (`docs/icon/`) |
 
 ## Documentation

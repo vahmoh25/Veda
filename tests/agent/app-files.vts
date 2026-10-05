@@ -36,9 +36,9 @@ agent-result '"search":"sun"'
 agent-call use_app '{"app":"files","action":"search","arguments":{"text":""}}' 30
 agent-result '"matches":9'
 # Properties of a folder count everything in it.
-agent-call use_app '{"app":"files","action":"properties","arguments":{"item":"~/Documents"}}' 30
+agent-call use_app '{"app":"files","action":"properties","arguments":{"item":"~/Pictures"}}' 30
 agent-result '"kind":"Folder"'
-agent-result '"contains":"2 files, 0 folders"'
+agent-result '"contains":"8 files, 1 folder'
 # Copying needs the user's OK. Allowed, the copies arrive in Trips, which
 # Files shows with them selected.
 agent-call use_app '{"app":"files","action":"copy","arguments":{"paths":"~/Pictures/Glass Orb.png\n~/Pictures/Lighthouse.jpg","to":"~/Pictures/Trips"}}' 30
@@ -108,12 +108,12 @@ agent-expect "give the full path" 20
 click 0.825 0.97
 wait 2
 shot target/veda/agent-app-files-3-after.png
-# Back to Documents, and a document opens in the Text Editor.
+# Back to Documents, and the picture moved there opens in Photos.
 agent-call use_app '{"app":"files","action":"go","arguments":{"to":"back"}}' 30
 agent-result '"showing":"~"'
-agent-call use_app '{"app":"files","action":"open_folder","arguments":{"path":"~/Documents/Notes.md"}}' 30
-agent-result '"showing":"~/Documents","items":3,"selected":["Notes.md"]'
-agent-call use_app '{"app":"files","action":"open","arguments":{"item":"notes.md"}}' 30
-agent-result '"opened":"~/Documents/Notes.md","with":"editor"'
-wait-serial "files: opened /home/user/Documents/Notes.md with editor" 20
-wait-serial "started editor" 30
+agent-call use_app '{"app":"files","action":"open_folder","arguments":{"path":"~/Documents/Beacon.jpg"}}' 30
+agent-result '"showing":"~/Documents","items":1,"selected":["Beacon.jpg"]'
+agent-call use_app '{"app":"files","action":"open","arguments":{"item":"beacon.jpg"}}' 30
+agent-result '"opened":"~/Documents/Beacon.jpg","with":"photos"'
+wait-serial "files: opened /home/user/Documents/Beacon.jpg with photos" 20
+wait-serial "started photos" 30

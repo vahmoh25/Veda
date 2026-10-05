@@ -1,14 +1,13 @@
-# Text Editor smoke test (1280x800 screen): open Welcome.txt from the
-# desktop, edit it, search it and save it.
+# Text Editor smoke test (1280x800 screen): start on a new document, write
+# in it, search it and save it.
+boot-cmdline "run=editor:/home/user/Documents/Shortcuts.txt"
 fail-on "PANIC"
 wait-serial "desktop ready" 90
-wait 2
-# Double-click the fourth desktop icon (Welcome.txt).
-double-click 0.0469 0.4425
-wait-serial "started editor" 30
+wait-serial "started editor" 60
 wait 6
 shot target/veda/editor-1-open.png
-key ctrl-end
+type "Keyboard shortcuts: Ctrl+F finds, Ctrl+S saves."
+key ret
 type "Edited by the automated test."
 key ret
 key ctrl-home
