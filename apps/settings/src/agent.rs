@@ -639,6 +639,7 @@ impl AgentPage {
             if voices.is_empty() {
                 let msg = self.catalog_error.clone().unwrap_or_else(|| "Loading the voices\u{2026}".into());
                 ui.label(Rect::new(ix, row, iw, 32), &msg, Font::Regular, t.small_size, t.text_dim, Align::Left);
+                row += 40;
             }
             for v in &voices {
                 let rr = Rect::new(ix, row, iw, 38);
@@ -743,6 +744,7 @@ impl AgentPage {
             if models.is_empty() {
                 let msg = self.catalog_error.clone().unwrap_or_else(|| "Loading the models\u{2026}".into());
                 ui.label(Rect::new(ix, row, iw, 32), &msg, Font::Regular, t.small_size, t.text_dim, Align::Left);
+                row += 36;
             }
             let mut sorted = models.clone();
             sorted.sort_by_key(|m| (m.detail != "Standard", m.provider.clone(), m.name.clone()));
