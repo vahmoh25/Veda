@@ -37,6 +37,11 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
 
 * The serial console (kernel log plus every program's `println!`) is saved
   to `target/veda/serial.log` by `shot`/`script`/`test`.
+* QEMU's window (GTK) takes the pointer as absolute from power-on: the
+  tablet is bound to the display, so a click never grabs the mouse. On
+  Windows, QEMU deadlocks if it holds a grab (Ctrl+Alt+G takes one) when
+  one of Veda's pointer drivers starts: the window stops responding, at
+  boot on the splash screen.
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
 * `cargo xtask iso` writes a hybrid ISO image (`xtask/src/image/iso9660.rs`)

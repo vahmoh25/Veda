@@ -819,7 +819,7 @@ pub fn silent_gaps(wav: &[u8], limit_ms: f64) -> std::result::Result<Vec<(f64, f
     let Some((channels @ 1.., rate @ 1.., 16)) = format else { return Err("audio.wav is not 16-bit PCM".into()) };
     let frames: Vec<&[u8]> = data.chunks_exact(2 * channels).collect();
     let silent = |f: &[u8]| f.iter().all(|&b| b == 0);
-    let loud = |f: &[u8]| f.chunks_exact(2).any(|s| i16::from_le_bytes([s[0], s[1]]).unsigned_abs() > 64);
+    let loud = |f: &[u8]| f.as_chunks::<2>().0.iter().any(|s| i16::from_le_bytes(*s).unsigned_abs() > 64);
     let (Some(first), Some(last)) = (frames.iter().position(|f| loud(f)), frames.iter().rposition(|f| loud(f))) else {
         return Ok(Vec::new());
     };

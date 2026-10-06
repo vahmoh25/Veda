@@ -226,6 +226,9 @@ impl Default for VmConfig {
 /// QEMU id of the wired network card (for QMP `set_link`).
 pub const WIRED_NIC_ID: &str = "nic0";
 
+/// QEMU id of the display device.
+const DISPLAY_ID: &str = "video0";
+
 /// Size of a new home disk.
 const HOME_DISK_BYTES: u64 = 64 << 20;
 
@@ -271,6 +274,14 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-m", &format!("{}M", cfg.memory_mib)]);
     cmd.args(["-drive", &flash(&install.ovmf_code, true)]);
     cmd.args(["-drive", &flash(vars, false)]);
+    // The display (what `-vga std` gives, at the same address, 00:01.0,
+    // before any other device takes it), named so that the tablet can be
+    // bound to it (see `-display` below).
+    cmd.args(["-vga", "none", "-device", &format!("VGA,id={DISPLAY_ID},addr=0x1")]);
+    // In a window, the tablet is bound to the display: the window's pointer
+    // is then absolute from power-on, not only once the guest's driver has
+    // started (see `-display` below).
+    let bound = if cfg.display { format!(",display={DISPLAY_ID}") } else { String::new() };
     if cfg.usb_stick || cfg.input == InputDevices::Usb {
         cmd.args(["-device", "qemu-xhci,id=xhci"]);
     }
@@ -295,7 +306,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     }
     match cfg.input {
         InputDevices::Standard => {
-            cmd.args(["-device", "virtio-tablet-pci"]);
+            cmd.args(["-device", &format!("virtio-tablet-pci{bound}")]);
         }
         InputDevices::Usb => {
             // A keyboard and a tablet behind a hub, and a mouse on a root
@@ -303,14 +314,13 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
             // pointer events go to the tablet.
             cmd.args(["-device", "usb-hub,bus=xhci.0,port=2"]);
             cmd.args(["-device", "usb-kbd,bus=xhci.0,port=2.1"]);
-            cmd.args(["-device", "usb-tablet,bus=xhci.0,port=2.2"]);
+            cmd.args(["-device", &format!("usb-tablet,bus=xhci.0,port=2.2{bound}")]);
             cmd.args(["-device", "usb-mouse,bus=xhci.0,port=3"]);
         }
     }
     // Host entropy for the firmware's EFI_RNG_PROTOCOL, which seeds the
     // kernel's random number generator.
     cmd.args(["-device", "virtio-rng-pci"]);
-    cmd.args(["-vga", "std"]);
     if cfg.audio {
         match &cfg.audio_wav {
             Some(wav) => cmd.args(["-audiodev", &format!("wav,id=audio0,path={}", wav.display())]),
@@ -344,12 +354,17 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(wifi_args(&p));
     }
     if cfg.display {
-        // Not SDL: when the guest's virtio tablet driver starts, QEMU
-        // switches to absolute pointing on the vCPU thread, and its SDL front
-        // end then grabs the mouse if the pointer is over the window; on
-        // Windows that call waits for the window's thread, which waits for
-        // the vCPU: QEMU deadlocks right after the boot splash (seen with
-        // QEMU 11.1 whenever the window had the focus). GTK does not grab.
+        // When the guest's tablet driver starts, QEMU tells its window the
+        // pointer has become absolute, on the vCPU thread. On Windows a
+        // window's grab of the mouse, set or released from that thread,
+        // waits for the window's own thread, which waits for the vCPU: QEMU
+        // deadlocks early in Veda's boot (seen with QEMU 11.1). SDL grabs
+        // the mouse then if the pointer is over the window, so not SDL. GTK
+        // releases a grab then, and grabs at a click in the window while the
+        // pointer is relative, as it is from power-on until that driver
+        // starts; which is why the tablet is bound to the display: the
+        // window's pointer is absolute from the start, and a click before
+        // the driver runs grabs nothing.
         cmd.args(["-display", "gtk"]);
     } else {
         cmd.args(["-display", "none"]);
