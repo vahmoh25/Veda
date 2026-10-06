@@ -59,7 +59,8 @@ RUN OPTIONS:
     --memory MiB        Guest RAM in MiB (default 1024)
     --headless          No display window (serial console only)
     --no-audio          Do not attach a sound device
-    --sound CARD        QEMU's sound card: virtio (default) or ac97 (VirtualBox: always ac97)
+    --sound CARD        The sound card: virtio (QEMU's default), ac97 (VirtualBox's default) or
+                        hda (Intel HD Audio, as most PCs have)
     --serial FILE       Write the serial console to FILE instead of the terminal
     --gdb               Wait for a debugger on localhost:1234
     --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
@@ -159,8 +160,8 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--no-audio" => o.vm.audio = false,
             "--sound" => {
                 let card = value(arg)?;
-                if !matches!(card.as_str(), "virtio" | "ac97") {
-                    return Err(format!("--sound: unknown card '{card}' (virtio or ac97)"));
+                if !matches!(card.as_str(), "virtio" | "ac97" | "hda") {
+                    return Err(format!("--sound: unknown card '{card}' (virtio, ac97 or hda)"));
                 }
                 o.vm.sound = card;
             }
@@ -620,6 +621,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vwlan", &[]),
     ("vradiolink", &[]),
     ("vusb", &[]),
+    ("vhda", &[]),
     ("airsim", &[]),
     ("xtask", &[]),
 ];

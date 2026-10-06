@@ -156,8 +156,8 @@ pub struct VmConfig {
     /// Show a window (`false` = headless).
     pub display: bool,
     pub audio: bool,
-    /// The sound card: `virtio` (QEMU's default here) or `ac97` (the card
-    /// VirtualBox always has).
+    /// The sound card: `virtio` (QEMU's default here), `ac97` (VirtualBox's
+    /// default) or `hda` (Intel HD Audio).
     pub sound: String,
     /// Record guest audio to this WAV file instead of playing it.
     pub audio_wav: Option<PathBuf>,
@@ -322,6 +322,13 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         let streams = if cfg.audio_wav.is_some() { 1 } else { 2 };
         match cfg.sound.as_str() {
             "ac97" => cmd.args(["-device", "AC97,audiodev=audio0"]),
+            // The ICH9's HD Audio controller with a codec that has a line
+            // output and, with the host's sound system, a line input.
+            "hda" => {
+                let codec = if streams == 2 { "hda-duplex" } else { "hda-output" };
+                cmd.args(["-device", "ich9-intel-hda,id=hda"]);
+                cmd.args(["-device", &format!("{codec},bus=hda.0,audiodev=audio0")])
+            }
             _ => cmd.args(["-device", &format!("virtio-sound-pci,audiodev=audio0,streams={streams}")]),
         };
     }

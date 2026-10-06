@@ -24,6 +24,8 @@ cargo xtask run --vm virtualbox --resolution 1600x1000 --scale 2   # larger desk
 cargo xtask test --ui --vm virtualbox      # the test suite in VirtualBox
 cargo xtask run --disk-bus ahci             # QEMU with SATA disks (as VirtualBox has)
 cargo xtask run --sound ac97   # QEMU with an AC'97 sound card (as VirtualBox has)
+cargo xtask run --sound hda    # Intel HD Audio, as most PCs have (also --vm virtualbox)
+cargo xtask script tests/ui/hda.vts         # HD Audio: music plays and reaches the recording
 cargo xtask run --input usb    # USB keyboard, tablet (behind a hub) and mouse, no PS/2
 cargo xtask script tests/ui/usb-input.vts   # USB input, with devices plugged in and out
 cargo xtask script tests/agent/sim-basics.vts   # the agent, with a stand-in for Deepgram
@@ -53,6 +55,12 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
   and `qmp device_del '{"id":"kbd2"}'`); the driver logs each device it
   finds as `xhci: port 6.3: ...` (root port, then hub ports).
 * Headless runs record audio to `target/veda/audio.wav`.
+* `--sound hda` gives QEMU the ICH9's HD Audio controller with QEMU's
+  codec (`hda-output` when recording to a WAV file, `hda-duplex`, with a
+  line input, otherwise), and VirtualBox its HD Audio with an emulated
+  SigmaTel STAC9221, which runs at 44.1 kHz. When the driver finds a
+  codec it cannot play through, it logs every widget of it (`dmesg hda`
+  in the Terminal shows them), which is what a fix for that codec needs.
 * The agent's scripts (`tests/agent/`) talk to a stand-in for Deepgram
   that xtask starts on the host, and feed the agent's microphone from the
   host (`testmic`). The scripts in `tests/real/` talk to the real Deepgram

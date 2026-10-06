@@ -48,6 +48,19 @@ const DRIVERS: &[DriverMatch] = &[
     DriverMatch { vendor: 0x1AF4, devices: &[0x1059], driver: "virtio-snd" },
     // Intel 82801AA AC'97 audio (QEMU's AC97, VirtualBox's ICH AC97).
     DriverMatch { vendor: 0x8086, devices: &[0x2415], driver: "ac97" },
+    // Intel's HD Audio controllers since Skylake: with an audio DSP beside
+    // them (laptops with digital microphones, mostly) they call themselves
+    // audio devices (class 04/01) rather than HD Audio controllers.
+    DriverMatch {
+        vendor: 0x8086,
+        devices: &[
+            0xA170, 0x9D70, 0xA171, 0x9D71, 0xA2F0, 0xA348, 0x9DC8, 0x02C8, 0x06C8, 0xA3F0, 0xF0C8, 0xF1C8, 0x34C8,
+            0x3DC8, 0x38C8, 0x4DC8, 0xA0C8, 0x43C8, 0x4B55, 0x4B58, 0x7AD0, 0x51C8, 0x51C9, 0x51CC, 0x51CD, 0x54C8,
+            0x7A50, 0x51CA, 0x51CB, 0x51CE, 0x51CF, 0x7E28, 0x7728, 0x7F50, 0x5A98, 0x3198, 0xA828, 0xE428, 0xE328,
+            0x4D28, 0xD328, 0x6E50,
+        ],
+        driver: "hda",
+    },
     // virtio block (transitional and modern)
     DriverMatch { vendor: 0x1AF4, devices: &[0x1001, 0x1042], driver: "virtio-blk" },
     // virtio network card (transitional and modern)
@@ -67,6 +80,10 @@ const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
     (0x01, 0x06, 0x01, "ahci"),
     // USB 3 (xHCI) controllers: USB keyboards, mice and hubs
     (0x0C, 0x03, 0x30, "xhci"),
+    // High Definition Audio controllers (most PCs' sound), also the ones
+    // with an audio DSP beside them
+    (0x04, 0x03, 0x00, "hda"),
+    (0x04, 0x03, 0x80, "hda"),
 ];
 
 /// Disk drivers. A live system (started with `live`) starts none of them:

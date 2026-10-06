@@ -269,12 +269,18 @@ On real hardware the desktop appears in the screen mode the firmware
 provides (1920x1080, or the largest below it). USB keyboards, mice and
 hubs work on the USB 3 (xHCI) controllers that PCs have had since about
 2012, as do PS/2 keyboards and mice; other USB devices, the stick
-included, are left alone. Few PCs have network or sound hardware Veda
-supports yet. To try USB input in QEMU (a keyboard and a tablet behind a
-hub, a mouse, and no PS/2 controller):
+included, are left alone. Sound plays on HD Audio, the sound hardware of
+nearly every PC since 2005: through the speakers, or the headphones when
+they are plugged in, and the line outputs, with the microphone (built in,
+or on a jack when one is plugged in) for the agent. Built-in microphones
+wired to an audio DSP rather than to the codec, as in many recent
+laptops, stay silent; HDMI and DisplayPort audio need a graphics driver,
+which Veda does not have yet; and few PCs have network hardware Veda
+supports. To try USB input or HD Audio in QEMU:
 
 ```bash
 cargo xtask run --input usb
+cargo xtask run --sound hda
 ```
 
 ## Talking to Veda
@@ -455,9 +461,9 @@ The serial console (kernel log plus every program's output) is saved to
 | `lib/agent/` | the agent's logic: Deepgram protocol, functions, instructions, wake word, echo gate, memory, configuration |
 | `boot/` | `vboot`, the UEFI bootloader |
 | `kernel/` | `vkernel`, the microkernel |
-| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `text`, `math`, ... |
+| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `hda` (HD Audio codecs and their routes), `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi) |
-| `drivers/` | `ps2`, `virtio-input`, `xhci` (USB 3 controllers: hubs, keyboards, mice), `virtio-blk`, `ahci` (SATA), `virtio-snd`, `ac97` (AC'97 sound), `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
+| `drivers/` | `ps2`, `virtio-input`, `xhci` (USB 3 controllers: hubs, keyboards, mice), `virtio-blk`, `ahci` (SATA), `hda` (Intel HD Audio), `virtio-snd`, `ac97` (AC'97 sound), `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
 | `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `racer` (*Velocity*) and `starfall` |
 | `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |

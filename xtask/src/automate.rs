@@ -27,7 +27,7 @@
 //! double-click 0.05 0.44           # two quick clicks
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
 //! nic e1000                        # QEMU model of the wired card for this run, applied before boot
-//! sound ac97                       # QEMU's sound card for this run (virtio or ac97), applied before boot
+//! sound ac97                       # the sound card for this run (virtio, ac97 or hda), applied before boot
 //! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot (QEMU)
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
 //! qmp device_del '{"id":"kbd2"}'   # a QMP command, such as plugging USB devices in and out (QEMU)

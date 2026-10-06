@@ -609,6 +609,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hda"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vhda",
+ "vproto",
+ "vrt",
+ "vvirtio",
+]
+
+[[package]]
 name = "heapless"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1339,6 +1351,10 @@ dependencies = [
  "vmath",
  "vraster",
 ]
+
+[[package]]
+name = "vhda"
+version = "0.1.0"
 
 [[package]]
 name = "vheap"

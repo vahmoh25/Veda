@@ -14,8 +14,9 @@ that communicate over kernel channels.
  ├──────────────────────────────────────────────────────────────────────────┤
  │ Services       init (registry, launcher) · vfs · compositor · audio ·    │
  │                agent (the voice agent) · netd · wlan                     │
- │ Drivers        ps2 · xhci (USB) · virtio-input · virtio-snd · ac97 ·     │
- │                virtio-blk · ahci · virtio-net · e1000 · pci              │
+ │ Drivers        ps2 · xhci (USB) · hda (sound) · virtio-snd · ac97 ·      │
+ │                virtio-input · virtio-blk · ahci · virtio-net · e1000 ·   │
+ │                pci                                                       │
  ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
  │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
  ├──────────────────────────────────────────────────────────────────────────┤
@@ -290,11 +291,46 @@ the pool's workers on different CPUs at once.
 
 ## Audio
 
-* `virtio-snd` (QEMU) and `ac97` (VirtualBox's AC'97 card, also in QEMU)
-  drive the sound cards, for playback and the microphone. They connect to
-  the audio service's private `audiodev` protocol, so the service also
-  runs without sound hardware (a null output then consumes audio in real
-  time).
+* `hda` (Intel High Definition Audio: most PCs, QEMU's `intel-hda`,
+  VirtualBox's HD Audio), `virtio-snd` (QEMU) and `ac97` (VirtualBox's
+  AC'97 card, also in QEMU) drive the sound cards, for playback and the
+  microphone. They connect to the audio service's private `audiodev`
+  protocol, so the service also runs without sound hardware (a null
+  output then consumes audio in real time).
+* **HD Audio.** `devmgr` starts `hda` for the PCI class of HD Audio
+  controllers, and for Intel's since Skylake by their IDs (with an audio
+  DSP beside them they call themselves audio devices instead). The
+  driver resets the controller and reads every codec on its link through
+  the command rings (the immediate command registers on Intel's since
+  Lunar Lake); `vhda` (`lib/hda`, which touches no hardware and is
+  unit-tested on the host with models of real codecs) turns a codec's
+  widget graph into routes, and prepares the codecs that need more than
+  the specification: Realtek's get their EAPD pins to follow the EAPD
+  verb, and their speaker amplifier switched on when the firmware's
+  assembly ID says a GPIO of the codec switches it (as Linux does). The
+  outputs are the speakers, headphone jacks and the front pair of each
+  line output, each with a path from a DAC of its own where there are
+  enough, all fed the same stream at unity gain (the volume stays the
+  service's); the input is the best microphone or line input that one
+  ADC reaches. Everything else is muted, the analog loopback above all,
+  and external amplifiers are powered. While headphones are plugged in the speakers and line outputs
+  are off, and a microphone plugged into a jack records instead of the
+  built-in one: the codec reports plugging, and the driver also looks
+  every second. Streams run at 48 kHz (44.1 kHz on codecs without it),
+  16-bit stereo, as rings of 10 ms periods that the controller loops over;
+  a played period is silenced at once, so a late refill plays silence
+  rather than old audio, and a stream that stops moving is started again.
+  The controller interrupts after each period (MSI), or the driver polls
+  (also when no interrupt ever comes). Because many HD Audio controllers
+  can move audio without snooping the CPU's caches, the driver asks the
+  chipset for snooping and also flushes the cache lines it hands over.
+  What particular chipsets need follows Linux's `snd-hda-intel`: Intel's
+  since Skylake reset with their clock gating off (or codecs can go
+  unnoticed), ATI's and AMD's south bridges have a snoop switch, NVIDIA's
+  MSI is left unused, and a recorded period is taken only once the
+  controller is 32 frames past it (AMD's count frames before they reach
+  memory). HDMI and DisplayPort codecs are left alone: their audio needs a
+  graphics driver.
 * **Recording.** An input device produces into a ring with a capture
   clock; the service converts it for each capture stream, and runs the
   echo canceller for streams that ask for it (the agent's microphone) with

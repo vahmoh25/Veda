@@ -49,6 +49,7 @@ pub const PROGRAMS: &[Program] = &[
     Program { package: "starfall", binary: "starfall" },
     Program { package: "virtio-snd", binary: "virtio-snd" },
     Program { package: "ac97", binary: "ac97" },
+    Program { package: "hda", binary: "hda" },
     Program { package: "audio", binary: "audio" },
     Program { package: "agent", binary: "agent" },
     Program { package: "music", binary: "music" },

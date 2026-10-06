@@ -165,9 +165,12 @@ impl VBox {
             "64",
             "--audio-enabled",
             if cfg.audio { "on" } else { "off" },
-            // AC'97 (drivers/ac97) for the loudspeakers and the microphone.
+            // AC'97 (drivers/ac97) for the loudspeakers and the microphone,
+            // or HD Audio (drivers/hda) with `--sound hda`.
             "--audio-controller",
-            "ac97",
+            if cfg.sound == "hda" { "hda" } else { "ac97" },
+            "--audio-codec",
+            if cfg.sound == "hda" { "stac9221" } else { "stac9700" },
             "--audio-driver",
             // Scripts record QEMU's output; under VirtualBox they stay silent.
             if cfg.audio_wav.is_some() { "null" } else { "default" },

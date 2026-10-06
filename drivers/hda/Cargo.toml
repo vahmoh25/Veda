@@ -1,0 +1,24 @@
+[package]
+name = "hda"
+description = "Driver for Intel High Definition Audio controllers and their codecs: speakers, headphones and microphones"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hda"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vproto = { workspace = true }
+vhda = { workspace = true }
+vvirtio = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true
