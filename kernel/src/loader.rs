@@ -7,7 +7,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use bootinfo::BootInfo;
+use bootinfo::{BootInfo, MemoryKind};
 use vabi::startup::{self, role};
 use vabi::{KernelBootInfo, Rights};
 
@@ -74,6 +74,21 @@ pub fn spawn_init(boot: &BootInfo) {
     let fb = &boot.framebuffer;
     let mut cmdline = [0u8; 256];
     cmdline[..boot.cmdline_len as usize].copy_from_slice(&boot.cmdline[..boot.cmdline_len as usize]);
+    // The firmware's ACPI memory, adjacent ranges merged.
+    let mut acpi_memory = [[0u64; 2]; vabi::ACPI_MEMORY_RANGES];
+    let mut acpi_memory_count = 0;
+    // SAFETY: the loader built a valid memory map.
+    for r in unsafe { boot.memory_map.as_slice() } {
+        if !matches!(r.kind, MemoryKind::AcpiReclaimable | MemoryKind::AcpiNvs) {
+            continue;
+        }
+        if acpi_memory_count > 0 && acpi_memory[acpi_memory_count - 1][1] == r.base {
+            acpi_memory[acpi_memory_count - 1][1] = r.end();
+        } else if acpi_memory_count < acpi_memory.len() {
+            acpi_memory[acpi_memory_count] = [r.base, r.end()];
+            acpi_memory_count += 1;
+        }
+    }
     let info = KernelBootInfo {
         framebuffer_width: fb.width,
         framebuffer_height: fb.height,
@@ -84,6 +99,9 @@ pub fn spawn_init(boot: &BootInfo) {
         cmdline,
         cmdline_len: boot.cmdline_len,
         cpu_count: crate::arch::percpu::online().count() as u32,
+        acpi_rsdp: boot.rsdp_phys,
+        acpi_memory,
+        acpi_memory_count: acpi_memory_count as u32,
     };
     let info_vmo = Vmo::new_anonymous(4096).unwrap();
     // SAFETY: viewing a plain #[repr(C)] struct as bytes.

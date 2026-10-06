@@ -1,0 +1,23 @@
+[package]
+name = "speakertest"
+description = "Speaker amplifiers for automated tests: the speakers service, answering slowly and logging what it is told"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "speakertest"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

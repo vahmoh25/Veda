@@ -3,3 +3,5 @@
 *.ttf binary
 *.png binary
 *.fd binary
+*.wmfw binary
+*.bin binary

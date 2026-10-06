@@ -1,0 +1,9 @@
+[package]
+name = "vspi"
+description = "SPI controllers for Veda's drivers: Intel's LPSS ports (PXA2xx-style), set up and driven through their registers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

@@ -410,13 +410,11 @@ fn laptop_setup() {
     assert!(has(0x15, verb::set_connection_select(1)));
     assert!(has(0x15, verb::set_pin_control(pin_ctl::OUT | pin_ctl::HEADPHONE)));
     assert!(has(0x03, verb::set_amp(Amp::Output, false, 0x57)));
-    // Both DACs on the output stream; the ADC on the input stream.
-    for dac in [0x02, 0x03] {
-        assert!(has(dac, verb::set_format(0x0011)));
-        assert!(has(dac, verb::set_stream_channel(1, 0)));
+    // Both DACs on the output stream, the ADC on the input stream: each
+    // converter its stream first, then the format (as Linux does it).
+    for (converter, tag) in [(0x02, 1), (0x03, 1), (0x08, 2)] {
+        assert!(position(converter, verb::set_stream_channel(tag, 0)) < position(converter, verb::set_format(0x0011)));
     }
-    assert!(has(0x08, verb::set_format(0x0011)));
-    assert!(has(0x08, verb::set_stream_channel(2, 0)));
     // The microphone jack with bias voltage and +20 dB; the digital
     // microphone without either.
     assert!(has(0x18, verb::set_pin_control(pin_ctl::IN | pin_ctl::VREF_80)));

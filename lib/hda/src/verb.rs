@@ -27,6 +27,7 @@ pub mod id {
     pub const GET_CONNECTION_LIST: u16 = 0xF02;
     pub const GET_POWER_STATE: u16 = 0xF05;
     pub const SET_POWER_STATE: u16 = 0x705;
+    pub const GET_STREAM_CHANNEL: u16 = 0xF06;
     pub const SET_STREAM_CHANNEL: u16 = 0x706;
     pub const GET_PIN_CONTROL: u16 = 0xF07;
     pub const SET_PIN_CONTROL: u16 = 0x707;

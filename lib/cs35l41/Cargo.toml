@@ -1,0 +1,9 @@
+[package]
+name = "vcs35l41"
+description = "Cirrus Logic CS35L41 speaker amplifiers for Veda: the register sequences that boot, trim, start and stop them, their DSP firmware, and the laptops that have them"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

@@ -469,7 +469,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
 | `third_party/` | vendored crates with Veda patches (smoltcp) |
 | `xtask/` | the build system: cross-compilation, disk image, QEMU and VirtualBox, automation, the stand-in for Deepgram |
-| `assets/` | fonts and application manifests |
+| `assets/` | fonts, application manifests, and firmware for laptop speaker amplifiers |
 | `docs/` | documentation, the README's screenshots, and the icon and social preview (`docs/icon/`) |
 
 ## Documentation
@@ -495,5 +495,9 @@ the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 PURPOSE.
 
 The bundled fonts (Inter, Lato, JetBrains Mono) are under the SIL Open
-Font License 1.1; see `assets/fonts/`. Vendored third-party code keeps its
-own license; see `third_party/`.
+Font License 1.1; see `assets/fonts/`. The firmware in
+`assets/firmware/cirrus/` is Cirrus Logic's, from the Linux firmware
+collection: it runs on the speaker amplifiers' own DSP, not in Veda, and is
+redistributed unmodified under Cirrus Logic's licence (`LICENSE.cirrus`
+there), for use only with their devices. Vendored third-party code keeps
+its own license; see `third_party/`.

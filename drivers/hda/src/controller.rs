@@ -30,8 +30,16 @@ mod reg {
     pub const VMAJ: usize = 0x03;
     pub const GCTL: usize = 0x08;
     pub const STATESTS: usize = 0x0E;
+    /// Where the extended capabilities start (Intel's, since Skylake).
+    pub const LLCH: usize = 0x14;
     pub const INTCTL: usize = 0x20;
     pub const INTSTS: usize = 0x24;
+    /// Counts the link's bit clock, 24 MHz.
+    pub const WALLCLK: usize = 0x30;
+    /// The DMA position buffer: where the controller writes each stream's
+    /// position (bit 0 of the low half turns it on).
+    pub const DPLBASE: usize = 0x70;
+    pub const DPUBASE: usize = 0x74;
     pub const CORBLBASE: usize = 0x40;
     pub const CORBUBASE: usize = 0x44;
     pub const CORBWP: usize = 0x48;
@@ -59,6 +67,7 @@ mod reg {
     pub const SD_LPIB: usize = 0x04;
     pub const SD_CBL: usize = 0x08;
     pub const SD_LVI: usize = 0x0C;
+    pub const SD_FIFOS: usize = 0x10;
     pub const SD_FMT: usize = 0x12;
     pub const SD_BDPL: usize = 0x18;
     pub const SD_BDPU: usize = 0x1C;
@@ -227,6 +236,10 @@ struct Quirks {
     ati_snoop: bool,
     /// NVIDIA chipsets: their MSI is unreliable; poll instead.
     no_msi: bool,
+    /// Intel since Skylake: stream positions from the DMA position buffer,
+    /// as Linux takes them there (its `POS_FIX_SKL`), and the processing
+    /// pipe (an audio DSP between the streams and the link) kept out.
+    skylake: bool,
 }
 
 impl Quirks {
@@ -237,14 +250,117 @@ impl Quirks {
             immediate_commands: intel(INTEL_IMMEDIATE_COMMANDS),
             ati_snoop: ATI_SNOOP.contains(&(info.vendor, info.device)),
             no_msi: info.vendor == NVIDIA,
+            skylake: intel(INTEL_SKYLAKE_AND_LATER),
         }
     }
 }
+
+/// The processing pipe capability of Intel's controllers since Skylake:
+/// PPCTL's bit 30 sends the streams through the audio DSP ("decoupled"),
+/// and bits 0-29 single streams.
+mod pp {
+    pub const CAP_ID: u32 = 0x3;
+    pub const PPCTL: usize = 0x04;
+    pub const GPROCEN: u32 = 1 << 30;
+    pub const STREAMS: u32 = (1 << 30) - 1;
+}
+
+/// Intel since Skylake: keeps every stream coupled to the link, as a
+/// controller without its DSP's firmware must run (the firmware could
+/// have left them decoupled). Returns PPCTL as it was found.
+fn couple_streams(regs: &Registers) -> Option<u32> {
+    let ppctl = find_capability(regs, pp::CAP_ID)? + pp::PPCTL;
+    let found = regs.r32(ppctl);
+    if found & (pp::GPROCEN | pp::STREAMS) != 0 {
+        regs.w32(ppctl, found & !(pp::GPROCEN | pp::STREAMS));
+    }
+    Some(found)
+}
+
+/// Intel since Skylake: each stream's DMA position as a register, besides
+/// the position buffer (for the log).
+const INTEL_DPIB: usize = 0x1084;
 
 /// Intel's clock gating control (PCI configuration space): bit 6 lets the
 /// controller stop its clocks.
 const INTEL_CGCTL: u16 = 0x48;
 const INTEL_CGCTL_MISCBDCGE: u32 = 1 << 6;
+
+/// The multi-link capability of Intel's controllers since Skylake: the
+/// first link (to the codecs) has its capabilities and its control.
+mod ml {
+    pub const CAP_ID: u32 = 0x2;
+    pub const LINK0: usize = 0x40;
+    /// The link's clocks: bit `n` for clock `n` of [`MHZ`].
+    pub const LCAP: usize = 0x00;
+    /// The clock in use (an index into [`MHZ`]), and the power wanted and
+    /// reached.
+    pub const LCTL: usize = 0x04;
+    pub const SCF: u32 = 0xF;
+    pub const SPA: u32 = 1 << 16;
+    pub const CPA: u32 = 1 << 23;
+    pub const MHZ: [u32; 6] = [6, 12, 24, 48, 96, 192];
+    /// The clocks to move a 6 MHz link to, best first (Linux's choice).
+    pub const PREFERRED: [u32; 5] = [2, 3, 1, 4, 5];
+}
+
+/// Finds an extended capability by its ID: the offset of its header.
+fn find_capability(regs: &Registers, id: u32) -> Option<usize> {
+    let mut offset = regs.r16(reg::LLCH) as usize;
+    for _ in 0..10 {
+        if offset == 0 || !regs.fits(offset, 4) {
+            return None;
+        }
+        let header = regs.r32(offset);
+        if header == u32::MAX {
+            return None;
+        }
+        if (header >> 16) & 0xFFF == id {
+            return Some(offset);
+        }
+        offset = (header & 0xFFFF) as usize;
+    }
+    None
+}
+
+/// Busy-waits `us` microseconds.
+fn delay_us(us: u64) {
+    let end = now_ns() + us * 1000;
+    while now_ns() < end {
+        core::hint::spin_loop();
+    }
+}
+
+/// Intel since Skylake: a link the firmware left at a 6 MHz clock is moved
+/// to the best other clock it has, powered down meanwhile (as Linux's
+/// `intel_init_lctl` does). Returns the link's clock in MHz before and
+/// after, if the controller has links to configure.
+fn init_link_clock(regs: &Registers) -> Option<(u32, u32)> {
+    let link = find_capability(regs, ml::CAP_ID)? + ml::LINK0;
+    let (lcap, lctl) = (link + ml::LCAP, link + ml::LCTL);
+    let clock = |v: u32| ml::MHZ.get((v & ml::SCF) as usize).copied().unwrap_or(0);
+    let mut v = regs.r32(lctl);
+    let before = clock(v);
+    // Power must have reached what was asked for before it is changed.
+    if v & ml::SCF == 0 && (v & ml::SPA != 0) == (v & ml::CPA != 0) {
+        let power = |on: bool| {
+            let v = regs.r32(lctl) & !ml::SPA | if on { ml::SPA } else { 0 };
+            regs.w32(lctl, v);
+            let reached = regs.wait(1, |r| (r.r32(lctl) & ml::CPA != 0) == on);
+            delay_us(100);
+            reached
+        };
+        if power(false) {
+            let caps = regs.r32(lcap);
+            if let Some(scf) = ml::PREFERRED.into_iter().find(|&c| caps & 1 << c != 0) {
+                v = (v & !ml::SCF) | scf;
+                regs.w32(lctl, v);
+            }
+        }
+        power(true);
+    }
+    Some((before, clock(regs.r32(lctl))))
+}
 
 fn config_read(pci: &pcidev::Client, off: u16, width: u8) -> Option<u32> {
     pci.config_read(off, width).ok().and_then(|r| r.ok())
@@ -321,14 +437,26 @@ pub struct Controller {
     rirb_rp: usize,
     /// Commands go through the immediate command registers.
     pub immediate_commands: bool,
+    /// Intel since Skylake: the link's clock in MHz, as the firmware left
+    /// it and as it is now.
+    pub link_clock: Option<(u32, u32)>,
+    /// Intel since Skylake: the processing pipe's control as the firmware
+    /// left it (every stream is coupled to the link now).
+    pub processing_pipe: Option<u32>,
+    /// Stream positions come from the DMA position buffer.
+    pub position_buffer: bool,
+    /// Buffers each stream completed, by the interrupts seen.
+    pub completions: [u32; 30],
     /// Unsolicited responses: (codec address, response).
     pub unsolicited: VecDeque<(u8, u32)>,
     /// The response ring overran (responses were lost).
     overruns: u32,
 }
 
-/// Where the response ring starts in the ring buffer.
+/// Where the response ring starts in the ring buffer, and the DMA position
+/// buffer between the two rings (8 bytes for each stream).
 const RIRB_OFFSET: usize = 2048;
+const POSITIONS_OFFSET: usize = 1024;
 
 /// The size code (0, 1, 2) and entries of the largest ring the controller
 /// offers, from the capability bits of CORBSIZE or RIRBSIZE.
@@ -474,6 +602,12 @@ impl Controller {
         }
         let codecs = reset?;
         let (corb_entries, rirb_entries) = entries;
+        let link_clock = if quirks.clock_gating { init_link_clock(&regs) } else { None };
+        let processing_pipe = if quirks.skylake { couple_streams(&regs) } else { None };
+        // The DMA position buffer, written by the controller as streams move.
+        let positions = rings.phys() + POSITIONS_OFFSET as u64;
+        regs.w32(reg::DPUBASE, (positions >> 32) as u32);
+        regs.w32(reg::DPLBASE, positions as u32 | 1);
 
         let irq = if quirks.no_msi { None } else { pci::enable_msi(pci) };
         if irq.is_some() {
@@ -497,9 +631,25 @@ impl Controller {
             corb_wp: 0,
             rirb_rp: 0,
             immediate_commands: quirks.immediate_commands,
+            link_clock,
+            processing_pipe,
+            position_buffer: quirks.skylake,
+            completions: [0; 30],
             unsolicited: VecDeque::new(),
             overruns: 0,
         })
+    }
+
+    /// Stream `index`'s position as the controller last wrote it to the
+    /// DMA position buffer.
+    pub fn buffered_position(&self, index: usize) -> u32 {
+        let at = POSITIONS_OFFSET + index * 8;
+        // SAFETY: inside the ring buffer; drop a stale cache line first.
+        let bytes = unsafe {
+            flush(self.rings.ptr().add(at), 4);
+            self.rings.bytes(at, 4)
+        };
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
     }
 
     /// Sends a command to node `nid` of the codec at `codec` and waits for
@@ -590,6 +740,7 @@ impl Controller {
             for s in 0..30 {
                 if status & 1 << s != 0 {
                     self.regs.w8(reg::SD_BASE + s * reg::SD_STRIDE + reg::SD_STS, SD_STS_BCIS);
+                    self.completions[s] = self.completions[s].wrapping_add(1);
                 }
             }
             let rirb = self.regs.r8(reg::RIRBSTS);
@@ -611,6 +762,11 @@ impl Controller {
     /// Whether the controller still answers (it reads all ones when gone).
     pub fn healthy(&self) -> bool {
         self.regs.r32(reg::GCTL) != u32::MAX
+    }
+
+    /// The link's bit clock count (24 MHz), for checking the link's speed.
+    pub fn wall_clock(&self) -> u32 {
+        self.regs.r32(reg::WALLCLK)
     }
 
     fn stream_base(&self, index: usize) -> usize {
@@ -676,24 +832,37 @@ impl Stream {
         r.w8(self.base(hc) + reg::SD_STS, SD_STS_CLEAR);
     }
 
-    /// Starts the stream in `format` from the first period.
+    /// Starts the stream in `format` from the first period, programmed in
+    /// Linux's order: the stream tag, the buffer and the format, the
+    /// interrupt, then RUN once the controller has sized the stream's FIFO
+    /// for the format.
     pub fn start(&self, hc: &Controller, format: u16) {
         self.reset(hc);
         let (base, r) = (self.base(hc), &hc.regs);
-        let list = self.memory.phys();
+        let direction = if self.bidirectional && self.output { SD_CTL_DIR_OUT } else { 0 };
+        let mut control = (self.tag as u32 & 0xF) << 20 | direction;
+        r.w32(base + reg::SD_CTL, control);
         r.w32(base + reg::SD_CBL, (self.periods * self.period_bytes) as u32);
-        r.w16(base + reg::SD_LVI, (self.periods - 1) as u16);
         r.w16(base + reg::SD_FMT, format);
+        r.w16(base + reg::SD_LVI, (self.periods - 1) as u16);
+        let list = self.memory.phys();
         r.w32(base + reg::SD_BDPL, list as u32);
         r.w32(base + reg::SD_BDPU, (list >> 32) as u32);
-        let direction = if self.bidirectional && self.output { SD_CTL_DIR_OUT } else { 0 };
-        let control = (self.tag as u32 & 0xF) << 20 | direction | if hc.irq.is_some() { SD_CTL_IOCE } else { 0 };
-        r.w32(base + reg::SD_CTL, control);
         if hc.irq.is_some() {
+            control |= SD_CTL_IOCE;
+            r.w32(base + reg::SD_CTL, control);
             r.w32(reg::INTCTL, r.r32(reg::INTCTL) | 1 << self.index);
         }
+        r.wait(1, |r| r.r16(base + reg::SD_FIFOS) != 0);
         r.w8(base + reg::SD_STS, SD_STS_CLEAR);
         r.w32(base + reg::SD_CTL, control | SD_CTL_RUN);
+    }
+
+    /// The format the stream descriptor holds, and the size of its FIFO,
+    /// for the log.
+    pub fn format_and_fifo(&self, hc: &Controller) -> (u16, u16) {
+        let base = self.base(hc);
+        (hc.regs.r16(base + reg::SD_FMT), hc.regs.r16(base + reg::SD_FIFOS))
     }
 
     pub fn stop(&self, hc: &Controller) {
@@ -702,9 +871,35 @@ impl Stream {
         self.reset(hc);
     }
 
-    /// Where the controller is in the buffer, in bytes.
+    /// Where the controller is in the buffer, in bytes: from the DMA
+    /// position buffer where Linux takes it from there (Intel since
+    /// Skylake; reading the link position first brings it up to date, as
+    /// Linux does), the link position (LPIB) elsewhere.
     pub fn position(&self, hc: &Controller) -> usize {
+        let link = self.link_position(hc);
+        if hc.position_buffer { self.buffer_position(hc) } else { link }
+    }
+
+    /// The link position register (LPIB), in bytes.
+    pub fn link_position(&self, hc: &Controller) -> usize {
         hc.regs.r32(self.base(hc) + reg::SD_LPIB) as usize % (self.periods * self.period_bytes)
+    }
+
+    /// The DMA position buffer's entry for this stream, in bytes.
+    pub fn buffer_position(&self, hc: &Controller) -> usize {
+        hc.buffered_position(self.index) as usize % (self.periods * self.period_bytes)
+    }
+
+    /// Intel since Skylake: the DMA position register, in bytes (for the
+    /// log).
+    pub fn dma_position(&self, hc: &Controller) -> Option<usize> {
+        hc.position_buffer.then(|| {
+            hc.regs.r32(INTEL_DPIB + self.index * reg::SD_STRIDE) as usize % (self.periods * self.period_bytes)
+        })
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
     }
 
     /// The stream's errors ([`SD_STS_FIFOE`], [`SD_STS_DESE`]) since the

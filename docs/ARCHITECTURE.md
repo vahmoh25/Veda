@@ -86,7 +86,11 @@ VMOs. Threads wait on signals of several objects at once
 (`object_wait_many`).
 
 **Time.** The monotonic clock comes from the TSC, calibrated against the
-HPET. The wall clock starts from the firmware's RTC, which keeps UTC; the
+HPET (or the PIT without one). On an Intel processor not under a
+hypervisor, the TSC frequency the processor reports itself (CPUID leaves
+0x15 and 0x16, as Linux reads them) wins over a timer that measures more
+than 5% off it; `dmesg time` says which was used. The wall clock starts
+from the firmware's RTC, which keeps UTC; the
 `tz=` boot option (xtask passes the host's offset) gives local time, which
 people see, while protocols and certificates use the UTC clock.
 
@@ -111,6 +115,46 @@ eager FPU/SSE/AVX state switching with XSAVE.
   the service the client's identity (process, program name, whether it is
   a system service or an application), so a service can decide who may do
   what; system service names cannot be registered by other programs.
+
+## Devices (`services/devmgr`)
+
+* `devmgr` enumerates the PCI bus and starts a driver for each device it
+  has one for, matched by vendor and device or by PCI class. A driver gets
+  a channel speaking the `pcidev` protocol for exactly its device: that
+  device's configuration space (its BAR registers stay as the firmware set
+  them), its BARs mapped, MSI interrupts and DMA memory. Drivers never see
+  other devices.
+* **ACPI.** `devmgr` also reads the firmware's ACPI tables (the kernel
+  hands `init` the RSDP and the firmware's ACPI memory ranges, `init`
+  hands them to `devmgr`), because some devices exist only there: a
+  laptop's speaker amplifiers on an SPI bus, the GPIO pins wired to them.
+  `vacpi` (`lib/acpi`) loads the DSDT and SSDTs into a namespace and
+  evaluates its objects with a small AML interpreter: integer, string,
+  buffer and package operations, buffer fields, control flow, method
+  calls, and the fields of firmware memory regions (the firmware's
+  settings, which decide what exists and where). It changes nothing:
+  what a method stores lasts only for that evaluation, and it reads no I/O
+  ports, PCI configuration space or embedded controller. Definitions
+  inside an `If` outside any method exist only when their condition holds
+  (that is how a board leaves out what its settings turn off); a region
+  whose address depends on a later table is placed when first read, as
+  ACPICA does. Every evaluation is bounded. The tables and the firmware's
+  ACPI memory are mapped cached, anything else AML reads uncached. On the
+  laptop this was written for, all of a 480 KiB DSDT and fifteen SSDTs
+  load (`cargo test -p vacpi -- --ignored` loads a machine's dumped
+  tables).
+* A driver asks for the devices the firmware describes below its PCI
+  function (its ACPI companion, found by `_ADR` under the PCI root bridge):
+  their ids (`_HID`, `_UID`, `_SUB`), status and resources (`_CRS`:
+  memory, ports, interrupts, GPIO and SPI or I2C connections).
+* **GPIO.** `devmgr` drives the GPIO pins those devices are wired to on
+  the driver's behalf, and no others: a driver names a GPIO connection of
+  one of its devices, `devmgr` finds the controller (its registers from
+  its own `_CRS`) and the pad (`vgpio`, `lib/gpio`). The controllers are
+  Intel's (Tiger Lake-LP's pads, which Alder Lake-P kept; the layout as
+  Linux's `pinctrl-tigerlake` has it): a pad owned by the firmware, or
+  whose settings are locked, is refused; one in another function becomes
+  a GPIO only when needed; a level is set before the output is enabled.
 
 ## Storage
 
@@ -319,18 +363,73 @@ the pool's workers on different CPUs at once.
   every second. Streams run at 48 kHz (44.1 kHz on codecs without it),
   16-bit stereo, as rings of 10 ms periods that the controller loops over;
   a played period is silenced at once, so a late refill plays silence
-  rather than old audio, and a stream that stops moving is started again.
-  The controller interrupts after each period (MSI), or the driver polls
+  rather than old audio. Where the controller is comes from its position
+  (the DMA position buffer it writes on Intel's since Skylake, as Linux
+  takes it there; the link position elsewhere), held against the link's
+  24 MHz clock, the clock the controller plays by: a stream that stops
+  moving is started again; a position that claims more periods than the
+  clock allowed since the last reading (one that wavered back across a
+  period boundary reads as a whole lap) is not taken as progress, which
+  would throw queued audio away; and one that runs far ahead of the clock
+  is not believed at all, the stream then being paced by the clock. The
+  controller interrupts after each period (MSI), or the driver polls
   (also when no interrupt ever comes). Because many HD Audio controllers
   can move audio without snooping the CPU's caches, the driver asks the
   chipset for snooping and also flushes the cache lines it hands over.
   What particular chipsets need follows Linux's `snd-hda-intel`: Intel's
   since Skylake reset with their clock gating off (or codecs can go
-  unnoticed), ATI's and AMD's south bridges have a snoop switch, NVIDIA's
-  MSI is left unused, and a recorded period is taken only once the
-  controller is 32 frames past it (AMD's count frames before they reach
-  memory). HDMI and DisplayPort codecs are left alone: their audio needs a
-  graphics driver.
+  unnoticed), get a link that the firmware left at a 6 MHz clock moved to
+  24 MHz, and keep every stream coupled to the link (out of the audio
+  DSP's processing pipe); ATI's and AMD's south bridges have a snoop
+  switch, NVIDIA's MSI is left unused, streams start only once the
+  controller has sized their FIFO, and a recorded period is taken only
+  once the controller is 32 frames past it (AMD's count frames before
+  they reach memory). For whoever looks into a machine where sound goes
+  wrong, the driver reads every converter's stream and format back
+  (setting them again where the codec did not take them), and soon after
+  playback starts logs how fast the link's clock ran by the system's, how
+  many buffers the controller completed, and how fast each of its
+  position counters moved (`dmesg hda`). HDMI and DisplayPort codecs are
+  left alone: their audio needs a graphics driver.
+* **Speaker amplifiers.** Many laptops since 2021 drive their speakers
+  with Cirrus Logic CS35L41 amplifiers: the codec sends them its output
+  over I2S, but they are set up over SPI or I2C, and play nothing until
+  they are. `devmgr` starts `lpss-spi` for the SPI controllers of Intel's
+  chipsets since Cannon Lake; it looks at the devices the firmware
+  describes on its bus and touches nothing unless they include the
+  amplifiers (`CSC3551`). Their settings come from Linux's table of
+  boards (by the subsystem id in `_SUB`; the firmware of these laptops
+  leaves them out): which GPIO resets them, which selects the second one,
+  which channel each plays. With them it resets the amplifiers, boots
+  each from its OTP memory, checks its id, applies its silicon revision's
+  fixes and the factory trims the OTP holds, and sets up the external
+  boost switch, its GPIOs and the I2S slot it plays; the sequences and
+  values are Linux's (`vcs35l41`, `lib/cs35l41`, over the SPI controller
+  of `vspi`, `lib/spi`; tested against a simulated amplifier and a
+  simulated Zenbook, `lib/boardsim`). It then serves the `speakers`
+  protocol: `hda` tells it when its stream starts (the amplifiers power
+  up once the codec clocks them) and before it stops (they power down
+  while it still does), and mutes them while headphones are plugged in.
+  A thread of `hda`'s own does the telling, and connects only once the
+  registry lists the service (a connection to a service that is not
+  registered waits in the registry until one is): the playback thread
+  never waits on another process. Before serving, the driver loads each
+  amplifier's DSP firmware, as Linux does: Cirrus's speaker protection
+  and the board maker's tuning for its speakers, from the Linux firmware
+  collection (`assets/firmware/cirrus`, installed at `/system/firmware`;
+  the files are chosen by board, speaker id and amplifier, by Linux's
+  names and rules). The firmware's blocks go into the DSP's memories, its
+  algorithm list is read back to place the tuning, then the core starts
+  and the firmware reports running and is paused; it is resumed for each
+  stream, switches the speaker on, and plays at 17.5 dB, which its
+  protection makes safe. If its files are missing or it does not start,
+  an amplifier plays without it, as on Linux: the codec's audio straight
+  to the amplifier at 4.5 dB. Not yet done as on Linux: the factory
+  calibration of the speakers Linux reads from a UEFI variable, and
+  putting the DSP to sleep between streams. Errors they latch
+  (overheating, a short) are logged once a second while they play, and
+  released when playback stops. Boards whose amplifiers boost their own
+  supply, and amplifiers on I2C, are not driven yet.
 * **Recording.** An input device produces into a ring with a capture
   clock; the service converts it for each capture stream, and runs the
   echo canceller for streams that ask for it (the agent's microphone) with
@@ -393,8 +492,23 @@ policy, the wake word) are in `vagent`, tested on the host. See
   published vectors, a station against an access point, two TCP/IP stacks
   over a simulated cable, the Wi-Fi simulator, and the TLS client against
   a rustls server and real certificate chains.
+* Simulated machines (`lib/boardsim`): hardware no emulator has, such as
+  a laptop's speaker amplifiers, as firmware descriptions shaped like the
+  real firmware's and models of the chips, wired as on the real board.
+  Veda's own code (the ACPI interpreter, the GPIO pads, the SPI
+  controller, the amplifiers' sequences and their DSP firmware, with the
+  real firmware files) runs against them through the same traits it uses
+  on the hardware, and the models note what a driver does wrong (two
+  devices selected at once, a protected register written while locked,
+  an amplifier powered without its clock, a DSP started with its memory
+  protection closed, a gain above 4.5 dB without the DSP's protection).
+  They cannot show that the real chips behave like their models, or how
+  anything sounds: the real machine stays the final check.
 * GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
   mouse, keyboard, waits on log lines, screenshots — and fail on panics.
+  The sound cards' scripts also check QEMU's recording of the output for
+  dropouts, and `hda-speakers.vts` gives the HD Audio driver a stand-in
+  for a laptop's amplifier driver (`speakertest`) that answers slowly.
 * The agent's scripts (`tests/agent/*.vts`) with a stand-in for Deepgram on
   the host and a test microphone fed from the host; `tests/real/` talks to
   the real Deepgram.
@@ -416,6 +530,9 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/v3d` | the fixed-point software 3D renderer and the game harness |
 | `lib/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
 | `lib/virtio` | virtio device access shared by the drivers |
+| `lib/hda`, `lib/usb`, `lib/cs35l41`, `lib/spi` | what the HD Audio, USB, speaker amplifier and SPI drivers know that touches no hardware |
+| `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
+| `lib/boardsim` | simulated machines for host tests: firmware descriptions and models of chips no emulator has |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
 | `lib/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |
@@ -427,5 +544,5 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `tests/` | in-system tests and GUI automation scripts |
 | `tools/` | host programs: media generators, `airsim` (the simulated Wi-Fi environment) |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |
-| `assets/` | fonts and other data shipped in the initrd |
+| `assets/` | fonts, firmware and other data shipped in the initrd |
 | `docs/` | documentation |

@@ -33,6 +33,7 @@
 //! qmp device_del '{"id":"kbd2"}'   # a QMP command, such as plugging USB devices in and out (QEMU)
 //! audio host                       # the host's loudspeakers and microphone instead of a WAV file (echo on real hardware)
 //! expect-audio                     # fail unless the recorded sound output holds more than silence
+//! expect-audio-gapless [20]        # fail if it drops out (digital silence over 20 ms between its first and last sound)
 //! requires qemu                    # only for QEMU (or `virtualbox`); `test` skips it elsewhere
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
 //! air-expect "list" "1 joined"     # fail unless the simulator's answer contains the text
@@ -625,6 +626,24 @@ pub fn run_script(
                         return Err(ctx(format!("the sound output is silent (peak {peak})")));
                     }
                 }
+                // While it plays, the sound output never drops out: no
+                // stretch of digital silence longer than the limit (20 ms by
+                // default) between the first sound and the last.
+                "expect-audio-gapless" => {
+                    let limit = if w.len() > 1 { num(&w, 1)? } else { 20.0 };
+                    let wav =
+                        std::fs::read(util::out_dir().join("audio.wav")).map_err(|e| ctx(format!("audio.wav: {e}")))?;
+                    let gaps = silent_gaps(&wav, limit).map_err(ctx)?;
+                    if !gaps.is_empty() {
+                        let list: Vec<String> =
+                            gaps.iter().take(5).map(|(at, ms)| format!("{ms:.0} ms at {at:.2} s")).collect();
+                        return Err(ctx(format!(
+                            "the sound output drops out {} time(s): {}",
+                            gaps.len(),
+                            list.join(", ")
+                        )));
+                    }
+                }
                 "reject-serial" => {
                     let needle = w.get(1).ok_or("missing text")?;
                     if s.recent().contains(needle.as_str()) {
@@ -772,4 +791,93 @@ pub fn run_script(
 pub fn tail(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+/// The stretches of digital silence (every channel exactly zero) longer
+/// than `limit_ms` in a 16-bit PCM WAV file, between its first and last
+/// sound: where (s) and how long (ms). QEMU leaves the data chunk's length
+/// at zero while it records; that means "to the end".
+pub fn silent_gaps(wav: &[u8], limit_ms: f64) -> std::result::Result<Vec<(f64, f64)>, String> {
+    let u16_at = |at: usize| wav.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let u32_at = |at: usize| wav.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    if wav.get(0..4) != Some(b"RIFF") || wav.get(8..12) != Some(b"WAVE") {
+        return Err("audio.wav is not a WAV file".into());
+    }
+    let (mut at, mut format) = (12, None);
+    let data = loop {
+        let (Some(id), Some(len)) = (wav.get(at..at + 4), u32_at(at + 4)) else {
+            return Err("audio.wav has no data".into());
+        };
+        if id == b"fmt " {
+            format = Some((u16_at(at + 10).unwrap_or(0), u32_at(at + 12).unwrap_or(0), u16_at(at + 22).unwrap_or(0)));
+        } else if id == b"data" {
+            let end = if len == 0 { wav.len() } else { (at + 8 + len).min(wav.len()) };
+            break &wav[at + 8..end];
+        }
+        at += 8 + len + (len & 1);
+    };
+    let Some((channels @ 1.., rate @ 1.., 16)) = format else { return Err("audio.wav is not 16-bit PCM".into()) };
+    let frames: Vec<&[u8]> = data.chunks_exact(2 * channels).collect();
+    let silent = |f: &[u8]| f.iter().all(|&b| b == 0);
+    let loud = |f: &[u8]| f.chunks_exact(2).any(|s| i16::from_le_bytes([s[0], s[1]]).unsigned_abs() > 64);
+    let (Some(first), Some(last)) = (frames.iter().position(|f| loud(f)), frames.iter().rposition(|f| loud(f))) else {
+        return Ok(Vec::new());
+    };
+    let mut gaps = Vec::new();
+    let mut run = 0usize;
+    for (i, f) in frames.iter().enumerate().take(last + 1).skip(first) {
+        if silent(f) {
+            run += 1;
+            continue;
+        }
+        let ms = run as f64 * 1000.0 / rate as f64;
+        if ms > limit_ms {
+            gaps.push(((i - run) as f64 / rate as f64, ms));
+        }
+        run = 0;
+    }
+    Ok(gaps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wav(samples: &[i16], data_len: Option<u32>) -> Vec<u8> {
+        let mut w = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+        w.extend_from_slice(&16u32.to_le_bytes());
+        // PCM, 2 channels, 1000 Hz, 4000 bytes/s, 4 bytes/frame, 16 bits.
+        for v in [1u16, 2] {
+            w.extend_from_slice(&v.to_le_bytes());
+        }
+        w.extend_from_slice(&1000u32.to_le_bytes());
+        w.extend_from_slice(&4000u32.to_le_bytes());
+        for v in [4u16, 16] {
+            w.extend_from_slice(&v.to_le_bytes());
+        }
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&data_len.unwrap_or(samples.len() as u32 * 2).to_le_bytes());
+        for s in samples {
+            w.extend_from_slice(&s.to_le_bytes());
+        }
+        w
+    }
+
+    #[test]
+    fn silent_gaps_inside_the_sound() {
+        // 1000 frames per second, stereo: silence, sound, a 30 ms
+        // dropout, sound, a 10 ms one, sound, silence.
+        let mut s = vec![0i16; 2 * 50];
+        s.extend(std::iter::repeat_n(3000, 2 * 100));
+        s.extend(std::iter::repeat_n(0, 2 * 30));
+        s.extend(std::iter::repeat_n(-3000, 2 * 100));
+        s.extend(std::iter::repeat_n(0, 2 * 10));
+        s.extend(std::iter::repeat_n(2000, 2 * 100));
+        s.extend(std::iter::repeat_n(0, 2 * 500));
+        let gaps = silent_gaps(&wav(&s, None), 20.0).unwrap();
+        assert_eq!(gaps, [(0.15, 30.0)]);
+        // QEMU's header while recording: no data length.
+        assert_eq!(silent_gaps(&wav(&s, Some(0)), 5.0).unwrap(), [(0.15, 30.0), (0.28, 10.0)]);
+        assert!(silent_gaps(b"RIFF", 20.0).is_err());
+    }
 }

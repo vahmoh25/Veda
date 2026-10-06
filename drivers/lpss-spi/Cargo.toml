@@ -1,0 +1,25 @@
+[package]
+name = "lpss-spi"
+description = "Driver for the SPI controllers of Intel's chipsets (LPSS) and the devices on them: a laptop's speaker amplifiers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lpss-spi"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+vcs35l41 = { workspace = true }
+vspi = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "vgpio"
+description = "GPIO controllers for Veda's device manager: Intel's chipset pads, located by ACPI pin number and driven through their registers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

@@ -293,10 +293,11 @@ impl Routing {
         for o in &self.outputs {
             self.output_path(codec, o, &mut c);
         }
+        // Each converter its stream, then the format (in Linux's order).
         if let Some((tag, format)) = output {
             for &dac in &self.dacs {
-                c.push((dac, verb::set_format(format)));
                 c.push((dac, verb::set_stream_channel(tag, 0)));
+                c.push((dac, verb::set_format(format)));
             }
         }
         for i in &self.inputs {
@@ -309,8 +310,8 @@ impl Routing {
             }
         }
         if let (Some(adc), Some((tag, format))) = (self.adc, input) {
-            c.push((adc, verb::set_format(format)));
             c.push((adc, verb::set_stream_channel(tag, 0)));
+            c.push((adc, verb::set_format(format)));
         }
         c
     }

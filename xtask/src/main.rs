@@ -622,6 +622,10 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vradiolink", &[]),
     ("vusb", &[]),
     ("vhda", &[]),
+    ("vacpi", &[]),
+    ("vcs35l41", &[]),
+    ("vgpio", &[]),
+    ("vboardsim", &[]),
     ("airsim", &[]),
     ("xtask", &[]),
 ];

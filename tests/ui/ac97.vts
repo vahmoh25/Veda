@@ -18,3 +18,4 @@ wait-serial "music: paused at 0:0" 10
 reject-serial "music: paused at 0:00"
 reject-serial "ac97: underrun 10"
 expect-audio
+expect-audio-gapless

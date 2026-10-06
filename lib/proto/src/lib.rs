@@ -19,6 +19,7 @@ pub mod net;
 pub mod netring;
 pub mod pci;
 pub mod shell;
+pub mod speakers;
 pub mod wlan;
 
 pub use fs::vfs;

@@ -1,0 +1,26 @@
+# HD Audio with speaker amplifiers beside the codec, as many laptops have:
+# a stand-in for their driver, which answers 300 ms late, as slow hardware
+# would. The sound driver finds them, tells them when its stream starts and
+# after the music stops (before the stream does), and its playback never
+# waits on them: the recording of the sound output does not drop out.
+sound hda
+boot-cmdline "run=speakertest:300"
+boot-cmdline "run=music"
+fail-on "PANIC"
+wait-serial "init: service 'speakers' registered" 60
+wait-serial "hda: attached to the audio service" 60
+wait-serial "music: library: 7 track(s)" 90
+wait-serial "music: covers: 7 ready" 60
+wait 1
+click 0.6188 0.8125
+wait-serial "music: playing Neon Horizon" 30
+wait-serial "hda: speaker amplifiers found" 10
+wait-serial "speakertest: playing" 10
+wait 4
+key spc
+wait-serial "music: paused at 0:0" 10
+wait-serial "speakertest: stopped" 10
+reject-serial "hda: underrun 10"
+reject-serial "the speaker amplifiers' driver does not answer"
+expect-audio
+expect-audio-gapless

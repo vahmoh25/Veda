@@ -126,8 +126,9 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
         apic::calibrate_timer(&time::busy_wait_ms);
     }
     kinfo!(
-        "time: TSC {} MHz, {} timer, {} mode APIC",
+        "time: TSC {} MHz (by the {}), {} timer, {} mode APIC",
         time::tsc_hz() / 1_000_000,
+        time::tsc_source(),
         if features.tsc_deadline { "TSC-deadline" } else { "one-shot" },
         if apic::is_x2apic() { "x2APIC" } else { "xAPIC" }
     );

@@ -1,6 +1,6 @@
 [package]
 name = "devmgr"
-description = "Device manager: enumerates PCI devices and starts their drivers"
+description = "Device manager: enumerates PCI devices, reads the firmware's ACPI tables and starts the drivers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,6 +16,8 @@ vabi = { workspace = true }
 vipc = { workspace = true }
 vproto = { workspace = true }
 initrd = { workspace = true }
+vacpi = { workspace = true }
+vgpio = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

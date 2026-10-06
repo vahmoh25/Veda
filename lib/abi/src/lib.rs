@@ -651,4 +651,13 @@ pub struct KernelBootInfo {
     pub cmdline: [u8; 256],
     pub cmdline_len: u32,
     pub cpu_count: u32,
+    /// Physical address of the ACPI RSDP (0: none).
+    pub acpi_rsdp: u64,
+    /// The firmware's ACPI memory (its tables and their variables), as
+    /// `[start, end)` ranges: RAM, to be mapped cached.
+    pub acpi_memory: [[u64; 2]; ACPI_MEMORY_RANGES],
+    pub acpi_memory_count: u32,
 }
+
+/// Ranges of [`KernelBootInfo::acpi_memory`].
+pub const ACPI_MEMORY_RANGES: usize = 16;

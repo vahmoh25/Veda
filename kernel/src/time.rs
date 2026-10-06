@@ -6,7 +6,7 @@
 //! The RTC keeps UTC (unless the firmware says otherwise); local time is UTC
 //! plus the offset of the `tz=` boot option.
 
-use core::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 
 use crate::arch::cpu::rdtsc;
 use crate::arch::port::{inb, outb};
@@ -178,7 +178,42 @@ fn measure_tsc_hz(ms: u64) -> u64 {
     (rdtsc() - t0) * 1000 / ms
 }
 
-/// Measures the TSC frequency and starts the monotonic clock.
+/// The TSC frequency an Intel processor reports itself (CPUID leaf 0x15:
+/// the TSC's ratio to the core crystal, and the crystal's frequency or,
+/// where leaf 0x15 leaves it out, the base frequency of leaf 0x16, as
+/// Linux reads them). Not under a hypervisor, whose TSC may run at another
+/// rate than the host's processor says.
+fn reported_tsc_hz() -> Option<u64> {
+    use crate::arch::cpu::cpuid;
+    let vendor = cpuid(0, 0);
+    let intel = (vendor.ebx, vendor.edx, vendor.ecx) == (0x756E_6547, 0x4965_6E69, 0x6C65_746E);
+    let hypervisor = cpuid(1, 0).ecx & (1 << 31) != 0;
+    if !intel || hypervisor || vendor.eax < 0x15 {
+        return None;
+    }
+    let ratio = cpuid(0x15, 0);
+    let (denominator, numerator) = (ratio.eax as u64, ratio.ebx as u64);
+    if denominator == 0 || numerator == 0 {
+        return None;
+    }
+    let crystal_hz = match ratio.ecx as u64 {
+        0 if vendor.eax >= 0x16 => cpuid(0x16, 0).eax as u64 * 1_000_000 * denominator / numerator,
+        hz => hz,
+    };
+    (crystal_hz != 0).then(|| crystal_hz * numerator / denominator)
+}
+
+/// How the TSC frequency was found: "HPET", "PIT" or "processor".
+static TSC_SOURCE: AtomicUsize = AtomicUsize::new(0);
+const SOURCES: [&str; 3] = ["HPET", "PIT", "processor"];
+
+pub fn tsc_source() -> &'static str {
+    SOURCES[TSC_SOURCE.load(Ordering::Relaxed)]
+}
+
+/// Measures the TSC frequency and starts the monotonic clock. A timer that
+/// measures more than 5% off what the processor reports is not believed
+/// (a gated or emulated PIT can count at any speed).
 pub fn calibrate_tsc() {
     // The median of five samples ignores outliers from emulator jitter.
     let mut samples = [0u64; 5];
@@ -186,7 +221,21 @@ pub fn calibrate_tsc() {
         *s = measure_tsc_hz(10);
     }
     samples.sort_unstable();
-    let hz = samples[samples.len() / 2].max(1_000_000);
+    let measured = samples[samples.len() / 2].max(1_000_000);
+    let timer = if HPET_BASE.load(Ordering::Relaxed) != 0 { 0 } else { 1 };
+    let (hz, source) = match reported_tsc_hz() {
+        Some(reported) if measured.abs_diff(reported) > reported / 20 => {
+            crate::kinfo!(
+                "time: the {} measured the TSC at {} MHz; the processor says {} MHz",
+                SOURCES[timer],
+                measured / 1_000_000,
+                reported / 1_000_000
+            );
+            (reported, 2)
+        }
+        _ => (measured, timer),
+    };
+    TSC_SOURCE.store(source, Ordering::Relaxed);
     TSC_HZ.store(hz, Ordering::Relaxed);
     TSC_BOOT.store(rdtsc(), Ordering::Relaxed);
     NS_PER_TICK_FP.store(((1_000_000_000u128 << 32) / hz as u128) as u64, Ordering::Relaxed);

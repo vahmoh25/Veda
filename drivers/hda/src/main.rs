@@ -34,6 +34,7 @@ extern crate alloc;
 mod controller;
 mod player;
 mod recorder;
+mod speakers;
 
 use alloc::format;
 use alloc::string::String;
@@ -147,18 +148,80 @@ fn input_name(kind: InputKind) -> &'static str {
 }
 
 /// Logs every widget of a codec: its type, capabilities and connections,
-/// and for pins their capabilities and configuration.
-fn dump(codec: &Codec) {
+/// and for pins their capabilities and configuration. With the controller,
+/// also what the codec holds now: power states, the converters' stream
+/// and format, the amplifiers' gains (`m` before a muted one's), the pins'
+/// controls and EAPD, and the selected connection (marked `*`).
+fn dump(codec: &Codec, mut hc: Option<&mut Controller>) {
+    let address = codec.address;
+    let amp = |v: u32| if v & 0x80 != 0 { format!("m{:02x}", v & 0x7F) } else { format!("{:02x}", v & 0x7F) };
+    if let Some(hc) = hc.as_deref_mut() {
+        let power = hc.command(address, codec.afg, verb::verb(verb::id::GET_POWER_STATE, 0)).unwrap_or(u32::MAX);
+        println!(
+            "codec {} function group {:#04x}: D{}, subsystem {:#010x}, revision {:#010x}",
+            address,
+            codec.afg,
+            (power >> 4) & 0xF,
+            codec.subsystem,
+            codec.revision
+        );
+    }
     for w in &codec.widgets {
-        let mut line = format!("codec {} node {:#04x}: {:?} caps {:#08x}", codec.address, w.nid, w.kind, w.caps);
+        let mut line = format!("codec {} node {:#04x}: {:?} caps {:#08x}", address, w.nid, w.kind, w.caps);
         if w.kind == WidgetType::Pin {
             line += &format!(" pin {:#010x} config {:#010x}", w.pin_caps, w.config.0);
         }
-        if matches!(w.kind, WidgetType::Output | WidgetType::Input) {
+        let converter = matches!(w.kind, WidgetType::Output | WidgetType::Input);
+        if converter {
             line += &format!(" pcm {:#010x}", w.pcm);
         }
+        let mut selected = None;
+        if let Some(hc) = hc.as_deref_mut() {
+            let mut get = |v: u32| hc.command(address, w.nid, v);
+            if w.has(caps::POWER_CONTROL)
+                && let Some(p) = get(verb::verb(verb::id::GET_POWER_STATE, 0))
+            {
+                line += &format!(" D{}", (p >> 4) & 0xF);
+            }
+            if converter
+                && let (Some(s), Some(f)) =
+                    (get(verb::verb(verb::id::GET_STREAM_CHANNEL, 0)), get(verb::verb4(verb::id4::GET_FORMAT, 0)))
+            {
+                line += &format!(" stream {} format {:#06x}", (s >> 4) & 0xF, f & 0xFFFF);
+            }
+            if w.has(caps::OUT_AMP)
+                && let Some(v) = get(verb::get_amp(verb::Amp::Output))
+            {
+                line += &format!(" out {}", amp(v));
+            }
+            if w.has(caps::IN_AMP) {
+                let inputs = if w.kind == WidgetType::Mixer { w.connections.len().clamp(1, 16) } else { 1 };
+                let gains: Vec<String> =
+                    (0..inputs).filter_map(|i| get(verb::get_amp(verb::Amp::Input(i as u8)))).map(amp).collect();
+                line += &format!(" in [{}]", gains.join(" "));
+            }
+            if w.kind == WidgetType::Pin {
+                if let Some(c) = get(verb::verb(verb::id::GET_PIN_CONTROL, 0)) {
+                    line += &format!(" ctl {:#04x}", c & 0xFF);
+                }
+                if w.pin_has(pin_caps::EAPD)
+                    && let Some(e) = get(verb::verb(verb::id::GET_EAPD, 0))
+                {
+                    line += &format!(" eapd {:#x}", e & 0xFF);
+                }
+            }
+            if w.connections.len() > 1 && w.kind != WidgetType::Mixer {
+                selected = get(verb::verb(verb::id::GET_CONNECTION_SELECT, 0)).map(|s| (s & 0xFF) as usize);
+            }
+        }
         if !w.connections.is_empty() {
-            line += &format!(" from {:02x?}", w.connections);
+            let list: Vec<String> = w
+                .connections
+                .iter()
+                .enumerate()
+                .map(|(i, c)| format!("{:02x}{}", c, if selected == Some(i) { "*" } else { "" }))
+                .collect();
+            line += &format!(" from [{}]", list.join(" "));
         }
         println!("{}", line);
     }
@@ -230,7 +293,7 @@ impl Audio {
             if routing.outputs.is_empty() && codec.widgets.iter().any(|w| w.kind == WidgetType::Pin && !w.digital()) {
                 // Analog pins but no way to them: what the codec looks
                 // like, for whoever finds out why.
-                dump(&codec);
+                dump(&codec, Some(&mut *hc));
             }
             if chosen.is_none() && !routing.outputs.is_empty() {
                 chosen = Some((codec, routing, rate));
@@ -270,6 +333,7 @@ impl Audio {
         let setup =
             self.routing.setup(&self.codec, Some((OUTPUT_TAG, format)), recording.then_some((INPUT_TAG, format)));
         self.send(hc, &setup);
+        self.verify_converters(hc, recording);
         // Unsolicited responses from the jacks, tagged with the pin.
         for pin in self.routing.jack_pins() {
             if self.codec.widget(pin).is_some_and(|w| w.has(caps::UNSOLICITED)) {
@@ -277,6 +341,42 @@ impl Audio {
             }
         }
         self.check_jacks(hc, true);
+    }
+
+    /// Reads every converter's stream and format back, and sets them again
+    /// (once the converter is powered) where the codec did not take them:
+    /// a converter in another format than the stream plays noise. Logs
+    /// what the converters hold.
+    fn verify_converters(&self, hc: &mut Controller, recording: bool) {
+        let (address, format) = (self.codec.address, self.timing.format);
+        let read = |hc: &mut Controller, nid: u8| -> Option<(u8, u16)> {
+            let stream = hc.command(address, nid, verb::verb(verb::id::GET_STREAM_CHANNEL, 0))?;
+            let format = hc.command(address, nid, verb::verb4(verb::id4::GET_FORMAT, 0))?;
+            Some((((stream >> 4) & 0xF) as u8, format as u16))
+        };
+        let converters = self.routing.dacs.iter().map(|&dac| (dac, OUTPUT_TAG));
+        let converters = converters.chain(self.routing.adc.filter(|_| recording).map(|adc| (adc, INPUT_TAG)));
+        let mut report: Vec<String> = Vec::new();
+        for (nid, tag) in converters {
+            let mut held = read(hc, nid);
+            let mut again = "";
+            if held != Some((tag, format)) {
+                vrt::time::sleep(Duration::from_millis(10));
+                let mut commands = Vec::new();
+                if self.codec.widget(nid).is_some_and(|w| w.has(caps::POWER_CONTROL)) {
+                    commands.push((nid, verb::set_power_state(0)));
+                }
+                commands.extend([(nid, verb::set_stream_channel(tag, 0)), (nid, verb::set_format(format))]);
+                self.send(hc, &commands);
+                held = read(hc, nid);
+                again = " (set again)";
+            }
+            report.push(match held {
+                Some((tag, f)) => format!("{:#04x} on stream {} at {:#06x}{}", nid, tag, f, again),
+                None => format!("{:#04x} does not answer", nid),
+            });
+        }
+        println!("converters {} ({:#06x} wanted)", report.join(", "), format);
     }
 
     /// Whether something is plugged into `pin`.
@@ -349,18 +449,40 @@ fn setup() -> Result<Device, String> {
     let info = pci.info().map_err(|_| "devmgr went away")?;
     let location = format!("{:02x}:{:02x}.{}", info.bus, info.slot, info.function);
     let mut hc = Controller::start(&pci, &info).map_err(|e| format!("controller at {}: {}", location, e))?;
+    let mut details = String::new();
+    match hc.link_clock {
+        Some((before, now)) if before != now => {
+            details += &format!(", link clock {} MHz (the firmware's {} MHz)", now, before)
+        }
+        Some((_, now)) => details += &format!(", link clock {} MHz", now),
+        None => {}
+    }
+    match hc.processing_pipe {
+        Some(found) if found & ((1 << 31) - 1) != 0 => {
+            details += &format!(", processing pipe was on ({:#010x}), now off", found)
+        }
+        Some(_) => details += ", processing pipe off",
+        None => {}
+    }
+    if hc.position_buffer {
+        details += ", positions from the position buffer";
+    }
     println!(
-        "controller at {} ({:04x}:{:04x}): HD Audio {}.{}, {} output, {} input and {} bidirectional streams, {}{}",
+        "controller at {} ({:04x}:{:04x}, class {:02x}.{:02x}.{:02x}): HD Audio {}.{}, {} output, {} input and {} bidirectional streams, {}{}{}",
         location,
         info.vendor,
         info.device,
+        info.class,
+        info.subclass,
+        info.prog_if,
         hc.version.0,
         hc.version.1,
         hc.output_streams,
         hc.input_streams,
         hc.bidirectional_streams,
         if hc.irq.is_some() { "MSI" } else { "polling" },
-        if hc.immediate_commands { ", immediate commands" } else { "" }
+        if hc.immediate_commands { ", immediate commands" } else { "" },
+        details
     );
     let mut audio = Audio::probe(&mut hc)?;
     let timing = audio.timing;
@@ -389,6 +511,7 @@ fn setup() -> Result<Device, String> {
         .filter(|&v| v != 0 && v != u32::MAX)
         .map(|v| (v as u16, (v >> 16) as u16));
     audio.configure(&mut hc, recorder.is_some(), board);
+    player.speakers.mute(audio.headphones);
     Ok(Device {
         hc,
         audio,
@@ -515,6 +638,13 @@ fn serve(
         if changed {
             let _ = space_event.signal();
         }
+        if dev.player.take_checked() {
+            // After the output check (and a refill, which the sampling of
+            // the positions has time for), the codec as it is while it
+            // plays: what someone fixing a codec that plays wrongly needs.
+            dev.player.log_positions(&dev.hc);
+            dump(&dev.audio.codec, Some(&mut dev.hc));
+        }
         if let (Some(rec), Some(input)) = (&mut dev.recorder, input) {
             let _ = input.wake_event.clear();
             rec.follow(&dev.hc, &input.ring);
@@ -527,6 +657,8 @@ fn serve(
         if reported || now >= dev.next_jack_check {
             dev.audio.check_jacks(&mut dev.hc, false);
             dev.next_jack_check = now + JACK_POLL_NS;
+            // Amplifiers beside the codec: silent while headphones play.
+            dev.player.speakers.mute(dev.audio.headphones);
         }
         if !dev.hc.healthy() {
             println!("the controller stopped answering");

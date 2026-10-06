@@ -54,13 +54,53 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
   commands (`qmp device_add '{"driver":"usb-kbd","bus":"xhci.0","port":"2.3","id":"kbd2"}'`
   and `qmp device_del '{"id":"kbd2"}'`); the driver logs each device it
   finds as `xhci: port 6.3: ...` (root port, then hub ports).
-* Headless runs record audio to `target/veda/audio.wav`.
+* Headless runs record audio to `target/veda/audio.wav`. A script's
+  `expect-audio-gapless` fails if that sound drops out while it plays
+  (digital silence over 20 ms between the first sound and the last),
+  which is what a driver that falls behind sounds like.
 * `--sound hda` gives QEMU the ICH9's HD Audio controller with QEMU's
   codec (`hda-output` when recording to a WAV file, `hda-duplex`, with a
   line input, otherwise), and VirtualBox its HD Audio with an emulated
   SigmaTel STAC9221, which runs at 44.1 kHz. When the driver finds a
   codec it cannot play through, it logs every widget of it (`dmesg hda`
   in the Terminal shows them), which is what a fix for that codec needs.
+  When sound plays wrongly on a real PC, the same log has the converters'
+  stream and format as the codec took them (`hda: converters ...`) and,
+  about a second into playback, the `hda: output check` line (the link's
+  clock by Veda's, 24 MHz when both are right, and the buffers the
+  controller completed per second, 100 at 48 kHz) and the `hda: output
+  positions` line (how fast the link position, the DMA position buffer
+  and, on Intel since Skylake, the DMA position register move by the
+  link's clock: 192 kB/s at 48 kHz). They tell a controller playing too
+  fast from a position counter that only claims to, and from a codec
+  playing the wrong format; a position the driver stopped believing is
+  logged as `the output position ran ...`. After them come the codec's
+  widgets as they are while playing (power, converters, amplifier gains
+  with `m` for muted, pin controls, EAPD, the selected input marked `*`),
+  as Linux shows them in `/proc/asound`. `dmesg time` shows how the
+  system's clock was calibrated. Emulators move their DMA in bursts, so
+  there the positions' rates over the check's 20 ms vary.
+* `dmesg devmgr` starts with what the firmware's ACPI tables gave
+  (`devmgr: acpi: N tables, ...`, and the conditional definitions left
+  out when their condition reads what the interpreter does not), then,
+  for each driver's device with devices of its own in the tables, which
+  ones (`acpi: 00:1e.3 is \_SB.PC00.SPI1, with ...`). `gpio:` lines show
+  a GPIO controller's register windows and every pad `devmgr` set up for
+  a driver, with its configuration before and after. On a laptop with
+  speaker amplifiers, `dmesg lpss-spi` has the SPI controller (its clock
+  and chip selects), the amplifiers that came up (channel, chip select,
+  silicon revision, OTP id, trims) or why one did not, each amplifier's
+  DSP firmware and tuning (files, version, gain) or why it plays without
+  them, the first power transitions (`speakers on`, `speakers off`) and
+  any error an amplifier latched; `hda: speaker amplifiers found` shows
+  the sound driver reached them (`hda: no speaker amplifiers' driver is
+  running` that it did not). `cargo test -p vacpi -- --ignored` loads a
+  machine's tables dumped as `<signature>[-n].dat` files into the
+  directory `VEDA_ACPI_DUMP` names, and evaluates every device's
+  resources. Before a real machine, `cargo test -p vboardsim` runs the
+  amplifier path (the firmware's description, devmgr's GPIO pads, the SPI
+  controller, both amplifiers and their DSPs, with the firmware files in
+  `assets/firmware`) against a simulated Zenbook Pro 16X.
 * The agent's scripts (`tests/agent/`) talk to a stand-in for Deepgram
   that xtask starts on the host, and feed the agent's microphone from the
   host (`testmic`). The scripts in `tests/real/` talk to the real Deepgram

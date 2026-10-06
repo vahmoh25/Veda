@@ -2,11 +2,14 @@
 //!
 //! A driver is started with a channel speaking this protocol for exactly one
 //! device: it can read and write that device's configuration space, map its
-//! BARs, enable it, and allocate MSI interrupts and DMA memory — and nothing
-//! else.
+//! BARs, enable it, and allocate MSI interrupts and DMA memory. It also
+//! learns what the firmware describes below the device (ACPI: the
+//! amplifiers on an SPI controller, say), and drives the GPIO pins those
+//! devices are wired to — those pins only. Nothing else.
 
+use alloc::string::String;
 use alloc::vec::Vec;
-use vipc::{enumeration, message, protocol};
+use vipc::{enumeration, message, protocol, union};
 use vrt::object::{Interrupt, IoPorts, Resource, Vmo};
 
 message! {
@@ -47,6 +50,55 @@ message! {
     }
 }
 
+message! {
+    /// A device the firmware (ACPI) describes below a PCI function: what
+    /// it is, and the resources it uses.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct AcpiDevice {
+        /// Its path in the ACPI namespace (`\_SB.PC00.SPI1.SPK1`).
+        pub path: String,
+        /// Hardware id (`CSC3551`); empty if none.
+        pub hid: String,
+        /// Unique id; empty if none.
+        pub uid: String,
+        /// Subsystem id: the board's, for devices that need per-board
+        /// settings (`10431F62`); empty if none.
+        pub sub: String,
+        /// `_STA` (bit 0: present).
+        pub status: u32,
+        pub resources: Vec<AcpiResource>,
+        /// Why its resources could not be read; empty if they could.
+        pub resource_error: String,
+    }
+}
+
+union! {
+    /// One resource an ACPI device uses.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum AcpiResource {
+        1 => Memory { base: u64, length: u64 },
+        2 => Io { base: u16, length: u16 },
+        3 => Irq { irqs: Vec<u32>, edge: bool, active_low: bool, shared: bool },
+        /// A GPIO connection: an input or output (`GpioIo`), or an
+        /// interrupt (`GpioInt`). `pull`: 0 default, 1 up, 2 down, 3 none;
+        /// `restriction`: 0 either way, 1 input only, 2 output only.
+        4 => Gpio { interrupt: bool, pins: Vec<u16>, controller: String, pull: u8, restriction: u8, shared: bool },
+        /// The device's connection to an SPI controller.
+        5 => Spi {
+            controller: String,
+            chip_select: u16,
+            speed_hz: u32,
+            bits: u8,
+            cpol: bool,
+            cpha: bool,
+            cs_active_high: bool,
+        },
+        6 => I2c { controller: String, address: u16, speed_hz: u32 },
+        /// Something else (its descriptor type).
+        7 => Other { kind: u8 },
+    }
+}
+
 enumeration! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum PciError {
@@ -54,6 +106,12 @@ enumeration! {
         NoSuchBar = 2,
         Denied = 3,
         NoResources = 4,
+        /// No such ACPI device or GPIO connection.
+        NotFound = 5,
+        /// A GPIO controller devmgr does not drive.
+        Unsupported = 6,
+        /// The pin belongs to the firmware, or its settings are locked.
+        Busy = 7,
     }
 }
 
@@ -75,6 +133,16 @@ protocol! {
         7 => fn dma_resource() -> Result<Resource, PciError>;
         /// The ports of an I/O BAR (older devices such as AC'97 sound).
         8 => fn map_io_bar(index: u8) -> Result<IoPorts, PciError>;
+        /// The devices the firmware describes below this one; none if it
+        /// describes none (or there are no ACPI tables).
+        9 => fn acpi_devices() -> Vec<AcpiDevice>;
+        /// The level of GPIO connection `index` (counting the device's
+        /// `Gpio` resources in order) of ACPI device `device` (its index in
+        /// `acpi_devices`).
+        10 => fn gpio_read(device: u32, index: u32) -> Result<bool, PciError>;
+        /// Drives GPIO connection `index` of ACPI device `device` high or
+        /// low, making the pin an output if it is not one.
+        11 => fn gpio_write(device: u32, index: u32, high: bool) -> Result<(), PciError>;
     }
 }
 
