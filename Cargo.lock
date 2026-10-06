@@ -1516,6 +1516,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vusb"
+version = "0.1.0"
+dependencies = [
+ "vproto",
+]
+
+[[package]]
 name = "vvirtio"
 version = "0.1.0"
 dependencies = [
@@ -1689,6 +1696,18 @@ dependencies = [
  "curve25519-dalek",
  "rand_core",
  "zeroize",
+]
+
+[[package]]
+name = "xhci"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vproto",
+ "vrt",
+ "vusb",
+ "vvirtio",
 ]
 
 [[package]]

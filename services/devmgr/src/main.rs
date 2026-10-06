@@ -65,6 +65,8 @@ const DRIVERS: &[DriverMatch] = &[
 const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
     // SATA controllers in AHCI mode (VirtualBox, QEMU q35, most PCs)
     (0x01, 0x06, 0x01, "ahci"),
+    // USB 3 (xHCI) controllers: USB keyboards, mice and hubs
+    (0x0C, 0x03, 0x30, "xhci"),
 ];
 
 /// Disk drivers. A live system (started with `live`) starts none of them:

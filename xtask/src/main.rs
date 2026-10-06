@@ -71,6 +71,9 @@ RUN OPTIONS:
                         VirtualBox: e1000 (82540EM, default), 82545EM, virtio)
     --bridge ADAPTER    VirtualBox host adapter for --net bridged (default: the first connected)
     --disk-bus BUS      How QEMU attaches the disks: virtio (default) or ahci (SATA)
+    --input DEVICES     Keyboard and pointer: standard (default; QEMU: PS/2 keyboard and virtio
+                        tablet, VirtualBox: PS/2) or usb (on the xHCI controller; QEMU: a
+                        keyboard and a tablet behind a hub, and a mouse)
     --live              Boot the live system (iso) from a USB stick, as a PC would (QEMU)
 
 SHOT OPTIONS:
@@ -188,6 +191,11 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--disk-bus" => {
                 let v = value(arg)?;
                 o.vm.disk_bus = qemu::DiskBus::parse(&v).ok_or(format!("unknown disk bus '{v}' (virtio, ahci)"))?;
+            }
+            "--input" => {
+                let v = value(arg)?;
+                o.vm.input =
+                    qemu::InputDevices::parse(&v).ok_or(format!("unknown input devices '{v}' (standard, usb)"))?;
             }
             other => return Err(format!("unknown option '{other}' (see `cargo xtask help`)")),
         }
@@ -556,6 +564,9 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     if let Some(model) = automate::nic_model(script) {
         vm.nic_model = Some(model);
     }
+    if let Some(input) = automate::input_devices(script)? {
+        vm.input = input;
+    }
     if live {
         // A stick with the ISO on it, and no home disk.
         vm.usb_stick = true;
@@ -608,6 +619,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vagent", &[]),
     ("vwlan", &[]),
     ("vradiolink", &[]),
+    ("vusb", &[]),
     ("airsim", &[]),
     ("xtask", &[]),
 ];

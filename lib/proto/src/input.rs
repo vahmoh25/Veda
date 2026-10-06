@@ -141,11 +141,15 @@ pub mod keys {
     pub const KP3: u16 = 81;
     pub const KP0: u16 = 82;
     pub const KPDOT: u16 = 83;
+    /// The extra key of ISO keyboards, left of Z.
+    pub const KEY_102ND: u16 = 86;
     pub const F11: u16 = 87;
     pub const F12: u16 = 88;
     pub const KPENTER: u16 = 96;
     pub const RIGHTCTRL: u16 = 97;
     pub const KPSLASH: u16 = 98;
+    /// Print Screen.
+    pub const SYSRQ: u16 = 99;
     pub const RIGHTALT: u16 = 100;
     pub const HOME: u16 = 102;
     pub const UP: u16 = 103;
@@ -157,6 +161,7 @@ pub mod keys {
     pub const PAGEDOWN: u16 = 109;
     pub const INSERT: u16 = 110;
     pub const DELETE: u16 = 111;
+    pub const PAUSE: u16 = 119;
     pub const LEFTMETA: u16 = 125;
     pub const RIGHTMETA: u16 = 126;
     pub const COMPOSE: u16 = 127;

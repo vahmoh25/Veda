@@ -14,7 +14,8 @@ that communicate over kernel channels.
  ├──────────────────────────────────────────────────────────────────────────┤
  │ Services       init (registry, launcher) · vfs · compositor · audio ·    │
  │                agent (the voice agent) · netd · wlan                     │
- │ Drivers        ps2 · virtio-input · virtio-snd · ac97 · virtio-blk · pci │
+ │ Drivers        ps2 · xhci (USB) · virtio-input · virtio-snd · ac97 ·     │
+ │                virtio-blk · ahci · virtio-net · e1000 · pci              │
  ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
  │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
  ├──────────────────────────────────────────────────────────────────────────┤
@@ -134,6 +135,38 @@ eager FPU/SSE/AVX state switching with XSAVE.
   types is the system's only list of which application opens which file:
   Files, the Terminal's `open`, the desktop icons and the pickers of Photos,
   Music and Settings all use it.
+
+## USB
+
+* `xhci` drives USB 3 (xHCI) host controllers, which PCs have had since
+  about 2012 (and QEMU's `qemu-xhci` and VirtualBox's USB controller).
+  `devmgr` starts it for the PCI class of such controllers. It takes the
+  controller over from the firmware (which stops the firmware's emulation
+  of a PS/2 keyboard), moves the ports that Intel 7 to 9 series chipsets
+  share with their EHCI controllers over to it, resets it, and finds the
+  devices on the root hub's ports and behind USB 2.0 hubs, chained to the
+  depth USB allows, as they come and go.
+* Keyboards, mice and tablets (the HID class) are configured from their
+  report descriptors, or with the boot protocol when a descriptor cannot
+  be used, and polled through their interrupt endpoints. Their reports
+  become key, motion, position, button and wheel events for the window
+  system's `input` service, as from the PS/2 and virtio drivers; keys and
+  buttons still held when a device is unplugged are released. Caps Lock
+  lights up the keyboard's LED.
+* Every other device (storage, audio, cameras, the stick the live system
+  started from) gets an address, and its descriptors are read for the log,
+  but it is never configured, so it is not touched.
+* One thread does everything: commands and control transfers go one at a
+  time and are waited for while the event ring keeps being drained, so
+  input flows during enumeration. Interrupts come by MSI-X or MSI; without
+  either the driver polls. Controllers that only address 32 bits get
+  their DMA memory below 4 GiB (`dma_flags::BELOW_4G`).
+* Descriptors, requests, the hub class, HID report descriptors and the
+  xHCI data structures are in `vusb` (`lib/usb`), which touches no
+  hardware and is unit-tested on the host.
+* Not yet supported: USB 2.0 (EHCI) controllers of older PCs, USB 3 devices
+  behind SuperSpeed hubs, and USB devices other than keyboards, mice,
+  tablets and hubs.
 
 ## Networking
 

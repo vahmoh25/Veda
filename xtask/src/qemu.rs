@@ -126,6 +126,28 @@ impl DiskBus {
     }
 }
 
+/// The keyboard and pointing devices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputDevices {
+    /// QEMU: a PS/2 keyboard and the virtio tablet; VirtualBox: a PS/2
+    /// keyboard and mouse.
+    Standard,
+    /// USB devices on the xHCI controller, as most PCs have. QEMU: a
+    /// keyboard and a tablet behind a hub, and a mouse; VirtualBox: a
+    /// keyboard and a tablet.
+    Usb,
+}
+
+impl InputDevices {
+    pub fn parse(s: &str) -> Option<InputDevices> {
+        match s {
+            "standard" => Some(InputDevices::Standard),
+            "usb" => Some(InputDevices::Usb),
+            _ => None,
+        }
+    }
+}
+
 /// User-tunable virtual machine settings.
 #[derive(Debug, Clone)]
 pub struct VmConfig {
@@ -154,6 +176,8 @@ pub struct VmConfig {
     pub usb_stick: bool,
     /// How the boot and home disks are attached.
     pub disk_bus: DiskBus,
+    /// The keyboard and pointing devices.
+    pub input: InputDevices,
     /// Let the guest reboot (otherwise a reset, e.g. after a triple fault,
     /// stops QEMU).
     pub allow_reboot: bool,
@@ -188,6 +212,7 @@ impl Default for VmConfig {
             home_disk: None,
             usb_stick: false,
             disk_bus: DiskBus::Virtio,
+            input: InputDevices::Standard,
             allow_reboot: false,
             net: NetMode::Ethernet,
             nic_model: None,
@@ -229,7 +254,9 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         )
     };
     cmd.args(["-name", "Veda"]);
-    cmd.args(["-machine", "q35"]);
+    // With USB input there is no PS/2 controller, as on many PCs: keys can
+    // only come through USB.
+    cmd.args(["-machine", if cfg.input == InputDevices::Usb { "q35,i8042=off" } else { "q35" }]);
     // Prefer hardware virtualisation when the host offers it; fall back to
     // the TCG emulator (multi-threaded, one host thread per vCPU) otherwise.
     if cfg!(windows) {
@@ -244,10 +271,12 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-m", &format!("{}M", cfg.memory_mib)]);
     cmd.args(["-drive", &flash(&install.ovmf_code, true)]);
     cmd.args(["-drive", &flash(vars, false)]);
+    if cfg.usb_stick || cfg.input == InputDevices::Usb {
+        cmd.args(["-device", "qemu-xhci,id=xhci"]);
+    }
     if cfg.usb_stick {
         // As a PC sees a stick the ISO was written to.
         cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,readonly=on,file={}", disk.display())]);
-        cmd.args(["-device", "qemu-xhci,id=xhci"]);
         cmd.args(["-device", "usb-storage,bus=xhci.0,drive=disk0,bootindex=0,removable=on"]);
     } else {
         cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,file={}", disk.display())]);
@@ -264,7 +293,20 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
             DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.1,drive=home,serial=veda-home"]),
         };
     }
-    cmd.args(["-device", "virtio-tablet-pci"]);
+    match cfg.input {
+        InputDevices::Standard => {
+            cmd.args(["-device", "virtio-tablet-pci"]);
+        }
+        InputDevices::Usb => {
+            // A keyboard and a tablet behind a hub, and a mouse on a root
+            // port (after the live system's stick, if any). QMP's absolute
+            // pointer events go to the tablet.
+            cmd.args(["-device", "usb-hub,bus=xhci.0,port=2"]);
+            cmd.args(["-device", "usb-kbd,bus=xhci.0,port=2.1"]);
+            cmd.args(["-device", "usb-tablet,bus=xhci.0,port=2.2"]);
+            cmd.args(["-device", "usb-mouse,bus=xhci.0,port=3"]);
+        }
+    }
     // Host entropy for the firmware's EFI_RNG_PROTOCOL, which seeds the
     // kernel's random number generator.
     cmd.args(["-device", "virtio-rng-pci"]);

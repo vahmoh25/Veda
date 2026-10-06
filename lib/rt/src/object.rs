@@ -257,6 +257,13 @@ impl Vmo {
         call(nr::VMO_CREATE_CONTIGUOUS, [res.raw() as usize, size, 0, 0, 0, 0]).map(|h| Vmo(Handle(h as RawHandle)))
     }
 
+    /// Like [`Vmo::create_contiguous`], below 4 GiB (for devices that can
+    /// only address 32 bits).
+    pub fn create_contiguous_below_4g(res: &Resource, size: usize) -> Result<Vmo, Error> {
+        call(nr::VMO_CREATE_CONTIGUOUS, [res.raw() as usize, size, vabi::dma_flags::BELOW_4G, 0, 0, 0])
+            .map(|h| Vmo(Handle(h as RawHandle)))
+    }
+
     pub fn size(&self) -> Result<usize, Error> {
         call(nr::VMO_GET_SIZE, [self.raw() as usize, 0, 0, 0, 0, 0])
     }

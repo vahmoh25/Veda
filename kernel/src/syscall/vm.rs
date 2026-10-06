@@ -2,7 +2,7 @@
 
 use alloc::vec;
 
-use vabi::{Error, RawHandle, Rights, cache_policy, map_flags, resource_kind, vmo_flags};
+use vabi::{Error, RawHandle, Rights, cache_policy, dma_flags, map_flags, resource_kind, vmo_flags};
 
 use super::{SysResult, get_resource, get_vmo, insert, ok, target_process};
 use crate::mm::aspace::Perms;
@@ -74,12 +74,16 @@ pub fn vmo_create_physical(res: RawHandle, paddr: usize, size: usize, cache: usi
     ok(insert(KObject::Vmo(vmo), rights)? as usize)
 }
 
-pub fn vmo_create_contiguous(res: RawHandle, size: usize) -> SysResult {
+pub fn vmo_create_contiguous(res: RawHandle, size: usize, flags: usize) -> SysResult {
+    if flags & !dma_flags::BELOW_4G != 0 {
+        return Err(Error::InvalidArgs);
+    }
     let r = get_resource(res, Rights::NONE)?;
     if !r.permits(resource_kind::DMA, 0, 0) && !r.permits(resource_kind::DMA, r.base, 0) {
         return Err(Error::AccessDenied);
     }
-    let vmo = Vmo::new_contiguous(size as u64).ok_or(Error::NoMemory)?;
+    let limit = if flags & dma_flags::BELOW_4G != 0 { 1 << 32 } else { u64::MAX };
+    let vmo = Vmo::new_contiguous(size as u64, limit).ok_or(Error::NoMemory)?;
     ok(insert(KObject::Vmo(vmo), VMO_RIGHTS)? as usize)
 }
 

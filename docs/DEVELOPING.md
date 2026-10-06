@@ -24,6 +24,8 @@ cargo xtask run --vm virtualbox --resolution 1600x1000 --scale 2   # larger desk
 cargo xtask test --ui --vm virtualbox      # the test suite in VirtualBox
 cargo xtask run --disk-bus ahci             # QEMU with SATA disks (as VirtualBox has)
 cargo xtask run --sound ac97   # QEMU with an AC'97 sound card (as VirtualBox has)
+cargo xtask run --input usb    # USB keyboard, tablet (behind a hub) and mouse, no PS/2
+cargo xtask script tests/ui/usb-input.vts   # USB input, with devices plugged in and out
 cargo xtask script tests/agent/sim-basics.vts   # the agent, with a stand-in for Deepgram
 cargo xtask script tests/real/agent-wake.vts    # ... with the real Deepgram ($DEEPGRAM_API_KEY)
 cargo xtask run --net wifi     # boot with the virtual Wi-Fi radio and airsim
@@ -43,6 +45,13 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
   it (`--resolution` changes it), and adds no time zone, as a PC's clock
   keeps local time under Windows. Scripts boot it with a `live` line
   (`tests/ui/live-usb.vts`); `--out FILE` writes it elsewhere.
+* `--input usb` replaces QEMU's PS/2 controller and virtio tablet with
+  USB devices on an xHCI controller: a hub with a keyboard and a tablet,
+  and a mouse (in VirtualBox: a USB keyboard and tablet). Scripts ask for
+  it with an `input usb` line, and plug devices in and out with `qmp`
+  commands (`qmp device_add '{"driver":"usb-kbd","bus":"xhci.0","port":"2.3","id":"kbd2"}'`
+  and `qmp device_del '{"id":"kbd2"}'`); the driver logs each device it
+  finds as `xhci: port 6.3: ...` (root port, then hub ports).
 * Headless runs record audio to `target/veda/audio.wav`.
 * The agent's scripts (`tests/agent/`) talk to a stand-in for Deepgram
   that xtask starts on the host, and feed the agent's microphone from the

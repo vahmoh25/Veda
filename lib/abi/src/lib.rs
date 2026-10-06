@@ -110,7 +110,8 @@ pub mod nr {
     pub const VMO_GET_SIZE: usize = 43;
     /// `vmo_create_physical(resource, paddr, size, cache_policy) -> h`.
     pub const VMO_CREATE_PHYSICAL: usize = 44;
-    /// `vmo_create_contiguous(resource, size) -> h` (DMA memory).
+    /// `vmo_create_contiguous(resource, size, flags) -> h` (DMA memory;
+    /// flags from [`dma_flags`](crate::dma_flags)).
     pub const VMO_CREATE_CONTIGUOUS: usize = 45;
     /// `vmo_phys_addr(h, offset) -> paddr` (contiguous/physical VMOs only).
     pub const VMO_PHYS_ADDR: usize = 46;
@@ -506,6 +507,13 @@ pub struct VmoInfo {
 pub mod vmo_flags {
     /// Commit (allocate) all pages immediately instead of on first touch.
     pub const COMMIT: usize = 1 << 0;
+}
+
+/// Flags for `vmo_create_contiguous`.
+pub mod dma_flags {
+    /// Allocate the memory below 4 GiB, for devices that can only put
+    /// 32-bit addresses on the bus.
+    pub const BELOW_4G: usize = 1 << 0;
 }
 
 /// Flags for `vm_map` / `vm_protect`.

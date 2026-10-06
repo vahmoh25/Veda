@@ -8,15 +8,16 @@
 //! files ("monolithicFlat"), so a rebuild needs no conversion and the home
 //! directory is shared between both hypervisors. The machine is closer to a
 //! PC than QEMU's: an ICH9 chipset, SATA disks on an AHCI controller, an
-//! Intel PRO/1000 network card, PS/2 keyboard and mouse, an xHCI USB
-//! controller. The serial console goes to a file that xtask shows.
+//! Intel PRO/1000 network card, PS/2 keyboard and mouse (or, with
+//! `--input usb`, a USB keyboard and tablet), an xHCI USB controller. The
+//! serial console goes to a file that xtask shows.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::qemu::{NetMode, VmConfig};
+use crate::qemu::{InputDevices, NetMode, VmConfig};
 use crate::util::{self, Result};
 
 /// The VirtualBox installation (`VBoxManage`) and the machine Veda runs
@@ -135,6 +136,7 @@ impl VBox {
         self.ensure_vm()?;
         let cpus = cfg.cpus.to_string();
         let memory = cfg.memory_mib.to_string();
+        let usb_input = cfg.input == InputDevices::Usb;
         let serial_path = serial.to_string_lossy().to_string();
         let mut args: Vec<String> = [
             "modifyvm",
@@ -176,9 +178,9 @@ impl VBox {
             "--usb-xhci",
             "on",
             "--mouse",
-            "ps2",
+            if usb_input { "usbtablet" } else { "ps2" },
             "--keyboard",
-            "ps2",
+            if usb_input { "usb" } else { "ps2" },
             "--clipboard-mode",
             "disabled",
             "--vrde",

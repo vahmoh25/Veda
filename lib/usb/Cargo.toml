@@ -1,0 +1,12 @@
+[package]
+name = "vusb"
+description = "USB for Veda's host controller drivers: descriptors, requests, the hub class, HID reports and xHCI data structures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vproto = { workspace = true }
+
+[lints]
+workspace = true

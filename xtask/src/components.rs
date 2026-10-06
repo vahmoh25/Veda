@@ -39,6 +39,7 @@ pub const PROGRAMS: &[Program] = &[
     Program { package: "vwifi", binary: "vwifi" },
     Program { package: "e1000", binary: "e1000" },
     Program { package: "ahci", binary: "ahci" },
+    Program { package: "xhci", binary: "xhci" },
     Program { package: "netd", binary: "netd" },
     Program { package: "wlan", binary: "wlan" },
     Program { package: "ps2", binary: "ps2" },

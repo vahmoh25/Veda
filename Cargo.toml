@@ -33,6 +33,7 @@ members = [
     "lib/json",
     "lib/web",
     "lib/agent",
+    "lib/usb",
     "services/init",
     "services/vfs",
     "services/devmgr",
@@ -64,6 +65,7 @@ members = [
     "drivers/vwifi",
     "drivers/e1000",
     "drivers/ahci",
+    "drivers/xhci",
     "tests/systest",
     "tests/nettest",
     "tests/testmic",
@@ -114,6 +116,7 @@ vradiolink = { path = "lib/radiolink" }
 vjson = { path = "lib/json" }
 vweb = { path = "lib/web" }
 vagent = { path = "lib/agent" }
+vusb = { path = "lib/usb" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
 sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }

@@ -29,6 +29,8 @@
 //! nic e1000                        # QEMU model of the wired card for this run, applied before boot
 //! sound ac97                       # QEMU's sound card for this run (virtio or ac97), applied before boot
 //! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot (QEMU)
+//! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
+//! qmp device_del '{"id":"kbd2"}'   # a QMP command, such as plugging USB devices in and out (QEMU)
 //! audio host                       # the host's loudspeakers and microphone instead of a WAV file (echo on real hardware)
 //! expect-audio                     # fail unless the recorded sound output holds more than silence
 //! requires qemu                    # only for QEMU (or `virtualbox`); `test` skips it elsewhere
@@ -70,7 +72,7 @@ use std::time::{Duration, Instant};
 use crate::agentsim::AgentSim;
 use crate::airsim::AirSim;
 use crate::mic::{self, MicServer};
-use crate::qemu::{self, NetMode, QemuInstall, VmConfig};
+use crate::qemu::{self, InputDevices, NetMode, QemuInstall, VmConfig};
 use crate::qmp::Qmp;
 use crate::util::{self, Result};
 use crate::vboxctl;
@@ -355,9 +357,21 @@ pub fn net_mode(script: &str) -> Result<Option<NetMode>> {
     Ok(mode)
 }
 
+/// The keyboard and pointing devices a script asks for with `input`.
+pub fn input_devices(script: &str) -> Result<Option<InputDevices>> {
+    let mut input = None;
+    for w in script.lines().map(words) {
+        if w.first().is_some_and(|c| c == "input") {
+            let v = w.get(1).ok_or("input: missing devices")?;
+            input = Some(InputDevices::parse(v).ok_or(format!("input: unknown devices '{v}' (standard, usb)"))?);
+        }
+    }
+    Ok(input)
+}
+
 /// Why a script can only run under QEMU, if it can: the simulated Wi-Fi
 /// (virtio-serial and airsim), QEMU's 82574L card, the live system's USB
-/// stick, or `requires qemu`.
+/// stick, QMP commands, or `requires qemu`.
 pub fn needs_qemu(script: &str) -> Option<&'static str> {
     for w in script.lines().map(words) {
         match w.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
@@ -365,6 +379,7 @@ pub fn needs_qemu(script: &str) -> Option<&'static str> {
             ["nic", "e1000e", ..] => return Some("the 82574L card"),
             ["air" | "air-expect" | "air-wait", ..] => return Some("the Wi-Fi simulator"),
             ["live", ..] => return Some("the live system's USB stick"),
+            ["qmp", ..] => return Some("QMP commands"),
             ["requires", "qemu", ..] => return Some("marked as QEMU only"),
             _ => {}
         }
@@ -504,7 +519,15 @@ pub fn run_script(
                     s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "sound" | "audio" | "requires" | "live" => {}
+                "boot-cmdline" | "net" | "nic" | "sound" | "audio" | "requires" | "live" | "input" => {}
+                "qmp" => {
+                    let command = w.get(1).ok_or("missing command")?;
+                    let arguments = w.get(2).map_or("{}", String::as_str);
+                    match &mut s.m {
+                        Machine::Qemu { qmp, .. } => qmp.execute(command, arguments).map(|_| ()).map_err(ctx)?,
+                        Machine::VirtualBox(_) => return Err(ctx("qmp needs QEMU".into())),
+                    }
+                }
                 "air" => {
                     let line = w.get(1).ok_or("missing command")?;
                     s.sim().and_then(|sim| sim.command(line)).map_err(ctx)?;

@@ -1,0 +1,40 @@
+# USB input (1280x800): QEMU's xHCI controller with a keyboard and a tablet
+# behind a hub, and a mouse on a port of its own, and no PS/2 controller, so
+# keys and clicks can only come through USB. The keyboard opens the Terminal
+# from the start menu and types a command; the tablet double-clicks a
+# desktop icon; then a keyboard and a mouse are plugged in and out.
+input usb
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+wait-serial "xhci: port 6.1: QEMU USB Keyboard (0627:0001, full speed): keyboard" 30
+wait-serial "xhci: port 6.2: QEMU USB Tablet (0627:0001, full speed): tablet" 30
+expect-serial "xhci: port 6: QEMU USB Hub (0409:55aa, full speed): hub with 8 ports"
+expect-serial "xhci: port 7: QEMU USB Mouse (0627:0001, high speed): mouse"
+wait 2
+# Super opens the start menu, typing searches it and Enter starts the app.
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 30
+wait 3
+type "logger usb-keyboard-ok"
+key ret
+wait-serial "terminal: usb-keyboard-ok" 30
+# The tablet: a double-click on the Home icon opens Files.
+double-click 0.0469 0.075
+wait-serial "started files" 30
+wait 3
+shot target/veda/usb-input.png
+# A second keyboard on the hub and a mouse on a root port, plugged in and
+# out while Veda runs.
+qmp device_add '{"driver":"usb-kbd","bus":"xhci.0","port":"2.3","id":"kbd2"}'
+wait-serial "xhci: port 6.3: QEMU USB Keyboard (0627:0001, full speed): keyboard" 30
+qmp device_add '{"driver":"usb-mouse","bus":"xhci.0","port":"4","id":"mouse2"}'
+wait-serial "xhci: port 8: QEMU USB Mouse (0627:0001, high speed): mouse" 30
+qmp device_del '{"id":"kbd2"}'
+wait-serial "xhci: port 6.3: removed" 30
+qmp device_del '{"id":"mouse2"}'
+wait-serial "xhci: port 8: removed" 30
+reject-serial "attempt"
+reject-serial "no longer polled"

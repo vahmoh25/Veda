@@ -58,7 +58,16 @@ pub struct DmaBuffer {
 impl DmaBuffer {
     pub fn new(dma: &Resource, len: usize) -> Result<DmaBuffer, VirtioError> {
         let len = len.next_multiple_of(4096);
-        let vmo = Vmo::create_contiguous(dma, len).map_err(|_| VirtioError::NoMemory)?;
+        DmaBuffer::mapped(Vmo::create_contiguous(dma, len).map_err(|_| VirtioError::NoMemory)?, len)
+    }
+
+    /// A buffer below 4 GiB, for devices limited to 32-bit addresses.
+    pub fn new_below_4g(dma: &Resource, len: usize) -> Result<DmaBuffer, VirtioError> {
+        let len = len.next_multiple_of(4096);
+        DmaBuffer::mapped(Vmo::create_contiguous_below_4g(dma, len).map_err(|_| VirtioError::NoMemory)?, len)
+    }
+
+    fn mapped(vmo: Vmo, len: usize) -> Result<DmaBuffer, VirtioError> {
         let phys = vmo.phys_addr(0).map_err(|_| VirtioError::NoMemory)?;
         let map_vmo = Vmo::from_handle(vmo.0.duplicate(None).map_err(|_| VirtioError::NoMemory)?);
         let map = Mapping::new(map_vmo, len, map_flags::READ | map_flags::WRITE).map_err(|_| VirtioError::NoMemory)?;

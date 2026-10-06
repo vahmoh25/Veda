@@ -1,0 +1,24 @@
+[package]
+name = "xhci"
+description = "Driver for xHCI USB host controllers, with hubs and USB keyboards, mice and tablets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "xhci"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vproto = { workspace = true }
+vusb = { workspace = true }
+vvirtio = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

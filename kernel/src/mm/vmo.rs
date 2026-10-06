@@ -57,12 +57,14 @@ impl Vmo {
         Vmo::new(super::page_align_up(size), VmoKind::Physical { base: super::page_align_down(base) }, cache)
     }
 
-    pub fn new_contiguous(size: u64) -> Option<Arc<Vmo>> {
+    /// Physically contiguous, zeroed memory for DMA, entirely below
+    /// `max_addr`.
+    pub fn new_contiguous(size: u64, max_addr: u64) -> Option<Arc<Vmo>> {
         let size = super::page_align_up(size);
         if size == 0 || size > (256 << 20) {
             return None;
         }
-        let base = phys::alloc_contiguous(size / PAGE_SIZE, PAGE_SIZE, u64::MAX)?;
+        let base = phys::alloc_contiguous(size / PAGE_SIZE, PAGE_SIZE, max_addr)?;
         let vmo = Vmo::new(size, VmoKind::Contiguous { base }, Cache::WriteBack);
         vmo.committed.store(size, Ordering::Relaxed);
         Some(vmo)
