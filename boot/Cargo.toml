@@ -13,6 +13,7 @@ bench = false
 [dependencies]
 bootinfo = { workspace = true }
 vpe = { workspace = true }
+vsplash = { workspace = true }
 
 [lints]
 workspace = true

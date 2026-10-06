@@ -28,32 +28,77 @@ impl Screen {
     pub(crate) fn flush(&mut self, r: Rect) {
         let r = r.intersect(&self.rect());
         let w = self.back.width;
-        let fb = self.fb.as_ptr();
+        let rgb = self.rgb;
         for y in r.y..r.bottom() {
             let src = &self.back.pixels[(y * w + r.x) as usize..(y * w + r.right()) as usize];
-            // SAFETY: the framebuffer mapping covers `pitch * height` bytes.
-            let dst = unsafe {
-                core::slice::from_raw_parts_mut(
-                    (fb.add(y as usize * self.pitch) as *mut u32).add(r.x as usize),
-                    r.w as usize,
-                )
-            };
-            if self.rgb {
+            let dst = framebuffer_row(&mut self.fb, self.pitch, y, r);
+            if rgb {
                 for (d, &s) in dst.iter_mut().zip(src) {
-                    *d = (s & 0xFF00_FF00) | ((s >> 16) & 0xFF) | ((s & 0xFF) << 16);
+                    *d = swap_red_blue(s);
                 }
             } else {
                 dst.copy_from_slice(src);
             }
         }
     }
+
+    /// Copies a region of `layer` (as large as the screen) to the
+    /// framebuffer, in place of the back buffer.
+    pub(crate) fn flush_from(&mut self, layer: &Bitmap, r: Rect) {
+        let r = r.intersect(&self.rect());
+        let w = layer.width;
+        let rgb = self.rgb;
+        for y in r.y..r.bottom() {
+            let src = &layer.pixels[(y * w + r.x) as usize..(y * w + r.right()) as usize];
+            let dst = framebuffer_row(&mut self.fb, self.pitch, y, r);
+            for (d, &s) in dst.iter_mut().zip(src) {
+                *d = if rgb { swap_red_blue(s) } else { s };
+            }
+        }
+    }
+
+    /// Shows the back buffer through `layer` (as large as the screen) in
+    /// `r`: `alpha` parts of 256 of the back buffer.
+    pub(crate) fn flush_mixed(&mut self, layer: &Bitmap, alpha: u32, r: Rect) {
+        let r = r.intersect(&self.rect());
+        let (w, t, rgb) = (self.back.width, alpha.min(256), self.rgb);
+        for y in r.y..r.bottom() {
+            let span = (y * w + r.x) as usize..(y * w + r.right()) as usize;
+            let (over, under) = (&layer.pixels[span.clone()], &self.back.pixels[span]);
+            let dst = framebuffer_row(&mut self.fb, self.pitch, y, r);
+            for ((d, &a), &b) in dst.iter_mut().zip(over).zip(under) {
+                // Red and blue together, then green.
+                let rb = (((a & 0xFF_00FF) * (256 - t) + (b & 0xFF_00FF) * t) >> 8) & 0xFF_00FF;
+                let g = (((a & 0x00_FF00) * (256 - t) + (b & 0x00_FF00) * t) >> 8) & 0x00_FF00;
+                let s = 0xFF00_0000 | rb | g;
+                *d = if rgb { swap_red_blue(s) } else { s };
+            }
+        }
+    }
+}
+
+/// The framebuffer's pixels of row `y` across `r`.
+fn framebuffer_row(fb: &mut Mapping, pitch: usize, y: i32, r: Rect) -> &mut [u32] {
+    // SAFETY: the framebuffer mapping covers `pitch * height` bytes, and
+    // callers keep `r` on the screen.
+    unsafe {
+        core::slice::from_raw_parts_mut(
+            (fb.as_ptr().add(y as usize * pitch) as *mut u32).add(r.x as usize),
+            r.w as usize,
+        )
+    }
+}
+
+/// A pixel for a framebuffer that stores red in the low byte.
+fn swap_red_blue(s: u32) -> u32 {
+    (s & 0xFF00_FF00) | ((s >> 16) & 0xFF) | ((s & 0xFF) << 16)
 }
 
 impl Compositor {
     // ---- rendering ---------------------------------------------------------
 
     pub(crate) fn animating(&self) -> bool {
-        self.windows.values().any(|w| w.anim.is_some())
+        self.startup.is_some() || self.windows.values().any(|w| w.anim.is_some())
     }
 
     pub(crate) fn composite(&mut self) {
@@ -80,6 +125,8 @@ impl Compositor {
         let screen = self.screen_rect();
         let order = self.paint_order();
         let rects = self.damage.take();
+        // During the startup sequence the screen shows it instead.
+        let shown = self.startup.is_none();
         for r in rects {
             let r = r.intersect(&screen);
             if r.is_empty() {
@@ -134,13 +181,25 @@ impl Compositor {
                 c.draw_bitmap(b, self.pointer.0 - hx, self.pointer.1 - hy, 255);
             }
             drop(c);
-            self.screen.flush(r);
+            if shown {
+                self.screen.flush(r);
+            }
         }
         // Clients may now draw their next frame.
         let owed: Vec<(u32, u8)> =
             self.windows.iter_mut().filter_map(|(id, w)| w.frame_owed.take().map(|b| (*id, b))).collect();
         for (id, b) in owed {
             self.send(id, WindowEvent::FrameDone { shown: b });
+        }
+        if self.startup.is_some() {
+            let ready = self.desktop_ready();
+            if let Some(s) = &mut self.startup
+                && !s.frame(&mut self.screen, now, ready)
+            {
+                // Over: from now on the composed screen, as it is.
+                self.startup = None;
+                self.screen.flush(screen);
+            }
         }
         self.last_frame = now;
     }

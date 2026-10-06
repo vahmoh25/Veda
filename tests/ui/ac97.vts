@@ -3,6 +3,8 @@
 # plays through it (its position moves on as the card plays) and reaches
 # the recording of the sound output.
 sound ac97
+# The recording holds the music alone (no startup sound before it).
+boot-cmdline "startup-sound=off"
 boot-cmdline "run=music"
 fail-on "PANIC"
 wait-serial "AC'97 at ports" 60

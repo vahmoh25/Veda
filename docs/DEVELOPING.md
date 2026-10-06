@@ -58,6 +58,17 @@ cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
   `expect-audio-gapless` fails if that sound drops out while it plays
   (digital silence over 20 ms between the first sound and the last),
   which is what a driver that falls behind sounds like.
+* The startup sequence ends with `compositor: desktop shown after N ms
+  (F frames, R a second)`, counted from the window system's start: how
+  long the splash stayed (at least 1.8 s, then until the desktop has drawn
+  itself) and how smoothly it ran. `shell: startup sound: playing` says
+  the sound started, or why not. `tests/ui/startup.vts` checks both, and
+  that the sound reaches the recording. Its look is in
+  `services/compositor/src/startup.rs` (timings, colours, the tagline);
+  the sound is `tools/musicgen/src/songs/startup.rs`. `startup-sound=off`
+  on the kernel command line (`--cmdline`, or the `BOOT.CFG` of an image)
+  leaves the sound out; the scripts that check a recording of the sound
+  output, or feed it back into the microphone, boot with it.
 * `--sound hda` gives QEMU the ICH9's HD Audio controller with QEMU's
   codec (`hda-output` when recording to a WAV file, `hda-duplex`, with a
   line input, otherwise), and VirtualBox its HD Audio with an emulated

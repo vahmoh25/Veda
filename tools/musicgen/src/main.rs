@@ -6,7 +6,8 @@
 //!
 //! Writes `OUT_DIR/samples/Music/<Title>.qoa` for every track of the album
 //! (QOA at 44.1 kHz, with a `VTAG` trailer holding title, artist, album,
-//! genre, year, track number, duration, tempo and cover-art parameters).
+//! genre, year, track number, duration, tempo and cover-art parameters),
+//! and the system's startup sound, `OUT_DIR/sounds/startup.wav`.
 //! `--wav` also writes 16-bit WAV previews to `OUT_DIR/preview/`, and
 //! `--only N` renders just track N. Rendering is deterministic.
 
@@ -138,6 +139,32 @@ fn main() {
             file.len() as f64 / 1e6
         );
         written.push(name);
+    }
+    // The startup sound (stereo, at the sound devices' rate).
+    if only.is_none() {
+        let (mix, stats) = synth::render(&songs::startup::song());
+        let pcm = to_i16(&mix, 1977);
+        let frames = pcm.len() / 2;
+        let tags = Tags {
+            title: "Startup".into(),
+            artist: songs::ARTIST.into(),
+            duration_ms: frames as u64 * 1000 / songs::startup::RATE as u64,
+            ..Tags::default()
+        };
+        let file = vaudio::wav::write(&pcm, 2, songs::startup::RATE, &tags);
+        let sounds = out.join("sounds");
+        std::fs::create_dir_all(&sounds).expect("cannot create the sounds directory");
+        std::fs::write(sounds.join("startup.wav"), &file).expect("cannot write the startup sound");
+        println!(
+            "    {:<16} {:>4}.{:01} s  peak {:5.1} dBFS  loudness {:5.1} dB  (WAV, {} Hz)  {:5.2} MB",
+            "Startup sound",
+            frames / songs::startup::RATE as usize,
+            frames * 10 / songs::startup::RATE as usize % 10,
+            stats.peak_db,
+            stats.rms_db,
+            songs::startup::RATE,
+            file.len() as f64 / 1e6
+        );
     }
     // Remove stale tracks from earlier runs.
     if only.is_none() {

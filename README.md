@@ -114,7 +114,10 @@ the voice pipeline, consent, memory and how the agent is tested.
   XSAVE. Drivers, the file system, the window system and the agent are
   user-space processes, supervised by `init`: if the window system
   crashes, it is restarted and the desktop comes back on its own.
-* **Desktop.** A compositing window manager with server-side decorations,
+* **Desktop.** A startup sequence that carries the boot splash on without
+  a seam (a breathing light around the ring, the name and tagline rising
+  in, a startup sound) and dissolves it into the desktop once that is
+  ready; a compositing window manager with server-side decorations,
   shadows, animations, window snapping and an Alt+Tab switcher with live
   thumbnails; a shell with wallpaper, desktop icons, a taskbar, a
   searchable start menu, a calendar and notifications; the `vui` toolkit

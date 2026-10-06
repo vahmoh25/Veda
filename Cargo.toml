@@ -40,6 +40,7 @@ members = [
     "lib/gpio",
     "lib/spi",
     "lib/boardsim",
+    "lib/splash",
     "services/init",
     "services/vfs",
     "services/devmgr",
@@ -131,6 +132,7 @@ vacpi = { path = "lib/acpi" }
 vcs35l41 = { path = "lib/cs35l41" }
 vgpio = { path = "lib/gpio" }
 vspi = { path = "lib/spi" }
+vsplash = { path = "lib/splash" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
 sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }

@@ -19,8 +19,12 @@ use vrt::sync::{Condvar, Mutex};
 use vrt::time::now_ns;
 
 /// How often the amplifiers' driver is looked for while the stream runs
-/// and it is not there.
+/// and it is not there: often while the system starts (the driver loads
+/// the amplifiers' firmware before it registers, and the startup sound may
+/// already play), rarely after.
 const LOOK_NS: u64 = 5_000_000_000;
+const LOOK_EARLY_NS: u64 = 250_000_000;
+const EARLY_NS: u64 = 15_000_000_000;
 /// How long a reply may take (powering down waits for the amplifiers).
 const TIMEOUT_NS: u64 = 1_000_000_000;
 /// How long the playback thread waits for the amplifiers to power down
@@ -108,6 +112,7 @@ fn run(shared: &Shared) {
     let (mut told_on, mut told_muted) = (false, false);
     let mut next_look = 0u64;
     let mut looked = false;
+    let started = now_ns();
     loop {
         let (on, muted) = {
             let mut s = shared.state.lock();
@@ -128,7 +133,8 @@ fn run(shared: &Shared) {
             (s.on, s.muted)
         };
         if client.is_none() {
-            next_look = now_ns() + LOOK_NS;
+            let now = now_ns();
+            next_look = now + if now - started < EARLY_NS { LOOK_EARLY_NS } else { LOOK_NS };
             client = connect();
             match (&client, looked) {
                 (Some(_), _) => {

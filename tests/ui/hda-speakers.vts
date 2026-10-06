@@ -4,6 +4,8 @@
 # after the music stops (before the stream does), and its playback never
 # waits on them: the recording of the sound output does not drop out.
 sound hda
+# The recording holds the music alone (no startup sound before it).
+boot-cmdline "startup-sound=off"
 boot-cmdline "run=speakertest:300"
 boot-cmdline "run=music"
 fail-on "PANIC"

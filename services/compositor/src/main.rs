@@ -21,6 +21,7 @@ mod input;
 mod keymap;
 mod render;
 mod session;
+mod startup;
 mod state;
 mod switcher;
 mod window;
@@ -42,6 +43,7 @@ use decor::{Decor, DecorState};
 use keymap::Keyboard;
 use render::Screen;
 use session::Session;
+use startup::Startup;
 use state::{Compositor, DisplayClient};
 
 vrt::entry!(main);
@@ -82,7 +84,8 @@ fn main() -> i32 {
     };
 
     let mut text = Text::new();
-    let mut title_font = 0;
+    // The fonts' indices: Inter SemiBold (titles), Inter Regular.
+    let mut fonts = [None; 3];
     if let Ok(ch) = vproto::connect(vproto::vfs::NAME) {
         let vfs = vproto::vfs::Client::new(ch);
         for (i, path) in
@@ -90,14 +93,13 @@ fn main() -> i32 {
                 .iter()
                 .enumerate()
         {
-            if let Some(data) = load_font(&vfs, path)
-                && let Some(idx) = text.add_font(data)
-                && i == 0
-            {
-                title_font = idx;
+            if let Some(data) = load_font(&vfs, path) {
+                fonts[i] = text.add_font(data);
             }
         }
     }
+    let title_font = fonts[0].unwrap_or(0);
+    let regular_font = fonts[1].unwrap_or(title_font);
     if text.font_count() == 0 {
         println!("warning: no fonts available, titles will be blank");
     }
@@ -132,7 +134,14 @@ fn main() -> i32 {
         switcher: None,
         snap: None,
         desktop_shown: Vec::new(),
+        startup: None,
     };
+    // At system start (not after a restart), the boot splash comes to
+    // life and dissolves into the desktop once it has drawn itself.
+    if vrt::env::args().iter().any(|a| a == "splash") {
+        let fonts = (title_font, regular_font);
+        comp.startup = Some(Startup::new(width, height, &mut comp.decor.text, fonts, vrt::time::now_ns()));
+    }
     comp.update_cursor_rect();
     comp.damage.add(comp.screen_rect());
     comp.composite();

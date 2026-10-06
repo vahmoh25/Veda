@@ -29,6 +29,7 @@ mod desktop;
 mod notify;
 mod presence;
 mod start;
+mod startup;
 mod taskbar;
 mod tooltip;
 mod volume;
@@ -200,6 +201,8 @@ struct Shell {
     agent_win: Option<Popup<agent::AgentWindow>>,
     /// When to try attaching the agent's interface again.
     next_agent_try: u64,
+    /// The startup sound, until it has played (at system start only).
+    startup: Option<startup::StartupSound>,
 }
 
 /// Connects to a service only if it is running: a call to a service that
@@ -995,6 +998,9 @@ impl Shell {
             None => deadline = deadline.min(self.next_agent_try),
         }
         deadline = deadline.min(self.next_net_poll);
+        if let Some(s) = &self.startup {
+            deadline = deadline.min(s.deadline());
+        }
         items.truncate(vabi::WAIT_MANY_MAX);
         if !self.model.actions.is_empty() {
             deadline = 0;
@@ -1018,7 +1024,24 @@ impl Shell {
             self.poll_network();
             self.check_wifi();
             self.check_agent();
+            self.play_startup_sound();
             self.wait();
+        }
+    }
+
+    /// Plays the startup sound once a sound device is there.
+    fn play_startup_sound(&mut self) {
+        if self.startup.is_none() {
+            return;
+        }
+        if self.audio.is_none() {
+            self.refresh_audio();
+        }
+        if let Some(s) = &mut self.startup {
+            s.poll(self.audio.as_ref(), self.vfs.as_ref(), vrt::time::now_ns());
+            if s.done() {
+                self.startup = None;
+            }
         }
     }
 }
@@ -1189,6 +1212,11 @@ fn main() -> i32 {
         agent: None,
         agent_win: None,
         next_agent_try: 0,
+        // Started with the system: the startup sound as the desktop appears.
+        startup: vrt::env::args()
+            .iter()
+            .any(|a| a == "startup")
+            .then(|| startup::StartupSound::new(vrt::time::now_ns())),
         task_events,
         hidden_by_show_desktop: Vec::new(),
     };

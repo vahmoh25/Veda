@@ -1,0 +1,9 @@
+[package]
+name = "vsplash"
+description = "The boot splash's picture (a dark gradient and the Veda ring), drawn alike by the boot loader and the window system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

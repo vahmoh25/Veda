@@ -91,7 +91,8 @@ impl Text {
     pub fn draw(&mut self, c: &mut Canvas, font: usize, size: f32, x: f32, y: f32, text: &str, color: Color) -> f32 {
         let scaled = self.fonts.scaled(font, size);
         self.scratch.clear();
-        let width = scaled.layout_line_into(text, Point::new(x, y), &mut self.scratch);
+        // The layout gives where the line ends.
+        let width = scaled.layout_line_into(text, Point::new(x, y), &mut self.scratch) - x;
         let clip = c.clip_rect();
         for g in &self.scratch {
             let Some(f) = self.fonts.font(g.font as usize) else { continue };

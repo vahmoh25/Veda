@@ -21,6 +21,7 @@ vimage = { workspace = true }
 vfiles = { workspace = true }
 vui = { workspace = true }
 vnet = { workspace = true }
+vaudio = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

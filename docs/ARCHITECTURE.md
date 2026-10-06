@@ -29,8 +29,8 @@ that communicate over kernel channels.
 1. OVMF loads `\EFI\BOOT\BOOTX64.EFI` (`boot/`, the `vboot` loader) from the
    FAT32 EFI system partition built by `cargo xtask build`.
 2. `vboot` reads `\VEDA\BOOT.CFG`, `VKERNEL.EXE` and `INITRD.IMG`, picks a
-   GOP graphics mode, paints the splash screen, loads the kernel's PE
-   sections, builds page tables (identity map, direct map at
+   GOP graphics mode, paints the splash screen (`vsplash`), loads the
+   kernel's PE sections, builds page tables (identity map, direct map at
    `0xFFFF800000000000`, kernel at `0xFFFFFFFF80000000`), exits boot services
    and jumps to the kernel with a `bootinfo::BootInfo`.
 3. The kernel initialises memory, ACPI, APICs, timers and the other CPUs, then
@@ -40,6 +40,22 @@ that communicate over kernel channels.
    if they crash (at most three times a minute). Drivers reconnect to a
    restarted compositor through the registry, which queues connections
    until a service registers again.
+
+**The startup sequence.** The loader's splash stays on the screen while the
+kernel and the services start. The window system takes it over without a
+seam, drawing the same picture through `vsplash` (`lib/splash`) pixel for
+pixel, and brings it to life (`services/compositor/src/startup.rs`): a soft
+light gathers around the ring and breathes, with a glint going round while
+the system works, and the name and the tagline ("The agentic-native
+operating system") rise into view. Once the shell's desktop and taskbar
+have each presented a frame, and the splash has been up for at least
+1.8 s, the ring swells and fades, the words lift away and the desktop
+dissolves in, in under a second (`compositor: desktop shown after N ms`
+says when, and at what frame rate). Meanwhile the shell plays the startup
+sound, `/system/sounds/startup.wav` (composed by `tools/musicgen`), as soon
+as a sound device is attached. `init` asks for the sequence (`splash`) and
+the sound (`startup`) only at system start: a window system or shell
+restarted after a crash shows the desktop at once, and quietly.
 
 The live system (`cargo xtask iso`) starts the same way from a USB stick or
 a disc. Its image is a hybrid ISO 9660 image: the boot files in the ISO 9660
@@ -256,7 +272,9 @@ for applications and `input` for drivers.
 * **Composition** is damage driven: changed rectangles are recomposed from
   the bottom up into a back buffer (premultiplied alpha, shadows,
   open/close/minimise animations) and copied to the framebuffer, at most
-  once per display frame.
+  once per display frame. At system start the screen shows the startup
+  sequence instead (see [Boot](#boot)) until the desktop has drawn itself
+  and dissolved in.
 * **Window kinds** form layers: the desktop, normal and borderless windows,
   panels (which reserve screen space), popups (closed when they lose focus)
   and notifications. A focused full-screen window rises above the panels.
@@ -447,7 +465,7 @@ the pool's workers on different CPUs at once.
   garble its own audio.
 * `vaudio` holds the formats (WAV, QOA), the resampler, mixing, an FFT for
   visualisers, and a synthesiser and sequencer that `tools/musicgen` uses
-  to render the bundled album at build time.
+  to render the bundled album and the startup sound at build time.
 * `vaudio` also holds the voice processing for an always-listening
   assistant. `aec::EchoCanceller` removes the loudspeakers' sound from the
   microphone, given the mixed speaker output as reference: a
@@ -533,6 +551,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/hda`, `lib/usb`, `lib/cs35l41`, `lib/spi` | what the HD Audio, USB, speaker amplifier and SPI drivers know that touches no hardware |
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `lib/boardsim` | simulated machines for host tests: firmware descriptions and models of chips no emulator has |
+| `lib/splash` | the boot splash's picture, which the boot loader and the window system draw alike |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
 | `lib/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |

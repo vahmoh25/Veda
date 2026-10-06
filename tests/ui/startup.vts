@@ -1,0 +1,16 @@
+# The startup sequence (1280x800): the boot splash comes to life (the
+# light around the ring, the name and the tagline), dissolves into the
+# desktop once it has drawn itself, and the startup sound plays as it does.
+sound hda
+fail-on "PANIC"
+wait-serial "compositor: display" 120
+wait 0.8
+shot target/veda/startup-1-splash.png
+wait-serial "shell: startup sound: playing" 60
+wait-serial "compositor: desktop shown after" 60
+wait 1
+shot target/veda/startup-2-desktop.png
+reject-serial "startup sound: no sound device"
+reject-serial "no desktop after"
+expect-audio
+expect-audio-gapless

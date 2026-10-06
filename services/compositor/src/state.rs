@@ -14,6 +14,7 @@ use vrt::object::Channel;
 use crate::decor::{Decor, DecorState};
 use crate::keymap::Keyboard;
 use crate::render::Screen;
+use crate::startup::Startup;
 use crate::switcher::{self, Switcher};
 use crate::window::{Anim, AnimKind, Part, TITLE_HEIGHT, Window};
 
@@ -104,6 +105,8 @@ pub(crate) struct Compositor {
     pub(crate) snap: Option<(Snap, Rect)>,
     /// Windows minimised by Super+D, restored by the next Super+D.
     pub(crate) desktop_shown: Vec<u32>,
+    /// The startup sequence, while it runs (see [`Startup`]).
+    pub(crate) startup: Option<Startup>,
 }
 
 /// The client rectangle of an automatically placed `w` x `h` window, with a
@@ -152,6 +155,18 @@ impl Compositor {
 
     pub(crate) fn screen_rect(&self) -> Rect {
         self.screen.rect()
+    }
+
+    /// Whether the desktop has drawn itself: the shell's desktop window and
+    /// its panels (the taskbar) have each presented a frame.
+    pub(crate) fn desktop_ready(&self) -> bool {
+        let Some(desktop) = self.windows.values().find(|w| w.kind == WindowKind::Desktop) else { return false };
+        desktop.current.is_some()
+            && self
+                .windows
+                .values()
+                .filter(|w| w.kind == WindowKind::Panel && w.client == desktop.client)
+                .all(|w| w.current.is_some())
     }
 
     /// Recomputes the work area (the screen minus the panels) and fits the

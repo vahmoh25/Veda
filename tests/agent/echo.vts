@@ -4,6 +4,8 @@
 # and while the agent speaks nothing of it reaches the recogniser (which
 # would take it for the user and interrupt the agent). Talking over the
 # agent, louder than its echo, still does.
+# Only the agent's own voice comes back (no startup sound).
+boot-cmdline "startup-sound=off"
 fail-on "PANIC"
 wait-serial "desktop ready" 120
 mic-echo -6 250

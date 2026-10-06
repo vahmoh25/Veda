@@ -4,6 +4,8 @@
 # the agent over it still wakes it, without what was heard before the
 # call. During the conversation the music plays quieter (ducked).
 agent-asleep
+# Only the music comes back (no startup sound).
+boot-cmdline "startup-sound=off"
 boot-cmdline "run=music"
 fail-on "PANIC"
 wait-serial "desktop ready" 120

@@ -7,6 +7,8 @@
 # checks the output: the link at 24 MHz and the stream at its format's
 # rate.
 sound hda
+# The recording holds the music alone (no startup sound before it).
+boot-cmdline "startup-sound=off"
 boot-cmdline "run=music"
 fail-on "PANIC"
 wait-serial "hda: codec 0: QEMU HDA codec (1af4:0012): line out (pin 0x03)" 60

@@ -270,6 +270,7 @@ dependencies = [
  "vproto",
  "vraster",
  "vrt",
+ "vsplash",
 ]
 
 [[package]]
@@ -1095,6 +1096,7 @@ name = "shell"
 version = "0.1.0"
 dependencies = [
  "vabi",
+ "vaudio",
  "vbuild",
  "vfiles",
  "vgfx",
@@ -1342,6 +1344,7 @@ version = "0.1.0"
 dependencies = [
  "bootinfo",
  "vpe",
+ "vsplash",
 ]
 
 [[package]]
@@ -1541,6 +1544,10 @@ dependencies = [
 
 [[package]]
 name = "vspi"
+version = "0.1.0"
+
+[[package]]
+name = "vsplash"
 version = "0.1.0"
 
 [[package]]

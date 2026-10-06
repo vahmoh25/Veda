@@ -81,12 +81,13 @@ fn handles_for(init: &Init, name: &str) -> Vec<(u32, Handle)> {
 /// Starts all system services.
 pub fn start_system(init: &mut Init) {
     for name in SERVICES {
-        start_service(init, name);
+        start_service(init, name, true);
     }
 }
 
-/// Starts (or restarts) one system service.
-pub fn start_service(init: &mut Init, name: &str) {
+/// Starts one system service, with the system (`at_boot`) or again after
+/// it exited.
+pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
     let path = alloc::format!("bin/{name}.exe");
     if init.initrd.find(&path).is_none() {
         println!("{} is not installed; skipping", name);
@@ -96,11 +97,16 @@ pub fn start_service(init: &mut Init, name: &str) {
     // The agent takes its test options (`agent.endpoint=...`) from the
     // kernel command line. A live system (`live`, booted from a USB stick)
     // tells the file system and the device manager to leave the computer's
-    // disks alone.
+    // disks alone. At system start the window system plays the startup
+    // sequence (`splash`) and the shell the startup sound (`startup`,
+    // unless `startup-sound=off`); started again, they do neither.
     let cmdline = cmdline(init);
+    let has = |option: &str| cmdline.split_whitespace().any(|a| a == option);
     let args: Vec<alloc::string::String> = match name {
         "agent" => cmdline.split_whitespace().filter(|a| a.starts_with("agent.")).map(Into::into).collect(),
-        "vfs" | "devmgr" if cmdline.split_whitespace().any(|a| a == "live") => alloc::vec!["live".into()],
+        "vfs" | "devmgr" if has("live") => alloc::vec!["live".into()],
+        "compositor" if at_boot => alloc::vec!["splash".into()],
+        "shell" if at_boot && !has("startup-sound=off") => alloc::vec!["startup".into()],
         _ => Vec::new(),
     };
     if let Err(e) = init.spawn(name, &path, &args, handles, true) {

@@ -330,7 +330,7 @@ impl Init {
         }
         history.push(now);
         println!("restarting {}", name);
-        boot::start_service(self, name);
+        boot::start_service(self, name, false);
     }
 
     fn run(&mut self) -> ! {

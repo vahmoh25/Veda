@@ -7,6 +7,7 @@ mod neon;
 mod pixel;
 mod rain;
 mod skyline;
+pub mod startup;
 
 use vaudio::synth::{Part, Song};
 
