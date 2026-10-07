@@ -1,0 +1,47 @@
+# GCC inside Veda (needs the native toolchain in the image): write a C
+# program in the Terminal, compile and run it; a program in two files,
+# compiled separately and linked; a mistake, which GCC reports with its
+# line, and a warning. Results are checked with the shell's `logger`
+# command, which writes to the serial log. (The program's string comes
+# from a macro: the typed line needs no double quotes.)
+requires native-toolchain
+boot-cmdline "run=terminal"
+wait-serial "desktop ready" 90
+wait-serial "started terminal" 60
+wait 3
+key meta_l-up
+wait 2
+type "cd /tmp && echo '#include <stdio.h>' > hello.c && echo '#define S(x) #x' >> hello.c"
+key ret
+type "echo 'int main(void) { puts(S(compiled-on-veda)); return 7; }' >> hello.c && cat hello.c"
+key ret
+wait 2
+type "gcc -O2 -Wall -o hello hello.c && logger compiled"
+key ret
+wait-serial "terminal: compiled" 600
+type "./hello"
+key ret
+wait 3
+type "logger ran-$?"
+key ret
+wait-serial "terminal: ran-7" 60
+shot target/veda/c-compile-1-ran.png
+# Two files, compiled to objects, linked by GCC.
+type "echo 'int twice(int x) { return 2 * x; }' > twice.c && echo 'int twice(int);' > main.c"
+key ret
+type "echo 'int main(void) { return twice(21); }' >> main.c && gcc -c twice.c && gcc -c main.c && logger objects"
+key ret
+wait-serial "terminal: objects" 600
+type "gcc -o both main.o twice.o && ./both; logger linked-$?"
+key ret
+wait-serial "terminal: linked-42" 600
+# A mistake: GCC names it and fails.
+type "echo 'int main(void) { return undefined_name; }' > bad.c && gcc bad.c; logger bad-$?"
+key ret
+wait-serial "terminal: bad-1" 600
+# A warning, which GCC colours and links to its documentation: the
+# screenshot shows the message without the link's escape sequences.
+type "echo 'int main(void) { int unused; return 0; }' > warn.c && gcc -Wall -c warn.c; logger warn-$?"
+key ret
+wait-serial "terminal: warn-0" 600
+shot target/veda/c-compile-2-messages.png

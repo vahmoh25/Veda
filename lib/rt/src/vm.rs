@@ -22,6 +22,23 @@ pub fn map(
     call(nr::VM_MAP, [p as usize, vmo.raw() as usize, offset, len, addr, flags])
 }
 
+/// Maps `len` bytes of new zero-filled memory into `process` (or the
+/// caller). No VMO handle reaches it, so its pages are freed as soon as
+/// they are unmapped or [decommitted](decommit). `addr` and `flags` as for
+/// [`map`]. Returns the mapped address.
+pub fn allocate(process: Option<&Process>, len: usize, addr: usize, flags: usize) -> Result<usize, Error> {
+    let p = process.map(|p| p.raw()).unwrap_or(vabi::INVALID_HANDLE);
+    call(nr::VM_ALLOCATE, [p as usize, len, addr, flags, 0, 0])
+}
+
+/// Frees the pages of `[addr, addr+len)`, which [`allocate`]d memory must
+/// cover completely (`NotSupported` otherwise); they read as zeros from
+/// then on.
+pub fn decommit(process: Option<&Process>, addr: usize, len: usize) -> Result<(), Error> {
+    let p = process.map(|p| p.raw()).unwrap_or(vabi::INVALID_HANDLE);
+    call(nr::VM_DECOMMIT, [p as usize, addr, len, 0, 0, 0]).map(|_| ())
+}
+
 pub fn unmap(process: Option<&Process>, addr: usize, len: usize) -> Result<(), Error> {
     let p = process.map(|p| p.raw()).unwrap_or(vabi::INVALID_HANDLE);
     call(nr::VM_UNMAP, [p as usize, addr, len, 0, 0, 0]).map(|_| ())

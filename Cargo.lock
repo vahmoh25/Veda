@@ -1379,6 +1379,10 @@ name = "vcs35l41"
 version = "0.1.0"
 
 [[package]]
+name = "velf"
+version = "0.1.0"
+
+[[package]]
 name = "ventropy"
 version = "0.1.0"
 
@@ -1570,6 +1574,16 @@ name = "vpe"
 version = "0.1.0"
 
 [[package]]
+name = "vposix"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vipc",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
 name = "vproto"
 version = "0.1.0"
 dependencies = [
@@ -1591,6 +1605,7 @@ name = "vrt"
 version = "0.1.0"
 dependencies = [
  "vabi",
+ "velf",
  "vheap",
  "vpe",
 ]
@@ -1844,6 +1859,7 @@ version = "0.1.0"
 dependencies = [
  "initrd",
  "sha1",
+ "sha2",
  "vbuild",
  "vpe",
 ]

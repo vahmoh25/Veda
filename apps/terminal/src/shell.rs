@@ -24,6 +24,7 @@ use vproto::init::{AppInfo, LaunchError, launcher};
 
 use crate::commands;
 use crate::job::Output;
+use crate::program::{self, Console, Destination, Input, Run};
 use crate::screen::{Cell, Style, cells, color};
 use vfiles::path::{display_path, file_name, glob_match, has_wildcards, is_read_only, normalize, resolve};
 use vfiles::{Fs, HOME};
@@ -123,6 +124,10 @@ enum Tok {
     In,
 }
 
+/// Where an item of a command list starts (a character index) and how it
+/// is connected to the item before it.
+type ListBreak = (usize, Connector);
+
 /// One command of a pipeline.
 #[derive(Debug, Default)]
 struct Command {
@@ -166,6 +171,8 @@ pub struct Shell {
     pub cols: usize,
     /// Set (by Ctrl+C) to stop the command that is running.
     pub interrupt: Arc<AtomicBool>,
+    /// The terminal programs run in (none without a window).
+    pub console: Option<Arc<Console>>,
 }
 
 impl Shell {
@@ -193,6 +200,7 @@ impl Shell {
             exit_requested: false,
             cols: 80,
             interrupt: Arc::new(AtomicBool::new(false)),
+            console: None,
         }
     }
 
@@ -357,28 +365,125 @@ impl Shell {
         launch_result(r).map(|koid| (name, koid))
     }
 
+    /// The program a command name runs as a child of the terminal: a path
+    /// (with a `/`) to a file, or a file of that name (or that name plus
+    /// `.exe`) in a directory of `PATH`. Built-in commands and installed
+    /// applications come first: they are not programs here.
+    pub fn program_for(&mut self, name: &str) -> Option<String> {
+        if commands::find(name).is_some() {
+            return None;
+        }
+        let is_file = |fs: &Fs, p: &str| fs.stat(p).is_ok_and(|s| !s.is_dir);
+        if name.contains('/') {
+            let path = self.resolve(name);
+            return is_file(&self.fs, &path).then_some(path);
+        }
+        let lower = name.to_ascii_lowercase();
+        if self.apps().iter().any(|a| a.id == lower || a.name.to_ascii_lowercase() == lower) {
+            return None;
+        }
+        let dirs = self.var("PATH").unwrap_or_default();
+        for dir in dirs.split(':').filter(|d| d.starts_with('/')) {
+            for candidate in [format!("{dir}/{name}"), format!("{dir}/{name}.exe")] {
+                if is_file(&self.fs, &candidate) {
+                    return Some(normalize(&candidate));
+                }
+            }
+        }
+        None
+    }
+
+    /// Runs the program at `path` for `cmd` (one command of a pipeline) and
+    /// waits for it. Its input is the terminal, `piped` (the output of the
+    /// command before) or a file; its output the terminal, a file, or (if it
+    /// is not the `last` command) kept for the next one. Returns its exit
+    /// status and the output kept, or the status of a failure to start it.
+    fn run_program(
+        &mut self,
+        path: &str,
+        args: &[String],
+        cmd: &Command,
+        piped: Option<Vec<u8>>,
+        last: bool,
+        out: &Output,
+    ) -> Result<(i32, Option<Vec<u8>>), i32> {
+        let Some(console) = self.console.clone() else {
+            out.styled("vsh: programs cannot run here (no terminal)\n", Style::ERROR);
+            return Err(1);
+        };
+        let open = |sh: &Self, p: &str, flags: u32| -> Result<vrt::object::Channel, i32> {
+            let abs = sh.resolve(p);
+            let r = sh.fs.client().map(|c| c.open_file(abs, flags));
+            match r {
+                Some(Ok(Ok((ch, _)))) => Ok(ch),
+                Some(Ok(Err(e))) => {
+                    out.styled(&format!("vsh: {p}: {e}\n"), Style::ERROR);
+                    Err(1)
+                }
+                _ => {
+                    out.styled("vsh: the file system is not responding\n", Style::ERROR);
+                    Err(1)
+                }
+            }
+        };
+        use vproto::fs::open_flags as of;
+        let stdin = match (&cmd.stdin, piped) {
+            (Some(p), _) => Input::File(open(self, p, of::READ)?),
+            (None, Some(text)) => Input::Text(text),
+            (None, None) => Input::Terminal,
+        };
+        let stdout = match &cmd.stdout {
+            Some((p, false)) => Destination::File(open(self, p, of::WRITE | of::CREATE | of::TRUNCATE)?),
+            Some((p, true)) => Destination::File(open(self, p, of::WRITE | of::CREATE | of::APPEND)?),
+            None if !last => Destination::Capture,
+            None => Destination::Terminal,
+        };
+        let capturing = matches!(stdout, Destination::Capture);
+        let mut env: Vec<String> = self.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        env.retain(|e| !e.starts_with("PWD="));
+        env.push(format!("PWD={}", self.cwd));
+        let run = Run { path, args, env, cwd: &self.cwd, stdin, stdout };
+        match program::run(&console, run, out, &self.interrupt) {
+            Ok(ended) => {
+                if let Some(reason) = ended.reason {
+                    out.finish_line();
+                    out.styled(&format!("{reason}\n"), Style::ERROR);
+                }
+                Ok((ended.status, capturing.then_some(ended.captured)))
+            }
+            Err(msg) => {
+                out.finish_line();
+                out.styled(&format!("vsh: {msg}\n"), Style::ERROR);
+                Err(126)
+            }
+        }
+    }
+
     // ---- execution ---------------------------------------------------------
 
     /// Runs a command line, writing output to `out`. After Ctrl+C the rest
     /// of the line is skipped.
     pub fn execute(&mut self, line: &str, out: &Output) {
-        let toks = match self.tokenize(line) {
-            Ok(t) => t,
+        // The whole line is checked first; then each item of the list is
+        // expanded when its turn comes, so that it sees what the items
+        // before it did (`prog; echo $?`).
+        let breaks = match self.tokenize_list(line).and_then(|(toks, breaks)| parse(toks).map(|_| breaks)) {
+            Ok(b) => b,
             Err(e) => {
                 out.styled(&format!("vsh: {e}\n"), Style::ERROR);
                 self.status = 2;
                 return;
             }
         };
-        let list = match parse(toks) {
-            Ok(l) => l,
-            Err(e) => {
-                out.styled(&format!("vsh: {e}\n"), Style::ERROR);
-                self.status = 2;
-                return;
-            }
-        };
-        for (conn, pipeline) in list {
+        let chars: Vec<char> = line.chars().collect();
+        let mut items = Vec::with_capacity(breaks.len() + 1);
+        let mut start = (0, Connector::Always);
+        for &b in &breaks {
+            items.push((start.1, chars[start.0..b.0].iter().collect::<String>()));
+            start = b;
+        }
+        items.push((start.1, chars[start.0..].iter().collect::<String>()));
+        for (conn, text) in items {
             if self.interrupted() {
                 break;
             }
@@ -387,6 +492,16 @@ impl Shell {
                 Connector::Or if self.status == 0 => continue,
                 _ => {}
             }
+            // The item without its separator, expanded now.
+            let toks = match self.tokenize(&text) {
+                Ok(t) => t.into_iter().filter(|t| !matches!(t, Tok::Semi | Tok::And | Tok::Or)).collect(),
+                Err(e) => {
+                    out.styled(&format!("vsh: {e}\n"), Style::ERROR);
+                    self.status = 2;
+                    return;
+                }
+            };
+            let Some((_, pipeline)) = parse(toks).ok().and_then(|l| l.into_iter().next()) else { continue };
             self.status = self.run_pipeline(pipeline, out);
             out.finish_line();
             if self.exit_requested {
@@ -400,13 +515,31 @@ impl Shell {
 
     fn run_pipeline(&mut self, cmds: Vec<Command>, out: &Output) -> i32 {
         let n = cmds.len();
-        let mut piped: Option<String> = None;
+        let mut piped: Option<Vec<u8>> = None;
         let mut status = 0;
         for (i, cmd) in cmds.into_iter().enumerate() {
             if self.interrupted() {
                 return INTERRUPTED;
             }
-            let mut stdin = piped.take();
+            let last = i + 1 == n;
+            let args = self.expand(&cmd.words);
+            // Programs get their redirections as files and pipes.
+            if let Some(name) = args.first()
+                && let Some(path) = self.program_for(name)
+            {
+                match self.run_program(&path, &args, &cmd, piped.take(), last, out) {
+                    Ok((s, captured)) => {
+                        status = s;
+                        piped = captured;
+                    }
+                    Err(s) => return s,
+                }
+                if self.exit_requested {
+                    break;
+                }
+                continue;
+            }
+            let mut stdin = piped.take().map(|b| String::from_utf8_lossy(&b).into_owned());
             if let Some(path) = &cmd.stdin {
                 let abs = self.resolve(path);
                 match self.fs.read(&abs) {
@@ -417,9 +550,7 @@ impl Shell {
                     }
                 }
             }
-            let last = i + 1 == n;
             let capture = !last || cmd.stdout.is_some();
-            let args = self.expand(&cmd.words);
             let mut io = Io { out, capture: if capture { Some(String::new()) } else { None }, stdin };
             status = if args.is_empty() { 0 } else { self.run_command(&args, &mut io) };
             let captured = io.capture.take();
@@ -437,7 +568,7 @@ impl Shell {
                     status = 1;
                 }
             } else if !last {
-                piped = captured;
+                piped = captured.map(String::into_bytes);
             }
             if self.exit_requested {
                 break;
@@ -514,7 +645,15 @@ impl Shell {
 
     /// Splits a command line into tokens.
     fn tokenize(&self, line: &str) -> Result<Vec<Tok>, String> {
+        self.tokenize_list(line).map(|(toks, _)| toks)
+    }
+
+    /// Splits a command line into tokens, and also returns where each list
+    /// separator (`;`, `&&`, `||`) ends: the character index of the next
+    /// list item and how it is connected.
+    fn tokenize_list(&self, line: &str) -> Result<(Vec<Tok>, Vec<ListBreak>), String> {
         let mut toks = Vec::new();
+        let mut breaks = Vec::new();
         let chars: Vec<char> = line.chars().collect();
         let mut i = 0;
         let mut word = String::new();
@@ -539,6 +678,7 @@ impl Shell {
                     if chars.get(i + 1) == Some(&'|') {
                         i += 1;
                         toks.push(Tok::Or);
+                        breaks.push((i + 1, Connector::Or));
                     } else {
                         toks.push(Tok::Pipe);
                     }
@@ -547,10 +687,12 @@ impl Shell {
                     end_word!();
                     i += 1;
                     toks.push(Tok::And);
+                    breaks.push((i + 1, Connector::And));
                 }
                 ';' => {
                     end_word!();
                     toks.push(Tok::Semi);
+                    breaks.push((i + 1, Connector::Always));
                 }
                 '>' => {
                     end_word!();
@@ -624,7 +766,7 @@ impl Shell {
         if in_word {
             toks.push(Tok::Word(word, glob));
         }
-        Ok(toks)
+        Ok((toks, breaks))
     }
 
     /// Expands `$NAME`, `${NAME}` or `$?` starting at `chars[i]` (the `$`);

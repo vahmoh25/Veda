@@ -744,7 +744,8 @@ fn cmd_ls(sh: &mut Shell, io: &mut Io, args: &[String]) -> i32 {
             }
         };
         if !st.is_dir {
-            let e = DirEntry { name: arg.clone(), is_dir: false, size: st.size, modified: st.modified };
+            let e =
+                DirEntry { name: arg.clone(), is_dir: false, size: st.size, modified: st.modified, inode: st.inode };
             print_entry_long(io, &e);
             continue;
         }

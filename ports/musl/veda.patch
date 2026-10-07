@@ -1,0 +1,502 @@
+--- a/arch/x86_64/crt_arch.h
++++ b/arch/x86_64/crt_arch.h
+@@ -1,9 +1,12 @@
++/* Veda: the kernel passes the process's bootstrap channel (which carries
++   its startup message) in rdi; the POSIX layer reads it in __init_libc. */
+ __asm__(
+ ".text \n"
+ ".global " START " \n"
+ ".type " START ",%function \n"
+ START ": \n"
+ "	xor %rbp,%rbp \n"
++"	mov %edi,__veda_bootstrap(%rip) \n"
+ "	mov %rsp,%rdi \n"
+ ".weak _DYNAMIC \n"
+ ".hidden _DYNAMIC \n"
+--- a/arch/x86_64/syscall_arch.h
++++ b/arch/x86_64/syscall_arch.h
+@@ -1,70 +1,45 @@
+ #define __SYSCALL_LL_E(x) (x)
+ #define __SYSCALL_LL_O(x) (x)
+ 
++/* Veda: system calls go to Veda's POSIX layer (part of libc.a), which
++   implements the Linux system call interface with Veda's kernel objects
++   and services. */
++__attribute__((__visibility__("hidden")))
++long __veda_syscall(long, long, long, long, long, long, long);
++
+ static __inline long __syscall0(long n)
+ {
+-	unsigned long ret;
+-	__asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n) : "rcx", "r11", "memory");
+-	return ret;
++	return __veda_syscall(n, 0, 0, 0, 0, 0, 0);
+ }
+ 
+ static __inline long __syscall1(long n, long a1)
+ {
+-	unsigned long ret;
+-	__asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n), "D"(a1) : "rcx", "r11", "memory");
+-	return ret;
++	return __veda_syscall(n, a1, 0, 0, 0, 0, 0);
+ }
+ 
+ static __inline long __syscall2(long n, long a1, long a2)
+ {
+-	unsigned long ret;
+-	__asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n), "D"(a1), "S"(a2)
+-						  : "rcx", "r11", "memory");
+-	return ret;
++	return __veda_syscall(n, a1, a2, 0, 0, 0, 0);
+ }
+ 
+ static __inline long __syscall3(long n, long a1, long a2, long a3)
+ {
+-	unsigned long ret;
+-	__asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n), "D"(a1), "S"(a2),
+-						  "d"(a3) : "rcx", "r11", "memory");
+-	return ret;
++	return __veda_syscall(n, a1, a2, a3, 0, 0, 0);
+ }
+ 
+ static __inline long __syscall4(long n, long a1, long a2, long a3, long a4)
+ {
+-	unsigned long ret;
+-	register long r10 __asm__("r10") = a4;
+-	__asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n), "D"(a1), "S"(a2),
+-						  "d"(a3), "r"(r10): "rcx", "r11", "memory");
+-	return ret;
++	return __veda_syscall(n, a1, a2, a3, a4, 0, 0);
+ }
+ 
+ static __inline long __syscall5(long n, long a1, long a2, long a3, long a4, long a5)
+ {
+-	unsigned long ret;
+-	register long r10 __asm__("r10") = a4;
+-	register long r8 __asm__("r8") = a5;
+-	__asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n), "D"(a1), "S"(a2),
+-						  "d"(a3), "r"(r10), "r"(r8) : "rcx", "r11", "memory");
+-	return ret;
++	return __veda_syscall(n, a1, a2, a3, a4, a5, 0);
+ }
+ 
+ static __inline long __syscall6(long n, long a1, long a2, long a3, long a4, long a5, long a6)
+ {
+-	unsigned long ret;
+-	register long r10 __asm__("r10") = a4;
+-	register long r8 __asm__("r8") = a5;
+-	register long r9 __asm__("r9") = a6;
+-	__asm__ __volatile__ ("syscall" : "=a"(ret) : "a"(n), "D"(a1), "S"(a2),
+-						  "d"(a3), "r"(r10), "r"(r8), "r"(r9) : "rcx", "r11", "memory");
+-	return ret;
++	return __veda_syscall(n, a1, a2, a3, a4, a5, a6);
+ }
+ 
+-#define VDSO_USEFUL
+-#define VDSO_CGT_SYM "__vdso_clock_gettime"
+-#define VDSO_CGT_VER "LINUX_2.6"
+-#define VDSO_GETCPU_SYM "__vdso_getcpu"
+-#define VDSO_GETCPU_VER "LINUX_2.6"
+-
+ #define IPC_64 0
+--- a/src/env/__libc_start_main.c
++++ b/src/env/__libc_start_main.c
+@@ -15,6 +15,10 @@
+ static void dummy1(void *p) {}
+ weak_alias(dummy1, __init_ssp);
+ 
++/* Veda: sets up the POSIX layer (descriptors, working directory, the
++   connections to the system services) from the startup message. */
++hidden void __veda_init(void);
++
+ #define AUX_CNT 38
+ 
+ #ifdef __GNUC__
+@@ -38,6 +42,7 @@
+ 
+ 	__init_tls(aux);
+ 	__init_ssp((void *)aux[AT_RANDOM]);
++	__veda_init();
+ 
+ 	if (aux[AT_UID]==aux[AT_EUID] && aux[AT_GID]==aux[AT_EGID]
+ 		&& !aux[AT_SECURE]) return;
+--- a/src/process/posix_spawn.c
++++ b/src/process/posix_spawn.c
+@@ -1,219 +1,60 @@
+ #define _GNU_SOURCE
+ #include <spawn.h>
+-#include <sched.h>
+ #include <unistd.h>
+-#include <signal.h>
+-#include <fcntl.h>
++#include <stdlib.h>
++#include <string.h>
++#include <limits.h>
+ #include <errno.h>
+-#include <sys/wait.h>
+-#include "syscall.h"
+-#include "lock.h"
+-#include "pthread_impl.h"
+ #include "fdop.h"
+ 
+-struct args {
+-	int p[2];
+-	sigset_t oldmask;
+-	const char *path;
+-	const posix_spawn_file_actions_t *fa;
+-	const posix_spawnattr_t *restrict attr;
+-	char *const *argv, *const *envp;
+-};
+-
+-static int __sys_dup2(int old, int new)
+-{
+-#ifdef SYS_dup2
+-	return __syscall(SYS_dup2, old, new);
+-#else
+-	return __syscall(SYS_dup3, old, new, 0);
+-#endif
+-}
+-
+-static int child(void *args_vp)
+-{
+-	int i, ret;
+-	struct sigaction sa = {0};
+-	struct args *args = args_vp;
+-	int p = args->p[1];
+-	const posix_spawn_file_actions_t *fa = args->fa;
+-	const posix_spawnattr_t *restrict attr = args->attr;
+-	sigset_t hset;
+-
+-	close(args->p[0]);
+-
+-	/* All signal dispositions must be either SIG_DFL or SIG_IGN
+-	 * before signals are unblocked. Otherwise a signal handler
+-	 * from the parent might get run in the child while sharing
+-	 * memory, with unpredictable and dangerous results. To
+-	 * reduce overhead, sigaction has tracked for us which signals
+-	 * potentially have a signal handler. */
+-	__get_handler_set(&hset);
+-	for (i=1; i<_NSIG; i++) {
+-		if ((attr->__flags & POSIX_SPAWN_SETSIGDEF)
+-		     && sigismember(&attr->__def, i)) {
+-			sa.sa_handler = SIG_DFL;
+-		} else if (sigismember(&hset, i)) {
+-			if (i-32<3U) {
+-				sa.sa_handler = SIG_IGN;
+-			} else {
+-				__libc_sigaction(i, 0, &sa);
+-				if (sa.sa_handler==SIG_IGN) continue;
+-				sa.sa_handler = SIG_DFL;
+-			}
+-		} else {
+-			continue;
+-		}
+-		__libc_sigaction(i, &sa, 0);
+-	}
+-
+-	if (attr->__flags & POSIX_SPAWN_SETSID)
+-		if ((ret=__syscall(SYS_setsid)) < 0)
+-			goto fail;
+-
+-	if (attr->__flags & POSIX_SPAWN_SETPGROUP)
+-		if ((ret=__syscall(SYS_setpgid, 0, attr->__pgrp)))
+-			goto fail;
+-
+-	/* Use syscalls directly because the library functions attempt
+-	 * to do a multi-threaded synchronized id-change, which would
+-	 * trash the parent's state. */
+-	if (attr->__flags & POSIX_SPAWN_RESETIDS)
+-		if ((ret=__syscall(SYS_setgid, __syscall(SYS_getgid))) ||
+-		    (ret=__syscall(SYS_setuid, __syscall(SYS_getuid))) )
+-			goto fail;
+-
+-	if (fa && fa->__actions) {
+-		struct fdop *op;
+-		int fd;
+-		for (op = fa->__actions; op->next; op = op->next);
+-		for (; op; op = op->prev) {
+-			/* It's possible that a file operation would clobber
+-			 * the pipe fd used for synchronizing with the
+-			 * parent. To avoid that, we dup the pipe onto
+-			 * an unoccupied fd. */
+-			if (op->fd == p) {
+-				ret = __syscall(SYS_dup, p);
+-				if (ret < 0) goto fail;
+-				__syscall(SYS_close, p);
+-				p = ret;
+-			}
+-			switch(op->cmd) {
+-			case FDOP_CLOSE:
+-				__syscall(SYS_close, op->fd);
+-				break;
+-			case FDOP_DUP2:
+-				fd = op->srcfd;
+-				if (fd == p) {
+-					ret = -EBADF;
+-					goto fail;
+-				}
+-				if (fd != op->fd) {
+-					if ((ret=__sys_dup2(fd, op->fd))<0)
+-						goto fail;
+-				} else {
+-					ret = __syscall(SYS_fcntl, fd, F_GETFD);
+-					ret = __syscall(SYS_fcntl, fd, F_SETFD,
+-					                ret & ~FD_CLOEXEC);
+-					if (ret<0)
+-						goto fail;
+-				}
+-				break;
+-			case FDOP_OPEN:
+-				fd = __sys_open(op->path, op->oflag, op->mode);
+-				if ((ret=fd) < 0) goto fail;
+-				if (fd != op->fd) {
+-					if ((ret=__sys_dup2(fd, op->fd))<0)
+-						goto fail;
+-					__syscall(SYS_close, fd);
+-				}
+-				break;
+-			case FDOP_CHDIR:
+-				ret = __syscall(SYS_chdir, op->path);
+-				if (ret<0) goto fail;
+-				break;
+-			case FDOP_FCHDIR:
+-				ret = __syscall(SYS_fchdir, op->fd);
+-				if (ret<0) goto fail;
+-				break;
+-			}
+-		}
+-	}
+-
+-	/* Close-on-exec flag may have been lost if we moved the pipe
+-	 * to a different fd. We don't use F_DUPFD_CLOEXEC above because
+-	 * it would fail on older kernels and atomicity is not needed --
+-	 * in this process there are no threads or signal handlers. */
+-	__syscall(SYS_fcntl, p, F_SETFD, FD_CLOEXEC);
+-
+-	pthread_sigmask(SIG_SETMASK, (attr->__flags & POSIX_SPAWN_SETSIGMASK)
+-		? &attr->__mask : &args->oldmask, 0);
+-
+-	int (*exec)(const char *, char *const *, char *const *) =
+-		attr->__fn ? (int (*)())attr->__fn : execve;
+-
+-	exec(args->path, args->argv, args->envp);
+-	ret = -errno;
+-
+-fail:
+-	/* Since sizeof errno < PIPE_BUF, the write is atomic. */
+-	ret = -ret;
+-	if (ret) {
+-		int r;
+-		do r = __syscall(SYS_write, p, &ret, sizeof ret);
+-		while (r<0 && r!=-EPIPE);
+-	}
+-	_exit(127);
+-}
+-
++/* Veda has no fork: the POSIX layer makes the new process directly. It
++   loads the program, applies the file actions to a copy of the caller's
++   descriptor table and hands the new process the descriptors that are
++   left (and the working directory). Returns 0 or an errno value. */
++hidden int __veda_spawn(pid_t *, const char *, const struct fdop *,
++	const posix_spawnattr_t *, char *const [], char *const []);
+ 
+ int posix_spawn(pid_t *restrict res, const char *restrict path,
+ 	const posix_spawn_file_actions_t *fa,
+ 	const posix_spawnattr_t *restrict attr,
+ 	char *const argv[restrict], char *const envp[restrict])
+ {
+-	pid_t pid;
+-	char stack[1024+PATH_MAX];
+-	int ec=0, cs;
+-	struct args args;
+-
+-	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cs);
+-
+-	args.path = path;
+-	args.fa = fa;
+-	args.attr = attr ? attr : &(const posix_spawnattr_t){0};
+-	args.argv = argv;
+-	args.envp = envp;
+-	pthread_sigmask(SIG_BLOCK, SIGALL_SET, &args.oldmask);
+-
+-	/* The lock guards both against seeing a SIGABRT disposition change
+-	 * by abort and against leaking the pipe fd to fork-without-exec. */
+-	LOCK(__abort_lock);
+-
+-	if (pipe2(args.p, O_CLOEXEC)) {
+-		UNLOCK(__abort_lock);
+-		ec = errno;
+-		goto fail;
+-	}
+-
+-	pid = __clone(child, stack+sizeof stack,
+-		CLONE_VM|CLONE_VFORK|SIGCHLD, &args);
+-	close(args.p[1]);
+-	UNLOCK(__abort_lock);
++	const struct fdop *ops = fa ? fa->__actions : 0;
++	const posix_spawnattr_t *a = attr ? attr : &(const posix_spawnattr_t){0};
+ 
+-	if (pid > 0) {
+-		if (read(args.p[0], &ec, sizeof ec) != sizeof ec) ec = 0;
+-		else waitpid(pid, &(int){0}, 0);
+-	} else {
+-		ec = -pid;
++	/* posix_spawnp marks its calls with __execvpe: search the caller's
++	   PATH as execvp does. */
++	if (a->__fn != (void *)__execvpe || strchr(path, '/'))
++		return __veda_spawn(res, path, ops, a, argv, envp);
++	if (!*path) return ENOENT;
++
++	const char *p, *z, *search = getenv("PATH");
++	if (!search) search = "/system/bin";
++	size_t l = strnlen(path, NAME_MAX+1);
++	if (l > NAME_MAX) return ENAMETOOLONG;
++	size_t k = strnlen(search, PATH_MAX-1) + 1;
++	char b[l+k+1];
++	int seen_eacces = 0, err = ENOENT;
++	for (p=search; ; p=z) {
++		z = __strchrnul(p, ':');
++		if (z-p >= k) {
++			if (!*z++) break;
++			continue;
++		}
++		memcpy(b, p, z-p);
++		b[z-p] = '/';
++		memcpy(b+(z-p)+(z>p), path, l+1);
++		err = __veda_spawn(res, b, ops, a, argv, envp);
++		switch (err) {
++		case EACCES:
++			seen_eacces = 1;
++		case ENOENT:
++		case ENOTDIR:
++			break;
++		default:
++			return err;
++		}
++		if (!*z++) break;
+ 	}
+-
+-	close(args.p[0]);
+-
+-	if (!ec && res) *res = pid;
+-
+-fail:
+-	pthread_sigmask(SIG_SETMASK, &args.oldmask, 0);
+-	pthread_setcancelstate(cs, 0);
+-
+-	return ec;
++	return seen_eacces ? EACCES : err;
+ }
+--- a/src/process/x86_64/vfork.s
++++ /dev/null
+@@ -1,10 +0,0 @@
+-.global vfork
+-.type vfork,@function
+-vfork:
+-	pop %rdx
+-	mov $58,%eax
+-	syscall
+-	push %rdx
+-	mov %rax,%rdi
+-	.hidden __syscall_ret
+-	jmp __syscall_ret
+--- a/src/thread/x86_64/__set_thread_area.s
++++ b/src/thread/x86_64/__set_thread_area.s
+@@ -1,11 +1,7 @@
+-/* Copyright 2011-2012 Nicholas J. Kain, licensed under standard MIT license */
++/* Veda: the POSIX layer sets the thread pointer. */
+ .text
+ .global __set_thread_area
+ .hidden __set_thread_area
+ .type __set_thread_area,@function
+ __set_thread_area:
+-	mov %rdi,%rsi           /* shift for syscall */
+-	movl $0x1002,%edi       /* SET_FS register */
+-	movl $158,%eax          /* set fs segment to */
+-	syscall                 /* arch_prctl(SET_FS, arg)*/
+-	ret
++	jmp __veda_set_thread_area
+--- a/src/thread/x86_64/__unmapself.s
++++ b/src/thread/x86_64/__unmapself.s
+@@ -1,10 +1,7 @@
+-/* Copyright 2011-2012 Nicholas J. Kain, licensed under standard MIT license */
++/* Veda: unmapping the stack the thread runs on and ending the thread
++   cannot touch the stack in between; the POSIX layer does both. */
+ .text
+ .global __unmapself
+ .type   __unmapself,@function
+ __unmapself:
+-	movl $11,%eax   /* SYS_munmap */
+-	syscall         /* munmap(arg2,arg3) */
+-	xor %rdi,%rdi   /* exit() args: always return success */
+-	movl $60,%eax   /* SYS_exit */
+-	syscall         /* exit(0) */
++	jmp __veda_unmapself
+--- a/src/thread/x86_64/clone.s
++++ b/src/thread/x86_64/clone.s
+@@ -1,28 +1,8 @@
++/* Veda: the POSIX layer creates threads; __veda_clone takes the arguments
++   of __clone and behaves like it (there are no new processes this way). */
+ .text
+ .global __clone
+ .hidden __clone
+ .type   __clone,@function
+ __clone:
+-	xor %eax,%eax
+-	mov $56,%al
+-	mov %rdi,%r11
+-	mov %rdx,%rdi
+-	mov %r8,%rdx
+-	mov %r9,%r8
+-	mov 8(%rsp),%r10
+-	mov %r11,%r9
+-	and $-16,%rsi
+-	sub $8,%rsi
+-	mov %rcx,(%rsi)
+-	syscall
+-	test %eax,%eax
+-	jnz 1f
+-	xor %ebp,%ebp
+-	pop %rdi
+-	call *%r9
+-	mov %eax,%edi
+-	xor %eax,%eax
+-	mov $60,%al
+-	syscall
+-	hlt
+-1:	ret
++	jmp __veda_clone
+--- a/src/thread/x86_64/syscall_cp.s
++++ b/src/thread/x86_64/syscall_cp.s
+@@ -1,3 +1,5 @@
++/* Veda: a cancellation point makes its system call through the POSIX
++   layer: __veda_syscall(nr, u, v, w, x, y, z). */
+ .text
+ .global __cp_begin
+ .hidden __cp_begin
+@@ -15,16 +17,15 @@
+ 	mov (%rdi),%eax
+ 	test %eax,%eax
+ 	jnz __cp_cancel
+-	mov %rdi,%r11
+-	mov %rsi,%rax
+-	mov %rdx,%rdi
+-	mov %rcx,%rsi
+-	mov %r8,%rdx
+-	mov %r9,%r10
+-	mov 8(%rsp),%r8
+-	mov 16(%rsp),%r9
+-	mov %r11,8(%rsp)
+-	syscall
++	mov %rsi,%rdi
++	mov %rdx,%rsi
++	mov %rcx,%rdx
++	mov %r8,%rcx
++	mov %r9,%r8
++	mov 8(%rsp),%r9
++	push 16(%rsp)
++	call __veda_syscall
++	add $8,%rsp
+ __cp_end:
+ 	ret
+ __cp_cancel:

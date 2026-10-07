@@ -11,6 +11,7 @@ pub mod interrupt;
 pub mod ioport;
 pub mod process;
 pub mod resource;
+pub mod socket;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -116,6 +117,7 @@ pub enum KObject {
     Process(Arc<process::Process>),
     Thread(Arc<Thread>),
     Channel(Arc<channel::ChannelEnd>),
+    Socket(Arc<socket::SocketEnd>),
     Event(Arc<event::Event>),
     Vmo(Arc<Vmo>),
     Interrupt(Arc<interrupt::Interrupt>),
@@ -129,6 +131,7 @@ impl KObject {
             KObject::Process(_) => ObjectType::Process,
             KObject::Thread(_) => ObjectType::Thread,
             KObject::Channel(_) => ObjectType::Channel,
+            KObject::Socket(_) => ObjectType::Socket,
             KObject::Event(_) => ObjectType::Event,
             KObject::Vmo(_) => ObjectType::Vmo,
             KObject::Interrupt(_) => ObjectType::Interrupt,
@@ -142,6 +145,7 @@ impl KObject {
             KObject::Process(o) => o.koid,
             KObject::Thread(o) => o.koid,
             KObject::Channel(o) => o.koid(),
+            KObject::Socket(o) => o.koid(),
             KObject::Event(o) => o.koid,
             KObject::Vmo(o) => o.koid,
             KObject::Interrupt(o) => o.koid,
@@ -156,6 +160,7 @@ impl KObject {
             KObject::Process(o) => Some(&o.signals),
             KObject::Thread(o) => Some(&o.signals),
             KObject::Channel(o) => Some(o.signals()),
+            KObject::Socket(o) => Some(o.signals()),
             KObject::Event(o) => Some(&o.signals),
             KObject::Interrupt(o) => Some(&o.signals),
             KObject::Vmo(_) | KObject::IoPorts(_) | KObject::Resource(_) => None,

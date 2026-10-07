@@ -1,0 +1,299 @@
+--- a/config.sub
++++ b/config.sub
+@@ -1746,7 +1746,7 @@
+ 	     | scout* | superux* | sysv* | rtmk* | tpf* | windiss* \
+ 	     | powermax* | dnix* | nx6 | nx7 | sei* | dragonfly* \
+ 	     | skyos* | haiku* | rdos* | toppers* | drops* | es* \
+-	     | onefs* | tirtos* | phoenix* | fuchsia* | redox* | bme* \
++	     | onefs* | tirtos* | phoenix* | fuchsia* | veda* | redox* | bme* \
+ 	     | midnightbsd* | amdhsa* | unleashed* | emscripten* | wasi* \
+ 	     | nsk* | powerunix* | genode* | zvmoe* | qnx* | emx* | zephyr* \
+ 	     | fiwix* )
+--- a/fixincludes/mkfixinc.sh
++++ b/fixincludes/mkfixinc.sh
+@@ -19,6 +19,7 @@
+     powerpcle-*-eabisim* | \
+     powerpcle-*-eabi* | \
+     *-*-vxworks7* | \
++    *-*-veda* | \
+     *-musl* )
+ 	#  IF there is no include fixing,
+ 	#  THEN create a no-op fixer and exit
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -932,6 +932,14 @@
+   rust_target_objs="${rust_target_objs} freebsd-rust.o"
+   target_has_targetrustm=yes
+   ;;
++*-*-veda*)
++  gas=yes
++  gnu_ld=yes
++  default_use_cxa_atexit=yes
++  use_gcc_stdint=wrap
++  native_system_header_dir=/system/include
++  extra_options="$extra_options veda.opt"
++  ;;
+ *-*-fuchsia*)
+   native_system_header_dir=/include
+   tmake_file="t-fuchsia"
+@@ -2373,6 +2381,9 @@
+ 			;;
+ 	esac
+ 	;;
++x86_64-*-veda*)
++	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h glibc-stdint.h i386/x86-64.h veda.h i386/veda.h"
++	;;
+ x86_64-*-fuchsia*)
+ 	tmake_file="${tmake_file} i386/t-x86_64-elf"
+ 	tm_file="${tm_file} i386/unix.h i386/att.h elfos.h newlib-stdint.h i386/i386elf.h i386/x86-64.h fuchsia.h"
+--- /dev/null
++++ b/gcc/config/i386/veda.h
+@@ -0,0 +1,53 @@
++/* Definitions for x86-64 Veda.
++   Copyright (C) 2026 Free Software Foundation, Inc.
++
++This file is part of GCC.
++
++GCC is free software; you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation; either version 3, or (at your option)
++any later version.
++
++GCC is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with GCC; see the file COPYING3.  If not see
++<http://www.gnu.org/licenses/>.  */
++
++/* The System V x86-64 ABI, LP64, as on GNU/Linux.  */
++
++#undef  ASM_SPEC
++#define ASM_SPEC "--64 %{msse2avx:%{!mavx:-msse2avx}}"
++
++#undef  CC1_SPEC
++#define CC1_SPEC "%(cc1_cpu)"
++
++/* The thread pointer (%fs) points at the thread control block, which
++   begins with itself.  */
++#undef  TARGET_TLS_DIRECT_SEG_REFS_DEFAULT
++#define TARGET_TLS_DIRECT_SEG_REFS_DEFAULT MASK_TLS_DIRECT_SEG_REFS
++
++#ifdef TARGET_LIBC_PROVIDES_SSP
++/* musl keeps the stack protector's canary where glibc does.  */
++#define TARGET_THREAD_SSP_OFFSET 0x28
++#endif
++
++/* -ffast-math sets the flush-to-zero and denormals-are-zero modes.  */
++#undef  ENDFILE_SPEC
++#define ENDFILE_SPEC \
++  "%{mdaz-ftz:crtfastmath.o%s;Ofast|ffast-math|funsafe-math-optimizations:%{!mno-daz-ftz:crtfastmath.o%s}} \
++   %{mpc32:crtprec32.o%s} %{mpc64:crtprec64.o%s} %{mpc80:crtprec80.o%s} " \
++  VEDA_ENDFILE_SPEC
++
++#define TARGET_ASM_FILE_END file_end_indicate_exec_stack
++
++/* The stack pointer needs to be moved while checking the stack.  */
++#define STACK_CHECK_MOVING_SP 1
++
++/* Static stack checking is supported by means of probes.  */
++#define STACK_CHECK_STATIC_BUILTIN 1
++
++#define MULTILIB_DEFAULTS { "m64" }
+--- /dev/null
++++ b/gcc/config/veda.h
+@@ -0,0 +1,98 @@
++/* Definitions for Veda, a POSIX environment over a capability microkernel.
++   Copyright (C) 2026 Free Software Foundation, Inc.
++
++This file is part of GCC.
++
++GCC is free software; you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation; either version 3, or (at your option)
++any later version.
++
++GCC is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with GCC; see the file COPYING3.  If not see
++<http://www.gnu.org/licenses/>.  */
++
++/* Veda's C library is musl, and every program is linked statically:
++   either at a fixed address (the default) or as a position-independent
++   executable that relocates itself (-static-pie).  The system lives under
++   /system: headers in /system/include, libraries and start files in
++   /system/lib.  */
++
++#undef  TARGET_OS_CPP_BUILTINS
++#define TARGET_OS_CPP_BUILTINS()		\
++  do						\
++    {						\
++      builtin_define ("__veda__");		\
++      builtin_define_std ("unix");		\
++      builtin_assert ("system=veda");		\
++      builtin_assert ("system=unix");		\
++      builtin_assert ("system=posix");		\
++    }						\
++  while (0)
++
++#undef  CPP_SPEC
++#define CPP_SPEC "%{posix:-D_POSIX_SOURCE} %{pthread:-D_REENTRANT}"
++
++/* The libraries and start files are in /system/lib (under the sysroot
++   when cross compiling).  */
++#undef  STANDARD_STARTFILE_PREFIX_1
++#define STANDARD_STARTFILE_PREFIX_1 "/system/lib/"
++#undef  STANDARD_STARTFILE_PREFIX_2
++#define STANDARD_STARTFILE_PREFIX_2 ""
++
++/* The compiler that runs on Veda finds the assembler and the linker with
++   the system's programs (a cross compiler does not look there).  */
++#undef  MD_EXEC_PREFIX
++#define MD_EXEC_PREFIX "/system/bin/"
++
++#define VEDA_PIE_SPEC "static-pie|pie"
++
++#undef  STARTFILE_SPEC
++#define STARTFILE_SPEC \
++  "%{" VEDA_PIE_SPEC ":rcrt1.o%s;:crt1.o%s} crti.o%s \
++   %{" VEDA_PIE_SPEC ":crtbeginS.o%s;:crtbeginT.o%s}"
++
++#define VEDA_ENDFILE_SPEC \
++  "%{" VEDA_PIE_SPEC ":crtendS.o%s;:crtend.o%s} crtn.o%s"
++
++#undef  ENDFILE_SPEC
++#define ENDFILE_SPEC VEDA_ENDFILE_SPEC
++
++/* musl has its threads in libc.  */
++#undef  LIB_SPEC
++#define LIB_SPEC "%{pthread:} -lc"
++
++#undef  LINK_SPEC
++#define LINK_SPEC \
++  "%{shared:%e-shared is not supported (Veda links programs statically)} \
++   %{" VEDA_PIE_SPEC ":-static -pie --no-dynamic-linker -z text;:-static} \
++   %{rdynamic:-export-dynamic} %{s:-s}"
++
++/* -pie means a static position-independent executable.  */
++#undef  LINK_PIE_SPEC
++#define LINK_PIE_SPEC ""
++
++/* The C library and libgcc refer to each other.  */
++#undef  LINK_GCC_C_SEQUENCE_SPEC
++#define LINK_GCC_C_SEQUENCE_SPEC "--start-group %G %{!nolibc:%L} --end-group"
++
++#if defined(HAVE_LD_EH_FRAME_HDR)
++#define LINK_EH_SPEC "%{" VEDA_PIE_SPEC ":--eh-frame-hdr} "
++#endif
++
++#define TARGET_POSIX_IO
++
++/* musl has the C99 functions and sincos.  */
++#undef  TARGET_LIBC_HAS_FUNCTION
++#define TARGET_LIBC_HAS_FUNCTION gnu_libc_has_function
++
++/* The C library is musl.  */
++#undef  OPTION_MUSL
++#define OPTION_MUSL 1
++#undef  OPTION_MUSL_P
++#define OPTION_MUSL_P(opts) 1
+--- /dev/null
++++ b/gcc/config/veda.opt
+@@ -0,0 +1,31 @@
++; Driver options for Veda.
++
++; Copyright (C) 2026 Free Software Foundation, Inc.
++;
++; This file is part of GCC.
++;
++; GCC is free software; you can redistribute it and/or modify it under
++; the terms of the GNU General Public License as published by the Free
++; Software Foundation; either version 3, or (at your option) any later
++; version.
++;
++; GCC is distributed in the hope that it will be useful, but WITHOUT ANY
++; WARRANTY; without even the implied warranty of MERCHANTABILITY or
++; FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++; for more details.
++;
++; You should have received a copy of the GNU General Public License
++; along with GCC; see the file COPYING3.  If not see
++; <http://www.gnu.org/licenses/>.
++
++; See the GCC internals manual (options.texi) for a description of
++; this file's format.
++
++posix
++Driver
++
++pthread
++Driver
++
++rdynamic
++Driver
+--- /dev/null
++++ b/gcc/config/veda.opt.urls
+@@ -0,0 +1,9 @@
++; Autogenerated by regenerate-opt-urls.py from gcc/config/veda.opt and generated HTML
++
++; skipping UrlSuffix for 'pthread' due to multiple URLs:
++;   duplicate: 'gcc/Link-Options.html#index-pthread-1'
++;   duplicate: 'gcc/Preprocessor-Options.html#index-pthread'
++
++rdynamic
++UrlSuffix(gcc/Link-Options.html#index-rdynamic)
++
+--- a/libgcc/config.host
++++ b/libgcc/config.host
+@@ -297,6 +297,11 @@
+   tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip t-slibgcc t-slibgcc-fuchsia"
+   extra_parts="crtbegin.o crtend.o"
+   ;;
++*-*-veda*)
++  # Static linking only: no shared libgcc.
++  tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip"
++  extra_parts="crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o"
++  ;;
+ *-*-linux* | frv-*-*linux* | *-*-kfreebsd*-gnu | *-*-gnu* | *-*-kopensolaris*-gnu | *-*-uclinuxfdpiceabi)
+   tmake_file="$tmake_file t-crtstuff-pic t-libgcc-pic t-eh-dw2-dip t-slibgcc t-slibgcc-gld t-slibgcc-elf-ver t-linux"
+   extra_parts="crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o"
+@@ -757,6 +762,11 @@
+ x86_64-*-fuchsia*)
+ 	tmake_file="$tmake_file t-libgcc-pic"
+ 	;;
++x86_64-*-veda*)
++	extra_parts="$extra_parts crtprec32.o crtprec64.o crtprec80.o crtfastmath.o"
++	tmake_file="${tmake_file} i386/t-crtpc t-crtfm i386/t-crtstuff t-dfprules"
++	tm_file="${tm_file} i386/elf-lib.h"
++	;;
+ i[34567]86-*-dragonfly*)
+ 	tmake_file="${tmake_file} i386/t-dragonfly i386/t-crtstuff"
+ 	md_unwind_header=i386/dragonfly-unwind.h
+--- a/libstdc++-v3/configure
++++ b/libstdc++-v3/configure
+@@ -39204,7 +39204,7 @@
+ 
+   fi
+     ;;
+-  *-linux* | *-uclinux* | *-gnu* | *-kfreebsd*-gnu | *-cygwin* | *-solaris*)
++  *-linux* | *-uclinux* | *-gnu* | *-kfreebsd*-gnu | *-cygwin* | *-solaris* | *-veda*)
+ 
+   # All these tests are for C++; save the language and the compiler flags.
+   # The CXXFLAGS thing is suspicious, but based on similar bits previously
+--- a/libstdc++-v3/crossconfig.m4
++++ b/libstdc++-v3/crossconfig.m4
+@@ -174,7 +174,7 @@
+ 
+     GCC_CHECK_TLS
+     ;;
+-  *-linux* | *-uclinux* | *-gnu* | *-kfreebsd*-gnu | *-cygwin* | *-solaris*)
++  *-linux* | *-uclinux* | *-gnu* | *-kfreebsd*-gnu | *-cygwin* | *-solaris* | *-veda*)
+     GLIBCXX_CHECK_COMPILER_FEATURES
+     GLIBCXX_CHECK_LINKER_FEATURES
+     GLIBCXX_CHECK_MATH_SUPPORT

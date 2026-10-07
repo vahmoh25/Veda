@@ -37,6 +37,8 @@ cargo xtask run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in s
 cargo xtask script tests/ui/prism.vts      # OpenGL ES: Prism renders (on the GPU if QEMU has one)
 VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (Windows; ANGLE)
 VGL_TEST_HOST=desktop VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on its desktop OpenGL
+cargo xtask toolchain          # build the C toolchain from ports/ (GCC, binutils, musl) -> target/toolchain
+cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
 ```
 
 * The serial console (kernel log plus every program's `println!`) is saved
@@ -191,8 +193,12 @@ VGL_TEST_HOST=desktop VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on its de
 | `LICENSE` (the GNU General Public License, version 3) | `/system/LICENSE.txt` |
 | everything under `assets/` | `/system/<same relative path>` |
 | everything under `target/generated/` (build-time generated media) | `/system/<same relative path>` |
+| `tests/c/*.c` and `*.cc`, compiled by the cross toolchain (each also as `<name>-pie`) | `/system/tests/c/<name>` |
+| the native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
 
-Files under `samples/` in the system image are also copied into the user's
+The last two need `cargo xtask toolchain` (see [C on Veda](C.md)); without
+it, the build says so and leaves them out. Files under `samples/` in the
+system image are also copied into the user's
 home directory at boot (`/system/samples/Pictures/x.png` →
 `/home/user/Pictures/x.png`).
 
@@ -277,6 +283,21 @@ Games and other full-screen renderers can use `vui::window::Window`
 directly: `begin_frame()` returns a `Canvas` for the back buffer,
 `present()` shows it, `poll_events()` returns `WindowEvent`s and
 `can_draw()` says when the compositor is ready for the next frame.
+
+### Programs in C
+
+C programs are compiled with GCC, inside Veda or on the development machine
+with the cross compiler, `target/toolchain/cross/bin/x86_64-veda-gcc`:
+
+```text
+target/toolchain/cross/bin/x86_64-veda-gcc -O2 -Wall -o hello hello.c
+```
+
+They are static ELF executables on musl and run from the Terminal like any
+command. [C on Veda](C.md) describes the environment, what is different
+from Linux, and how the toolchain is built and tested. The test programs
+in `tests/c/` are compiled by `cargo xtask build` and installed in
+`/system/tests/c`, for `systest` and the GUI scripts to run.
 
 ## Performance notes
 

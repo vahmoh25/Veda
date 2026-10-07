@@ -1,0 +1,6 @@
+# GNU Binutils: the assembler, the linker and the tools for object files.
+name = "binutils"
+version = "2.47"
+url = "https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz"
+sha256 = "154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff"
+license = "GPL-3.0-or-later"

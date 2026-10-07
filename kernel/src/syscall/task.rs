@@ -1,5 +1,7 @@
 //! Processes and threads.
 
+use core::sync::atomic::Ordering;
+
 use vabi::{Error, ProcessInfo, RawHandle, Rights, resource_kind};
 
 use super::{SysResult, current_process, get_process, get_resource, get_thread, insert, ok, read_str, target_process};
@@ -69,10 +71,22 @@ pub fn process_exit(code: i64) -> SysResult {
     sched::exit_current()
 }
 
-pub fn process_kill(raw: RawHandle) -> SysResult {
+/// Ends the process; with `kill_flags::DESCENDANTS`, the processes it
+/// started (and so on) as well: its handle manages its whole job.
+pub fn process_kill(raw: RawHandle, flags: usize) -> SysResult {
+    if flags & !vabi::kill_flags::DESCENDANTS != 0 {
+        return Err(Error::InvalidArgs);
+    }
     let p = get_process(raw, Rights::MANAGE)?;
-    p.kill(vabi::EXIT_CODE_KILLED);
-    if p.koid == current_process()?.koid {
+    let mut victims = alloc::vec![p.clone()];
+    if flags & vabi::kill_flags::DESCENDANTS != 0 {
+        victims.extend(process::descendants(p.koid));
+    }
+    let me = current_process()?.koid;
+    for v in &victims {
+        v.kill(vabi::EXIT_CODE_KILLED);
+    }
+    if victims.iter().any(|v| v.koid == me) {
         sched::exit_current();
     }
     ok(0)
@@ -96,6 +110,25 @@ pub fn thread_start(raw: RawHandle, entry: usize, stack: usize, arg0: usize, arg
     }
     sched::make_ready(&t);
     ok(0)
+}
+
+pub fn thread_set_exit_futex(addr: usize) -> SysResult {
+    if addr != 0 && (!is_user_address(addr) || !addr.is_multiple_of(4)) {
+        return Err(Error::InvalidArgs);
+    }
+    sched::current().exit_futex.store(addr as u64, Ordering::Relaxed);
+    ok(0)
+}
+
+/// Ends the calling thread. Its exit futex word (if any) is cleared and a
+/// waiter woken now that the thread is off its user stack for good; a bad
+/// address is ignored, as there is no one left to report it to.
+pub fn thread_exit() -> SysResult {
+    let addr = sched::current().exit_futex.swap(0, Ordering::Relaxed);
+    if addr != 0 && user::write(addr, &0u32).is_ok() {
+        let _ = crate::futex::wake(addr, 1);
+    }
+    sched::exit_current()
 }
 
 pub fn thread_set_priority(raw: RawHandle, prio: usize) -> SysResult {

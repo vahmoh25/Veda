@@ -33,3 +33,13 @@ pub const fn page_align_down(x: u64) -> u64 {
 pub const fn page_align_up(x: u64) -> u64 {
     (x + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
 }
+
+/// [`page_align_up`] for sizes that come from user space: `None` where the
+/// rounding would overflow.
+#[inline]
+pub const fn checked_page_align_up(x: u64) -> Option<u64> {
+    match x.checked_add(PAGE_SIZE - 1) {
+        Some(v) => Some(v & !(PAGE_SIZE - 1)),
+        None => None,
+    }
+}

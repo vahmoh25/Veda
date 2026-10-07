@@ -147,6 +147,15 @@ the voice pipeline, consent, memory and how the agent is tested.
   reflective knot, shadow-mapped crystals drawn with instancing, and a
   fountain of sparks simulated with transform feedback, at 55 frames a
   second under QEMU.
+* **C, and GCC inside Veda.** Write a C program in the Terminal or the
+  Text Editor, compile it with GCC 16 and run it, in an emulator or on a
+  PC alike. C programs are static ELF executables on the musl C library,
+  whose system calls go to `vposix`, a POSIX layer written in Rust: files,
+  directories, pipes, a terminal with line editing and `termios`, threads,
+  `mmap`, `posix_spawn`, clocks and signals they raise themselves. The
+  toolchain is built from the upstream releases with small patches
+  (`ports/`), and a cross compiler builds C and C++ programs for Veda on
+  the development machine. See [C on Veda](docs/C.md).
 * **Tooling.** One command builds a bootable disk image and runs it in
   QEMU or VirtualBox; scripted, headless runs drive the GUI and the agent
   and check screenshots and logs.
@@ -181,6 +190,9 @@ Veda also runs in VirtualBox (see below).
   7.1 or newer (no Extension Pack needed).
 * For the agent: a [Deepgram](https://deepgram.com) API key, entered in
   Veda's Settings.
+* For C and GCC in the image (optional): [MSYS2](https://www.msys2.org)
+  with a few packages, to build the toolchain once with
+  `cargo xtask toolchain` (see [C on Veda](docs/C.md#the-toolchain)).
 
 Check the environment:
 
@@ -348,7 +360,7 @@ keyboard, the agent can do too, through the application's own actions.
 | **Photos** | A thumbnail library of `~/Pictures` and a viewer with zoom, pan, rotation, full screen, slideshows, details and "set as wallpaper"; PNG, JPEG (including progressive), BMP and QOI. | Show any picture, zoom, rotate, go full screen, run a slideshow, show details, set a picture as the wallpaper. |
 | **Music** | A library of `~/Music`, now playing with cover art and a live spectrum visualiser, seeking, shuffle and repeat; plays QOA and WAV through the audio service. | Play a song by its name, pause, stop, skip, seek, shuffle, repeat, set the volume. |
 | **Files** | Places sidebar, breadcrumbs, list and icon views with thumbnails, search, copy/cut/paste, rename, delete, new folders and documents, properties, free space. | Open folders and files, search, show properties, make folders; copy, move and rename (with your OK); delete (asked every time). |
-| **Terminal** | A command shell with about fifty built-in commands for files, processes, the network (`wifi`, `ifconfig`, `ping`, `nslookup`, `curl`, ...) and the system, history and tab completion. | Run a command (with your OK), read its output, interrupt it. |
+| **Terminal** | A command shell with about fifty built-in commands for files, processes, the network (`wifi`, `ifconfig`, `ping`, `nslookup`, `curl`, ...) and the system, history and tab completion. Runs programs, C programs and GCC included, as a Unix terminal does: line editing, `termios`, Ctrl+C, pipes and redirections. | Run a command (with your OK), read its output, interrupt it. |
 | **Task Manager** | Processes with CPU and memory use, "end task", and live performance graphs. | List processes, show and read the performance graphs, end a program (asked every time). |
 | **Settings** | Wallpaper gallery, the agent (Deepgram key, name, voice, language and speech models, listening, memory, permissions), network and Wi-Fi (connection, networks in range, saved networks, interfaces, diagnostics), display information and system details. | Open a page, change the agent's voice and speaking rate; rename the agent or change its language model (with your OK). Never the key. |
 | **Velocity** | An arcade 3D racing game against computer opponents on a procedurally generated circuit. | Start, pause, resume or restart a race; change the track, laps or opponents. |
@@ -420,10 +432,11 @@ cargo xtask test
 runs the host unit tests of the libraries (the agent's protocol, tools,
 prompt, memory, wake word and echo gate, the kernel ABI, heap, IPC,
 service protocols, math, rasterizer, fonts, image codecs, 2D graphics,
-text editing, paths and file types, audio, build tool) and then boots Veda
-headless with the `systest` integration tests (IPC, threads, file system,
-launcher, crash reports and recovery of the window system after it is
-killed), failing on any panic.
+text editing, paths and file types, audio, ELF loading, the POSIX layer,
+build tool) and then boots Veda headless with the `systest` integration
+tests (IPC, sockets, memory, threads, file system, launcher, crash reports,
+recovery of the window system after it is killed, and C programs that
+check the C library and the POSIX layer), failing on any panic.
 
 The agent is tested end to end against a stand-in for Deepgram that runs
 on the host (`tests/agent/`): conversations, function calls, interruptions,
@@ -440,7 +453,9 @@ rustls server and real certificate chains), and `nettest` checks DNS,
 TCP, HTTP, HTTPS and ping from inside Veda.
 
 GUI automation scripts in `tests/ui/` click through the desktop and
-applications, check the log and save screenshots. The Wi-Fi scripts join
+applications, check the log and save screenshots; two of them run C
+programs in the Terminal and compile one with GCC inside Veda (they need
+the toolchain, and are skipped without it). The Wi-Fi scripts join
 networks through the desktop and break the simulated network in many ways
 (access point gone, disconnection, outages, the radio or the Wi-Fi service
 vanishing) to check that Veda recovers by itself. Run them all, the
@@ -471,11 +486,12 @@ The serial console (kernel log plus every program's output) is saved to
 | `lib/agent/` | the agent's logic: Deepgram protocol, functions, instructions, wake word, echo gate, memory, configuration |
 | `boot/` | `vboot`, the UEFI bootloader |
 | `kernel/` | `vkernel`, the microkernel |
-| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `hda` (HD Audio codecs and their routes), `text`, `math`, ... |
+| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `posix` (the POSIX layer under the C library), `elf` (ELF executables), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `hda` (HD Audio codecs and their routes), `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi) |
 | `drivers/` | `ps2`, `virtio-input`, `xhci` (USB 3 controllers: hubs, keyboards, mice), `virtio-blk`, `ahci` (SATA), `hda` (Intel HD Audio), `virtio-snd`, `ac97` (AC'97 sound), `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio), `virtio-gpu` (3D on the host's GPU) |
 | `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `racer` (*Velocity*) and `starfall` |
-| `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), GUI automation scripts |
+| `ports/` | the C toolchain built from source: GCC, binutils, GMP, MPFR, MPC and musl, each an upstream release and Veda's patch |
+| `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), C and C++ test programs (`c/`), GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
 | `third_party/` | vendored crates with Veda patches (smoltcp) |
 | `xtask/` | the build system: cross-compilation, disk image, QEMU and VirtualBox, automation, the stand-in for Deepgram |
@@ -489,6 +505,8 @@ The serial console (kernel log plus every program's output) is saved to
 * [Architecture](docs/ARCHITECTURE.md): how the system fits together.
 * [Networking](docs/NETWORKING.md): the network and Wi-Fi services, the
   simulated Wi-Fi environment, security and tests.
+* [C on Veda](docs/C.md): writing, compiling and running C programs, the
+  POSIX layer, and how the toolchain is built.
 * [Developing](docs/DEVELOPING.md): build commands, the system image,
   writing applications, performance notes.
 * [Coding conventions](docs/CODING.md).
@@ -510,4 +528,9 @@ Font License 1.1; see `assets/fonts/`. The firmware in
 collection: it runs on the speaker amplifiers' own DSP, not in Veda, and is
 redistributed unmodified under Cirrus Logic's licence (`LICENSE.cirrus`
 there), for use only with their devices. Vendored third-party code keeps
-its own license; see `third_party/`.
+its own license; see `third_party/`. The C toolchain an image may contain
+keeps its own licences too: GCC and binutils GPL version 3 or later (the
+GCC runtime library with its Runtime Library Exception, so programs GCC
+builds keep their own licences), GMP, MPFR and MPC LGPL version 3 or
+later, musl MIT; their source is the upstream releases `ports/*/port.toml`
+names, with the patches beside them.

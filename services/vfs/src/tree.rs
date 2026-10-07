@@ -54,6 +54,8 @@ pub struct Tree {
     nodes: BTreeMap<NodeId, Node>,
     next: NodeId,
     pub read_only: bool,
+    /// The `Stat::device` of its files.
+    device: u64,
 }
 
 /// Splits a path into normalised components (rejecting `..` escapes).
@@ -73,10 +75,10 @@ pub fn components(path: &str) -> Result<Vec<&str>, FsError> {
 }
 
 impl Tree {
-    pub fn new(read_only: bool) -> Tree {
+    pub fn new(read_only: bool, device: u64) -> Tree {
         let mut nodes = BTreeMap::new();
         nodes.insert(ROOT, Node { parent: ROOT, kind: Kind::Dir(BTreeMap::new()), modified: 0 });
-        Tree { nodes, next: ROOT + 1, read_only }
+        Tree { nodes, next: ROOT + 1, read_only, device }
     }
 
     fn now() -> u64 {
@@ -140,6 +142,11 @@ impl Tree {
     }
 
     pub fn create(&mut self, comps: &[&str], dir: bool) -> Result<NodeId, FsError> {
+        // What is there already is reported as such, even where nothing
+        // can be made (as POSIX file systems do: `mkdir -p` relies on it).
+        if self.lookup(comps).is_ok() {
+            return Err(FsError::Exists);
+        }
         if self.read_only {
             return Err(FsError::ReadOnly);
         }
@@ -149,15 +156,27 @@ impl Tree {
         self.insert(parent, name, kind)
     }
 
+    /// Whether file contents are a program: an ELF or PE executable, or a
+    /// script that names its interpreter.
+    pub fn is_program(bytes: &[u8]) -> bool {
+        bytes.starts_with(b"\x7fELF") || bytes.starts_with(b"MZ") || bytes.starts_with(b"#!")
+    }
+
     pub fn stat(&self, id: NodeId) -> Stat {
         let n = &self.nodes[&id];
-        match &n.kind {
-            Kind::File(d) => {
-                Stat { size: d.bytes().len() as u64, is_dir: false, read_only: self.read_only, modified: n.modified }
-            }
-            Kind::Dir(c) => {
-                Stat { size: c.len() as u64, is_dir: true, read_only: self.read_only, modified: n.modified }
-            }
+        let (size, is_dir, executable) = match &n.kind {
+            Kind::File(d) => (d.bytes().len() as u64, false, Self::is_program(d.bytes())),
+            Kind::Dir(c) => (c.len() as u64, true, false),
+        };
+        Stat {
+            size,
+            is_dir,
+            read_only: self.read_only,
+            modified: n.modified,
+            inode: id,
+            device: self.device,
+            executable,
+            char_device: false,
         }
     }
 
@@ -180,12 +199,16 @@ impl Tree {
             .iter()
             .map(|(name, &child)| {
                 let s = self.stat(child);
-                DirEntry { name: name.clone(), is_dir: s.is_dir, size: s.size, modified: s.modified }
+                DirEntry { name: name.clone(), is_dir: s.is_dir, size: s.size, modified: s.modified, inode: child }
             })
             .collect())
     }
 
-    pub fn remove(&mut self, comps: &[&str]) -> Result<(), FsError> {
+    /// Takes `comps` out of its directory (a directory must be empty) and
+    /// returns its node. The node stays readable until it is
+    /// [forgotten](Self::forget): POSIX keeps an unlinked file alive while
+    /// it is open.
+    pub fn unlink(&mut self, comps: &[&str]) -> Result<NodeId, FsError> {
         if self.read_only {
             return Err(FsError::ReadOnly);
         }
@@ -200,11 +223,22 @@ impl Tree {
         if let Some(Node { kind: Kind::Dir(children), .. }) = self.nodes.get_mut(&parent) {
             children.remove(*name);
         }
-        self.nodes.remove(&id);
-        Ok(())
+        Ok(id)
     }
 
-    pub fn rename(&mut self, from: &[&str], to: &[&str]) -> Result<(), FsError> {
+    /// Deletes a node [unlinked](Self::unlink) before.
+    pub fn forget(&mut self, id: NodeId) {
+        if id != ROOT {
+            self.nodes.remove(&id);
+        }
+    }
+
+    /// Moves `from` to `to`. If `to` exists, the move fails with `Exists`
+    /// unless `replace` is set: then `to` (a file, when `from` is a file; an
+    /// empty directory, when `from` is a directory) is unlinked first and
+    /// returned, to be [forgotten](Self::forget) once no longer open.
+    /// Either everything happens or nothing does.
+    pub fn rename(&mut self, from: &[&str], to: &[&str], replace: bool) -> Result<Option<NodeId>, FsError> {
         if self.read_only {
             return Err(FsError::ReadOnly);
         }
@@ -224,13 +258,22 @@ impl Tree {
             }
             p = self.nodes[&p].parent;
         }
-        if let Some(Node { kind: Kind::Dir(c), .. }) = self.nodes.get(&to_parent) {
-            if c.contains_key(*to_name) {
-                return Err(FsError::Exists);
+        let Some(Node { kind: Kind::Dir(c), .. }) = self.nodes.get(&to_parent) else { return Err(FsError::NotDir) };
+        let replaced = match c.get(*to_name).copied() {
+            None => None,
+            // A name for itself: nothing to do.
+            Some(old) if old == id => return Ok(None),
+            Some(_) if !replace => return Err(FsError::Exists),
+            Some(old) => {
+                match (&self.nodes[&id].kind, &self.nodes[&old].kind) {
+                    (Kind::File(_), Kind::Dir(_)) => return Err(FsError::IsDir),
+                    (Kind::Dir(_), Kind::File(_)) => return Err(FsError::NotDir),
+                    (Kind::Dir(_), Kind::Dir(c)) if !c.is_empty() => return Err(FsError::NotEmpty),
+                    _ => {}
+                }
+                Some(old)
             }
-        } else {
-            return Err(FsError::NotDir);
-        }
+        };
         if let Some(Node { kind: Kind::Dir(c), .. }) = self.nodes.get_mut(&from_parent) {
             c.remove(*from_name);
         }
@@ -240,12 +283,19 @@ impl Tree {
         if let Some(n) = self.nodes.get_mut(&id) {
             n.parent = to_parent;
         }
-        Ok(())
+        Ok(replaced)
     }
 
     pub fn touch(&mut self, id: NodeId) {
         if let Some(n) = self.nodes.get_mut(&id) {
             n.modified = Self::now();
+        }
+    }
+
+    /// Sets a node's modification time (nanoseconds since the Unix epoch).
+    pub fn set_modified(&mut self, id: NodeId, modified: u64) {
+        if let Some(n) = self.nodes.get_mut(&id) {
+            n.modified = modified;
         }
     }
 }

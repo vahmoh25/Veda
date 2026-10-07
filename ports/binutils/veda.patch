@@ -1,0 +1,57 @@
+--- a/bfd/config.bfd
++++ b/bfd/config.bfd
+@@ -1386,6 +1386,11 @@
+     targ_selvecs="i386_elf32_vec x86_64_elf32_vec"
+     want64=true
+     ;;
++  x86_64-*-veda*)
++    targ_defvec=x86_64_elf64_vec
++    targ_selvecs="i386_elf32_vec"
++    want64=true
++    ;;
+ #endif
+ 
+   xgate-*-*)
+--- a/config.sub
++++ b/config.sub
+@@ -2141,6 +2141,7 @@
+ 	| uwin* \
+ 	| uxpv* \
+ 	| v88r* \
++	| veda* \
+ 	|*vms* \
+ 	| vos* \
+ 	| vsta* \
+--- a/gas/configure.tgt
++++ b/gas/configure.tgt
+@@ -232,6 +232,7 @@
+   i386-*-fuchsia*)			fmt=elf ;;
+   i386-*-haiku*)			fmt=elf em=haiku ;;
+   i386-*-genode*)			fmt=elf ;;
++  i386-*-veda*)				fmt=elf ;;
+   i386-*-bsd*)				fmt=aout em=386bsd ;;
+   i386-*-netbsd*-gnu* | \
+   i386-*-knetbsd*-gnu | \
+--- a/ld/configure.tgt
++++ b/ld/configure.tgt
+@@ -969,6 +969,8 @@
+ 			targ_extra_libpath="elf_i386 elf32_x86_64"
+ 			tdir_elf_i386=`echo ${targ_alias} | sed -e 's/x86_64/i386/'`
+ 			;;
++x86_64-*-veda*)		targ_emul=elf_x86_64
++			;;
+ x86_64-*-dragonfly*)	targ_emul=elf_x86_64
+ 			targ_extra_emuls="elf_i386"
+ 			;;
+@@ -1104,9 +1106,9 @@
+   ;;
+ esac
+ 
+-# Enable -z separate-code and --warn-textrel by default for Linux/x86.
++# Enable -z separate-code and --warn-textrel by default for Linux/x86 and Veda.
+ case "${target}" in
+-i[3-7]86-*-linux-* | x86_64-*-linux-*)
++i[3-7]86-*-linux-* | x86_64-*-linux-* | x86_64-*-veda*)
+   if test ${ac_default_ld_z_separate_code} = unset; then
+     ac_default_ld_z_separate_code=1
+   fi

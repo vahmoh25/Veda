@@ -1,0 +1,64 @@
+# C programs in the Terminal (1280x800 with the taskbar): a program found by
+# its path runs as a child of the shell with the terminal as its standard
+# streams, and $? is its exit status; an interactive program shows its
+# prompt and reads the line typed for it, leaving lines typed ahead to the
+# shell; Ctrl+C ends a program; a program's output goes through a pipe and
+# into a file. The programs are the C tests the cross toolchain built
+# (tests/c). Results are checked with the shell's `logger` command, which
+# writes to the serial log.
+requires c-toolchain
+boot-cmdline "run=terminal"
+wait-serial "desktop ready" 90
+wait-serial "started terminal" 60
+wait 3
+key meta_l-up
+wait 2
+type "/system/tests/c/hello one two; logger hello-status-$?"
+key ret
+wait-serial "terminal: hello-status-42" 60
+# The prompt stays on the line the answer is typed on; the program sees
+# the terminal (isatty, its size, canonical mode with echo).
+type "/system/tests/c/greet && logger greet-ok"
+key ret
+wait 4
+shot target/veda/c-programs-1-prompt.png
+type "Veda"
+key ret
+wait-serial "terminal: greet-ok" 60
+shot target/veda/c-programs-2-greeted.png
+# Lines typed ahead: the program reads its own line, and the next one is
+# left for the shell, which runs it once the program has ended.
+type "/system/tests/c/greet; logger greet-quick"
+key ret
+type "Ada"
+key ret
+type "logger typed-ahead"
+key ret
+wait-serial "terminal: greet-quick" 60
+wait-serial "terminal: typed-ahead" 30
+# Ctrl+C ends a program waiting for input (status 130) and, as in other
+# shells, the rest of its command line.
+type "/system/tests/c/greet; logger not-skipped"
+key ret
+wait 4
+key ctrl-c
+wait 2
+type "logger interrupted-$?"
+key ret
+wait-serial "terminal: interrupted-130" 30
+reject-serial "terminal: not-skipped"
+# Ctrl+D ends its input instead: it reads the end of the file.
+type "/system/tests/c/greet; logger eof-$?"
+key ret
+wait 4
+key ctrl-d
+wait-serial "terminal: eof-1" 30
+# Output through a pipe into a built-in command, then into a file.
+type "cd /tmp && /system/tests/c/hello | grep Hello > out.txt; cat out.txt | grep 'argc=1' && logger pipe-ok"
+key ret
+wait-serial "terminal: pipe-ok" 60
+# Not a program: refused with a message, status 126.
+type "echo text > notprog && ./notprog; logger notprog-$?"
+key ret
+wait-serial "terminal: notprog-126" 30
+shot target/veda/c-programs-3-done.png

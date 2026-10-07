@@ -198,6 +198,22 @@ pub fn all() -> Vec<Arc<Process>> {
     PROCESSES.lock().iter().filter_map(|w| w.upgrade()).collect()
 }
 
+/// The live processes `koid` started, those they started, and so on.
+pub fn descendants(koid: u64) -> Vec<Arc<Process>> {
+    let all = all();
+    let mut found: Vec<Arc<Process>> = Vec::new();
+    let mut parents = alloc::vec![koid];
+    while let Some(parent) = parents.pop() {
+        for p in all.iter().filter(|p| p.parent_koid == parent) {
+            if !found.iter().any(|f| f.koid == p.koid) {
+                parents.push(p.koid);
+                found.push(p.clone());
+            }
+        }
+    }
+    found
+}
+
 pub fn find(koid: u64) -> Option<Arc<Process>> {
     PROCESSES.lock().iter().filter_map(|w| w.upgrade()).find(|p| p.koid == koid)
 }

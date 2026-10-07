@@ -4,8 +4,11 @@
 //! soft-wrapped into visual rows when drawn, so resizing the window re-flows
 //! the text. [`Screen::write`] understands newlines, tabs and the ANSI
 //! "select graphic rendition" escape sequences (`ESC [ ... m`) that set
-//! colours and attributes; [`Screen::write_styled`] writes plain text in a
-//! given style.
+//! colours and attributes, and the carriage return, backspace and "erase in
+//! line" (`ESC [ K`) with which programs redraw the line they are on
+//! (progress bars); other escape sequences (window titles, hyperlinks,
+//! cursor movement, ...) are recognised and left out, so that none of their
+//! bytes show. [`Screen::write_styled`] writes plain text in a given style.
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
@@ -88,13 +91,39 @@ pub struct Pos {
     pub col: usize,
 }
 
-/// State of the escape-sequence parser.
+/// State of the escape-sequence parser (sequences as ECMA-48 forms them).
 enum Esc {
     None,
     /// Saw ESC.
     Escape,
     /// Inside `ESC [`; collected parameter bytes.
     Csi(String),
+    /// After ESC and an intermediate byte (`ESC ( B` chooses a character
+    /// set): ignored up to the final byte.
+    Intermediate,
+    /// Inside a control string, ignored up to its end (`ESC \`, or BEL as
+    /// xterm allows): `ESC ]` (an operating system command, such as a
+    /// window title or the hyperlinks GCC puts in its messages), `ESC P`,
+    /// `ESC _`, `ESC ^` or `ESC X`.
+    Control {
+        /// The last character was ESC.
+        escape: bool,
+    },
+}
+
+impl Esc {
+    /// The state after ESC and `c`.
+    fn after_escape(c: char) -> Esc {
+        match c {
+            '[' => Esc::Csi(String::new()),
+            ']' | 'P' | '_' | '^' | 'X' => Esc::Control { escape: false },
+            '\x20'..='\x2f' => Esc::Intermediate,
+            '\x1b' => Esc::Escape,
+            // Anything else completes a sequence of its own (`ESC 7`,
+            // `ESC c`, ...), none of which this terminal acts on.
+            _ => Esc::None,
+        }
+    }
 }
 
 /// The scrollback buffer.
@@ -105,6 +134,8 @@ pub struct Screen {
     base: u64,
     /// The line currently being written (not yet terminated).
     partial: Vec<Cell>,
+    /// Where the next character goes in `partial`.
+    col: usize,
     /// Current style of [`Screen::write`].
     style: Style,
     esc: Esc,
@@ -124,6 +155,7 @@ impl Screen {
             lines: VecDeque::new(),
             base: 0,
             partial: Vec::new(),
+            col: 0,
             style: Style::PLAIN,
             esc: Esc::None,
             generation: 0,
@@ -152,6 +184,7 @@ impl Screen {
         self.base += self.lines.len() as u64;
         self.lines.clear();
         self.partial.clear();
+        self.col = 0;
         self.style = Style::PLAIN;
         self.esc = Esc::None;
         self.generation += 1;
@@ -167,6 +200,7 @@ impl Screen {
 
     /// Ends the current line.
     pub fn newline(&mut self) {
+        self.col = 0;
         let line = core::mem::take(&mut self.partial);
         self.push_line(line);
         self.generation += 1;
@@ -188,17 +222,51 @@ impl Screen {
         self.generation += 1;
     }
 
+    /// The line being written, not yet ended (a prompt waiting for input).
+    pub fn partial(&self) -> &[Cell] {
+        &self.partial
+    }
+
+    /// Writes `c` at the cursor, over what is there.
+    fn place(&mut self, c: Cell) {
+        if self.col < self.partial.len() {
+            self.partial[self.col] = c;
+        } else {
+            self.partial.resize(self.col, Cell { ch: ' ', style: Style::PLAIN });
+            self.partial.push(c);
+        }
+        self.col += 1;
+    }
+
     fn put(&mut self, c: char, style: Style) {
         match c {
             '\n' => self.newline(),
+            '\r' => self.col = 0,
+            '\x08' => self.col = self.col.saturating_sub(1),
             '\t' => {
-                let n = TAB_WIDTH - self.partial.len() % TAB_WIDTH;
+                let n = TAB_WIDTH - self.col % TAB_WIDTH;
                 for _ in 0..n {
-                    self.partial.push(Cell { ch: ' ', style });
+                    self.place(Cell { ch: ' ', style });
                 }
             }
             c if c.is_control() => {}
-            c => self.partial.push(Cell { ch: c, style }),
+            c => self.place(Cell { ch: c, style }),
+        }
+    }
+
+    /// `ESC [ n K`: erases the line after the cursor (0), before it (1) or
+    /// all of it (2).
+    fn erase_in_line(&mut self, params: &str) {
+        match params {
+            "" | "0" => self.partial.truncate(self.col),
+            "1" => {
+                let end = (self.col + 1).min(self.partial.len());
+                for c in &mut self.partial[..end] {
+                    *c = Cell { ch: ' ', style: Style::PLAIN };
+                }
+            }
+            "2" => self.partial.clear(),
+            _ => {}
         }
     }
 
@@ -212,7 +280,8 @@ impl Screen {
         self.generation += 1;
     }
 
-    /// Writes text, interpreting `ESC [ ... m` colour sequences.
+    /// Writes text, interpreting `ESC [ ... m` colour sequences and
+    /// `ESC [ K`; other escape sequences are recognised and left out.
     pub fn write(&mut self, s: &str) {
         for c in s.chars() {
             match &mut self.esc {
@@ -224,15 +293,34 @@ impl Screen {
                         self.put(c, style);
                     }
                 }
-                Esc::Escape => {
-                    self.esc = if c == '[' { Esc::Csi(String::new()) } else { Esc::None };
+                Esc::Escape => self.esc = Esc::after_escape(c),
+                Esc::Intermediate => {
+                    if !('\x20'..='\x2f').contains(&c) {
+                        self.esc = Esc::None;
+                    }
                 }
+                Esc::Control { escape } => {
+                    if *escape {
+                        // ESC \ ends the string; any other ESC starts a new
+                        // sequence.
+                        self.esc = if c == '\\' { Esc::None } else { Esc::after_escape(c) };
+                    } else if c == '\x07' {
+                        self.esc = Esc::None;
+                    } else if c == '\x1b' {
+                        *escape = true;
+                    }
+                }
+                // ESC starts a new sequence; CAN and SUB cancel this one.
+                Esc::Csi(_) if c == '\x1b' => self.esc = Esc::Escape,
+                Esc::Csi(_) if c == '\x18' || c == '\x1a' => self.esc = Esc::None,
                 Esc::Csi(params) => {
                     if ('\x40'..='\x7e').contains(&c) {
                         let params = core::mem::take(params);
                         self.esc = Esc::None;
-                        if c == 'm' {
-                            self.style = apply_sgr(self.style, &params);
+                        match c {
+                            'm' => self.style = apply_sgr(self.style, &params),
+                            'K' => self.erase_in_line(&params),
+                            _ => {}
                         }
                     } else if params.len() < 64 {
                         params.push(c);

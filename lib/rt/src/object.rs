@@ -123,6 +123,10 @@ wrapper!(
     Channel
 );
 wrapper!(
+    /// A socket endpoint: one end of a byte stream (see `vabi::nr::SOCKET_CREATE`).
+    Socket
+);
+wrapper!(
     /// A memory object.
     Vmo
 );
@@ -239,6 +243,80 @@ impl Channel {
     }
 }
 
+impl Socket {
+    /// A connected pair of endpoints.
+    pub fn create() -> Result<(Socket, Socket), Error> {
+        let mut out = [0u32; 2];
+        call(nr::SOCKET_CREATE, [out.as_mut_ptr() as usize, 0, 0, 0, 0, 0])?;
+        // SAFETY: the kernel just gave us both handles.
+        Ok(unsafe { (Socket(Handle::from_raw(out[0])), Socket(Handle::from_raw(out[1]))) })
+    }
+
+    /// Writes as much of `data` as fits without blocking and returns how
+    /// much that was (`ShouldWait` if nothing fits; writes of at most
+    /// `vabi::SOCKET_ATOMIC_WRITE` bytes go in whole or not at all).
+    pub fn write(&self, data: &[u8]) -> Result<usize, Error> {
+        call(nr::SOCKET_WRITE, [self.raw() as usize, data.as_ptr() as usize, data.len(), 0, 0, 0])
+    }
+
+    /// Reads what is buffered, up to `buf.len()` bytes, without blocking.
+    /// `PeerClosed` marks the end of the stream.
+    pub fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        call(nr::SOCKET_READ, [self.raw() as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0])
+    }
+
+    /// Writes all of `data`, waiting for room as needed.
+    pub fn write_all(&self, mut data: &[u8]) -> Result<(), Error> {
+        use vabi::signals::{PEER_CLOSED, WRITABLE};
+        while !data.is_empty() {
+            match self.write(data) {
+                Ok(n) => data = &data[n..],
+                Err(Error::ShouldWait) => {
+                    self.wait(WRITABLE | PEER_CLOSED, vabi::DEADLINE_INFINITE)?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads at least one byte, waiting until there is one; `Ok(0)` at the
+    /// end of the stream.
+    pub fn read_blocking(&self, buf: &mut [u8]) -> Result<usize, Error> {
+        use vabi::signals::{PEER_CLOSED, PEER_WRITE_DISABLED, READABLE};
+        loop {
+            match self.read(buf) {
+                Err(Error::ShouldWait) => {
+                    self.wait(READABLE | PEER_CLOSED | PEER_WRITE_DISABLED, vabi::DEADLINE_INFINITE)?;
+                }
+                Err(Error::PeerClosed) => return Ok(0),
+                other => return other,
+            }
+        }
+    }
+
+    /// Stops writing from this endpoint (the peer reads the end of the
+    /// stream once it has read what is buffered).
+    pub fn shutdown(&self) -> Result<(), Error> {
+        call(nr::SOCKET_SHUTDOWN, [self.raw() as usize, 0, 0, 0, 0, 0]).map(|_| ())
+    }
+
+    /// Bytes buffered for reading here, and bytes a write would accept now.
+    pub fn info(&self) -> Result<vabi::SocketInfo, Error> {
+        let mut info = vabi::SocketInfo::default();
+        call(
+            nr::OBJECT_INFO,
+            [self.raw() as usize, info_topic::SOCKET, &mut info as *mut _ as usize, size_of_val(&info), 0, 0],
+        )?;
+        Ok(info)
+    }
+
+    /// Another handle to the same endpoint, with all rights or `rights`.
+    pub fn duplicate(&self, rights: Option<Rights>) -> Result<Socket, Error> {
+        self.0.duplicate(rights).map(Socket)
+    }
+}
+
 impl Vmo {
     pub fn create(size: usize) -> Result<Vmo, Error> {
         call(nr::VMO_CREATE, [size, 0, 0, 0, 0, 0]).map(|h| Vmo(Handle(h as RawHandle)))
@@ -319,6 +397,12 @@ impl Process {
 
     pub fn kill(&self) -> Result<(), Error> {
         call(nr::PROCESS_KILL, [self.raw() as usize, 0, 0, 0, 0, 0]).map(|_| ())
+    }
+
+    /// Kills the process and every process it started that still runs
+    /// (and those they started): its job, as a terminal's Ctrl+C ends it.
+    pub fn kill_tree(&self) -> Result<(), Error> {
+        call(nr::PROCESS_KILL, [self.raw() as usize, vabi::kill_flags::DESCENDANTS, 0, 0, 0, 0]).map(|_| ())
     }
 
     /// Waits for the process to terminate and returns its exit code.
@@ -406,6 +490,17 @@ pub fn wait_many(items: &mut [WaitItem], deadline: u64) -> Result<usize, Error> 
 pub fn log_read(offset: u64, buf: &mut [u8]) -> Result<(usize, u64), Error> {
     call2(nr::LOG_READ, [offset as usize, buf.as_mut_ptr() as usize, buf.len(), 0, 0, 0])
         .map(|(n, next)| (n, next as u64))
+}
+
+/// Information about the calling process.
+pub fn process_self_info() -> Result<ProcessInfo, Error> {
+    let mut info = ProcessInfo::default();
+    let len = core::mem::size_of_val(&info);
+    call(
+        nr::OBJECT_INFO,
+        [vabi::INVALID_HANDLE as usize, info_topic::PROCESS, &mut info as *mut _ as usize, len, 0, 0],
+    )?;
+    Ok(info)
 }
 
 /// Lists processes (up to `out.len()`); returns the total number.

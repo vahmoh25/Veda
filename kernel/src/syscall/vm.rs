@@ -1,10 +1,8 @@
 //! Memory objects and address-space management.
 
-use alloc::vec;
-
 use vabi::{Error, RawHandle, Rights, cache_policy, dma_flags, map_flags, resource_kind, vmo_flags};
 
-use super::{SysResult, get_resource, get_vmo, insert, ok, target_process};
+use super::{SysResult, get_resource, get_vmo, handle, insert, ok, target_process};
 use crate::mm::aspace::Perms;
 use crate::mm::paging::Cache;
 use crate::mm::user;
@@ -26,7 +24,7 @@ pub fn vmo_create(size: usize, flags: usize) -> SysResult {
 
 pub fn vmo_read(raw: RawHandle, offset: usize, buf: usize, len: usize) -> SysResult {
     let vmo = get_vmo(raw, Rights::READ)?;
-    let mut tmp = vec![0u8; len.min(256 * 1024)];
+    let mut tmp = user::buffer(len.min(256 * 1024))?;
     let mut done = 0;
     while done < len {
         let n = (len - done).min(tmp.len());
@@ -41,7 +39,7 @@ pub fn vmo_read(raw: RawHandle, offset: usize, buf: usize, len: usize) -> SysRes
 
 pub fn vmo_write(raw: RawHandle, offset: usize, buf: usize, len: usize) -> SysResult {
     let vmo = get_vmo(raw, Rights::WRITE)?;
-    let mut tmp = vec![0u8; len.min(256 * 1024)];
+    let mut tmp = user::buffer(len.min(256 * 1024))?;
     let mut done = 0;
     while done < len {
         let n = (len - done).min(tmp.len());
@@ -69,7 +67,13 @@ pub fn vmo_create_physical(res: RawHandle, paddr: usize, size: usize, cache: usi
         cache_policy::UNCACHED => Cache::Uncached,
         _ => return Err(Error::InvalidArgs),
     };
-    let vmo = Vmo::new_physical(paddr as u64, size as u64 + (paddr as u64 & 0xFFF), cache);
+    // The pages the range touches (the root resource permits any range).
+    let span = (size as u64)
+        .checked_add(paddr as u64 & 0xFFF)
+        .and_then(crate::mm::checked_page_align_up)
+        .filter(|&span| span <= crate::mm::vmo::MAX_VMO_SIZE)
+        .ok_or(Error::InvalidArgs)?;
+    let vmo = Vmo::new_physical(paddr as u64, span, cache);
     let rights = Rights(Rights::BASIC.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::GET_INFO.0);
     ok(insert(KObject::Vmo(vmo), rights)? as usize)
 }
@@ -95,8 +99,10 @@ pub fn vmo_phys_addr(raw: RawHandle, offset: usize) -> SysResult {
 pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: usize, flags: usize) -> SysResult {
     let p = target_process(proc)?;
     let perms = Perms::from_map_flags(flags);
+    // x86 has no write-only or execute-only pages: a page that can be
+    // accessed at all can be read, so any access takes the READ right.
     let mut needed = Rights::MAP;
-    if perms.read {
+    if !perms.none() {
         needed = needed | Rights::READ;
     }
     if perms.write {
@@ -105,7 +111,15 @@ pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: 
     if perms.exec {
         needed = needed | Rights::EXECUTE;
     }
-    let vmo = get_vmo(vmo, needed)?;
+    let h = handle(vmo, needed)?;
+    let KObject::Vmo(vmo) = h.object else { return Err(Error::WrongType) };
+    // What vm_protect may later grant: no more than the handle allows.
+    let readable = h.rights.contains(Rights::READ);
+    let max = Perms {
+        read: readable,
+        write: readable && h.rights.contains(Rights::WRITE),
+        exec: readable && h.rights.contains(Rights::EXECUTE),
+    };
     let aspace = p.aspace().ok_or(Error::BadState)?;
     let at = aspace.map(
         vmo,
@@ -114,9 +128,29 @@ pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: 
         addr as u64,
         flags & map_flags::FIXED != 0,
         perms,
+        max,
         flags & map_flags::COMMIT != 0,
     )?;
     ok(at as usize)
+}
+
+pub fn vm_allocate(proc: RawHandle, len: usize, addr: usize, flags: usize) -> SysResult {
+    let p = target_process(proc)?;
+    let aspace = p.aspace().ok_or(Error::BadState)?;
+    let at = aspace.allocate(
+        len as u64,
+        addr as u64,
+        flags & map_flags::FIXED != 0,
+        Perms::from_map_flags(flags),
+        flags & map_flags::COMMIT != 0,
+    )?;
+    ok(at as usize)
+}
+
+pub fn vm_decommit(proc: RawHandle, addr: usize, len: usize) -> SysResult {
+    let p = target_process(proc)?;
+    p.aspace().ok_or(Error::BadState)?.decommit(addr as u64, len as u64)?;
+    ok(0)
 }
 
 pub fn vm_unmap(proc: RawHandle, addr: usize, len: usize) -> SysResult {

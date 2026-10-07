@@ -8,6 +8,8 @@ members = [
     "lib/bootinfo",
     "lib/initrd",
     "lib/pe",
+    "lib/elf",
+    "lib/posix",
     "lib/math",
     "lib/raster",
     "lib/font",
@@ -106,6 +108,8 @@ vabi = { path = "lib/abi" }
 bootinfo = { path = "lib/bootinfo" }
 initrd = { path = "lib/initrd" }
 vpe = { path = "lib/pe" }
+velf = { path = "lib/elf" }
+vposix = { path = "lib/posix" }
 vmath = { path = "lib/math" }
 vraster = { path = "lib/raster" }
 vfont = { path = "lib/font" }

@@ -23,6 +23,8 @@ use vrt::object::{Channel, Event, Vmo};
 use vrt::println;
 use vrt::sync::{Condvar, Mutex};
 
+mod posix;
+
 vrt::entry!(main);
 
 type TestResult = Result<(), String>;
@@ -234,16 +236,29 @@ fn test_ipc_primitives() -> TestResult {
 type Test = (&'static str, fn() -> TestResult);
 
 fn main() -> i32 {
-    if vrt::env::args().get(1).is_some_and(|a| a == "crash") {
-        crash();
+    match vrt::env::args().get(1).map(|a| a.as_str()) {
+        Some("crash") => crash(),
+        Some("job") => return posix::job(),
+        Some("wait") => {
+            posix::wait();
+            return 0;
+        }
+        _ => {}
     }
     println!("starting");
-    let tests: [Test; 8] = [
+    let tests: [Test; 15] = [
         ("ipc primitives", test_ipc_primitives),
+        ("sockets", posix::test_sockets),
+        ("memory protection", posix::test_memory_protection),
+        ("private memory", posix::test_private_memory),
+        ("thread exit futex", posix::test_exit_futex),
         ("threads and locks", test_threads_and_locks),
         ("vfs system image", test_vfs_system_image),
         ("vfs read/write", test_vfs_read_write),
         ("vfs space", test_vfs_space),
+        ("vfs open files", posix::test_vfs_open_files),
+        ("c programs", posix::test_c_programs),
+        ("killing a job", posix::test_kill_job),
         ("launcher", test_launcher),
         ("crash report", test_crash_report),
         ("service restart", test_service_restart),

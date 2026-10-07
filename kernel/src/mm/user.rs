@@ -60,14 +60,21 @@ pub fn write<T: Copy>(dst: u64, value: &T) -> Result<(), Error> {
     copy_to_user(dst, bytes)
 }
 
+/// A zeroed kernel buffer for data on its way to or from user memory:
+/// `NoMemory`, not a panic, when the kernel heap cannot provide it.
+pub fn buffer(len: usize) -> Result<Vec<u8>, Error> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(len).map_err(|_| Error::NoMemory)?;
+    v.resize(len, 0);
+    Ok(v)
+}
+
 /// Copies a user buffer into a new kernel vector (bounded by `max`).
 pub fn read_vec(src: u64, len: usize, max: usize) -> Result<Vec<u8>, Error> {
     if len > max {
         return Err(Error::InvalidArgs);
     }
-    let mut v = Vec::new();
-    v.try_reserve_exact(len).map_err(|_| Error::NoMemory)?;
-    v.resize(len, 0);
+    let mut v = buffer(len)?;
     copy_from_user(&mut v, src)?;
     Ok(v)
 }

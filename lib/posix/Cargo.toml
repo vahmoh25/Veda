@@ -1,0 +1,15 @@
+[package]
+name = "vposix"
+description = "Veda's POSIX layer: the Linux system call interface of C programs (musl), over Veda's kernel objects and services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vabi = { workspace = true }
+vrt = { workspace = true, default-features = false }
+vipc = { workspace = true }
+vproto = { workspace = true }
+
+[lints]
+workspace = true

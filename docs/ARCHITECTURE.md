@@ -9,6 +9,7 @@ that communicate over kernel channels.
 ```
  ┌──────────────────────────────────────────────────────────────────────────┐
  │ Applications   shell · editor · photos · music · terminal · games …      │
+ │                C programs: gcc · as · ld … (musl, vposix)                │
  ├──────────────────────────────────────────────────────────────────────────┤
  │ Libraries      vui (widgets) · vgfx (2D) · vgl (OpenGL ES) · v3d …       │
  ├──────────────────────────────────────────────────────────────────────────┤
@@ -74,7 +75,7 @@ are never read or written.
 | `arch` | GDT/TSS, IDT and entry paths, x2APIC/xAPIC and I/O APIC, SMP bring-up, TLB shootdowns |
 | `mm` | frame allocator, page tables, kernel heap, kernel stacks/MMIO windows, VMOs, address spaces, user copies |
 | `sched` | threads, priority round-robin scheduling, blocking with timeouts, idle loop |
-| `object` | handles, signals, processes, channels, events, interrupts, I/O ports, resources |
+| `object` | handles, signals, processes, channels, sockets, events, interrupts, I/O ports, resources |
 | `syscall` | the system call layer (see `lib/abi`) |
 | `acpi`, `time`, `futex`, `loader`, `log`, `panic` | supporting subsystems |
 
@@ -90,16 +91,28 @@ object reached through a per-process handle with rights (`vabi::Rights`).
 There is no ambient authority: a process can only use the objects it was
 given. Hardware access requires *resource* handles: `init` receives the root
 resource and derives narrow ones (an I/O port range, one IRQ, one MMIO range)
-for each driver.
+for each driver. A process's handle (with `MANAGE`) can end the process
+alone or with every process it started, and those they started: its job,
+as the Terminal's Ctrl+C ends a program.
 
 **Memory.** VMOs are the unit of memory. Anonymous VMOs are committed lazily
-on page faults. Address spaces map VMOs with per-mapping permissions; the
-kernel half of every address space is shared.
+on page faults. Address spaces map VMOs with per-mapping permissions, which
+`vm_protect` can change for any part of a mapping but never beyond what the
+handle the VMO was mapped with allows; parts of mappings can be unmapped.
+*Private memory* (`vm_allocate`) is a VMO that no handle reaches, made for
+one mapping: its pages are freed as soon as they are unmapped, and
+`vm_decommit` frees them while the mapping stays (they read as zeros
+afterwards), which is what C's `munmap` and `madvise` need. Frames are freed
+only after the TLB shootdown that makes them unreachable. The kernel half
+of every address space is shared.
 
 **IPC.** Channels carry messages of up to 64 KiB plus up to 64 handles.
 Bulk data (window buffers, audio rings, file contents) travels in shared
-VMOs. Threads wait on signals of several objects at once
-(`object_wait_many`).
+VMOs. *Sockets* are byte streams for pipes and terminals: a 256 KiB buffer
+each way, writes of up to 4096 bytes that are all-or-nothing (as POSIX
+promises for pipes), half-closing to end a stream, and endpoints that can
+be duplicated, so several processes can share one. Threads wait on signals
+of several objects at once (`object_wait_many`).
 
 **Time.** The monotonic clock comes from the TSC, calibrated against the
 HPET (or the PIT without one). On an Intel processor not under a
@@ -112,19 +125,33 @@ people see, while protocols and certificates use the UTC clock.
 
 **Scheduling.** 32 priorities, round-robin within a priority, 10 ms slices,
 preemption on wake-up of a higher-priority thread, tickless one-shot timers,
-eager FPU/SSE/AVX state switching with XSAVE.
+eager FPU/SSE/AVX state switching with XSAVE. A thread can name an *exit
+futex*: a word the kernel clears, and wakes a waiter on, once the thread
+has ended and left its stack, which is how thread libraries join threads.
 
 ## User space
 
-* **Executables** are PE32+ images (built for `x86_64-pc-windows-msvc` with
-  `#![no_std]`, linked at `0x140000000` with no imports): this target gives
-  stable Rust hard-float SSE code, while the kernel is soft-float.
-* **`vrt`** is the runtime every program links: entry point and startup
-  message, syscall wrappers, heap (TLSF), threads, futex-based locks, time,
-  logging and process creation.
-* **Process creation** happens in user space: create a process, map the PE
-  sections from a VMO, create a thread, and start it with a bootstrap channel
-  carrying the startup message (arguments, environment, role-tagged handles).
+* **Executables.** Veda's own programs are PE32+ images (built for
+  `x86_64-pc-windows-msvc` with `#![no_std]`, linked at `0x140000000` with
+  no imports): this target gives stable Rust hard-float SSE code, while the
+  kernel is soft-float. C programs are static ELF64 executables for the
+  System V ABI, built with GCC and musl (see [C on Veda](C.md)).
+* **`vrt`** is the runtime every Rust program links: entry point and
+  startup message, syscall wrappers, heap (TLSF), threads, futex-based
+  locks, time, logging and process creation.
+* **Process creation** happens in user space (`vrt::process::Spawn`):
+  create a process, map the program's image from VMOs, create a thread, and
+  start it with a bootstrap channel carrying the startup message
+  (arguments, environment, working directory, role-tagged handles). An ELF
+  program's segments are checked and mapped by `lib/elf`, and its stack
+  starts the way Linux starts one: arguments, environment and the
+  auxiliary vector.
+* **C programs** run on musl, whose system calls go to `vposix`
+  (`lib/posix`), a POSIX layer in Rust linked into the C library: files are
+  the VFS's open files, pipes and terminals are sockets, threads are kernel
+  threads, `posix_spawn` starts processes. The Terminal runs them with a
+  terminal of their own (canonical line editing, `termios`, Ctrl+C). See
+  [C on Veda](C.md).
 * **Services** register with the registry in `init`; clients connect by name.
   Protocols are declared with the `vipc` macros, which generate typed client
   stubs and server dispatch code. With every connection the registry hands
@@ -187,6 +214,13 @@ eager FPU/SSE/AVX state switching with XSAVE.
   snapshot slots with checksums; saves alternate between them, so an
   interrupted save never damages the previous one. Unchanged sample files
   are stored as references to the system image.
+* Besides whole-file requests, the VFS opens files as connections of the
+  `file` protocol, each an open file description with its own offset;
+  duplicates share it, as POSIX descriptors do. A file removed while open
+  stays readable and writable through its connections until the last one
+  closes. Stat results carry inode numbers and whether a file is a program
+  (by its first bytes: ELF, PE, `#!`), and `/dev` holds `null`, `zero`,
+  `full`, `random` and `urandom`.
 * Applications work with files through `vfiles`: paths (resolving against a
   working directory and `~`, the read-only `/system`, wildcards, natural
   name order, free names for new items), size and time formatting, a VFS
@@ -581,13 +615,16 @@ policy, the wake word) are in `vagent`, tested on the host. See
 ## Testing
 
 * Host unit tests for the libraries with platform-independent logic (ABI,
-  heap, IPC codec, service protocols, math, rasteriser, fonts, image
-  codecs, 2D graphics, text editing, paths and file types, audio, build
-  tool).
-* `systest`, a program that runs inside Veda and exercises kernel objects,
+  heap, IPC codec, service protocols, ELF loading, the POSIX layer's
+  conversions, math, rasteriser, fonts, image codecs, 2D graphics, text
+  editing, paths and file types, audio, build tool).
+* `systest`, a program that runs inside Veda and exercises kernel objects
+  (sockets, memory protection, private memory, exit futexes, ending a job),
   threads, the file system, the launcher, crash reports and the restart of
-  the window system; `nettest` checks DNS, UDP, TCP, HTTP, HTTPS and ping
-  over Ethernet or Wi-Fi.
+  the window system, and runs C and C++ programs: `tests/c/posix.c` checks
+  the C library and the POSIX layer, `tests/c/cxx.cc` the C++ library.
+  `nettest` checks DNS, UDP, TCP, HTTP, HTTPS and ping over Ethernet or
+  Wi-Fi.
 * Network host tests: the 802.11 protocol and its cryptography against
   published vectors, a station against an access point, two TCP/IP stacks
   over a simulated cable, the Wi-Fi simulator, and the TLS client against
@@ -621,8 +658,9 @@ policy, the wake word) are in `vagent`, tested on the host. See
 |------|----------|
 | `boot/` | UEFI loader |
 | `kernel/` | microkernel |
-| `lib/abi`, `lib/bootinfo`, `lib/initrd`, `lib/pe` | shared formats and the kernel ABI |
+| `lib/abi`, `lib/bootinfo`, `lib/initrd`, `lib/pe`, `lib/elf` | shared formats and the kernel ABI |
 | `lib/rt`, `lib/heap`, `lib/build` | user runtime, allocator, build helper |
+| `lib/posix` | the POSIX layer under the C library |
 | `lib/math`, `lib/raster`, `lib/font`, `lib/image` | math, vector rasterisation, fonts, image codecs |
 | `lib/ipc`, `lib/proto` | message encoding and the service protocols |
 | `lib/gfx`, `lib/ui`, `lib/text` | 2D drawing, the GUI toolkit, the text editing model |
@@ -642,8 +680,9 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `lib/wlan`, `lib/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
 | `third_party/` | vendored crates with documented patches (smoltcp) |
+| `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl |
 | `services/`, `drivers/`, `apps/` | system services, drivers and applications (the games included) |
-| `tests/` | in-system tests and GUI automation scripts |
+| `tests/` | in-system tests, C and C++ test programs (`tests/c`) and GUI automation scripts |
 | `tools/` | host programs: media generators, `airsim` (the simulated Wi-Fi environment) |
 | `xtask/` | build orchestration, disk image creation, QEMU automation |
 | `assets/` | fonts, firmware and other data shipped in the initrd |

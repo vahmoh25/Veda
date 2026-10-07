@@ -134,7 +134,9 @@ impl Init {
         let process = spawn.start(image).map_err(|e| {
             println!("failed to start {}: {}", path, e);
             match e {
-                vrt::process::SpawnError::BadImage(_) => LaunchError::BadImage,
+                vrt::process::SpawnError::NotExecutable
+                | vrt::process::SpawnError::BadPe(_)
+                | vrt::process::SpawnError::BadElf(_) => LaunchError::BadImage,
                 vrt::process::SpawnError::Kernel(vabi::Error::NoMemory) => LaunchError::NoMemory,
                 _ => LaunchError::Failed,
             }

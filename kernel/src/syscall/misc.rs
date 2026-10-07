@@ -1,7 +1,5 @@
 //! Miscellaneous system calls: logging, clocks, sleeping, system info.
 
-use alloc::vec;
-
 use vabi::{Error, RawHandle, SystemInfo, clock, power_action, resource_kind};
 
 use super::{SysResult, deadline, get_resource, ok};
@@ -18,7 +16,7 @@ pub fn debug_write(ptr: usize, len: usize) -> SysResult {
 }
 
 pub fn log_read(offset: usize, buf: usize, len: usize) -> SysResult {
-    let mut tmp = vec![0u8; len.min(64 * 1024)];
+    let mut tmp = user::buffer(len.min(64 * 1024))?;
     let (n, next) = crate::log::read(offset as u64, &mut tmp);
     user::copy_to_user(buf as u64, &tmp[..n])?;
     Ok((n, Some(next as usize)))
@@ -95,7 +93,7 @@ pub fn random(buf: usize, len: usize) -> SysResult {
     if len > 4096 {
         return Err(Error::InvalidArgs);
     }
-    let mut tmp = vec![0u8; len];
+    let mut tmp = user::buffer(len)?;
     crate::random::fill(&mut tmp);
     user::copy_to_user(buf as u64, &tmp)?;
     ok(len)

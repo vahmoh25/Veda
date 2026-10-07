@@ -49,7 +49,7 @@ pub fn spawn_init(boot: &BootInfo) {
     assert!(image.write(0, pe.header_bytes()));
     let ro = Perms { read: true, write: false, exec: false };
     aspace
-        .map(image.clone(), 0, page_align_up(pe.size_of_headers() as u64), base, true, ro, false)
+        .map(image.clone(), 0, page_align_up(pe.size_of_headers() as u64), base, true, ro, Perms::ALL, false)
         .expect("mapping init headers");
     for s in pe.sections().filter(|s| !s.discardable() && s.virtual_size > 0) {
         assert!(image.write(s.virtual_address as u64, s.data));
@@ -61,6 +61,7 @@ pub fn spawn_init(boot: &BootInfo) {
                 base + s.virtual_address as u64,
                 true,
                 perms_of(&s),
+                Perms::ALL,
                 false,
             )
             .expect("mapping an init section");
@@ -68,7 +69,7 @@ pub fn spawn_init(boot: &BootInfo) {
 
     let stack = Vmo::new_anonymous(STACK_SIZE).unwrap();
     let rw = Perms { read: true, write: true, exec: false };
-    let stack_base = aspace.map(stack, 0, STACK_SIZE, 0, false, rw, false).expect("mapping init's stack");
+    let stack_base = aspace.map(stack, 0, STACK_SIZE, 0, false, rw, Perms::ALL, false).expect("mapping init's stack");
 
     // Boot modules handed to init.
     let fb = &boot.framebuffer;
@@ -135,7 +136,8 @@ pub fn spawn_init(boot: &BootInfo) {
     roles.push(role::BOOT_INFO);
 
     let mut data = Vec::new();
-    startup::encode(&["init"], &[], &roles, &mut |b| data.extend_from_slice(b));
+    startup::Startup { args: &["init"], roles: &roles, ..Default::default() }
+        .encode(&mut |b| data.extend_from_slice(b));
     let (kernel_end, init_end) = channel::create();
     if kernel_end.write(Message { data, handles }).is_err() {
         panic!("could not send init its startup message");

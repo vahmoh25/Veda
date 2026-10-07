@@ -124,6 +124,9 @@ pub struct Thread {
     pub cpu_time_ns: AtomicU64,
     pub kill_pending: AtomicBool,
     pub is_idle: bool,
+    /// User address of a 32-bit word to clear, and wake a futex waiter on,
+    /// when the thread exits (0: none; see `THREAD_SET_EXIT_FUTEX`).
+    pub exit_futex: AtomicU64,
 }
 
 // SAFETY: `ctx` is only accessed by the scheduler under the BKL; everything
@@ -164,6 +167,7 @@ impl Thread {
             cpu_time_ns: AtomicU64::new(0),
             kill_pending: AtomicBool::new(false),
             is_idle,
+            exit_futex: AtomicU64::new(0),
         }))
     }
 

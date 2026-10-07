@@ -66,6 +66,10 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::CHANNEL_CREATE => ipc::channel_create(a[0]),
         nr::CHANNEL_WRITE => ipc::channel_write(a[0] as RawHandle, a[1], a[2], a[3], a[4]),
         nr::CHANNEL_READ => ipc::channel_read(a[0] as RawHandle, a[1], a[2], a[3], a[4], a[5]),
+        nr::SOCKET_CREATE => ipc::socket_create(a[0]),
+        nr::SOCKET_WRITE => ipc::socket_write(a[0] as RawHandle, a[1], a[2]),
+        nr::SOCKET_READ => ipc::socket_read(a[0] as RawHandle, a[1], a[2]),
+        nr::SOCKET_SHUTDOWN => ipc::socket_shutdown(a[0] as RawHandle),
         nr::EVENT_CREATE => ipc::event_create(),
 
         nr::VMO_CREATE => vm::vmo_create(a[0], a[1]),
@@ -78,20 +82,23 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::VM_MAP => vm::vm_map(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4], a[5]),
         nr::VM_UNMAP => vm::vm_unmap(a[0] as RawHandle, a[1], a[2]),
         nr::VM_PROTECT => vm::vm_protect(a[0] as RawHandle, a[1], a[2], a[3]),
+        nr::VM_ALLOCATE => vm::vm_allocate(a[0] as RawHandle, a[1], a[2], a[3]),
+        nr::VM_DECOMMIT => vm::vm_decommit(a[0] as RawHandle, a[1], a[2]),
 
         nr::PROCESS_CREATE => task::process_create(a[0], a[1]),
         nr::PROCESS_START => {
             task::process_start(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4] as RawHandle, a[5])
         }
         nr::PROCESS_EXIT => task::process_exit(a[0] as i64),
-        nr::PROCESS_KILL => task::process_kill(a[0] as RawHandle),
+        nr::PROCESS_KILL => task::process_kill(a[0] as RawHandle, a[1]),
         nr::THREAD_CREATE => task::thread_create(a[0] as RawHandle, a[1], a[2]),
         nr::THREAD_START => task::thread_start(a[0] as RawHandle, a[1], a[2], a[3], a[4]),
-        nr::THREAD_EXIT => sched::exit_current(),
+        nr::THREAD_EXIT => task::thread_exit(),
         nr::THREAD_SET_PRIORITY => task::thread_set_priority(a[0] as RawHandle, a[1]),
         nr::THREAD_SET_FS_BASE => task::thread_set_fs_base(a[0]),
         nr::PROCESS_LIST => task::process_list(a[0], a[1]),
         nr::PROCESS_OPEN => task::process_open(a[0] as RawHandle, a[1] as u64),
+        nr::THREAD_SET_EXIT_FUTEX => task::thread_set_exit_futex(a[0]),
 
         nr::FUTEX_WAIT => {
             crate::futex::wait(a[0] as u64, a[1] as u32, deadline(a[2] as u64))?;
@@ -146,6 +153,7 @@ macro_rules! typed_getter {
 }
 
 typed_getter!(get_channel, Channel, crate::object::channel::ChannelEnd);
+typed_getter!(get_socket, Socket, crate::object::socket::SocketEnd);
 typed_getter!(get_vmo, Vmo, crate::mm::vmo::Vmo);
 typed_getter!(get_process, Process, Process);
 typed_getter!(get_thread, Thread, crate::sched::Thread);

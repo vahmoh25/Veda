@@ -9,6 +9,7 @@ license.workspace = true
 vabi = { workspace = true }
 vheap = { workspace = true }
 vpe = { workspace = true }
+velf = { workspace = true }
 
 [features]
 default = ["runtime"]

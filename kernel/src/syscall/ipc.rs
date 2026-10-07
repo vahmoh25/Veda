@@ -1,21 +1,25 @@
-//! Handles, waiting, channels and events.
+//! Handles, waiting, channels, sockets and events.
 
 use alloc::vec::Vec;
 
 use vabi::signals::{SIGNALED, USER_ALL};
 use vabi::{Error, HandleBasicInfo, RawHandle, Rights, WaitItem, info_topic};
 
-use super::{SysResult, current_process, deadline, get_channel, handle, insert, ok};
+use super::{SysResult, current_process, deadline, get_channel, get_socket, handle, insert, ok};
 use crate::mm::user;
 use crate::object::channel::{self, Message};
 use crate::object::event::Event;
 use crate::object::handle::Handle;
+use crate::object::socket;
 use crate::object::{KObject, new_koid};
 use crate::sched::{self, WakeReason};
 
 const CHANNEL_RIGHTS: Rights = Rights(
     Rights::TRANSFER.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::WAIT.0 | Rights::SIGNAL.0 | Rights::GET_INFO.0,
 );
+/// Socket endpoints, unlike channels, may be duplicated (shared by several
+/// processes, as a pipe or terminal is).
+const SOCKET_RIGHTS: Rights = Rights(CHANNEL_RIGHTS.0 | Rights::DUPLICATE.0);
 
 pub fn handle_close(raw: RawHandle) -> SysResult {
     let h = current_process()?.handles.lock().remove(raw)?;
@@ -50,7 +54,16 @@ pub fn handle_replace(raw: RawHandle, rights: u32) -> SysResult {
 }
 
 pub fn object_info(raw: RawHandle, topic: usize, buf: usize, len: usize) -> SysResult {
-    let h = handle(raw, Rights::NONE)?;
+    // The invalid handle names the calling process (it may always learn
+    // about itself).
+    let h = if raw == vabi::INVALID_HANDLE {
+        if !matches!(topic, info_topic::HANDLE_BASIC | info_topic::PROCESS) {
+            return Err(Error::InvalidArgs);
+        }
+        Handle { object: KObject::Process(current_process()?), rights: Rights::GET_INFO }
+    } else {
+        handle(raw, Rights::NONE)?
+    };
     let write = |bytes: &[u8]| -> SysResult {
         if len < bytes.len() {
             return Err(Error::BufferTooSmall);
@@ -97,6 +110,14 @@ pub fn object_info(raw: RawHandle, topic: usize, buf: usize, len: usize) -> SysR
             }
             _ => Err(Error::WrongType),
         },
+        info_topic::SOCKET => match &h.object {
+            KObject::Socket(s) => {
+                let info =
+                    vabi::SocketInfo { readable: s.readable_bytes() as u64, writable: s.writable_bytes() as u64 };
+                write(as_bytes(&info))
+            }
+            _ => Err(Error::WrongType),
+        },
         _ => Err(Error::InvalidArgs),
     }
 }
@@ -105,7 +126,7 @@ pub fn object_signal(raw: RawHandle, clear: u32, set: u32) -> SysResult {
     let h = handle(raw, Rights::SIGNAL)?;
     let allowed = match h.object {
         KObject::Event(_) => USER_ALL | SIGNALED,
-        KObject::Channel(_) => USER_ALL,
+        KObject::Channel(_) | KObject::Socket(_) => USER_ALL,
         _ => return Err(Error::NotSupported),
     };
     if (clear | set) & !allowed != 0 {
@@ -301,6 +322,55 @@ pub fn channel_read(
     user::copy_to_user(handles_ptr as u64, &hv)?;
     user::write(actual as u64, &[msg.data.len() as u32, values.len() as u32])?;
     ok(msg.data.len())
+}
+
+pub fn socket_create(out: usize) -> SysResult {
+    let (a, b) = socket::create();
+    let p = current_process()?;
+    let mut table = p.handles.lock();
+    let ha = table.insert(Handle { object: KObject::Socket(a), rights: SOCKET_RIGHTS })?;
+    let hb = match table.insert(Handle { object: KObject::Socket(b), rights: SOCKET_RIGHTS }) {
+        Ok(h) => h,
+        Err(e) => {
+            let _ = table.remove(ha);
+            return Err(e);
+        }
+    };
+    drop(table);
+    user::write(out as u64, &[ha, hb])?;
+    ok(0)
+}
+
+/// The most one `socket_read` or `socket_write` moves: the bytes go through
+/// a kernel buffer. Larger requests are partly done (writes of up to
+/// [`socket::ATOMIC_WRITE`] bytes stay whole).
+const SOCKET_CHUNK: usize = 64 * 1024;
+
+pub fn socket_write(raw: RawHandle, buf: usize, len: usize) -> SysResult {
+    let s = get_socket(raw, Rights::WRITE)?;
+    let n = len.min(SOCKET_CHUNK);
+    let data = user::read_vec(buf as u64, n, SOCKET_CHUNK)?;
+    ok(s.write(&data)?)
+}
+
+pub fn socket_read(raw: RawHandle, buf: usize, len: usize) -> SysResult {
+    let s = get_socket(raw, Rights::READ)?;
+    let n = len.min(SOCKET_CHUNK).min(s.readable_bytes().max(1));
+    // Validate the buffer first so that bytes taken from the socket are
+    // never lost to a bad pointer.
+    let aspace = current_process()?.aspace().ok_or(Error::BadState)?;
+    if !aspace.ensure_range(buf as u64, n as u64, true) {
+        return Err(Error::Fault);
+    }
+    let mut data = user::buffer(n)?;
+    let got = s.read(&mut data)?;
+    user::copy_to_user(buf as u64, &data[..got])?;
+    ok(got)
+}
+
+pub fn socket_shutdown(raw: RawHandle) -> SysResult {
+    get_socket(raw, Rights::WRITE)?.shutdown();
+    ok(0)
 }
 
 pub fn event_create() -> SysResult {

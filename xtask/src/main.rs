@@ -10,6 +10,7 @@ mod image;
 mod mic;
 mod qemu;
 mod qmp;
+mod toolchain;
 mod util;
 mod vbox;
 mod vboxctl;
@@ -38,6 +39,9 @@ COMMANDS:
     test        Run host unit tests, then the in-system integration tests
                 (--ui also runs the GUI automation scripts in tests/ui
                 and the agent's in tests/agent)
+    toolchain   Build the C toolchain (GCC, binutils, musl) from ports/: a cross
+                compiler for this machine and the native one the image installs in
+                /system (needs MSYS2 on Windows; see docs/C.md; --jobs N)
     clean       Remove build outputs
     doctor      Check that the required tools are installed
     help        Show this message
@@ -308,6 +312,20 @@ fn build_system(o: &Options) -> Result<System> {
     let mut initrd = initrd::builder::Builder::new();
     for (program, path) in &artifacts.programs {
         initrd.add(&format!("bin/{}.exe", program.binary), util::read(path)?);
+    }
+    // C programs that test the POSIX layer (with a cross compiler only).
+    for (name, exe) in toolchain::c_tests()? {
+        initrd.add(&format!("tests/c/{name}"), exe);
+    }
+    // The C toolchain (`cargo xtask toolchain`): gcc, as, ld, the C library
+    // and its headers, as /system has them.
+    toolchain::relink_native()?;
+    let native = toolchain::native_files()?;
+    if native.is_empty() {
+        util::status("Note", "no C toolchain in the image (build it with `cargo xtask toolchain`)");
+    }
+    for (path, data) in native {
+        initrd.add(&path, data);
     }
     initrd.add("etc/version", format!("Veda {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
     // The licence, which About Veda refers to.
@@ -603,6 +621,8 @@ fn shot(o: &Options) -> Result {
 const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vabi", &[]),
     ("vpe", &[]),
+    ("velf", &[]),
+    ("vposix", &[]),
     ("initrd", &["std"]),
     ("vheap", &[]),
     ("vipc", &[]),
@@ -704,6 +724,12 @@ fn test(o: &Options) -> Result {
                 util::status("Skipping", format!("GUI script {name} (needs QEMU: {why})"));
                 continue;
             }
+            if let Some(what) = automate::needs_toolchain(&text)
+                && !toolchain::built(what)
+            {
+                util::status("Skipping", format!("GUI script {name} (needs the {what}: `cargo xtask toolchain`)"));
+                continue;
+            }
             util::status("Testing", format!("GUI script {name}"));
             let mut ui = o.clone();
             ui.cmdline.clear();
@@ -746,6 +772,10 @@ fn doctor() -> Result {
         }
         Err(e) => check("qemu", Err(e)),
     }
+    match toolchain::status() {
+        Ok(v) => println!("  [ok]   c toolchain: {v}"),
+        Err(e) => println!("  [--]   c toolchain: {e}"),
+    }
     if ok { Ok(()) } else { Err("some checks failed".into()) }
 }
 
@@ -767,6 +797,7 @@ fn main() -> ExitCode {
                 .and_then(|text| parse_options(opts).and_then(|o| script(&o, &text))),
             None => Err("usage: cargo xtask script FILE [options]".into()),
         },
+        "toolchain" => toolchain::command(rest),
         "clean" => util::run(util::cargo().arg("clean")),
         "doctor" => doctor(),
         "help" | "--help" | "-h" => {

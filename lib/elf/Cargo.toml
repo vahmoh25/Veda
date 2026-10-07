@@ -1,0 +1,9 @@
+[package]
+name = "velf"
+description = "ELF64 executable parser and System V process image layout, used to load POSIX programs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

@@ -3,6 +3,7 @@
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::paging::Cache;
@@ -46,7 +47,7 @@ impl Vmo {
     }
 
     pub fn new_anonymous(size: u64) -> Option<Arc<Vmo>> {
-        let size = super::page_align_up(size);
+        let size = super::checked_page_align_up(size)?;
         if size == 0 || size > MAX_VMO_SIZE {
             return None;
         }
@@ -60,7 +61,7 @@ impl Vmo {
     /// Physically contiguous, zeroed memory for DMA, entirely below
     /// `max_addr`.
     pub fn new_contiguous(size: u64, max_addr: u64) -> Option<Arc<Vmo>> {
-        let size = super::page_align_up(size);
+        let size = super::checked_page_align_up(size)?;
         if size == 0 || size > (256 << 20) {
             return None;
         }
@@ -110,6 +111,26 @@ impl Vmo {
                 Some(f)
             }
         }
+    }
+
+    /// Detaches the committed pages of `[offset, offset+len)` of an
+    /// anonymous VMO, which reads as zeros there from then on. The frames
+    /// are freed when the returned value is dropped: only once no page
+    /// table maps them and no TLB remembers them.
+    pub fn decommit(&self, offset: u64, len: u64) -> Frames {
+        let mut frames = Frames::default();
+        if self.kind != VmoKind::Anonymous || len == 0 {
+            return frames;
+        }
+        let first = offset / PAGE_SIZE;
+        let end = offset.saturating_add(len).div_ceil(PAGE_SIZE);
+        let mut pages = self.pages.lock();
+        let keys: Vec<u64> = pages.range(first..end).map(|(&page, _)| page).collect();
+        for page in keys {
+            frames.0.extend(pages.remove(&page));
+        }
+        self.committed.fetch_sub(frames.0.len() as u64 * PAGE_SIZE, Ordering::Relaxed);
+        frames
     }
 
     /// Physical address for DMA (contiguous and physical VMOs only).
@@ -168,6 +189,25 @@ impl Vmo {
             done += n;
         }
         true
+    }
+}
+
+/// Frames detached from a VMO ([`Vmo::decommit`]), freed on drop.
+#[derive(Default)]
+pub struct Frames(Vec<u64>);
+
+impl Frames {
+    /// Takes over `other`'s frames.
+    pub fn append(&mut self, mut other: Frames) {
+        self.0.append(&mut other.0);
+    }
+}
+
+impl Drop for Frames {
+    fn drop(&mut self) {
+        for &f in &self.0 {
+            phys::free(f);
+        }
     }
 }
 

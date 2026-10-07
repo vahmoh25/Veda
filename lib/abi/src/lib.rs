@@ -17,8 +17,8 @@
 //!
 //! # Objects and handles
 //!
-//! Kernel objects (processes, threads, channels, events, memory objects,
-//! interrupts, I/O port ranges and resources) are only reachable through
+//! Kernel objects (processes, threads, channels, sockets, events, memory
+//! objects, interrupts, I/O port ranges and resources) are only reachable through
 //! *handles*: per-process 32-bit names that carry a set of [`Rights`].
 //! Handles are capabilities — the only way to gain access to an object is to
 //! be given a handle to it (through a channel message or at process start).
@@ -95,6 +95,18 @@ pub mod nr {
     /// `channel_read(h, bytes, bytes_cap, handles, handles_cap, out: *mut [u32; 2])`.
     pub const CHANNEL_READ: usize = 22;
 
+    // --- sockets ------------------------------------------------------
+    /// `socket_create(out: *mut [RawHandle; 2])`.
+    pub const SOCKET_CREATE: usize = 23;
+    /// `socket_write(h, buf, len) -> bytes written` (see
+    /// [`SOCKET_ATOMIC_WRITE`](crate::SOCKET_ATOMIC_WRITE)).
+    pub const SOCKET_WRITE: usize = 24;
+    /// `socket_read(h, buf, len) -> bytes read`; `PeerClosed` at the end of
+    /// the stream.
+    pub const SOCKET_READ: usize = 25;
+    /// `socket_shutdown(h)`: this endpoint writes no more.
+    pub const SOCKET_SHUTDOWN: usize = 26;
+
     // --- events -------------------------------------------------------
     /// `event_create() -> h`.
     pub const EVENT_CREATE: usize = 30;
@@ -123,6 +135,15 @@ pub mod nr {
     pub const VM_UNMAP: usize = 51;
     /// `vm_protect(process, addr, len, flags)`.
     pub const VM_PROTECT: usize = 52;
+    /// `vm_allocate(process, len, addr, flags) -> addr`: maps `len` bytes
+    /// of new zero-filled memory that belongs to the mapping alone (no VMO
+    /// handle reaches it), so its pages are freed as soon as they are
+    /// unmapped or decommitted. `addr` and `flags` as for `vm_map`.
+    pub const VM_ALLOCATE: usize = 53;
+    /// `vm_decommit(process, addr, len)`: frees the pages of
+    /// `[addr, addr+len)`, which `vm_allocate` memory must cover completely;
+    /// they read as zeros from then on. The mappings stay.
+    pub const VM_DECOMMIT: usize = 54;
 
     // --- processes and threads ----------------------------------------
     /// `process_create(name, name_len) -> h`.
@@ -131,7 +152,8 @@ pub mod nr {
     pub const PROCESS_START: usize = 61;
     /// `process_exit(code) -> !`.
     pub const PROCESS_EXIT: usize = 62;
-    /// `process_kill(h)`.
+    /// `process_kill(h, flags)`: ends the process (flags from
+    /// [`kill_flags`](crate::kill_flags)).
     pub const PROCESS_KILL: usize = 63;
     /// `thread_create(process, name, name_len) -> h`.
     pub const THREAD_CREATE: usize = 64;
@@ -147,6 +169,12 @@ pub mod nr {
     pub const PROCESS_LIST: usize = 69;
     /// `process_open(resource, koid) -> h`.
     pub const PROCESS_OPEN: usize = 70;
+    /// `thread_set_exit_futex(addr)`: when the calling thread ends with
+    /// `thread_exit`, the kernel stores zero to the 32-bit word at `addr`
+    /// and wakes one `futex_wait`er on it (0 = nothing to do). Thread
+    /// libraries join with this: the word changes only once the thread no
+    /// longer runs on its stack.
+    pub const THREAD_SET_EXIT_FUTEX: usize = 71;
 
     // --- futexes ------------------------------------------------------
     /// `futex_wait(addr, expected, deadline)`.
@@ -356,16 +384,21 @@ impl fmt::Debug for Rights {
 
 /// Object signal bits, observed through `object_wait_*`.
 pub mod signals {
-    /// Channel has at least one message queued.
+    /// A channel has a message queued, or a socket has bytes to read.
     pub const READABLE: u32 = 1 << 0;
-    /// Channel can accept another message.
+    /// A channel can accept another message, or a socket another
+    /// [`SOCKET_ATOMIC_WRITE`](crate::SOCKET_ATOMIC_WRITE) bytes.
     pub const WRITABLE: u32 = 1 << 1;
-    /// The other end of the channel has been closed.
+    /// The other end of the channel or socket has been closed (every
+    /// handle to it).
     pub const PEER_CLOSED: u32 = 1 << 2;
     /// Event or interrupt is signalled.
     pub const SIGNALED: u32 = 1 << 3;
     /// Process or thread has terminated.
     pub const TERMINATED: u32 = 1 << 4;
+    /// The peer of a socket writes no more: what is buffered is the rest
+    /// of the stream.
+    pub const PEER_WRITE_DISABLED: u32 = 1 << 5;
     /// Signals reserved for applications (settable with `object_signal`).
     pub const USER_ALL: u32 = 0xFF00_0000;
     pub const USER_0: u32 = 1 << 24;
@@ -409,6 +442,7 @@ pub enum ObjectType {
     Interrupt = 6,
     IoPorts = 7,
     Resource = 8,
+    Socket = 9,
 }
 
 /// Topics for `object_info`.
@@ -421,9 +455,27 @@ pub mod info_topic {
     pub const VMO: usize = 3;
     /// [`super::ThreadInfo`] for a thread handle.
     pub const THREAD: usize = 4;
+    /// [`super::SocketInfo`] for a socket handle.
+    pub const SOCKET: usize = 5;
 }
 
-/// Basic information about any handle.
+/// Information about a socket endpoint.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SocketInfo {
+    /// Bytes waiting to be read from this endpoint.
+    pub readable: u64,
+    /// Bytes a write to this endpoint would accept now.
+    pub writable: u64,
+}
+
+/// Writes to a socket of at most this many bytes are never split: they go
+/// in whole or not at all (POSIX `PIPE_BUF`).
+pub const SOCKET_ATOMIC_WRITE: usize = 4096;
+
+/// Basic information about any handle. `object_info` on
+/// [`INVALID_HANDLE`] describes the calling process (topics
+/// [`info_topic::HANDLE_BASIC`] and [`info_topic::PROCESS`]).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HandleBasicInfo {
@@ -431,6 +483,13 @@ pub struct HandleBasicInfo {
     pub koid: u64,
     pub object_type: u32,
     pub rights: u32,
+}
+
+/// Flags of `process_kill`.
+pub mod kill_flags {
+    /// The processes it started too, those they started, and so on: a
+    /// job, as a terminal ends one.
+    pub const DESCENDANTS: usize = 1 << 0;
 }
 
 /// Process states reported in [`ProcessInfo::state`].
@@ -635,6 +694,24 @@ pub const EXIT_CODE_CRASHED: i64 = -1001;
 pub const EXIT_CODE_KILLED: i64 = -1002;
 /// Exit code of a program that panicked (set by the runtime's panic handler).
 pub const EXIT_CODE_PANICKED: i64 = -1003;
+/// Exit codes of POSIX programs ended by a signal they did not handle
+/// (`abort` raises `SIGABRT`): `EXIT_CODE_SIGNALED - signal`. See
+/// [`exit_signal`].
+pub const EXIT_CODE_SIGNALED: i64 = -2000;
+
+/// The signal number (1-64) a process was ended by, if its exit code says
+/// so: [`EXIT_CODE_SIGNALED`] codes, and the kernel's own codes as the
+/// signals that stand for them (a crash is `SIGSEGV`, a kill `SIGKILL`, a
+/// Rust panic `SIGABRT`).
+pub const fn exit_signal(code: i64) -> Option<u32> {
+    match code {
+        EXIT_CODE_CRASHED => Some(11),
+        EXIT_CODE_KILLED => Some(9),
+        EXIT_CODE_PANICKED => Some(6),
+        c if c < EXIT_CODE_SIGNALED && c >= EXIT_CODE_SIGNALED - 64 => Some((EXIT_CODE_SIGNALED - c) as u32),
+        _ => None,
+    }
+}
 
 /// Boot-time information the kernel hands to `init` in a VMO.
 #[repr(C)]

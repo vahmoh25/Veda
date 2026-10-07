@@ -22,6 +22,7 @@ mod agent;
 mod commands;
 mod job;
 mod netcmds;
+mod program;
 mod screen;
 mod shell;
 
@@ -41,6 +42,7 @@ use vui::ui::KeyPress;
 use vui::{App, Color, Cursor, Font, MenuItem, Rect, Ui, WindowSpec};
 
 use job::{Job, Output};
+use program::Console;
 use screen::{Cell, Pos, Screen, Style, color};
 use shell::Shell;
 
@@ -165,6 +167,8 @@ struct Terminal {
     title: String,
     /// A Ctrl+R history search in progress.
     hsearch: Option<HistorySearch>,
+    /// The terminal the programs it runs see.
+    console: Arc<Console>,
 }
 
 /// Number of visual rows a line of `len` cells takes.
@@ -268,9 +272,12 @@ impl Terminal {
         screen.write_styled(" to list the commands, or ", Style::DIM);
         screen.write_styled("apps", Style::fg(color::BRIGHT_GREEN));
         screen.write_styled(" to see the installed applications.\n\n", Style::DIM);
+        let console = Console::new(24, 80)?;
         let mut shell = Shell::new(cwd);
         shell.load_history();
+        shell.console = Some(console.clone());
         Some(Terminal {
+            console,
             screen,
             interrupt: shell.interrupt.clone(),
             cwd: shell.cwd.clone(),
@@ -320,6 +327,16 @@ impl Terminal {
             }
             return (cells, prompt_len);
         }
+        // A program reading the terminal a line at a time: what it wrote of
+        // the line so far (its prompt), then what is being typed for it.
+        if self.program_mode() {
+            let mut cells = self.screen.partial().to_vec();
+            let prompt_len = cells.len();
+            if self.console.canonical() && self.console.echo() {
+                cells.extend(screen::cells(&self.input, Style::PLAIN));
+            }
+            return (cells, prompt_len);
+        }
         // While a command runs, the line below its output stays empty; the
         // prompt comes back when it is done.
         let Some(shell) = &self.shell else { return (Vec::new(), 0) };
@@ -336,6 +353,10 @@ impl Terminal {
                 let failed = !s.query.is_empty() && s.found.is_none();
                 let prefix = if failed { SEARCH_FAILED_PREFIX } else { SEARCH_PREFIX };
                 prefix.chars().count() + s.query.chars().count()
+            }
+            None if self.program_mode() => {
+                let typed = self.console.canonical() && self.console.echo();
+                prompt_len + if typed { self.input[..self.cursor].chars().count() } else { 0 }
             }
             None if self.shell.is_none() => 0,
             None => prompt_len + self.input[..self.cursor].chars().count(),
@@ -516,6 +537,7 @@ impl Terminal {
                 let mut shell = Shell::new(&self.cwd);
                 shell.load_history();
                 shell.interrupt = self.interrupt.clone();
+                shell.console = Some(self.console.clone());
                 shell
             }
         };
@@ -524,6 +546,11 @@ impl Terminal {
         self.cwd = shell.cwd.clone();
         self.shell = Some(shell);
         self.screen.finish_line();
+        // Lines typed ahead that no program read are the shell's.
+        let unread = self.console.take_unread();
+        if !unread.is_empty() {
+            self.pending.push_front(Pending::Paste(String::from_utf8_lossy(&unread).into_owned()));
+        }
         true
     }
 
@@ -551,8 +578,13 @@ impl Terminal {
             return false;
         }
         self.interrupt.store(true, Ordering::Relaxed);
+        // A program the shell waits for ends at once.
+        self.console.wake();
         self.output.drain_into(&mut self.screen);
-        self.screen.push_cells(screen::cells("^C", Style::DIM));
+        self.screen.write_styled("^C", Style::DIM);
+        self.screen.newline();
+        self.input.clear();
+        self.cursor = 0;
         self.pending.clear();
         self.scroll = 0;
         true
@@ -693,6 +725,17 @@ impl Terminal {
     /// do.
     fn handle_keys(&mut self, ui: &mut Ui) {
         for k in ui.input.keys.clone() {
+            if self.program_mode() {
+                // Keys typed before the program started are its input too.
+                while let Some(p) = self.pending.pop_front() {
+                    match p {
+                        Pending::Key(k) => self.program_key(ui, &k),
+                        Pending::Paste(text) => self.program_paste(&text),
+                    }
+                }
+                self.program_key(ui, &k);
+                continue;
+            }
             if self.job.is_some() || !self.pending.is_empty() {
                 if !self.key_while_running(ui, &k) {
                     self.pending.push_back(Pending::Key(k));
@@ -703,6 +746,154 @@ impl Terminal {
             if self.exit_requested() {
                 return;
             }
+        }
+    }
+
+    /// A program is running in the foreground and reads the terminal.
+    fn program_mode(&self) -> bool {
+        self.job.is_some() && self.console.program_running()
+    }
+
+    /// Sends text to the program: in canonical mode it is edited here first
+    /// (each complete line goes when its newline is pasted).
+    fn program_paste(&mut self, text: &str) {
+        if !self.console.canonical() {
+            self.console.send(text.as_bytes());
+            return;
+        }
+        let text = text.replace("\r\n", "\n");
+        let mut rest = text.as_str();
+        while let Some((line, more)) = rest.split_once('\n') {
+            self.input.insert_str(self.cursor, line);
+            self.cursor = self.input.len();
+            self.program_enter();
+            rest = more;
+        }
+        self.input.insert_str(self.cursor, rest);
+        self.cursor += rest.len();
+    }
+
+    /// Ends the line being typed for the program (Enter in canonical mode).
+    fn program_enter(&mut self) {
+        let line = core::mem::take(&mut self.input);
+        self.cursor = 0;
+        if self.console.echo() {
+            self.screen.write_styled(&line, Style::PLAIN);
+        }
+        self.screen.newline();
+        let mut bytes = line.into_bytes();
+        bytes.push(b'\n');
+        self.console.send(&bytes);
+    }
+
+    /// A key while a program runs in the foreground. In canonical mode the
+    /// line is edited here and sent with Enter; otherwise each key goes to
+    /// the program as the bytes a terminal sends for it.
+    fn program_key(&mut self, ui: &mut Ui, k: &KeyPress) {
+        let ctrl = k.modifiers & modifiers::CTRL != 0;
+        let shift = k.modifiers & modifiers::SHIFT != 0;
+        self.reset_view(ui.now());
+        // What the window does with these whatever the program wants.
+        match k.code {
+            keys::C if ctrl && shift => {
+                self.copy_selection(ui);
+                return;
+            }
+            keys::V if ctrl && shift => {
+                let clip = ui.clipboard();
+                self.program_paste(&clip);
+                return;
+            }
+            keys::A if ctrl && shift => return self.select_all(),
+            keys::C if ctrl && self.console.signals() => {
+                if !self.copy_selection(ui) {
+                    self.interrupt();
+                }
+                self.selection = None;
+                return;
+            }
+            keys::UP | keys::DOWN if shift => {
+                self.scroll =
+                    if k.code == keys::UP { self.scroll.saturating_add(1) } else { self.scroll.saturating_sub(1) };
+                return;
+            }
+            keys::PAGEUP if shift => {
+                self.scroll = self.scroll.saturating_add(PAGE);
+                return;
+            }
+            keys::PAGEDOWN if shift => {
+                self.scroll = self.scroll.saturating_sub(PAGE);
+                return;
+            }
+            keys::EQUAL | keys::KPPLUS if ctrl => return self.zoom(1.0),
+            keys::MINUS | keys::KPMINUS if ctrl => return self.zoom(-1.0),
+            keys::KEY_0 if ctrl => return self.zoom(0.0),
+            _ => {}
+        }
+        if !self.console.canonical() {
+            if let Some(bytes) = key_bytes(k) {
+                if self.console.echo()
+                    && !ctrl
+                    && let Some(c) = k.ch
+                {
+                    let mut buf = [0u8; 4];
+                    self.screen.write_styled(c.encode_utf8(&mut buf), Style::PLAIN);
+                }
+                self.console.send(&bytes);
+            }
+            return;
+        }
+        if let Some(c) = k.ch.filter(|_| !ctrl) {
+            let mut buf = [0u8; 4];
+            let s = c.encode_utf8(&mut buf);
+            self.input.insert_str(self.cursor, s);
+            self.cursor += s.len();
+            return;
+        }
+        match k.code {
+            keys::ENTER | keys::KPENTER => self.program_enter(),
+            keys::BACKSPACE if self.cursor > 0 => {
+                let p = if ctrl { self.word_left(self.cursor) } else { self.prev_char(self.cursor) };
+                self.input.replace_range(p..self.cursor, "");
+                self.cursor = p;
+            }
+            keys::DELETE if self.cursor < self.input.len() => {
+                let n = self.next_char(self.cursor);
+                self.input.replace_range(self.cursor..n, "");
+            }
+            keys::LEFT => self.cursor = self.prev_char(self.cursor),
+            keys::RIGHT => self.cursor = self.next_char(self.cursor),
+            keys::HOME => self.cursor = 0,
+            keys::END => self.cursor = self.input.len(),
+            keys::A if ctrl => self.cursor = 0,
+            keys::E if ctrl => self.cursor = self.input.len(),
+            keys::U if ctrl => {
+                self.input.replace_range(..self.cursor, "");
+                self.cursor = 0;
+            }
+            keys::K if ctrl => self.input.truncate(self.cursor),
+            keys::W if ctrl => {
+                let p = self.word_left(self.cursor);
+                self.input.replace_range(p..self.cursor, "");
+                self.cursor = p;
+            }
+            keys::L if ctrl => self.clear_screen(),
+            keys::C if ctrl => self.console.send(b"\x03"),
+            // The end of the input: what was typed goes without a newline;
+            // on an empty line the program reads the end of the file.
+            keys::D if ctrl => {
+                if self.input.is_empty() {
+                    self.console.end_input();
+                } else {
+                    let line = core::mem::take(&mut self.input);
+                    self.cursor = 0;
+                    if self.console.echo() {
+                        self.screen.write_styled(&line, Style::PLAIN);
+                    }
+                    self.console.send(line.as_bytes());
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1282,6 +1473,10 @@ impl App for Terminal {
         if let Some(shell) = &mut self.shell {
             shell.cols = layout.cols;
         }
+        // Programs ask the terminal how large it is.
+        let clamp = |n: usize| n.clamp(1, u16::MAX as usize) as u16;
+        self.console.tty.set_size(clamp(layout.rows), clamp(layout.cols));
+        self.console.tty.set_pixels(clamp(layout.area.w.max(0) as usize), clamp(layout.area.h.max(0) as usize));
         self.handle_mouse(ui, &mut layout, &live, prompt_len);
         if !ui.input.keys.is_empty() {
             self.handle_keys(ui);
@@ -1321,6 +1516,44 @@ impl Terminal {
             self.title = title;
         }
     }
+}
+
+/// The letter a key code types on a US keyboard (for Ctrl+letter).
+fn letter(code: u16) -> Option<u8> {
+    const ROWS: [(u16, &[u8]); 3] = [(keys::Q, b"qwertyuiop"), (keys::A, b"asdfghjkl"), (keys::Z, b"zxcvbnm")];
+    ROWS.iter().find_map(|&(first, letters)| letters.get(code.checked_sub(first)? as usize).copied())
+}
+
+/// The bytes a terminal sends a program for a key when the program reads
+/// keys as they are typed (as xterm sends them).
+fn key_bytes(k: &KeyPress) -> Option<Vec<u8>> {
+    if k.modifiers & modifiers::CTRL != 0
+        && let Some(c) = letter(k.code)
+    {
+        return Some(alloc::vec![c - b'a' + 1]);
+    }
+    if let Some(c) = k.ch {
+        let mut buf = [0u8; 4];
+        return Some(c.encode_utf8(&mut buf).as_bytes().to_vec());
+    }
+    let seq: &[u8] = match k.code {
+        keys::ENTER | keys::KPENTER => b"\r",
+        keys::BACKSPACE => b"\x7f",
+        keys::TAB => b"\t",
+        keys::ESC => b"\x1b",
+        keys::UP => b"\x1b[A",
+        keys::DOWN => b"\x1b[B",
+        keys::RIGHT => b"\x1b[C",
+        keys::LEFT => b"\x1b[D",
+        keys::HOME => b"\x1b[H",
+        keys::END => b"\x1b[F",
+        keys::INSERT => b"\x1b[2~",
+        keys::DELETE => b"\x1b[3~",
+        keys::PAGEUP => b"\x1b[5~",
+        keys::PAGEDOWN => b"\x1b[6~",
+        _ => return None,
+    };
+    Some(seq.to_vec())
 }
 
 fn main() -> i32 {
