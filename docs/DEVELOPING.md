@@ -33,10 +33,27 @@ cargo xtask script tests/real/agent-wake.vts    # ... with the real Deepgram ($D
 cargo xtask run --net wifi     # boot with the virtual Wi-Fi radio and airsim
 cargo xtask run --net both     # ... plus the wired card (or --net none)
 cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
+cargo xtask run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in software)
+cargo xtask script tests/ui/prism.vts      # OpenGL ES: Prism renders (on the GPU if QEMU has one)
+VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (Windows; ANGLE)
+VGL_TEST_HOST=desktop VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on its desktop OpenGL
 ```
 
 * The serial console (kernel log plus every program's `println!`) is saved
   to `target/veda/serial.log` by `shot`/`script`/`test`.
+* QEMU's display is also a 3D GPU (`virtio-vga-gl`: VGA plus virtio-gpu
+  with virgl) when its build has one, as QEMU's Windows build does (with
+  ANGLE): the window then uses `-display gtk,gl=on` (the host's desktop
+  OpenGL), and headless runs `-display egl-headless` (ANGLE). `--no-gpu`
+  makes it plain VGA and `--gpu` insists on the GPU.
+  OpenGL ES programs render on it through the `virtio-gpu` driver, and in
+  software without it (VirtualBox, real PCs).
+* `cargo xtask test` also runs the OpenGL ES tests on the host's GPU,
+  through the virglrenderer that QEMU ships, on ANGLE and on the host's
+  desktop OpenGL, as headless QEMU and its window render (`VEDA_QEMU_DIR`
+  says where, if not with the QEMU xtask finds). `PRISM_SIZE=960x600
+  PRISM_SHOT=soft.png PRISM_GPU_SHOT=gpu.png cargo test -p prism-scene`
+  saves Prism's frame as both renderers draw it.
 * QEMU's window (GTK) takes the pointer as absolute from power-on: the
   tablet is bound to the display, so a click never grabs the mouse. On
   Windows, QEMU deadlocks if it holds a grab (Ctrl+Alt+G takes one) when

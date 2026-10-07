@@ -57,6 +57,8 @@ const DRIVERS: &[DriverMatch] = &[
     DriverMatch { vendor: 0x1AF4, devices: &[0x1052], driver: "virtio-input" },
     // virtio 1.0 sound
     DriverMatch { vendor: 0x1AF4, devices: &[0x1059], driver: "virtio-snd" },
+    // virtio 1.0 GPU: 3D on the host's GPU (QEMU's virtio-gpu-gl)
+    DriverMatch { vendor: 0x1AF4, devices: &[0x1050], driver: "virtio-gpu" },
     // Intel 82801AA AC'97 audio (QEMU's AC97, VirtualBox's ICH AC97).
     DriverMatch { vendor: 0x8086, devices: &[0x2415], driver: "ac97" },
     // Intel's HD Audio controllers since Skylake: with an audio DSP beside

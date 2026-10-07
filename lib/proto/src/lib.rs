@@ -13,6 +13,7 @@ pub mod audio;
 pub mod block;
 pub mod display;
 pub mod fs;
+pub mod gpu;
 pub mod init;
 pub mod input;
 pub mod net;

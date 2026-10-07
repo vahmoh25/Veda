@@ -10,13 +10,13 @@ that communicate over kernel channels.
  ┌──────────────────────────────────────────────────────────────────────────┐
  │ Applications   shell · editor · photos · music · terminal · games …      │
  ├──────────────────────────────────────────────────────────────────────────┤
- │ Libraries      vui (widgets) · vgfx (2D) · v3d (3D) · vfont · vimage …   │
+ │ Libraries      vui (widgets) · vgfx (2D) · vgl (OpenGL ES) · v3d …       │
  ├──────────────────────────────────────────────────────────────────────────┤
  │ Services       init (registry, launcher) · vfs · compositor · audio ·    │
  │                agent (the voice agent) · netd · wlan                     │
  │ Drivers        ps2 · xhci (USB) · hda (sound) · virtio-snd · ac97 ·      │
  │                virtio-input · virtio-blk · ahci · virtio-net · e1000 ·   │
- │                pci                                                       │
+ │                virtio-gpu (3D) · pci                                     │
  ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
  │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
  ├──────────────────────────────────────────────────────────────────────────┤
@@ -324,8 +324,8 @@ Frames are drawn only when input arrives or an animation asks for one.
 
 ## 3D graphics (`lib/v3d`)
 
-There is no GPU: `v3d` renders on the CPU, usually under QEMU's TCG
-emulator, where integer instructions are cheap and floating point is very
+`v3d` renders on the CPU (the games predate OpenGL ES in Veda), usually
+under QEMU's TCG emulator, where integer instructions are cheap and floating point is very
 expensive. Floating point is therefore used once per draw call (matrices
 and light parameters); everything per vertex and per pixel is fixed-point
 integer code (`src/pipeline`). Each render mode gets its own monomorphised
@@ -350,6 +350,88 @@ several times slower there.
 The window system cooperates: a game's window is opaque, so the compositor
 copies its rows and skips everything underneath, and the scheduler starts
 the pool's workers on different CPUs at once.
+
+## OpenGL ES and the GPU (`lib/glsl`, `lib/gl`, `drivers/virtio-gpu`)
+
+Applications get OpenGL ES 3.0, with GLSL ES 1.00 and 3.00, from `vgl`,
+in pure Rust. *Prism* (`apps/prism`) shows it off: a reflective knot under
+a sky cube map, shadow-mapped crystals drawn with instancing, and sparks
+simulated with transform feedback.
+
+* **The shading language.** `vglsl` preprocesses, parses and checks
+  shaders, links programs (attribute, uniform and varying locations,
+  std140 blocks, transform feedback), and lowers each stage to an SSA form
+  over structured control flow, which it optimises. Constants are folded
+  with `vglsl::ops`, the one definition of what every operation computes.
+  Two back ends take the SSA form: bytecode for the software renderer's
+  SIMD interpreter, and TGSI text for virglrenderer (`vglsl::tgsi`).
+* **The API.** `vgl::Context` has every OpenGL ES 3.0 entry point, as a
+  method named after the C function, and checks every call as the
+  specification requires; it keeps the GL's objects and state and converts
+  pixel data. Vertex and index data always come from buffers (as in
+  WebGL 2). Below it, a `Backend` with Gallium's shape renders: resources,
+  surfaces, and draws described by complete state.
+* **The software renderer** (`vgl::soft`) records draws per framebuffer,
+  shades vertices, bins triangles into 64-pixel tiles and rasterises the
+  tiles in parallel, running fragment shaders on 16 lanes at a time (four
+  2x2 quads): 4x multisampling, every ES 3.0 format, ETC2, exact sRGB.
+* **The GPU renderer** (`vgl::virgl`) speaks virglrenderer's protocol,
+  which QEMU's 3D virtio-gpu replays with the host's OpenGL (ANGLE on
+  Direct3D 11 on Windows). State objects are made once per distinct state
+  and cached, draws set only what changed, data moves through a staging
+  buffer shared with the device, in command order, and presenting blits
+  the frame (resolved, flipped and scaled) into an image the window's
+  size that is read back ready to copy. What hosts refuse is handled
+  first: draws that would read past a buffer are dropped (ANGLE would
+  give up the context), integer constants are built at run time (the
+  host's compiler flushes them as denormal floats), and separate transform
+  feedback buffers take a pass each on OpenGL ES hosts. So is what would
+  end the host: on OpenGL ES, virglrenderer binds a 3D texture's slice to
+  a framebuffer with a function ANGLE lacks, and the process aborts. 3D
+  textures there are only sampled and written; their slices are read by
+  drawing their texels into a 2D image, drawn into through a 2D copy
+  that is written back, and their mipmaps are made in guest memory, as
+  the software renderer makes them. Copies between images, which hosts
+  without `glCopyImageSubData` make through framebuffers (a layer at a
+  time, and not for formats they cannot render to), are made by blits, a
+  layer at a time, or through guest memory. Some drivers err in ways only
+  the host's desktop OpenGL shows (QEMU's window renders on it; headless
+  QEMU on ANGLE): Intel's on Windows records only zeros as transform
+  feedback from any vertex shader that writes `gl_ClipDistance`, which
+  virglrenderer's all do there, and does not order
+  `glCopyImageSubData` after draws into its source. The first draw that
+  captures checks the host with a known point, and where it fails the
+  captured vertices are shaded in guest memory by the software
+  renderer's vertex stage (the host still draws what is seen); and blits
+  carry a scissor that keeps virglrenderer from turning them into image
+  copies. New render targets are cleared to zero, as the software
+  renderer starts them (the host's memory may hold another context's
+  frames), and stencil-only ones are kept in a depth-stencil format
+  (hosts find stencil-only attachments incomplete), whose depth draws
+  ignore: a test without its attachment is turned off, as OpenGL ES has
+  it pass.
+* **The driver** (`virtio-gpu`) owns the device and serves the `gpu`
+  protocol: each connection gets a virgl context of its own, resources
+  with handles the driver assigns (a context can name only its own), a
+  block of DMA memory for commands, staging and query results, and
+  fences that signal through that memory and an event, without a call.
+  It bounds what each client allocates, and all clients together, and
+  frees what a client leaves behind.
+  It never takes the scanout: under QEMU the device is also the display
+  (`virtio-vga-gl`), whose VGA side keeps showing the framebuffer the
+  firmware set up.
+
+`vgl::veda::context` renders on the GPU when the `gpu` service exists and
+in software on every CPU otherwise (VirtualBox and real PCs). Under QEMU
+the difference is large: Prism runs at about 1 frame a second in
+software, and at 55 at its full resolution on the GPU.
+
+The virgl renderer is tested on the host: `vgl::virgl::host` loads the
+virglrenderer and ANGLE that QEMU's Windows build ships and runs the
+whole `vgl` test suite on the host's GPU (`VGL_TEST_BACKEND=virgl`), on
+ANGLE and on the host's desktop OpenGL (`VGL_TEST_HOST=desktop`, through
+WGL, as QEMU's window uses it), and Prism's scene, rendered both ways,
+must look the same to within the GPU's rounding.
 
 ## Audio
 
@@ -546,6 +628,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/gfx`, `lib/ui`, `lib/text` | 2D drawing, the GUI toolkit, the text editing model |
 | `lib/files` | files for applications: paths, file types and the apps that open them, formatting, VFS access, thumbnails |
 | `lib/v3d` | the fixed-point software 3D renderer and the game harness |
+| `lib/glsl`, `lib/gl` | the GLSL ES compiler (with its TGSI back end), and OpenGL ES 3.0 with its software and GPU (virgl) renderers |
 | `lib/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
 | `lib/virtio` | virtio device access shared by the drivers |
 | `lib/hda`, `lib/usb`, `lib/cs35l41`, `lib/spi` | what the HD Audio, USB, speaker amplifier and SPI drivers know that touches no hardware |

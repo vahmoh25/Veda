@@ -52,6 +52,27 @@ impl QemuInstall {
             .ok_or("OVMF variable store (edk2-i386-vars.fd) not found; set OVMF_VARS")?;
         Ok(QemuInstall { binary, ovmf_code, ovmf_vars_template })
     }
+
+    /// The directory of the virglrenderer library this QEMU runs, which the
+    /// OpenGL ES tests can drive directly (Windows builds, which ship it
+    /// with ANGLE).
+    pub fn virglrenderer_dir(&self) -> Option<PathBuf> {
+        let dir = self.binary.parent()?;
+        (cfg!(windows) && dir.join("libvirglrenderer-1.dll").is_file() && dir.join("libEGL.dll").is_file())
+            .then(|| dir.to_path_buf())
+    }
+
+    /// Whether this QEMU has the 3D virtio-gpu (built with virglrenderer):
+    /// it lists `virtio-vga-gl` among its devices.
+    pub fn has_gl_gpu(&self) -> bool {
+        static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *HAS.get_or_init(|| {
+            std::process::Command::new(&self.binary)
+                .args(["-device", "help"])
+                .output()
+                .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("\"virtio-vga-gl\""))
+        })
+    }
 }
 
 /// How the virtual machine reaches the network.
@@ -192,6 +213,9 @@ pub struct VmConfig {
     /// Ports for the Wi-Fi radio and its NAT link (required when `net`
     /// includes Wi-Fi).
     pub wifi: Option<WifiPorts>,
+    /// A display that is also a 3D GPU (virtio-gpu with virgl): `None` uses
+    /// one if QEMU has it.
+    pub gpu: Option<bool>,
     /// Extra raw QEMU arguments.
     pub extra: Vec<String>,
 }
@@ -218,6 +242,7 @@ impl Default for VmConfig {
             nic_model: None,
             bridge_adapter: None,
             wifi: None,
+            gpu: None,
             extra: Vec::new(),
         }
     }
@@ -274,10 +299,21 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-m", &format!("{}M", cfg.memory_mib)]);
     cmd.args(["-drive", &flash(&install.ovmf_code, true)]);
     cmd.args(["-drive", &flash(vars, false)]);
-    // The display (what `-vga std` gives, at the same address, 00:01.0,
-    // before any other device takes it), named so that the tablet can be
-    // bound to it (see `-display` below).
-    cmd.args(["-vga", "none", "-device", &format!("VGA,id={DISPLAY_ID},addr=0x1")]);
+    // The display, at 00:01.0 (where `-vga std` puts it, before any other
+    // device takes it), named so that the tablet can be bound to it (see
+    // `-display` below). With a GPU it is virtio-vga-gl: a standard VGA
+    // that is also virtio-gpu with virgl, whose virglrenderer runs on the
+    // host's OpenGL (ANGLE on Windows), and needs an OpenGL display
+    // backend, a window or an offscreen one. The firmware and Veda show the
+    // picture through its VGA side, as with plain VGA; the `virtio-gpu`
+    // driver uses only the 3D side and never takes the scanout. Not VGA
+    // beside a separate virtio-gpu-gl-pci: the firmware drives that one
+    // itself, as a second display, and resets it at boot's end, and such a
+    // reset (from a vCPU thread, which waits for QEMU's main loop) now and
+    // then deadlocks QEMU when the device has OpenGL.
+    let gpu = cfg.gpu.unwrap_or_else(|| install.has_gl_gpu());
+    let display = if gpu { "virtio-vga-gl" } else { "VGA" };
+    cmd.args(["-vga", "none", "-device", &format!("{display},id={DISPLAY_ID},addr=0x1")]);
     // In a window, the tablet is bound to the display: the window's pointer
     // is then absolute from power-on, not only once the guest's driver has
     // started (see `-display` below).
@@ -365,9 +401,9 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         // starts; which is why the tablet is bound to the display: the
         // window's pointer is absolute from the start, and a click before
         // the driver runs grabs nothing.
-        cmd.args(["-display", "gtk"]);
+        cmd.args(["-display", if gpu { "gtk,gl=on" } else { "gtk" }]);
     } else {
-        cmd.args(["-display", "none"]);
+        cmd.args(["-display", if gpu { "egl-headless" } else { "none" }]);
     }
     match &cfg.serial_file {
         Some(path) => cmd.args(["-serial", &format!("file:{}", path.display())]),

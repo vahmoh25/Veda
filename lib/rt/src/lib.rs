@@ -27,6 +27,7 @@ pub mod env;
 pub mod heap;
 pub mod io;
 pub mod object;
+pub mod pool;
 pub mod process;
 #[cfg(feature = "runtime")]
 pub mod start;

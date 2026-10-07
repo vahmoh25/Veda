@@ -1,0 +1,24 @@
+[package]
+name = "vgl"
+description = "OpenGL ES 3.0: the API with complete error checking, a multi-threaded SIMD software renderer, and a virgl renderer for virtio-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Running in Veda: the GPU service (virtio-gpu), or the software renderer on
+# a worker thread per CPU.
+veda = ["dep:vrt", "dep:vabi", "dep:vproto"]
+# Host tests of programs using OpenGL ES: the virgl renderer on the host's
+# GPU, through the virglrenderer QEMU ships (Windows).
+host-virgl = []
+
+[dependencies]
+vglsl = { workspace = true }
+vmath = { workspace = true }
+vrt = { workspace = true, default-features = false, optional = true }
+vabi = { workspace = true, optional = true }
+vproto = { workspace = true, optional = true }
+
+[lints]
+workspace = true

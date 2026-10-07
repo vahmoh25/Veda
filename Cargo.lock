@@ -881,6 +881,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "prism"
+version = "0.1.0"
+dependencies = [
+ "prism-scene",
+ "vabi",
+ "vbuild",
+ "vgfx",
+ "vgl",
+ "vproto",
+ "vrt",
+ "vui",
+]
+
+[[package]]
+name = "prism-scene"
+version = "0.1.0"
+dependencies = [
+ "vgl",
+ "vimage",
+ "vmath",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1400,6 +1423,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "vgl"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vglsl",
+ "vmath",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
+name = "vglsl"
+version = "0.1.0"
+dependencies = [
+ "vmath",
+]
+
+[[package]]
 name = "vgpio"
 version = "0.1.0"
 
@@ -1425,6 +1466,18 @@ dependencies = [
 
 [[package]]
 name = "virtio-blk"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vipc",
+ "vproto",
+ "vrt",
+ "vvirtio",
+]
+
+[[package]]
+name = "virtio-gpu"
 version = "0.1.0"
 dependencies = [
  "vabi",

@@ -22,8 +22,9 @@ wait 3
 reset
 wait-serial "desktop ready" 90
 expect-serial "home directory restored from the home disk"
-# Double-click the fourth desktop icon (Note.txt).
-double-click 0.0469 0.4425
+# Double-click the fifth desktop icon (Note.txt, after Home, Velocity,
+# Starfall and Prism).
+double-click 0.0469 0.565
 wait-serial "started editor" 30
 wait 5
 shot target/veda/persist-after-reboot.png

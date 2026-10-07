@@ -456,9 +456,16 @@ impl Device {
     /// Resets the device and performs the feature handshake, accepting the
     /// intersection of the device's features and `wanted` (plus VERSION_1).
     pub fn initialize(&self, wanted: u64) -> Result<u64, VirtioError> {
-        self.set_status(0);
-        while self.status() != 0 {
-            core::hint::spin_loop();
+        // A device whose status reads 0 is in its reset state already (the
+        // firmware resets its devices when it hands over). Resetting it
+        // again is not only redundant: QEMU's 3D virtio-gpu resets on its
+        // main loop and holds the vCPU that asked until it has, which now
+        // and then deadlocks the whole machine.
+        if self.status() != 0 {
+            self.set_status(0);
+            while self.status() != 0 {
+                core::hint::spin_loop();
+            }
         }
         self.set_status(status::ACKNOWLEDGE);
         self.set_status(status::ACKNOWLEDGE | status::DRIVER);

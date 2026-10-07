@@ -402,7 +402,7 @@ pub fn run<G: Game>(settings: Settings, make: impl FnOnce(&mut Renderer) -> G) -
     };
     let (mut text, fonts) = vui::load_fonts();
     let mut hud_cache = HudCache::default();
-    let pool = ThreadPool::for_system();
+    let pool = ThreadPool::named("v3d-worker", vrt::pool::cpus().min(16), Some(vabi::priority::NORMAL - 2));
     vrt::println!("{}: rendering with {} threads", settings.log_name, pool.threads());
     let level_of = |s: f32| {
         let mut best = 0;

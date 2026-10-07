@@ -75,7 +75,7 @@ impl Desktop {
                 color: "home".into(),
             });
         }
-        for id in ["racer", "starfall"] {
+        for id in ["racer", "starfall", "prism"] {
             if let Some(app) = m.app(id) {
                 items.push(Shortcut {
                     label: app.name.clone(),

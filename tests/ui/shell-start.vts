@@ -3,8 +3,10 @@
 fail-on "PANIC"
 wait-serial "desktop ready" 90
 wait 3
-# The start button is the first slot of the centred taskbar group.
-click 0.3555 0.97
+# The start button is the first slot of the centred taskbar group: ten
+# slots of 46 pixels (it and nine pinned apps), so its centre is at
+# (1280 - 460) / 2 + 22 = 432.
+click 0.3375 0.97
 wait 2
 shot target/veda/shell-1-start.png
 type "term"

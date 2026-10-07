@@ -1,0 +1,17 @@
+[package]
+name = "prism-scene"
+description = "Prism's scene: everything that only talks to OpenGL ES, testable on the host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vgl = { workspace = true }
+vmath = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+vimage = { workspace = true }
+vgl = { workspace = true, features = ["host-virgl"] }

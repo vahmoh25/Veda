@@ -1,0 +1,19 @@
+# Prism: the OpenGL ES 3.0 showcase starts and keeps rendering (its frame
+# statistics reach the log); its options change the picture. It renders on
+# the host's GPU where the machine has one (QEMU's virtio-gpu-gl), in
+# software otherwise.
+boot-cmdline "run=prism"
+fail-on "PANIC"
+fail-on "link: "
+fail-on "shader:"
+fail-on "cannot render on the GPU"
+wait-serial "(OpenGL ES 3.0 Veda)" 90
+wait 8
+shot target/veda/prism-1.png
+wait-serial " fps, render " 30
+key s
+wait 4
+shot target/veda/prism-2-no-shadows.png
+key spc
+wait 2
+shot target/veda/prism-3-paused.png

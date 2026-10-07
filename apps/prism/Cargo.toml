@@ -1,0 +1,26 @@
+[package]
+name = "prism"
+description = "Prism: an OpenGL ES 3.0 showcase"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "prism"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vgl = { workspace = true, features = ["veda"] }
+prism-scene = { path = "scene" }
+vproto = { workspace = true }
+vgfx = { workspace = true }
+vui = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

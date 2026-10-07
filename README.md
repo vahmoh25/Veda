@@ -140,6 +140,13 @@ the voice pipeline, consent, memory and how the agent is tested.
 * **Applications.** Text Editor, Photos, Music, Files, Terminal, Task
   Manager, Settings and About, and two 3D games, *Velocity* (racing) and
   *Starfall* (a space shooter), rendered by the `v3d` software 3D engine.
+* **3D graphics.** OpenGL ES 3.0 with GLSL ES 1.00 and 3.00 (`vgl`,
+  `vglsl`), every call checked as the specification requires. It renders
+  on the host's GPU through QEMU's 3D virtio-gpu, or with a multi-threaded
+  software renderer where there is none. *Prism* shows it off: a
+  reflective knot, shadow-mapped crystals drawn with instancing, and a
+  fountain of sparks simulated with transform feedback, at 55 frames a
+  second under QEMU.
 * **Tooling.** One command builds a bootable disk image and runs it in
   QEMU or VirtualBox; scripted, headless runs drive the GUI and the agent
   and check screenshots and logs.
@@ -348,8 +355,8 @@ keyboard, the agent can do too, through the application's own actions.
 | **Starfall** | A 3D space shooter through asteroid fields and enemy waves. | Start, pause, resume or restart a game. |
 
 The games are drawn by `v3d`, a multi-threaded fixed-point software 3D
-renderer; there is no GPU. Beyond the applications, the agent's own
-functions cover windows, files, sound, Wi-Fi, the wallpaper,
+renderer, and *Prism* by OpenGL ES. Beyond the applications, the agent's
+own functions cover windows, files, sound, Wi-Fi, the wallpaper,
 notifications, timers and reminders, its memory and the system.
 
 ## Building agent-compatible applications
@@ -464,9 +471,9 @@ The serial console (kernel log plus every program's output) is saved to
 | `lib/agent/` | the agent's logic: Deepgram protocol, functions, instructions, wake word, echo gate, memory, configuration |
 | `boot/` | `vboot`, the UEFI bootloader |
 | `kernel/` | `vkernel`, the microkernel |
-| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `hda` (HD Audio codecs and their routes), `text`, `math`, ... |
+| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `hda` (HD Audio codecs and their routes), `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi) |
-| `drivers/` | `ps2`, `virtio-input`, `xhci` (USB 3 controllers: hubs, keyboards, mice), `virtio-blk`, `ahci` (SATA), `hda` (Intel HD Audio), `virtio-snd`, `ac97` (AC'97 sound), `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
+| `drivers/` | `ps2`, `virtio-input`, `xhci` (USB 3 controllers: hubs, keyboards, mice), `virtio-blk`, `ahci` (SATA), `hda` (Intel HD Audio), `virtio-snd`, `ac97` (AC'97 sound), `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio), `virtio-gpu` (3D on the host's GPU) |
 | `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `racer` (*Velocity*) and `starfall` |
 | `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
