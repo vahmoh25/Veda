@@ -109,6 +109,24 @@ symbols and nothing else, so no symbol of the Rust code (or of its
 compiler-builtins) can clash with the C library's. Its memory comes from
 its own heap (`vrt`'s), not from `malloc`, which calls into it.
 
+**Veda's own interfaces** are there too, for C programs that are Veda
+services or talk to them directly (`<veda/ipc.h>`): handles, channels and
+the service registry (`veda_service_register`, `_accept`, `_connect`),
+waiting on several objects at once (`veda_wait`), memory objects
+(`veda_vmo_create`, `_map`) and events. They are the kernel's calls but for
+the registry's, made by the POSIX layer (`lib/posix/src/native.rs`); every
+call returns 0 or a count, or a negative Veda error number. A program
+speaks a protocol by writing its messages itself: a 12-byte header (method,
+transaction, request or response), then the values in order, as the
+header describes. Veda's renderer (`services/renderer/src/main.c`) serves
+the `gpu` protocol so.
+
+**The GPU's render node**, `/dev/dri/renderD128`, is Linux's i915
+interface, as Mesa's iris driver uses it: its ioctls, buffers mapped with
+`mmap`, and syncobjs (`lib/posix/src/drm.rs`; `tests/c/drm.c` checks it).
+It opens where a GPU driver serves the `gem` protocol, and is not there
+otherwise (`ENOENT`).
+
 **The Terminal** runs a program on a fresh socket pair: the program's
 descriptors 0, 1 and 2 are one end, the window keeps the other. The
 terminal's state page tells programs which socket is the terminal, its
@@ -189,10 +207,12 @@ On Windows the build needs MSYS2 (`C:\msys64`, or `VEDA_MSYS2`) with:
 
 ```text
 pacman -S make m4 bison flex texinfo diffutils patch mingw-w64-ucrt-x86_64-gcc
+pacman -S meson ninja python-mako python-yaml python-packaging
 ```
 
-The cross toolchain's programs are linked statically and run without
-MSYS2.
+The second line is for Mesa (the renderer's Gallium; `ports/mesa`), whose
+build is meson's. The cross toolchain's programs are linked statically and
+run without MSYS2.
 
 ### The ports
 

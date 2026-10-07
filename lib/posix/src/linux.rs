@@ -217,6 +217,7 @@ pub mod errno {
     pub const ENOSYS: isize = 38;
     pub const ENOTEMPTY: isize = 39;
     pub const ELOOP: isize = 40;
+    pub const ETIME: isize = 62;
     pub const EILSEQ: isize = 84;
     pub const ENOTSOCK: isize = 88;
     pub const EOPNOTSUPP: isize = 95;
@@ -284,6 +285,7 @@ pub mod fcntl {
     pub const SETLKW: u32 = 7;
     pub const SETOWN: u32 = 8;
     pub const GETOWN: u32 = 9;
+    pub const DUPFD_QUERY: u32 = 1027;
     pub const DUPFD_CLOEXEC: u32 = 1030;
     pub const FD_CLOEXEC: u32 = 1;
     /// `l_type` of a lock that is not held.

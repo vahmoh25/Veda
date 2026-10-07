@@ -1,98 +1,14 @@
-//! The screen and composition: damaged regions are redrawn bottom to top
-//! into a back buffer, which is then copied to the framebuffer.
+//! Composition: damaged regions are redrawn bottom to top into the back
+//! buffer, which is then copied to the screen (`screen`).
 
 use alloc::vec::Vec;
 
-use vgfx::{Bitmap, Canvas, Rect};
+use vgfx::Canvas;
 use vproto::display::WindowEvent;
-use vrt::vm::Mapping;
 
 use crate::decor;
 use crate::state::{Compositor, Drag};
 use crate::window::AnimKind;
-
-/// The framebuffer and the back buffer we compose into.
-pub(crate) struct Screen {
-    pub(crate) fb: Mapping,
-    pub(crate) pitch: usize,
-    pub(crate) rgb: bool,
-    pub(crate) back: Bitmap,
-}
-
-impl Screen {
-    pub(crate) fn rect(&self) -> Rect {
-        self.back.rect()
-    }
-
-    /// Copies a region of the back buffer to the framebuffer.
-    pub(crate) fn flush(&mut self, r: Rect) {
-        let r = r.intersect(&self.rect());
-        let w = self.back.width;
-        let rgb = self.rgb;
-        for y in r.y..r.bottom() {
-            let src = &self.back.pixels[(y * w + r.x) as usize..(y * w + r.right()) as usize];
-            let dst = framebuffer_row(&mut self.fb, self.pitch, y, r);
-            if rgb {
-                for (d, &s) in dst.iter_mut().zip(src) {
-                    *d = swap_red_blue(s);
-                }
-            } else {
-                dst.copy_from_slice(src);
-            }
-        }
-    }
-
-    /// Copies a region of `layer` (as large as the screen) to the
-    /// framebuffer, in place of the back buffer.
-    pub(crate) fn flush_from(&mut self, layer: &Bitmap, r: Rect) {
-        let r = r.intersect(&self.rect());
-        let w = layer.width;
-        let rgb = self.rgb;
-        for y in r.y..r.bottom() {
-            let src = &layer.pixels[(y * w + r.x) as usize..(y * w + r.right()) as usize];
-            let dst = framebuffer_row(&mut self.fb, self.pitch, y, r);
-            for (d, &s) in dst.iter_mut().zip(src) {
-                *d = if rgb { swap_red_blue(s) } else { s };
-            }
-        }
-    }
-
-    /// Shows the back buffer through `layer` (as large as the screen) in
-    /// `r`: `alpha` parts of 256 of the back buffer.
-    pub(crate) fn flush_mixed(&mut self, layer: &Bitmap, alpha: u32, r: Rect) {
-        let r = r.intersect(&self.rect());
-        let (w, t, rgb) = (self.back.width, alpha.min(256), self.rgb);
-        for y in r.y..r.bottom() {
-            let span = (y * w + r.x) as usize..(y * w + r.right()) as usize;
-            let (over, under) = (&layer.pixels[span.clone()], &self.back.pixels[span]);
-            let dst = framebuffer_row(&mut self.fb, self.pitch, y, r);
-            for ((d, &a), &b) in dst.iter_mut().zip(over).zip(under) {
-                // Red and blue together, then green.
-                let rb = (((a & 0xFF_00FF) * (256 - t) + (b & 0xFF_00FF) * t) >> 8) & 0xFF_00FF;
-                let g = (((a & 0x00_FF00) * (256 - t) + (b & 0x00_FF00) * t) >> 8) & 0x00_FF00;
-                let s = 0xFF00_0000 | rb | g;
-                *d = if rgb { swap_red_blue(s) } else { s };
-            }
-        }
-    }
-}
-
-/// The framebuffer's pixels of row `y` across `r`.
-fn framebuffer_row(fb: &mut Mapping, pitch: usize, y: i32, r: Rect) -> &mut [u32] {
-    // SAFETY: the framebuffer mapping covers `pitch * height` bytes, and
-    // callers keep `r` on the screen.
-    unsafe {
-        core::slice::from_raw_parts_mut(
-            (fb.as_ptr().add(y as usize * pitch) as *mut u32).add(r.x as usize),
-            r.w as usize,
-        )
-    }
-}
-
-/// A pixel for a framebuffer that stores red in the low byte.
-fn swap_red_blue(s: u32) -> u32 {
-    (s & 0xFF00_FF00) | ((s >> 16) & 0xFF) | ((s & 0xFF) << 16)
-}
 
 impl Compositor {
     // ---- rendering ---------------------------------------------------------
@@ -101,8 +17,15 @@ impl Compositor {
         self.startup.is_some() || self.windows.values().any(|w| w.anim.is_some())
     }
 
+    /// Whether a frame is to be composed (when the screen is ready for one).
+    pub(crate) fn wants_frame(&self) -> bool {
+        !self.damage.is_empty() || self.animating() || self.screen.needs_frame()
+    }
+
     pub(crate) fn composite(&mut self) {
-        let now = vrt::time::now_ns();
+        let real = vrt::time::now_ns();
+        // Animations as they are when the frame is seen.
+        let now = self.screen.frame_time(real);
         // Advance animations.
         let mut finished_close = Vec::new();
         let ids: Vec<u32> = self.windows.keys().copied().collect();
@@ -125,6 +48,7 @@ impl Compositor {
         let screen = self.screen_rect();
         let order = self.paint_order();
         let rects = self.damage.take();
+        self.screen.begin_frame(self.startup.as_ref().map(|s| s.layer()));
         // During the startup sequence the screen shows it instead.
         let shown = self.startup.is_none();
         for r in rects {
@@ -201,6 +125,7 @@ impl Compositor {
                 self.screen.flush(screen);
             }
         }
-        self.last_frame = now;
+        self.screen.end_frame(real);
+        self.last_frame = real;
     }
 }

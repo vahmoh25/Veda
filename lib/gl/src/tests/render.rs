@@ -70,15 +70,21 @@ fn draws_a_triangle_with_the_fill_rule() {
     let img = read_rgba(&mut c, 16, 16);
     assert_eq!(px(&img, 16, 2, 2), [255, 0, 0, 255]);
     assert_eq!(px(&img, 16, 13, 13), [0, 0, 0, 255]);
-    // Pixels whose centres are on the diagonal belong to the other
-    // triangle of the square.
-    assert_eq!(count(&img, |p| p[0] == 255), 120);
+    let first = count(&img, |p| p[0] == 255);
     // The complementary triangle covers exactly the rest.
     c.clear(gl::COLOR_BUFFER_BIT);
     attrib(&mut c, p, "pos", 4, &[1.0, -1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, -1.0, 1.0, 0.0, 1.0]);
     c.draw_arrays(gl::TRIANGLES, 0, 3);
     let img = read_rgba(&mut c, 16, 16);
-    assert_eq!(count(&img, |p| p[0] == 255), 136);
+    assert_eq!(first + count(&img, |p| p[0] == 255), 256);
+    // Pixels whose centres are on the diagonal belong to one of the two,
+    // which OpenGL leaves to the implementation: here, the other one; GPUs
+    // that rasterize with y down (Intel's) give them to this one.
+    if virgl_requested() {
+        assert!(first == 120 || first == 136, "{first}");
+    } else {
+        assert_eq!(first, 120);
+    }
 }
 
 #[test]

@@ -79,7 +79,7 @@ pub fn vmo_create_physical(res: RawHandle, paddr: usize, size: usize, cache: usi
 }
 
 pub fn vmo_create_contiguous(res: RawHandle, size: usize, flags: usize) -> SysResult {
-    if flags & !dma_flags::BELOW_4G != 0 {
+    if flags & !(dma_flags::BELOW_4G | dma_flags::WRITE_COMBINING) != 0 {
         return Err(Error::InvalidArgs);
     }
     let r = get_resource(res, Rights::NONE)?;
@@ -87,13 +87,45 @@ pub fn vmo_create_contiguous(res: RawHandle, size: usize, flags: usize) -> SysRe
         return Err(Error::AccessDenied);
     }
     let limit = if flags & dma_flags::BELOW_4G != 0 { 1 << 32 } else { u64::MAX };
-    let vmo = Vmo::new_contiguous(size as u64, limit).ok_or(Error::NoMemory)?;
+    let cache = if flags & dma_flags::WRITE_COMBINING != 0 { Cache::WriteCombining } else { Cache::WriteBack };
+    let vmo = Vmo::new_contiguous(size as u64, limit, cache).ok_or(Error::NoMemory)?;
     ok(insert(KObject::Vmo(vmo), VMO_RIGHTS)? as usize)
 }
 
 pub fn vmo_phys_addr(raw: RawHandle, offset: usize) -> SysResult {
     let vmo = get_vmo(raw, Rights::NONE)?;
     ok(vmo.phys_addr(offset as u64).ok_or(Error::NotSupported)? as usize)
+}
+
+/// The most pages one `vmo_pages` call reports.
+const MAX_PAGES: usize = 1 << 20;
+
+pub fn vmo_pages(res: RawHandle, raw: RawHandle, offset: usize, count: usize, out: usize) -> SysResult {
+    let r = get_resource(res, Rights::NONE)?;
+    if !r.permits(resource_kind::DMA, 0, 0) && !r.permits(resource_kind::DMA, r.base, 0) {
+        return Err(Error::AccessDenied);
+    }
+    // A device reads and writes them.
+    let vmo = get_vmo(raw, Rights(Rights::READ.0 | Rights::WRITE.0))?;
+    if !offset.is_multiple_of(4096) || count > MAX_PAGES {
+        return Err(Error::InvalidArgs);
+    }
+    let mut chunk = alloc::vec::Vec::with_capacity(count.min(512));
+    let mut done = 0;
+    while done < count {
+        chunk.clear();
+        for i in done..count.min(done + 512) {
+            let at = (offset as u64).checked_add(i as u64 * 4096).ok_or(Error::OutOfRange)?;
+            if at >= vmo.size() {
+                return Err(Error::OutOfRange);
+            }
+            chunk.push(vmo.page(at, true).ok_or(Error::NoMemory)?);
+        }
+        let bytes: alloc::vec::Vec<u8> = chunk.iter().flat_map(|a| a.to_le_bytes()).collect();
+        user::copy_to_user((out + done * 8) as u64, &bytes)?;
+        done += chunk.len();
+    }
+    ok(count)
 }
 
 pub fn vm_map(proc: RawHandle, vmo: RawHandle, offset: usize, len: usize, addr: usize, flags: usize) -> SysResult {

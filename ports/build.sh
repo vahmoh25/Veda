@@ -230,6 +230,9 @@ stage_posix_layer() {
 	$TARGET-objcopy --strip-debug --remove-section=.llvmbc --remove-section=.llvmcmd "${keep[@]}" \
 		veda-all.o "$BUILD/veda.o"
 	$TARGET-ar rcs "$SYSROOT/system/lib/libc.a" "$BUILD/veda.o"
+	# And its header for Veda's own interfaces, <veda/ipc.h>.
+	mkdir -p "$SYSROOT/system/include/veda"
+	cp "$PORTS"/../lib/posix/include/veda/*.h "$SYSROOT/system/include/veda/"
 }
 stage posix_layer musl "$POSIX_LIB" @POSIX_EXPORTS
 
@@ -344,5 +347,68 @@ stage_native() {
 	done
 }
 stage native binutils_native gcc_native posix_layer
+
+# --- Mesa, for Veda's renderer ------------------------------------------------
+
+# Veda's renderer (services/renderer) carries out OpenGL ES command streams
+# on Mesa's Gallium drivers. The stage configures Mesa's build (meson) for
+# Veda and, on Windows, for this machine too: the renderer as a library on
+# softpipe (vgallium.dll), which the OpenGL ES tests use. `cargo xtask`
+# builds them (ninja) when it needs them. meson is MSYS2's own (not
+# UCRT64's), and says so unless MSYSTEM agrees.
+eval "stage_src_mesa() { unpack mesa; }"
+stage src_mesa "$PORTS/mesa/port.toml" "$PORTS/mesa/veda.patch"
+
+MESA_OPTIONS=(
+	--buildtype=release -Ddefault_library=static -Dvulkan-drivers=
+	-Dplatforms= -Dopengl=false -Dgles1=disabled -Dgles2=disabled -Degl=disabled -Dglx=disabled
+	-Dgbm=disabled -Dllvm=disabled -Dmesa-clc=auto -Dzlib=disabled -Dzstd=disabled -Dexpat=disabled
+	-Dxmlconfig=disabled -Dshader-cache=disabled -Dbuild-tests=false -Dvalgrind=disabled
+	-Dlibunwind=disabled -Dgallium-va=disabled -Dmicrosoft-clc=disabled -Dvideo-codecs=
+)
+
+stage_mesa() {
+	local renderer
+	renderer=$(realpath "$PORTS/../services/renderer")
+	cat > "$BUILD/mesa-veda.cross" <<-EOF
+	[binaries]
+	c = '$CROSS/bin/$TARGET-gcc'
+	cpp = '$CROSS/bin/$TARGET-g++'
+	ar = '$CROSS/bin/$TARGET-ar'
+	strip = '$CROSS/bin/$TARGET-strip'
+	[properties]
+	needs_exe_wrapper = true
+	[host_machine]
+	system = 'linux'
+	cpu_family = 'x86_64'
+	cpu = 'x86_64'
+	endian = 'little'
+	EOF
+	rm -rf "$BUILD/mesa" "$BUILD/mesa-host"
+	MSYSTEM=MSYS quiet "$BUILD/mesa-setup.log" meson setup "$BUILD/mesa" "$SRC/mesa" \
+		--cross-file "$BUILD/mesa-veda.cross" "${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" \
+		-Dgallium-drivers=softpipe,iris -Dintel-elk=false
+	case "$(uname -s)" in
+	MINGW*|MSYS*|UCRT*|CLANG*)
+		cat > "$BUILD/mesa-host.cross" <<-EOF
+		[binaries]
+		c = '$(command -v gcc)'
+		cpp = '$(command -v g++)'
+		ar = '$(command -v ar)'
+		strip = '$(command -v strip)'
+		windres = '$(command -v windres)'
+		[host_machine]
+		system = 'windows'
+		cpu_family = 'x86_64'
+		cpu = 'x86_64'
+		endian = 'little'
+		EOF
+		MSYSTEM=MSYS quiet "$BUILD/mesa-host-setup.log" meson setup "$BUILD/mesa-host" "$SRC/mesa" \
+			--cross-file "$BUILD/mesa-host.cross" "${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" \
+			-Dgallium-drivers=softpipe
+		;;
+	esac
+}
+stage mesa src_mesa gcc_cross musl @MESA_OPTIONS
 
 log Finished "the C toolchain ($ROOT)"

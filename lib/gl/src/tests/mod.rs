@@ -39,22 +39,46 @@ impl Workers for StdWorkers {
 pub fn context_with(w: u32, h: u32, threads: usize, samples: u32) -> Context {
     let config = Config { width: w, height: h, samples, ..Config::default() };
     if virgl_requested() {
-        return virgl_context(config).expect("VGL_TEST_BACKEND=virgl, but the host renderer is not available");
+        return virgl_context(config).expect("VGL_TEST_BACKEND names a renderer that is not available");
     }
     let workers: Box<dyn Workers> = Box::new(StdWorkers(threads));
     Context::new(Box::new(SoftBackend::new(workers)), config)
 }
 
-/// Whether the tests are to run on the virgl renderer
-/// (`VGL_TEST_BACKEND=virgl`).
+/// Whether the tests are to run on the virgl renderer: through
+/// virglrenderer on the host's GPU (`VGL_TEST_BACKEND=virgl`), or through
+/// Veda's renderer on softpipe (`VGL_TEST_BACKEND=gallium`).
 pub fn virgl_requested() -> bool {
-    std::env::var("VGL_TEST_BACKEND").is_ok_and(|v| v == "virgl")
+    std::env::var("VGL_TEST_BACKEND").is_ok_and(|v| v == "virgl" || v == "gallium")
 }
 
-/// A context on the host's GPU through virglrenderer, if it is installed.
+/// Whether the tests run on softpipe, through Veda's renderer
+/// (`VGL_TEST_BACKEND=gallium`): its points sit an eighth of a pixel off
+/// their place, and it filters depth before comparing it rather than the
+/// comparisons. GPUs do neither.
+pub fn on_softpipe() -> bool {
+    std::env::var("VGL_TEST_BACKEND").is_ok_and(|v| v == "gallium")
+}
+
+/// Whether the renderer has multisampling (softpipe has none); tests of it
+/// skip where it does not.
+pub fn multisampling(c: &mut Context) -> bool {
+    let n = c.get_integer(gl::MAX_SAMPLES);
+    if n < 4 {
+        std::println!("skipped: the renderer has no multisampling");
+    }
+    n >= 4
+}
+
+/// A context of the virgl renderer: through Veda's renderer if
+/// `VGL_TEST_BACKEND=gallium`, otherwise through virglrenderer on the
+/// host's GPU, if it is installed.
 pub fn virgl_context(config: Config) -> Option<Context> {
     #[cfg(windows)]
     {
+        if std::env::var("VGL_TEST_BACKEND").is_ok_and(|v| v == "gallium") {
+            return crate::virgl::gallium::context(config);
+        }
         crate::virgl::host::context(config)
     }
     #[cfg(not(windows))]

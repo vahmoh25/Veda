@@ -1,15 +1,17 @@
 //! `compositor` — the Veda window system.
 //!
-//! Owns the framebuffer and composes client windows into it. It provides two
+//! Owns the screen and composes client windows onto it. It provides three
 //! services:
 //!
 //! * `display` — clients create windows, attach shared pixel buffers and
 //!   present frames (see `vproto::display`);
-//! * `input` — device drivers report keyboard and pointer events.
+//! * `input` — device drivers report keyboard and pointer events;
+//! * `displaydev` — a display driver hands over pictures it flips between
+//!   at the vertical blank (see `screen`).
 //!
 //! Rendering is damage driven: only regions that changed are recomposited
-//! into the back buffer and copied to the framebuffer, at most once per
-//! display frame.
+//! into the back buffer and copied to the screen, at most once per display
+//! frame.
 
 #![no_std]
 #![no_main]
@@ -20,6 +22,7 @@ mod decor;
 mod input;
 mod keymap;
 mod render;
+mod screen;
 mod session;
 mod startup;
 mod state;
@@ -31,9 +34,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use vabi::signals;
-use vgfx::{Bitmap, Damage, Rect, Text};
+use vgfx::{Damage, Rect, Text};
 use vipc::WaitSet;
 use vproto::display::{Cursor, display};
+use vproto::displaydev::{self, DisplayDevError, Link, displaydev as driver_protocol};
 use vproto::input::InputEvent;
 use vrt::object::{Channel, Vmo};
 use vrt::println;
@@ -41,15 +45,12 @@ use vrt::vm::Mapping;
 
 use decor::{Decor, DecorState};
 use keymap::Keyboard;
-use render::Screen;
+use screen::Screen;
 use session::Session;
 use startup::Startup;
 use state::{Compositor, DisplayClient};
 
 vrt::entry!(main);
-
-/// Shortest time between two composited frames (60 Hz).
-const FRAME_NS: u64 = 16_666_666;
 
 /// Reads a font file from the system image and leaks it (fonts live forever).
 fn load_font(vfs: &vproto::vfs::Client, path: &str) -> Option<&'static [u8]> {
@@ -57,6 +58,34 @@ fn load_font(vfs: &vproto::vfs::Client, path: &str) -> Option<&'static [u8]> {
     let mut data = alloc::vec![0u8; len as usize];
     vmo.read(0, &mut data).ok()?;
     Some(data.leak())
+}
+
+/// A display driver's connection (`displaydev`).
+struct DriverLink<'a> {
+    screen: &'a mut Screen,
+    key: u64,
+    /// A driver's (started by devmgr); nobody else may attach.
+    trusted: bool,
+    /// The firmware's framebuffer (physical address).
+    framebuffer: u64,
+}
+
+impl driver_protocol::Server for DriverLink<'_> {
+    fn attach(&mut self, screen: displaydev::Screen, link: Link) -> Result<(), DisplayDevError> {
+        if !self.trusted {
+            println!("{} cannot have the screen: only drivers may attach", screen.name);
+            return Err(DisplayDevError::Denied);
+        }
+        let name = screen.name.clone();
+        let result = self.screen.attach(self.key, screen, link, self.framebuffer);
+        // A mismatch is told in detail where it is found.
+        if let Err(e) = result
+            && e != DisplayDevError::Mismatch
+        {
+            println!("{} cannot have the screen: {}", name, e);
+        }
+        result
+    }
 }
 
 fn main() -> i32 {
@@ -106,10 +135,11 @@ fn main() -> i32 {
 
     let display_listener = vproto::register(display::NAME).expect("cannot register the display service");
     let input_listener = vproto::register(vproto::input::NAME).expect("cannot register the input service");
+    let driver_listener = vproto::register(driver_protocol::NAME).expect("cannot register the display driver service");
     println!("display {}x{} ready", width, height);
 
     let mut comp = Compositor {
-        screen: Screen { fb, pitch, rgb: info.framebuffer_format == 2, back: Bitmap::new(width, height) },
+        screen: Screen::new(fb, pitch, info.framebuffer_format == 2, width, height),
         decor: Decor::new(text, title_font),
         windows: BTreeMap::new(),
         order: Vec::new(),
@@ -147,15 +177,25 @@ fn main() -> i32 {
     comp.composite();
 
     let mut inputs: BTreeMap<u64, Channel> = BTreeMap::new();
+    // Display drivers' connections, and whether each is a driver's.
+    let mut drivers: BTreeMap<u64, (Channel, bool)> = BTreeMap::new();
+    let framebuffer = info.framebuffer_phys;
     let mut next_key = 10u64;
     const DISPLAY_KEY: u64 = 1;
     const INPUT_KEY: u64 = 2;
+    const DRIVER_KEY: u64 = 3;
+    const FLIP_DONE_KEY: u64 = 4;
     const INPUT_BASE: u64 = 1 << 40;
+    const DRIVER_BASE: u64 = 1 << 41;
     loop {
         let now = vrt::time::now_ns();
+        comp.screen.check(now);
         let mut deadline = vabi::DEADLINE_INFINITE;
-        if !comp.damage.is_empty() || comp.animating() {
-            deadline = (comp.last_frame + FRAME_NS).max(now);
+        if comp.wants_frame() {
+            deadline = comp.screen.next_frame(comp.last_frame).max(now);
+        }
+        if let Some(t) = comp.screen.timeout() {
+            deadline = deadline.min(t);
         }
         if let Some(r) = comp.keyboard.repeat_deadline() {
             deadline = deadline.min(r);
@@ -163,6 +203,13 @@ fn main() -> i32 {
         let mut ws = WaitSet::new();
         ws.add(display_listener.raw(), signals::READABLE, DISPLAY_KEY);
         ws.add(input_listener.raw(), signals::READABLE, INPUT_KEY);
+        ws.add(driver_listener.raw(), signals::READABLE, DRIVER_KEY);
+        if let Some(done) = comp.screen.done_event() {
+            ws.add(done, signals::SIGNALED, FLIP_DONE_KEY);
+        }
+        for (&k, (c, _)) in &drivers {
+            ws.add(c.raw(), signals::READABLE | signals::PEER_CLOSED, DRIVER_BASE | k);
+        }
         for (&k, c) in &comp.clients {
             ws.add(c.channel.raw(), signals::READABLE | signals::PEER_CLOSED, k);
         }
@@ -182,6 +229,35 @@ fn main() -> i32 {
                     while let Some(ch) = vproto::accept(&input_listener) {
                         next_key += 1;
                         inputs.insert(next_key, ch);
+                    }
+                }
+                DRIVER_KEY => {
+                    while let Some((ch, who)) = vproto::accept_with_identity(&driver_listener) {
+                        next_key += 1;
+                        // devmgr starts the drivers with its own registry
+                        // channel: they speak as devmgr.
+                        drivers.insert(next_key, (ch, who.service && who.name == "devmgr"));
+                    }
+                }
+                FLIP_DONE_KEY => comp.screen.flip_done(),
+                k if k & DRIVER_BASE != 0 => {
+                    let k = k & !DRIVER_BASE;
+                    if observed & signals::READABLE != 0 {
+                        while let Some(Ok(msg)) = drivers.get(&k).map(|(c, _)| c.read()) {
+                            let trusted = drivers.get(&k).is_some_and(|(_, t)| *t);
+                            let mut link = DriverLink { screen: &mut comp.screen, key: k, trusted, framebuffer };
+                            match driver_protocol::dispatch(&mut link, msg) {
+                                Ok(reply) => {
+                                    if let Some((c, _)) = drivers.get(&k) {
+                                        let _ = reply.send(c);
+                                    }
+                                }
+                                Err(e) => println!("bad display driver request: {}", e),
+                            }
+                        }
+                    } else if observed & signals::PEER_CLOSED != 0 {
+                        drivers.remove(&k);
+                        comp.screen.detach(k);
                     }
                 }
                 k if k & INPUT_BASE != 0 => {
@@ -242,7 +318,8 @@ fn main() -> i32 {
         while let Some(out) = comp.keyboard.poll_repeat(now) {
             comp.deliver_key(out);
         }
-        if (!comp.damage.is_empty() || comp.animating()) && now >= comp.last_frame + FRAME_NS {
+        comp.screen.check(now);
+        if comp.wants_frame() && now >= comp.screen.next_frame(comp.last_frame) {
             comp.composite();
         }
     }

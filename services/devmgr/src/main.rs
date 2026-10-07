@@ -114,12 +114,27 @@ const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
     (0x04, 0x03, 0x80, "hda"),
 ];
 
+/// QEMU's standard VGA, which tests may have played by `flipsim`, a
+/// display that flips (rather than left to the firmware's framebuffer).
+const FLIPSIM_DEVICE: (u16, u16) = (0x1234, 0x1111);
+
 /// Disk drivers. A live system (started with `live`) starts none of them:
 /// it runs from memory and never touches the computer's disks.
 const DISK_DRIVERS: [&str; 2] = ["virtio-blk", "ahci"];
 
+/// Programs started beside a driver, with their arguments: the renderer,
+/// which serves applications' OpenGL ES (`gpu`) on Mesa's iris, over the
+/// engines `intel-gpu` serves (`gem`). It waits for them a while, and
+/// leaves if they do not come.
+const COMPANIONS: &[(&str, &str, &[&str])] = &[("intel-gpu", "renderer", &["iris"])];
+
 /// The driver for a device, if any.
 fn driver_for(info: &DeviceInfo) -> Option<&'static str> {
+    // Intel's integrated graphics: the GPUs the display driver knows, from
+    // its own table.
+    if info.vendor == vigpu::device::VENDOR && vigpu::device::platform(info.device).is_some() {
+        return Some("intel-gpu");
+    }
     DRIVERS.iter().find(|m| m.vendor == info.vendor && m.devices.contains(&info.device)).map(|m| m.driver).or_else(
         || {
             CLASS_DRIVERS
@@ -301,30 +316,50 @@ impl DeviceSession<'_> {
 /// Starts `driver` for a device, returning the server end of its channel.
 /// Driver images come straight from the system image (not through the file
 /// system, which may itself be waiting for a disk driver).
-fn start_driver(boot: &initrd::Archive<'static>, driver: &str, info: &DeviceInfo) -> Option<Channel> {
-    let path = alloc::format!("bin/{driver}.exe");
+fn start_driver(boot: &initrd::Archive<'static>, driver: &str, args: &[String], info: &DeviceInfo) -> Option<Channel> {
+    let (ours, theirs) = Channel::create().ok()?;
+    let started = start_program(boot, driver, args, Some(theirs))?;
+    started.then(|| {
+        println!(
+            "started {} for {:04x}:{:04x} at {:02x}:{:02x}.{}",
+            driver, info.vendor, info.device, info.bus, info.slot, info.function
+        );
+        ours
+    })
+}
+
+/// Starts the programs that go with `driver` ([`COMPANIONS`]).
+fn start_companions(boot: &initrd::Archive<'static>, driver: &str) {
+    for &(_, program, args) in COMPANIONS.iter().filter(|(d, ..)| *d == driver) {
+        let args: Vec<String> = args.iter().map(|&a| a.into()).collect();
+        if start_program(boot, program, &args, None) == Some(true) {
+            println!("started {} {} beside {}", program, args.join(" "), driver);
+        }
+    }
+}
+
+/// Starts `bin/NAME.exe` from the system image with the registry, and the
+/// channel for its device if it drives one: whether it started (`None` if
+/// it could not be tried).
+fn start_program(boot: &initrd::Archive<'static>, name: &str, args: &[String], pci: Option<Channel>) -> Option<bool> {
+    let path = alloc::format!("bin/{name}.exe");
     let Some(image) = boot.find(&path).map(|f| f.data) else {
-        println!("driver {} is not installed", driver);
+        println!("{} is not installed", name);
         return None;
     };
     let registry = vproto::with_registry(|r| r.clone_registry()).ok()?.ok()?.ok()?;
-    let (ours, theirs) = Channel::create().ok()?;
-    let name = String::from(driver);
-    let result = vrt::process::Spawn::new(&name)
-        .handle(vabi::startup::role::REGISTRY, registry.into_handle())
-        .handle(PCIDEV_ROLE, theirs.into_handle())
-        .start(image);
-    match result {
-        Ok(_) => {
-            println!(
-                "started {} for {:04x}:{:04x} at {:02x}:{:02x}.{}",
-                driver, info.vendor, info.device, info.bus, info.slot, info.function
-            );
-            Some(ours)
-        }
+    let mut spawn = vrt::process::Spawn::new(name).handle(vabi::startup::role::REGISTRY, registry.into_handle());
+    if let Some(pci) = pci {
+        spawn = spawn.handle(PCIDEV_ROLE, pci.into_handle());
+    }
+    for a in args {
+        spawn = spawn.arg(a);
+    }
+    match spawn.start(image) {
+        Ok(_) => Some(true),
         Err(e) => {
-            println!("failed to start {}: {}", driver, e);
-            None
+            println!("failed to start {}: {}", name, e);
+            Some(false)
         }
     }
 }
@@ -381,7 +416,11 @@ fn main() -> i32 {
     };
     let acpi = boot_info().and_then(|boot| Acpi::load(&mmio, &boot));
     let mgr = Manager { config: ConfigSpace::new(ports), io, mmio, dma, acpi, gpio: RefCell::new(Gpio::default()) };
-    let live = vrt::env::args().iter().any(|a| a == "live");
+    let args = vrt::env::args();
+    let live = args.iter().any(|a| a == "live");
+    // Tests: QEMU's standard VGA as a display that flips (`flipsim`, or
+    // `flipsim=N` for one that goes away after N flips).
+    let flipsim = args.iter().find(|a| *a == "flipsim" || a.starts_with("flipsim="));
 
     let mut bound: BTreeMap<u64, Bound> = BTreeMap::new();
     let mut next = 1u64;
@@ -396,8 +435,12 @@ fn main() -> i32 {
             info.device,
             class_name(&info)
         );
-        let Some(driver) = driver_for(&info) else {
-            continue;
+        let (driver, driver_args) = match flipsim {
+            Some(option) if (info.vendor, info.device) == FLIPSIM_DEVICE => ("flipsim", alloc::vec![option.clone()]),
+            _ => match driver_for(&info) {
+                Some(driver) => (driver, Vec::new()),
+                None => continue,
+            },
         };
         if live && DISK_DRIVERS.contains(&driver) {
             println!(
@@ -407,9 +450,10 @@ fn main() -> i32 {
             continue;
         }
         let below = described_below(mgr.acpi.as_ref(), a);
-        if let Some(ch) = start_driver(&boot, driver, &info) {
+        if let Some(ch) = start_driver(&boot, driver, &driver_args, &info) {
             bound.insert(next, Bound { address: a, info, channel: ch, acpi: below });
             next += 1;
+            start_companions(&boot, driver);
         }
     }
 

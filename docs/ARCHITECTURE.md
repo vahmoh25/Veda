@@ -17,7 +17,7 @@ that communicate over kernel channels.
  │                agent (the voice agent) · netd · wlan                     │
  │ Drivers        ps2 · xhci (USB) · hda (sound) · virtio-snd · ac97 ·      │
  │                virtio-input · virtio-blk · ahci · virtio-net · e1000 ·   │
- │                virtio-gpu (3D) · pci                                     │
+ │                virtio-gpu (3D) · intel-gpu (display, 3D) · pci           │
  ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
  │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
  ├──────────────────────────────────────────────────────────────────────────┤
@@ -118,10 +118,24 @@ of several objects at once (`object_wait_many`).
 HPET (or the PIT without one). On an Intel processor not under a
 hypervisor, the TSC frequency the processor reports itself (CPUID leaves
 0x15 and 0x16, as Linux reads them) wins over a timer that measures more
-than 5% off it; `dmesg time` says which was used. The wall clock starts
-from the firmware's RTC, which keeps UTC; the
-`tz=` boot option (xtask passes the host's offset) gives local time, which
-people see, while protocols and certificates use the UTC clock.
+than 5% off it; `dmesg time` says which was used. The clock and every
+timer read the TSC of the processor they run on, so all processors' TSCs
+must agree. They count the same clock, each offset by its
+`IA32_TSC_ADJUST`, which firmware may leave different from one processor
+to another; as Linux does, the kernel sets the boot processor's to 0
+before the clock starts and each other processor's alike as it starts,
+then checks with an exchange of readings that they agree and corrects
+what is left (`dmesg smp` says by how much). The wall clock starts from
+the firmware's RTC, which keeps UTC; the `tz=` boot option (xtask passes
+the host's offset) gives local time, which people see, while protocols and
+certificates use the UTC clock.
+
+**Processors.** Each processor turns its caches on as it starts (a
+processor started with INIT keeps the setting the firmware left it, which
+may be off), and on Intel processors with hardware P-states lets the
+processor choose its own speed, up to turbo, leaning towards performance;
+without them it would stay at whatever speed the firmware left it at.
+`dmesg cpu` says how fast the boot processor runs while busy.
 
 **Scheduling.** 32 priorities, round-robin within a priority, 10 ms slices,
 preemption on wake-up of a higher-priority thread, tickless one-shot timers,
@@ -296,8 +310,9 @@ generator.
 
 ## The window system (`services/compositor`)
 
-The compositor owns the framebuffer and serves two protocols: `display`
-for applications and `input` for drivers.
+The compositor owns the screen and serves three protocols: `display` for
+applications, `input` for input drivers and `displaydev` for a display
+driver.
 
 * **Surfaces.** A client creates a window and attaches two pixel buffers in
   a shared VMO. It draws into the back buffer and `present`s it; the
@@ -305,10 +320,26 @@ for applications and `input` for drivers.
   needed, which paces every client to the display without copying pixels.
 * **Composition** is damage driven: changed rectangles are recomposed from
   the bottom up into a back buffer (premultiplied alpha, shadows,
-  open/close/minimise animations) and copied to the framebuffer, at most
-  once per display frame. At system start the screen shows the startup
+  open/close/minimise animations) and copied to the screen, at most once
+  per display frame. At system start the screen shows the startup
   sequence instead (see [Boot](#boot)) until the desktop has drawn itself
   and dissolved in.
+* **The screen** (`screen.rs`). Frames go into the framebuffer the
+  firmware left, written in place and paced by a 60 Hz timer, until a
+  display driver that can flip attaches (`displaydev`; see
+  [Display](#display-driversintel-gpu)). From then on each frame goes into
+  one of the driver's pictures that is not on the screen; the compositor
+  asks for it, the driver shows it from the next vertical blank, and the
+  next frame is composed once it is shown. So the screen never shows a
+  frame half drawn, frames come at the screen's own pace, and animations
+  are timed for the vertical blank at which their frames will be seen.
+  Each picture keeps what changed while the other was drawn into, and is
+  brought up to date before its next frame. Only drivers (started by
+  `devmgr`) may attach, and only to the screen the compositor draws on:
+  the firmware's framebuffer address, the size and the pixel format must
+  match. If the driver goes away, or leaves a flip undone for a second,
+  frames go into all its pictures and the firmware's framebuffer, in
+  place, whichever the screen shows.
 * **Window kinds** form layers: the desktop, normal and borderless windows,
   panels (which reserve screen space), popups (closed when they lose focus)
   and notifications. A focused full-screen window rises above the panels.
@@ -321,6 +352,58 @@ for applications and `input` for drivers.
   the screen; Super+arrows do the same from the keyboard and Super+D shows
   the desktop. Alt+Tab shows the window switcher (live thumbnails), Alt+F4
   closes, and tapping Super sends `StartMenuKey` to the shell.
+
+## Display (`drivers/intel-gpu`)
+
+Drawing into the picture the screen is showing tears, and frames paced by
+a timer drift against the screen's own rhythm: what looks smooth in a
+virtual machine's window, whose host shows whole frames, judders on a
+laptop's panel. On Intel's integrated graphics of Tiger Lake to Raptor
+Lake (display versions 12 and 13: Iris Xe and UHD Graphics), `intel-gpu`
+gives the window system flips.
+
+* **Takeover.** It keeps the mode the firmware set (no mode setting, link
+  training, clocks or watermarks) and takes over the picture plane 1 shows
+  on every pipe that is on, if that picture is plain: linear, 32 bits a
+  pixel, unrotated, shown from its first pixel, the same on every pipe
+  (where the plane sits and whether a scaler fits it to the panel stay as
+  the firmware set them). Anything else stays the firmware's
+  framebuffer's. It logs every pipe as it found it: the mode, scaling,
+  panel self refresh, the planes (`dmesg intel-gpu`).
+* **Pictures.** Two, in physically contiguous write-combining memory: the
+  display engine does not look into the processor's caches, so what the
+  compositor writes goes to memory, and the kernel writes back the lines
+  it zeroed the memory through. They are mapped into the GPU's global
+  address table (GGTT) where nothing is scanned out: in unused entries if
+  there are any, never over the firmware's framebuffer, other planes or
+  cursors.
+* **Flips.** A flip writes `PLANE_SURF` on every pipe showing the picture;
+  the display engine takes the new picture at the start of the next
+  vertical blank, and `PLANE_SURFLIVE` says when it has. While flips come
+  the display engine interrupts at each vertical blank (MSI, through the
+  GPU's master and display interrupt controls, as Linux's i915 has them);
+  without interrupts the driver watches the frame counter. A completion
+  says when its vertical blank began (from the line being scanned out)
+  and how long the screen takes for a frame (measured at the start).
+* **Faults.** The pipe latches faults without interrupting: should plane 1
+  fail to read a picture (unmapped memory, an IOMMU the firmware left
+  on), or the pipe keep running short of pixels, the driver shows the
+  firmware's framebuffer again and leaves the screen to it, and the
+  compositor draws in place.
+* If the compositor goes away, the driver shows the firmware's
+  framebuffer again, which a restarted compositor draws into, and
+  attaches to the next one.
+
+What the driver knows of the hardware is `vigpu` (`lib/igpu`): register
+offsets and fields as i915 names them, the device ids it lists, and the
+logic of the takeover, the address table, flips, interrupts and the flip
+loop itself (`scanout`: the driver only waits and calls in). The host
+tests run it against a simulated display engine (`lib/boardsim`), time
+passing as they say, which notes what a driver must not do: change a
+plane's setup, scan out unmapped memory, remap the firmware's entries. Under QEMU, `flipsim`
+stands in for the hardware (QEMU's VGA, played as a display that flips at
+the vertical blank), so that the GUI scripts cover the compositor's side
+(`tests/ui/flips*.vts`).
 
 ## The desktop shell (`apps/shell`)
 
@@ -455,17 +538,85 @@ simulated with transform feedback.
   (`virtio-vga-gl`), whose VGA side keeps showing the framebuffer the
   firmware set up.
 
+* **The renderer** (`services/renderer`, C) serves the same protocol
+  where there is no virtio-gpu: it carries the commands out itself, on
+  one of Mesa's Gallium drivers (`ports/mesa`), so applications cannot
+  tell it from the virtio-gpu driver. Its decoder takes virgl's commands
+  straight to Gallium's calls, checking every word first (a client can
+  fail its own context, never the renderer), with Gallium's state cache
+  (`cso_context`) between it and the driver, so that a client deleting an
+  object leaves nothing behind that the driver still uses. Commands are
+  copied out of the shared memory before they are decoded. Its `main` is
+  a Veda service written in C, on `<veda/ipc.h>`. It renders on softpipe
+  (`run=renderer`) or on iris, Intel's driver (`run=renderer:iris`).
+  Formats are virgl's, which OpenGL hosts take: 24-bit depth with stencil
+  is `S8_UINT_Z24_UNORM`, depth in the upper bits as
+  `GL_UNSIGNED_INT_24_8` packs it. iris has depth only in the lower bits
+  (`Z24_UNORM_S8_UINT`), so on iris the renderer keeps those formats that
+  way round and turns each texel round when it is copied in or out
+  (`VR_DEPTH_LOW=1` makes it do so on softpipe too, for the host's tests).
+  When a context is destroyed it unbinds the views it bound on the driver
+  first: softpipe cannot be destroyed with views bound.
+
+* **iris** reaches the GPU as on Linux, through i915's render node,
+  `/dev/dri/renderD128`, which the POSIX layer carries out
+  (`lib/posix/src/drm.rs`, with a small libdrm of Veda's own in
+  `services/renderer/drm`). What i915 keeps per open file the layer
+  keeps: handles of buffers, syncobjs, contexts and address spaces, and
+  each buffer's last uses; queries are answered from what the GPU's
+  driver says of the GPU. The driver does what the GPU needs done, over
+  the `gem` protocol (`lib/proto/src/gem.rs`): buffers (memory objects
+  the client maps), address spaces, contexts made when first submitted
+  to, and submissions, numbered per engine. A page every client maps
+  holds each engine's last completed number, and an event says when they
+  move, so waiting takes no call. The bookkeeping, including buffers
+  that must stay bound until the GPU is done with them, is
+  `vigpu::gem`, whatever the GPU underneath, and the service around it
+  (clients, sessions, the fence page) is `vgem` (`lib/gem`). `gemsim`
+  serves the protocol with it as an Alder Lake GPU that runs nothing, so
+  that iris starts, compiles shaders and submits frames under QEMU
+  (`tests/ui/iris.vts`, and systest's checks of the render node,
+  `tests/c/drm.c`) through the same service loop as the hardware's.
+
+* **The GPU's engines** (`intel-gpu`, beside the display) serve `gem` on
+  Intel's Gfx12 GPUs (Tiger Lake to Raptor Lake: Iris Xe and UHD
+  Graphics), on the render and copy engines, as Linux's i915 drives them
+  with execlists (`vigpu::render`, with `gt`, `lrc` and `ppgtt`). Bringing
+  them up takes forcewake and keeps it, resets the engines, sets the GT
+  and each engine up (workarounds, PAT, MOCS, the registers user batches
+  may write), then runs a golden context on each engine: the image the
+  engine saves of it is what every context starts from. Address spaces
+  are four-level page tables; a context is an image and a ring, mapped in
+  a range of the global table set aside before the display's pictures
+  are placed. Submissions go to an engine one at a time and end by
+  writing their number into the engine's status page, which the driver
+  looks at every millisecond while the GPU has work (the engines'
+  interrupts stay off: the GPU's one interrupt is the display's). A
+  submission still running after 4 s is lost, its engine reset and its
+  context banned, as i915 does; Mesa makes another. The GT runs at its
+  highest frequency while it has work and at its lowest once idle.
+  devmgr starts the renderer on iris beside `intel-gpu` (it waits for
+  `gem` a while, and leaves if the engines do not come up). The host
+  tests drive all of it against a model of the GT (`lib/boardsim`: page
+  walks, rings, batches, hangs and resets).
+
 `vgl::veda::context` renders on the GPU when the `gpu` service exists and
-in software on every CPU otherwise (VirtualBox and real PCs). Under QEMU
-the difference is large: Prism runs at about 1 frame a second in
-software, and at 55 at its full resolution on the GPU.
+in software on every CPU otherwise (VirtualBox, and PCs without Intel's
+Gfx12 graphics). Under QEMU the difference is large: Prism runs at about
+1 frame a second in software, and at 55 at its full resolution on the
+GPU.
 
 The virgl renderer is tested on the host: `vgl::virgl::host` loads the
 virglrenderer and ANGLE that QEMU's Windows build ships and runs the
 whole `vgl` test suite on the host's GPU (`VGL_TEST_BACKEND=virgl`), on
 ANGLE and on the host's desktop OpenGL (`VGL_TEST_HOST=desktop`, through
 WGL, as QEMU's window uses it), and Prism's scene, rendered both ways,
-must look the same to within the GPU's rounding.
+must look the same to within the GPU's rounding. The suite also runs
+through the renderer's decoder on softpipe (`VGL_TEST_BACKEND=gallium`,
+`vgl::virgl::gallium`, which loads the decoder built with Mesa as
+`vgallium.dll`); where softpipe falls short of a GPU (no multisampling,
+points an eighth of a pixel off, depth filtered before it is compared)
+the tests say so.
 
 ## Audio
 
@@ -524,7 +675,8 @@ must look the same to within the GPU's rounding.
   playback starts logs how fast the link's clock ran by the system's, how
   many buffers the controller completed, and how fast each of its
   position counters moved (`dmesg hda`). HDMI and DisplayPort codecs are
-  left alone: their audio needs a graphics driver.
+  left alone: their audio needs the graphics driver to set the display's
+  link up for it, and `intel-gpu` keeps the firmware's mode as it is.
 * **Speaker amplifiers.** Many laptops since 2021 drive their speakers
   with Cirrus Logic CS35L41 amplifiers: the codec sends them its output
   over I2S, but they are set up over SPI or I2C, and play nothing until
@@ -630,22 +782,30 @@ policy, the wake word) are in `vagent`, tested on the host. See
   over a simulated cable, the Wi-Fi simulator, and the TLS client against
   a rustls server and real certificate chains.
 * Simulated machines (`lib/boardsim`): hardware no emulator has, such as
-  a laptop's speaker amplifiers, as firmware descriptions shaped like the
-  real firmware's and models of the chips, wired as on the real board.
-  Veda's own code (the ACPI interpreter, the GPIO pads, the SPI
-  controller, the amplifiers' sequences and their DSP firmware, with the
-  real firmware files) runs against them through the same traits it uses
-  on the hardware, and the models note what a driver does wrong (two
-  devices selected at once, a protected register written while locked,
-  an amplifier powered without its clock, a DSP started with its memory
-  protection closed, a gain above 4.5 dB without the DSP's protection).
-  They cannot show that the real chips behave like their models, or how
-  anything sounds: the real machine stays the final check.
+  a laptop's speaker amplifiers and Intel's display engine, as firmware
+  descriptions shaped like the real firmware's and models of the chips,
+  wired as on the real board. Veda's own code (the ACPI interpreter, the
+  GPIO pads, the SPI controller, the amplifiers' sequences and their DSP
+  firmware, with the real firmware files; the display driver's takeover,
+  address table, flips and interrupts) runs against them through the same
+  traits it uses on the hardware, and the models note what a driver does
+  wrong (two devices selected at once, a protected register written while
+  locked, an amplifier powered without its clock, a DSP started with its
+  memory protection closed, a gain above 4.5 dB without the DSP's
+  protection, a plane's setup changed, unmapped memory scanned out). They
+  cannot show that the real chips behave like their models, or how
+  anything sounds or looks: the real machine stays the final check.
 * GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
   mouse, keyboard, waits on log lines, screenshots — and fail on panics.
   The sound cards' scripts also check QEMU's recording of the output for
   dropouts, and `hda-speakers.vts` gives the HD Audio driver a stand-in
   for a laptop's amplifier driver (`speakertest`) that answers slowly.
+  `flips.vts` gives the window system a display that flips (`flipsim`,
+  QEMU's VGA played as one) and compares screenshots of the desktop before
+  and after a window came and went, in both of its pictures;
+  `flips-driver-gone.vts` has that driver go away during the startup
+  sequence, and `flips-restart.vts` the window system restart while it is
+  attached.
 * The agent's scripts (`tests/agent/*.vts`) with a stand-in for Deepgram on
   the host and a test microphone fed from the host; `tests/real/` talks to
   the real Deepgram.
@@ -670,6 +830,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
 | `lib/virtio` | virtio device access shared by the drivers |
 | `lib/hda`, `lib/usb`, `lib/cs35l41`, `lib/spi` | what the HD Audio, USB, speaker amplifier and SPI drivers know that touches no hardware |
+| `lib/igpu` | Intel's integrated graphics for the display driver: registers, device ids, takeover, address table, flips, interrupts, the flip loop |
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `lib/boardsim` | simulated machines for host tests: firmware descriptions and models of chips no emulator has |
 | `lib/splash` | the boot splash's picture, which the boot loader and the window system draw alike |

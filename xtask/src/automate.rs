@@ -332,6 +332,49 @@ fn words(line: &str) -> Vec<String> {
     out
 }
 
+/// A screenshot's path as a script gives it: relative to the workspace, with
+/// `target/veda/` standing for the output directory (`$VEDA_OUT`).
+fn shot_path(w: &[String], i: usize) -> Result<PathBuf> {
+    let given = w.get(i).ok_or("missing file name")?;
+    if let Some(rest) = given.strip_prefix("target/veda/") {
+        return Ok(util::out_dir().join(rest));
+    }
+    let path = PathBuf::from(given);
+    Ok(if path.is_absolute() { path } else { util::workspace_root().join(path) })
+}
+
+/// Fails unless the screenshots `a` and `b` are alike, pixel for pixel, in
+/// `region` (fractions of the screen: left, top, right, bottom).
+fn same_pictures(a: &Path, b: &Path, region: [f64; 4]) -> Result {
+    let load = |p: &Path| -> Result<vimage::Image> {
+        let data = std::fs::read(p).map_err(|e| format!("reading {}: {e}", p.display()))?;
+        vimage::decode(&data).map_err(|e| format!("decoding {}: {e:?}", p.display()))
+    };
+    let (first, second) = (load(a)?, load(b)?);
+    if (first.width, first.height) != (second.width, second.height) {
+        return Err(format!("{} and {} differ in size", a.display(), b.display()));
+    }
+    let (w, h) = (first.width as f64, first.height as f64);
+    let x = (region[0] * w) as u32..((region[2] * w) as u32).min(first.width);
+    let y = (region[1] * h) as u32..((region[3] * h) as u32).min(first.height);
+    let mut differing = y
+        .flat_map(|y| x.clone().map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let i = (y * first.width + x) as usize;
+            first.pixels[i] != second.pixels[i]
+        })
+        .peekable();
+    match differing.peek().copied() {
+        None => Ok(()),
+        Some((x, y)) => Err(format!(
+            "{} and {} differ in {} pixels, the first at ({x}, {y})",
+            a.display(),
+            b.display(),
+            differing.count()
+        )),
+    }
+}
+
 fn num(w: &[String], i: usize) -> Result<f64> {
     w.get(i).ok_or("missing argument")?.parse::<f64>().map_err(|_| format!("'{}' is not a number", w[i]))
 }
@@ -372,9 +415,25 @@ pub fn input_devices(script: &str) -> Result<Option<InputDevices>> {
     Ok(input)
 }
 
+/// Whether a script asks for QEMU's 3D GPU (`gpu on`) or plain VGA (`gpu
+/// off`) as the display; `None` if it does not say.
+pub fn gpu(script: &str) -> Result<Option<bool>> {
+    let mut gpu = None;
+    for w in script.lines().map(words) {
+        if w.first().is_some_and(|c| c == "gpu") {
+            gpu = Some(match w.get(1).map(String::as_str) {
+                Some("on") => true,
+                Some("off") => false,
+                other => return Err(format!("gpu: expected on or off, not {}", other.unwrap_or("nothing"))),
+            });
+        }
+    }
+    Ok(gpu)
+}
+
 /// Why a script can only run under QEMU, if it can: the simulated Wi-Fi
 /// (virtio-serial and airsim), QEMU's 82574L card, the live system's USB
-/// stick, QMP commands, or `requires qemu`.
+/// stick, QMP commands, the choice of display (`gpu`), or `requires qemu`.
 pub fn needs_qemu(script: &str) -> Option<&'static str> {
     for w in script.lines().map(words) {
         match w.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
@@ -383,6 +442,7 @@ pub fn needs_qemu(script: &str) -> Option<&'static str> {
             ["air" | "air-expect" | "air-wait", ..] => return Some("the Wi-Fi simulator"),
             ["live", ..] => return Some("the live system's USB stick"),
             ["qmp", ..] => return Some("QMP commands"),
+            ["gpu", ..] => return Some("the choice of QEMU's display"),
             ["requires", "qemu", ..] => return Some("marked as QEMU only"),
             _ => {}
         }
@@ -502,13 +562,23 @@ pub fn run_script(
                     }
                 }
                 "shot" => {
-                    let path = PathBuf::from(w.get(1).ok_or("missing file name")?);
-                    let path = if path.is_absolute() { path } else { util::workspace_root().join(path) };
+                    let path = shot_path(&w, 1)?;
                     if let Some(dir) = path.parent() {
                         std::fs::create_dir_all(dir).ok();
                     }
                     s.m.screenshot(&path).map_err(ctx)?;
                     util::status("Screenshot", path.display());
+                }
+                // Two screenshots show the same in a region (fractions of
+                // the screen; all of it if none is given): what came and
+                // went between them left nothing behind.
+                "expect-same" => {
+                    let region = if w.len() >= 7 {
+                        [num(&w, 3)?, num(&w, 4)?, num(&w, 5)?, num(&w, 6)?]
+                    } else {
+                        [0.0, 0.0, 1.0, 1.0]
+                    };
+                    same_pictures(&shot_path(&w, 1)?, &shot_path(&w, 2)?, region).map_err(ctx)?;
                 }
                 "move" => s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?,
                 "click" => {
@@ -533,7 +603,7 @@ pub fn run_script(
                     s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "sound" | "audio" | "requires" | "live" | "input" => {}
+                "boot-cmdline" | "net" | "nic" | "sound" | "audio" | "requires" | "live" | "input" | "gpu" => {}
                 "qmp" => {
                     let command = w.get(1).ok_or("missing command")?;
                     let arguments = w.get(2).map_or("{}", String::as_str);

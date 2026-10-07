@@ -87,7 +87,28 @@ fn renders_the_same_on_the_gpu() {
     };
     let px = render(&mut gpu, w, h);
     save("PRISM_GPU_SHOT", &px, w, h);
-    looks_like_the_scene(&px, w, h);
+    same_as_software(&px, w, h);
+}
+
+/// And through Veda's renderer, on softpipe (`vgallium.dll`), as Veda
+/// renders without virtio-gpu.
+#[test]
+fn renders_the_same_through_the_renderer() {
+    let (w, h) = size();
+    let config = Config { width: w, height: h, ..Config::default() };
+    let Some(mut gpu) = vgl::virgl::gallium::context(config) else {
+        std::println!("skipped: the renderer (vgallium.dll) is not built");
+        return;
+    };
+    let px = render(&mut gpu, w, h);
+    save("PRISM_RENDERER_SHOT", &px, w, h);
+    same_as_software(&px, w, h);
+}
+
+/// A frame looks like the scene, and like the software renderer's.
+fn same_as_software(px: &[u32], w: u32, h: u32) {
+    looks_like_the_scene(px, w, h);
+    let config = Config { width: w, height: h, ..Config::default() };
     let mut soft = Context::new(Box::new(SoftBackend::new(Box::new(Serial))), config);
     let reference = render(&mut soft, w, h);
     // Per channel: the mean difference, and how many pixels differ much.

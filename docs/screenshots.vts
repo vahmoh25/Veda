@@ -6,7 +6,10 @@
 # menu's search and the Terminal, so only Music's play button and a few
 # things on the taskbar are clicked by position. The machine has the
 # virtual Wi-Fi radio (its icon is on the taskbar) and airsim's simulated
-# networks, and the agent talks to the stand-in for Deepgram.
+# networks, and the agent talks to the stand-in for Deepgram. GCC must be
+# in the image (`cargo xtask toolchain`), and Prism renders on the host's
+# GPU where QEMU has one.
+requires native-toolchain
 net wifi
 agent-asleep
 fail-on "PANIC"
@@ -153,3 +156,47 @@ shot docs/images/starfall.png
 key alt-f4
 wait-serial "starfall exited" 20
 wait 2
+
+# GCC in the Terminal: a C program with a mistake, which GCC finds. It runs
+# once first, to have its programs read from the disk, then for the
+# picture; that run has no line in the log to wait for.
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 30
+wait 4
+type "echo -e 'int main(void)\n{\n    int sum = 0;\n    for (int i = 1; i <= 100; i++)\n        sum += i;\n    return total;\n}' > sum.c"
+key ret
+wait 1
+type "gcc -Wall -o sum sum.c; logger warm-$?"
+key ret
+wait-serial "terminal: warm-1" 600
+type "clear"
+key ret
+wait 1
+type "gcc --version && cat sum.c"
+key ret
+wait 4
+type "gcc -Wall -o sum sum.c"
+key ret
+wait 40
+move 0.97 0.08
+wait 3
+shot docs/images/gcc.png
+key alt-f4
+wait-serial "terminal exited" 20
+wait 2
+
+# Prism: OpenGL ES 3.0.
+key meta_l
+wait 2
+type "prism"
+key ret
+wait-serial "(OpenGL ES 3.0 Veda)" 90
+wait-serial " fps, render " 60
+move 0.97 0.08
+wait 4
+shot docs/images/prism.png
+key alt-f4
+wait-serial "prism exited" 20

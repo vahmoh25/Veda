@@ -127,6 +127,12 @@ pub mod nr {
     pub const VMO_CREATE_CONTIGUOUS: usize = 45;
     /// `vmo_phys_addr(h, offset) -> paddr` (contiguous/physical VMOs only).
     pub const VMO_PHYS_ADDR: usize = 46;
+    /// `vmo_pages(resource, h, offset, count, out) -> count`: the physical
+    /// addresses of `count` pages of a VMO from `offset` (page-aligned),
+    /// committed first, written to `out` (a `u64` each), for a device to
+    /// reach them (a DMA resource). They stay the VMO's while it lives:
+    /// pages never move, and only private memory gives pages back.
+    pub const VMO_PAGES: usize = 47;
 
     // --- address spaces -----------------------------------------------
     /// `vm_map(process, vmo, vmo_offset, len, addr, flags) -> addr`.
@@ -573,6 +579,11 @@ pub mod dma_flags {
     /// Allocate the memory below 4 GiB, for devices that can only put
     /// 32-bit addresses on the bus.
     pub const BELOW_4G: usize = 1 << 0;
+    /// Map the memory write-combining, for a device that reads it without
+    /// snooping the CPU's caches (a display engine scanning a picture out):
+    /// what the CPU writes goes to memory, not into its caches. Reading the
+    /// memory from the CPU is slow.
+    pub const WRITE_COMBINING: usize = 1 << 1;
 }
 
 /// Flags for `vm_map` / `vm_protect`.
@@ -724,6 +735,9 @@ pub struct KernelBootInfo {
     /// 1 = BGRX, 2 = RGBX.
     pub framebuffer_format: u32,
     pub framebuffer_size: u64,
+    /// Where the framebuffer is in physical memory (for a display driver's
+    /// handover, which must take over the very picture the firmware set).
+    pub framebuffer_phys: u64,
     pub initrd_size: u64,
     pub cmdline: [u8; 256],
     pub cmdline_len: u32,

@@ -96,6 +96,7 @@ pub fn spawn_init(boot: &BootInfo) {
         framebuffer_pitch: fb.stride * 4,
         framebuffer_format: fb.format as u32,
         framebuffer_size: fb.size,
+        framebuffer_phys: fb.phys_base,
         initrd_size: boot.initrd.size,
         cmdline,
         cmdline_len: boot.cmdline_len,

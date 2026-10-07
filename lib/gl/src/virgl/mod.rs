@@ -31,6 +31,8 @@ mod draw;
 mod feedback;
 pub mod formats;
 #[cfg(all(windows, any(test, feature = "host-virgl")))]
+pub mod gallium;
+#[cfg(all(windows, any(test, feature = "host-virgl")))]
 pub mod host;
 mod ops;
 mod protocol;

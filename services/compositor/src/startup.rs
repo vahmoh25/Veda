@@ -24,7 +24,7 @@ use vmath::FloatExt;
 use vrt::println;
 use vsplash::Ring;
 
-use crate::render::Screen;
+use crate::screen::Screen;
 
 const MS: u64 = 1_000_000;
 /// The light gathers around the ring; then the name, then the tagline,
@@ -227,6 +227,12 @@ impl Startup {
         }
     }
 
+    /// The splash as the screen shows it (during the dissolve, under the
+    /// desktop).
+    pub(crate) fn layer(&self) -> &Bitmap {
+        &self.layer
+    }
+
     /// Draws the sequence's next frame on the screen; `ready`: the desktop
     /// has drawn itself. False once the sequence is over: the composed
     /// screen is to be shown as it is from then on.
@@ -244,10 +250,11 @@ impl Startup {
                 let r = now - start;
                 if r >= REVEAL {
                     println!(
-                        "desktop shown after {} ms ({} frames, {} a second)",
+                        "desktop shown after {} ms ({} frames, {} a second; {})",
                         t / MS,
                         self.frames,
-                        self.frames as u64 * 1_000_000_000 / t.max(1)
+                        self.frames as u64 * 1_000_000_000 / t.max(1),
+                        screen.describe()
                     );
                     return false;
                 }

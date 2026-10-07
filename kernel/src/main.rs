@@ -118,7 +118,12 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
     if let Some(hpet) = acpi.hpet_phys {
         time::set_hpet(hpet);
     }
+    // The boot processor's TSC as all processors' will be (see `time`).
+    let firmware_adjust = time::reset_boot_tsc();
     time::calibrate_tsc();
+    if let Some(adjust) = firmware_adjust {
+        kinfo!("time: the firmware's adjustment of CPU 0's TSC ({} ns) set to 0", time::ticks_to_ns(adjust));
+    }
     time::set_boot_time(&boot.boot_time, opts.tz);
     if features.tsc_deadline {
         apic::use_tsc_deadline(true);
@@ -132,6 +137,16 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
         if features.tsc_deadline { "TSC-deadline" } else { "one-shot" },
         if apic::is_x2apic() { "x2APIC" } else { "xAPIC" }
     );
+    // How fast the processor runs: rated, and measured while busy.
+    let rated = cpu::rated_mhz()
+        .map_or(alloc::string::String::new(), |(base, top)| alloc::format!(", rated {} MHz (up to {} MHz)", base, top));
+    let measured =
+        cpu::measure_mhz(20_000).map_or(alloc::string::String::from("unknown"), |mhz| alloc::format!("{} MHz", mhz));
+    let pstates = match cpu::hwp_range() {
+        Some((lowest, highest)) => alloc::format!("hardware P-states on (performance {} to {})", lowest, highest),
+        None => alloc::string::String::from("no hardware P-states: the firmware's speed"),
+    };
+    kinfo!("cpu: running at {} while busy{}; {}", measured, rated, pstates);
 
     random::init(boot.entropy());
 

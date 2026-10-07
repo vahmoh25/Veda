@@ -14,6 +14,17 @@ pub const MSR_KERNEL_GS_BASE: u32 = 0xC000_0102;
 pub const MSR_APIC_BASE: u32 = 0x1B;
 pub const MSR_PAT: u32 = 0x277;
 pub const MSR_TSC_DEADLINE: u32 = 0x6E0;
+/// `IA32_TSC_ADJUST`: this processor's offset of the TSC from the clock all
+/// processors share (writing the TSC moves it).
+pub const MSR_TSC_ADJUST: u32 = 0x3B;
+/// Cycles at the base frequency and at the actual one, while running.
+pub const MSR_MPERF: u32 = 0xE7;
+pub const MSR_APERF: u32 = 0xE8;
+/// Hardware P-states (`IA32_PM_ENABLE`, `IA32_HWP_CAPABILITIES`,
+/// `IA32_HWP_REQUEST`).
+pub const MSR_PM_ENABLE: u32 = 0x770;
+pub const MSR_HWP_CAPABILITIES: u32 = 0x771;
+pub const MSR_HWP_REQUEST: u32 = 0x774;
 
 #[inline]
 pub fn rdmsr(msr: u32) -> u64 {
@@ -54,6 +65,17 @@ pub fn rdtsc() -> u64 {
     unsafe { core::arch::x86_64::_rdtsc() }
 }
 
+/// The TSC, read once every earlier instruction has completed (LFENCE): it
+/// orders with the memory accesses around it.
+#[inline]
+pub fn rdtsc_ordered() -> u64 {
+    // SAFETY: LFENCE and RDTSC are always available on x86-64.
+    unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    }
+}
+
 #[inline]
 pub fn read_cr2() -> u64 {
     let v: u64;
@@ -82,6 +104,22 @@ pub unsafe fn write_cr3(pml4: u64) {
 pub fn invlpg(addr: u64) {
     // SAFETY: invalidating a TLB entry is always safe.
     unsafe { asm!("invlpg [{}]", in(reg) addr, options(nostack, preserves_flags)) };
+}
+
+/// Writes back and evicts every cache line of `[virt, virt + len)`
+/// (CLFLUSH), then fences: memory then holds what was written there, and
+/// no line of it is left in a cache. x86-64 processors' lines are at least
+/// 64 bytes, so flushing every 64 bytes reaches each.
+pub fn flush_cache_range(virt: u64, len: u64) {
+    const LINE: u64 = 64;
+    let mut p = virt & !(LINE - 1);
+    while p < virt + len {
+        // SAFETY: flushing a mapped line changes no data.
+        unsafe { asm!("clflush [{}]", in(reg) p, options(nostack, preserves_flags)) };
+        p += LINE;
+    }
+    // SAFETY: a fence only orders memory accesses.
+    unsafe { asm!("mfence", options(nostack, preserves_flags)) };
 }
 
 /// Flushes all non-global TLB entries.
@@ -143,6 +181,12 @@ pub struct Features {
     pub page_1g: bool,
     pub pat: bool,
     pub umip: bool,
+    pub tsc_adjust: bool,
+    /// The APERF/MPERF cycle counters; hardware P-states, and their energy
+    /// performance preference.
+    pub aperf_mperf: bool,
+    pub hwp: bool,
+    pub hwp_epp: bool,
     /// Size of the XSAVE area for the features we enable.
     pub xsave_size: u32,
     /// XCR0 value we program.
@@ -164,6 +208,10 @@ static mut FEATURES: Features = Features {
     page_1g: false,
     pat: false,
     umip: false,
+    tsc_adjust: false,
+    aperf_mperf: false,
+    hwp: false,
+    hwp_epp: false,
     xsave_size: 512,
     xcr0: 0,
 };
@@ -177,7 +225,10 @@ pub fn features() -> Features {
 
 /// Probes CPUID once on the bootstrap processor.
 pub fn detect_features() -> Features {
+    let max = cpuid(0, 0).eax;
     let l1 = cpuid(1, 0);
+    let hypervisor = l1.ecx & (1 << 31) != 0;
+    let l6 = if max >= 6 { cpuid(6, 0) } else { CpuidResult { eax: 0, ebx: 0, ecx: 0, edx: 0 } };
     let l7 = cpuid(7, 0);
     let ext = cpuid(0x8000_0001, 0);
     let max_ext = cpuid(0x8000_0000, 0).eax;
@@ -195,6 +246,12 @@ pub fn detect_features() -> Features {
         page_1g: ext.edx & (1 << 26) != 0,
         pat: l1.edx & (1 << 16) != 0,
         umip: l7.ecx & (1 << 2) != 0,
+        // A processor's TSC and speed are the host's business under a
+        // hypervisor, which may well report these without them.
+        tsc_adjust: !hypervisor && l7.ebx & (1 << 1) != 0,
+        aperf_mperf: !hypervisor && l6.ecx & (1 << 0) != 0,
+        hwp: !hypervisor && l6.eax & (1 << 7) != 0,
+        hwp_epp: !hypervisor && l6.eax & (1 << 10) != 0,
         xsave_size: 512,
         xcr0: 0,
     };
@@ -215,20 +272,36 @@ pub fn detect_features() -> Features {
     f
 }
 
-/// Configures control registers and MSRs on the current CPU: SSE/XSAVE for
-/// user-space floating point, NX, SMEP/SMAP, write-combining PAT entry and
-/// the global-page bit.
+/// Processors that found their caches off (`CR0.CD`) when they started, and
+/// turned them on.
+pub static CACHES_WERE_OFF: AtomicU32 = AtomicU32::new(0);
+
+const CR0_NW: u64 = 1 << 29;
+const CR0_CD: u64 = 1 << 30;
+
+/// Configures control registers and MSRs on the current CPU: caches on,
+/// SSE/XSAVE for user-space floating point, NX, SMEP/SMAP, write-combining
+/// PAT entry, the global-page bit, and hardware P-states.
 pub fn init_cpu_features() {
     let f = features();
     // SAFETY: only enables features that CPUID reported as present.
     unsafe {
         // CR0: monitor coprocessor, native FPU errors, write protect; clear
-        // emulation and task-switched bits.
+        // emulation and task-switched bits; caches on (`CD` and `NW` clear).
+        // A processor started with INIT keeps the cache setting it had,
+        // which firmware may have left off: everything it runs would then
+        // go to memory uncached.
         let mut cr0: u64;
         asm!("mov {}, cr0", out(reg) cr0);
+        let caches_were_off = cr0 & (CR0_CD | CR0_NW) != 0;
         cr0 |= (1 << 1) | (1 << 5) | (1 << 16);
-        cr0 &= !((1 << 2) | (1 << 3));
+        cr0 &= !((1 << 2) | (1 << 3) | CR0_CD | CR0_NW);
         asm!("mov cr0, {}", in(reg) cr0);
+        if caches_were_off {
+            // What was cached while the caches did not write through.
+            asm!("wbinvd", options(nostack, preserves_flags));
+            CACHES_WERE_OFF.fetch_add(1, Ordering::Relaxed);
+        }
 
         let mut cr4: u64;
         asm!("mov {}, cr4", out(reg) cr4);
@@ -264,6 +337,64 @@ pub fn init_cpu_features() {
         }
         asm!("fninit");
     }
+    enable_hwp();
+}
+
+/// The range of performance levels hardware P-states choose from (lowest,
+/// highest) on the boot processor, once they are on.
+static HWP_RANGE: AtomicU32 = AtomicU32::new(0);
+
+/// Lets this processor choose its own speed (Intel's hardware P-states),
+/// anywhere from its lowest to its highest performance (turbo), leaning
+/// towards performance as Linux does by default ("balance performance").
+/// Without them a processor keeps whatever speed the firmware left it at,
+/// often its base speed. Each processor makes its own request.
+fn enable_hwp() {
+    let f = features();
+    if !f.hwp {
+        return;
+    }
+    // SAFETY: CPUID says hardware P-states are there; turning them on and
+    // asking for a range of performance only changes the speed.
+    unsafe {
+        wrmsr(MSR_PM_ENABLE, rdmsr(MSR_PM_ENABLE) | 1);
+        let caps = rdmsr(MSR_HWP_CAPABILITIES);
+        let (highest, lowest) = (caps & 0xFF, (caps >> 24) & 0xFF);
+        let preference = if f.hwp_epp { 0x80 } else { 0 };
+        wrmsr(MSR_HWP_REQUEST, lowest | highest << 8 | preference << 24);
+        let _ = HWP_RANGE.compare_exchange(0, (lowest | highest << 8) as u32, Ordering::Relaxed, Ordering::Relaxed);
+    }
+}
+
+/// The boot processor's range of hardware P-states performance levels
+/// (lowest, highest), if they are on.
+pub fn hwp_range() -> Option<(u32, u32)> {
+    let r = HWP_RANGE.load(Ordering::Relaxed);
+    (r != 0).then_some((r & 0xFF, (r >> 8) & 0xFF))
+}
+
+/// How fast this processor runs while busy (MHz): its cycles counted at the
+/// actual and at the base frequency (APERF, MPERF) over `us` microseconds
+/// of spinning, scaled to the TSC's frequency.
+pub fn measure_mhz(us: u64) -> Option<u64> {
+    if !features().aperf_mperf {
+        return None;
+    }
+    let (a0, m0) = (rdmsr(MSR_APERF), rdmsr(MSR_MPERF));
+    crate::time::udelay(us);
+    let (a1, m1) = (rdmsr(MSR_APERF), rdmsr(MSR_MPERF));
+    let (actual, base) = (a1.wrapping_sub(a0) as u128, m1.wrapping_sub(m0) as u128);
+    (base > 0).then(|| (crate::time::tsc_hz() as u128 * actual / base / 1_000_000) as u64)
+}
+
+/// The processor's base and highest (turbo) frequencies in MHz, as it
+/// reports them (CPUID leaf 0x16), if it does.
+pub fn rated_mhz() -> Option<(u32, u32)> {
+    if cpuid(0, 0).eax < 0x16 {
+        return None;
+    }
+    let r = cpuid(0x16, 0);
+    (r.eax != 0).then_some((r.eax & 0xFFFF, r.ebx & 0xFFFF))
 }
 
 /// Reads the CPU brand string ("Intel(R) Core(TM) ...").

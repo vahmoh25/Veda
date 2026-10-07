@@ -1,0 +1,21 @@
+# Veda's renderer: an OpenGL ES 3.0 program (Prism) renders through the
+# renderer service on Mesa's softpipe, as on a PC without virtio-gpu's 3D
+# (plain VGA here). The service serves the `gpu` protocol, so Prism takes it
+# for a GPU, and its frames keep coming.
+gpu off
+boot-cmdline "run=renderer run=prism"
+fail-on "PANIC"
+fail-on "renderer: commands refused"
+fail-on "renderer: a resource refused"
+fail-on "cannot render on the GPU"
+fail-on "rendering stops"
+fail-on "link: "
+fail-on "shader:"
+wait-serial "renderer: serving gpu on softpipe" 60
+wait-serial "virtio-gpu: softpipe (OpenGL ES 3.0 Veda)" 90
+wait 8
+shot target/veda/renderer-1.png
+wait-serial " fps, render " 60
+key s
+wait 4
+shot target/veda/renderer-2-no-shadows.png

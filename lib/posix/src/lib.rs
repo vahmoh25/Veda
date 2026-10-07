@@ -14,6 +14,7 @@
 //! | threads, TLS, futexes | kernel threads, `FS` base, kernel futexes ([`thread`]) |
 //! | `fork` + `exec` | `posix_spawn`, which loads the program directly ([`process`]) |
 //! | signals | synchronous delivery (`raise`, `abort`, `SIGPIPE`) ([`signal`]) |
+//! | the GPU's render node (i915's ioctls) | the GPU's driver, over the GEM protocol ([`drm`]) |
 //!
 //! musl's hooks into this layer are:
 //!
@@ -37,6 +38,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+mod drm;
 mod error;
 mod fd;
 mod file;
@@ -44,6 +46,7 @@ mod fs;
 mod io;
 mod linux;
 mod mem;
+mod native;
 mod path;
 mod process;
 mod signal;

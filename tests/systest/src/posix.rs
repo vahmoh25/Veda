@@ -312,7 +312,7 @@ pub fn test_vfs_open_files() -> TestResult {
 
 /// Runs a C program with its output on a socket: the exit code and what it
 /// wrote.
-fn run_c(path: &str, args: &[&str], cwd: &str) -> Result<(i64, String), String> {
+pub(crate) fn run_c(path: &str, args: &[&str], cwd: &str) -> Result<(i64, String), String> {
     let fs = vfs_client()?;
     let (vmo, size) = fs.read_file(path.into()).map_err(s)?.map_err(|e| format!("{path}: {e}"))?;
     let image = vm::Mapping::new(vmo, size as usize, map_flags::READ).map_err(s)?;

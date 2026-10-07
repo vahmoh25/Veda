@@ -1,7 +1,8 @@
 # Ports
 
-Third-party software Veda builds from source: here, the C toolchain (see
-[docs/C.md](../docs/C.md)). Veda's own code is Rust; what is written in C
+Third-party software Veda builds from source: the C toolchain (see
+[docs/C.md](../docs/C.md)) and Mesa, for the renderer. Veda's own code is
+Rust; what is written in C
 comes as a port — the upstream release, unchanged but for a patch that is
 kept small, readable and explained.
 
@@ -45,6 +46,20 @@ the layer (`src/thread/x86_64/*.s`); `vfork` falls back to the generic
 version (which fails: there is no `fork`); `__init_libc` sets the layer
 up; `posix_spawn` asks the layer to start the program.
 
+**mesa** — Veda's renderer (`services/renderer`), which carries out the
+OpenGL ES command streams of applications on Mesa's Gallium drivers, is a
+target of Mesa's build: `src/gallium/targets/veda`, compiling the sources
+the `veda-renderer` option names, makes the renderer service for Veda and,
+on Windows, `vgallium.dll` (the renderer on softpipe) for the OpenGL ES
+tests. Gallium's own state handling is built without any OpenGL API
+(`with_gfx_compute`), and `src/util/detect_os.h` counts Veda as Linux: its
+POSIX layer carries out Linux's system calls. iris, Intel's driver, is
+built with the renderer's small libdrm (`services/renderer/drm`) and
+without what needs Mesa's OpenCL compiler (LLVM): generating indirect
+draws on the GPU, and blorp's indirect copies (its bounds check is
+written in NIR instead). `build.sh` configures Mesa (meson); `cargo xtask`
+builds the renderer (ninja) with the system.
+
 ## Updating a port
 
 1. Download the new release and its signature; check the signature
@@ -60,6 +75,6 @@ up; `posix_spawn` asks the layer to start the program.
 
 The ports keep their licences: GCC and binutils GPL-3.0-or-later (libgcc
 with the GCC Runtime Library Exception), GMP, MPFR and MPC
-LGPL-3.0-or-later, musl MIT. Distributing Veda's image, which contains
-them, means offering their source: the archives `port.toml` names and the
-patches here.
+LGPL-3.0-or-later, musl MIT, and the parts of Mesa the renderer uses MIT.
+Distributing Veda's image, which contains them, means offering their
+source: the archives `port.toml` names and the patches here.

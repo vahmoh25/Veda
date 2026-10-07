@@ -7,6 +7,8 @@
 //! Either way `munmap` and `mprotect` are plain kernel calls on address
 //! ranges. A file mapping is a private copy of the file's bytes: changes
 //! are never written back, and shared writable file mappings are refused.
+//! A mapping of the GPU's render node is a buffer's memory itself, which
+//! the GPU shares ([`crate::drm`]).
 
 use vabi::{Error, map_flags};
 use vrt::object::Vmo;
@@ -59,20 +61,21 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
         if !desc.readable() {
             return Err(EACCES);
         }
-        if kind != MAP_PRIVATE && prot & PROT_WRITE != 0 {
-            return Err(ENODEV);
+        match &desc.object {
+            // A buffer of the GPU's: its memory itself, shared with the GPU.
+            Object::Drm(_) if kind == MAP_PRIVATE => return Err(EINVAL),
+            Object::Drm(_) => {}
+            _ if kind != MAP_PRIVATE && prot & PROT_WRITE != 0 => return Err(ENODEV),
+            Object::File(_) => {}
+            _ => return Err(ENODEV),
         }
         Some(desc)
     };
-    if let Some(desc) = &file
-        && !matches!(desc.object, Object::File(_))
-    {
-        return Err(ENODEV);
-    }
+    let gpu = file.as_ref().is_some_and(|d| matches!(d.object, Object::Drm(_)));
 
     // A file's bytes go in through a writable mapping, then the
     // protections the program asked for are applied.
-    let initial = if file.is_some() { map_flags::READ | map_flags::WRITE } else { map_prot(prot) };
+    let initial = if file.is_some() && !gpu { map_flags::READ | map_flags::WRITE } else { map_prot(prot) };
     let mut f = initial;
     if flags & MAP_POPULATE != 0 {
         f |= map_flags::COMMIT;
@@ -88,6 +91,11 @@ pub unsafe fn mmap(addr: usize, len: usize, prot: u32, flags: u32, fd: i32, offs
         f |= map_flags::FIXED;
     }
     let hint = addr & !(PAGE - 1);
+    if let Some(desc) = &file
+        && let Object::Drm(drm) = &desc.object
+    {
+        return drm.map(offset as u64, len, hint, f);
+    }
     let mapped = if file.is_none() && kind == MAP_PRIVATE {
         vm::allocate(None, len, hint, f)
     } else {

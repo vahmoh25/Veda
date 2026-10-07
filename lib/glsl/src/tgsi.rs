@@ -1415,7 +1415,7 @@ impl<'a> Translator<'a> {
         for (i, v) in self.imms.chunks(4).enumerate() {
             let _ = writeln!(t, "IMM[{i}] UINT32 {{{}, {}, {}, {}}}", v[0], v[1], v[2], v[3]);
         }
-        t.push_str(&self.code);
+        t.push_str(&label_branches(&self.code));
         t.push_str("END\n");
         // A token is never shorter than a character of text.
         let tokens = t.len() as u32 + 16;
@@ -1441,6 +1441,43 @@ impl<'a> Translator<'a> {
 /// and a compiler folding constants may flush the others (small integers
 /// read as floats are denormals) or canonicalise them (NaN payloads, such
 /// as `true`, all ones).
+/// Gives each `IF`, `UIF` and `ELSE` (one instruction a line) the
+/// instruction where execution goes on when no invocation takes it: the
+/// matching `ELSE` or `ENDIF`, as `:n`. TGSI's interpreter (softpipe's)
+/// jumps there; translators to other languages follow the nesting instead,
+/// and without a label it would jump to the first instruction.
+fn label_branches(code: &str) -> String {
+    let lines: Vec<&str> = code.lines().collect();
+    let mut labels = vec![None; lines.len()];
+    let mut open = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        match l.trim_start().split(' ').next().unwrap_or("") {
+            "IF" | "UIF" => open.push(i),
+            "ELSE" => {
+                if let Some(at) = open.pop() {
+                    labels[at] = Some(i);
+                }
+                open.push(i);
+            }
+            "ENDIF" => {
+                if let Some(at) = open.pop() {
+                    labels[at] = Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = String::with_capacity(code.len() + 8 * lines.len());
+    for (l, label) in lines.iter().zip(labels) {
+        out.push_str(l);
+        if let Some(n) = label {
+            let _ = write!(out, " :{n}");
+        }
+        out.push('\n');
+    }
+    out
+}
+
 fn float_safe(bits: u32) -> bool {
     let e = bits & 0x7F80_0000;
     bits == 0 || (e != 0 && e != 0x7F80_0000)

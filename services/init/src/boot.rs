@@ -97,14 +97,21 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
     // The agent takes its test options (`agent.endpoint=...`) from the
     // kernel command line. A live system (`live`, booted from a USB stick)
     // tells the file system and the device manager to leave the computer's
-    // disks alone. At system start the window system plays the startup
-    // sequence (`splash`) and the shell the startup sound (`startup`,
-    // unless `startup-sound=off`); started again, they do neither.
+    // disks alone; tests ask the device manager for a stand-in display that
+    // flips (`flipsim`, `flipsim=N`). At system start the window system
+    // plays the startup sequence (`splash`) and the shell the startup sound
+    // (`startup`, unless `startup-sound=off`); started again, they do
+    // neither.
     let cmdline = cmdline(init);
     let has = |option: &str| cmdline.split_whitespace().any(|a| a == option);
     let args: Vec<alloc::string::String> = match name {
         "agent" => cmdline.split_whitespace().filter(|a| a.starts_with("agent.")).map(Into::into).collect(),
-        "vfs" | "devmgr" if has("live") => alloc::vec!["live".into()],
+        "devmgr" => cmdline
+            .split_whitespace()
+            .filter(|a| *a == "live" || *a == "flipsim" || a.starts_with("flipsim="))
+            .map(Into::into)
+            .collect(),
+        "vfs" if has("live") => alloc::vec!["live".into()],
         "compositor" if at_boot => alloc::vec!["splash".into()],
         "shell" if at_boot && !has("startup-sound=off") => alloc::vec!["startup".into()],
         _ => Vec::new(),

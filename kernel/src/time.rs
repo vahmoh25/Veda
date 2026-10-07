@@ -248,3 +248,148 @@ pub fn udelay(us: u64) {
         core::hint::spin_loop();
     }
 }
+
+// ---- the same TSC on every processor -------------------------------------
+//
+// The clock is the TSC of whichever processor reads it, and timers fire when
+// that processor's TSC reaches a deadline: every processor's must agree.
+// They all count the same clock, each offset by its `IA32_TSC_ADJUST`, which
+// firmware may leave different from processor to processor (writing a TSC
+// moves it). Then the clock jumps as threads move between processors, and
+// timers fire early or late by as much. So, as Linux does, the boot
+// processor's adjustment is set to 0 before the clock starts, and each
+// other processor's to the same as it starts; an exchange of readings with
+// the boot processor then checks that they agree, and corrects what is left.
+
+/// Sets the boot processor's TSC adjustment to 0 (before the clock starts).
+/// The adjustment the firmware left, if it was not 0.
+pub fn reset_boot_tsc() -> Option<i64> {
+    if !crate::arch::cpu::features().tsc_adjust {
+        return None;
+    }
+    let adjust = crate::arch::cpu::rdmsr(crate::arch::cpu::MSR_TSC_ADJUST) as i64;
+    if adjust == 0 {
+        return None;
+    }
+    // SAFETY: TSC_ADJUST exists (CPUID); nothing has used the TSC as a clock
+    // yet.
+    unsafe { crate::arch::cpu::wrmsr(crate::arch::cpu::MSR_TSC_ADJUST, 0) };
+    Some(adjust)
+}
+
+/// Exchanges of readings per check, and how long a starting processor waits
+/// for an answer before it gives up.
+const SYNC_ROUNDS: u32 = 32;
+const SYNC_TIMEOUT_MS: u64 = 100;
+
+/// The exchange: a starting processor makes the step odd to ask for the boot
+/// processor's TSC, which the boot processor answers by storing it and
+/// making the step even again.
+static SYNC_STEP: AtomicU64 = AtomicU64::new(0);
+static SYNC_BOOT_TSC: AtomicU64 = AtomicU64::new(0);
+
+/// The boot processor's part: answers a starting processor that waits for
+/// its TSC. Called while it waits for the processor to start.
+pub fn serve_tsc_sync() {
+    let step = SYNC_STEP.load(Ordering::Acquire);
+    if step % 2 == 1 {
+        SYNC_BOOT_TSC.store(crate::arch::cpu::rdtsc_ordered(), Ordering::Relaxed);
+        SYNC_STEP.store(step + 1, Ordering::Release);
+    }
+}
+
+/// How a starting processor's TSC compared with the boot processor's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TscSync {
+    /// Its adjustment as the firmware left it (set to 0 since).
+    pub firmware_adjust: i64,
+    /// How many ticks it was behind the boot processor's after that, and
+    /// is now (negative: ahead).
+    pub behind: i64,
+    pub left: i64,
+    /// The shortest exchange's round trip (ticks): how exactly that is
+    /// known.
+    pub uncertainty: u64,
+    /// The boot processor did not answer.
+    pub failed: bool,
+}
+
+/// The starting processor's part: sets its TSC alike the boot processor's.
+/// Runs before the processor counts as started, while the boot processor
+/// answers ([`serve_tsc_sync`]).
+pub fn sync_tsc() -> TscSync {
+    use crate::arch::cpu::{MSR_TSC_ADJUST, features, rdmsr, wrmsr};
+    let mut result = TscSync::default();
+    let adjustable = features().tsc_adjust;
+    if adjustable {
+        result.firmware_adjust = rdmsr(MSR_TSC_ADJUST) as i64;
+        if result.firmware_adjust != 0 {
+            // SAFETY: TSC_ADJUST exists; this processor keeps no time yet.
+            unsafe { wrmsr(MSR_TSC_ADJUST, 0) };
+        }
+    }
+    let Some((behind, rtt)) = boot_tsc_offset() else {
+        result.failed = true;
+        return result;
+    };
+    (result.behind, result.left, result.uncertainty) = (behind, behind, rtt);
+    // Corrected only when clearly more than the exchange can tell.
+    if adjustable && behind.unsigned_abs() > rtt {
+        // SAFETY: as above; moves this processor's TSC forward by `behind`.
+        unsafe { wrmsr(MSR_TSC_ADJUST, (rdmsr(MSR_TSC_ADJUST) as i64).wrapping_add(behind) as u64) };
+        if let Some((left, rtt)) = boot_tsc_offset() {
+            (result.left, result.uncertainty) = (left, rtt);
+        }
+    }
+    result
+}
+
+/// How many ticks this processor's TSC is behind the boot processor's, and
+/// the round trip of the exchange it was measured with (the shortest of
+/// several: the boot processor's reading falls inside it). `None` if the
+/// boot processor does not answer.
+fn boot_tsc_offset() -> Option<(i64, u64)> {
+    use crate::arch::cpu::{rdtsc, rdtsc_ordered};
+    let timeout = TSC_HZ.load(Ordering::Relaxed) / 1000 * SYNC_TIMEOUT_MS;
+    let wait_for = |step: u64, since: u64| {
+        while SYNC_STEP.load(Ordering::Acquire) != step {
+            if rdtsc().wrapping_sub(since) > timeout {
+                return false;
+            }
+            core::hint::spin_loop();
+        }
+        true
+    };
+    let mut best: Option<(u64, i64)> = None;
+    for _ in 0..SYNC_ROUNDS {
+        // An unanswered request (from a processor that gave up) is answered
+        // first.
+        let mut step = SYNC_STEP.load(Ordering::Acquire);
+        if step % 2 == 1 {
+            if !wait_for(step + 1, rdtsc()) {
+                return None;
+            }
+            step += 1;
+        }
+        let t1 = rdtsc_ordered();
+        SYNC_STEP.store(step + 1, Ordering::Release);
+        if !wait_for(step + 2, t1) {
+            return None;
+        }
+        let t2 = rdtsc_ordered();
+        let boot = SYNC_BOOT_TSC.load(Ordering::Relaxed);
+        let rtt = t2.wrapping_sub(t1);
+        let midpoint = t1 + rtt / 2;
+        let behind = boot.wrapping_sub(midpoint) as i64;
+        if best.is_none_or(|(b, _)| rtt < b) {
+            best = Some((rtt, behind));
+        }
+    }
+    best.map(|(rtt, behind)| (behind, rtt))
+}
+
+/// Ticks in nanoseconds (for the log).
+pub fn ticks_to_ns(ticks: i64) -> i64 {
+    let hz = TSC_HZ.load(Ordering::Relaxed).max(1) as i128;
+    (ticks as i128 * 1_000_000_000 / hz) as i64
+}

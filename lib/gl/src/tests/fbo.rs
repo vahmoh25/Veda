@@ -212,6 +212,9 @@ fn depth_textures_render_and_sample() {
 #[test]
 fn multisampling_resolves_edges() {
     let mut c = context(8, 8);
+    if !multisampling(&mut c) {
+        return;
+    }
     let p = program(
         &mut c,
         "#version 300 es

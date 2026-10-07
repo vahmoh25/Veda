@@ -1,0 +1,26 @@
+# Mesa's iris, Intel's Gallium driver, in the renderer: on gemsim, a
+# stand-in for the test laptop's Iris Xe that runs nothing. iris starts on
+# the POSIX layer's DRM device, compiles Prism's shaders for the GPU and
+# submits its frames, which complete at once. What it draws is never
+# drawn: this checks the way to the GPU (on real hardware, intel-gpu serves
+# the same protocol), not pictures.
+gpu off
+boot-cmdline "run=gemsim run=renderer:iris run=prism"
+fail-on "PANIC"
+fail-on "POSIX layer panic"
+fail-on "renderer: commands refused"
+fail-on "renderer: a resource refused"
+fail-on "renderer: no DRM device"
+fail-on "did not start"
+fail-on "cannot render on the GPU"
+fail-on "the window has no"
+fail-on "rendering stops"
+fail-on "link: "
+fail-on "shader:"
+wait-serial "gemsim: serving gem" 60
+wait-serial "renderer: serving gpu on Mesa Intel" 120
+wait-serial "virtio-gpu: Mesa Intel" 120
+wait-serial " fps, render " 180
+# Frames keep coming, with the shadows off as with them on.
+key s
+wait-serial-count " fps, render " 3 120

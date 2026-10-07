@@ -14,6 +14,7 @@ use super::{apic, cpu, gdt, idt, percpu};
 use crate::mm::{paging, phys, phys_to_virt};
 use crate::sched::{self, Thread};
 use crate::sync::{SpinLock, bkl};
+use crate::time;
 
 const TRAMPOLINE_PHYS: u64 = 0x8000;
 
@@ -93,6 +94,9 @@ unsafe extern "C" {
 static IDLE_THREADS: SpinLock<[Option<Arc<Thread>>; percpu::MAX_CPUS]> =
     SpinLock::new([const { None }; percpu::MAX_CPUS]);
 static STARTED: AtomicU32 = AtomicU32::new(0);
+/// How each AP's TSC compared with the BSP's as it started.
+static TSC_SYNC: SpinLock<[Option<time::TscSync>; percpu::MAX_CPUS]> =
+    SpinLock::new([const { None }; percpu::MAX_CPUS]);
 
 /// Programs the syscall MSRs on the current CPU.
 pub fn init_syscall_msrs() {
@@ -135,6 +139,9 @@ extern "sysv64" fn ap_entry(index: u64) -> ! {
         cpu::write_cr3(paging::kernel_pml4());
     }
     init_this_cpu(id);
+    // Its clock alike the BSP's before anything here keeps time.
+    let sync = time::sync_tsc();
+    TSC_SYNC.lock()[id] = Some(sync);
     apic::init_local();
     let idle = IDLE_THREADS.lock()[id].take().expect("AP started without an idle thread");
     sched::init_cpu(idle);
@@ -200,17 +207,19 @@ pub fn start_aps(max_cpus: usize) -> usize {
         }
         let before = STARTED.load(Ordering::Acquire);
         apic::send_ipi(apic_id, apic::ICR_INIT);
-        crate::time::busy_wait_ms(10);
+        time::busy_wait_ms(10);
         for _ in 0..2 {
             apic::send_ipi(apic_id, apic::ICR_STARTUP | (TRAMPOLINE_PHYS >> 12) as u32);
-            crate::time::udelay(300);
+            time::udelay(300);
             if STARTED.load(Ordering::Acquire) != before {
                 break;
             }
         }
-        // Allow a generous delay under emulation.
-        let deadline = crate::time::now_ns() + 1_000_000_000;
-        while STARTED.load(Ordering::Acquire) == before && crate::time::now_ns() < deadline {
+        // Allow a generous delay under emulation, answering the AP's
+        // exchange of TSC readings meanwhile.
+        let deadline = time::now_ns() + 1_000_000_000;
+        while STARTED.load(Ordering::Acquire) == before && time::now_ns() < deadline {
+            time::serve_tsc_sync();
             core::hint::spin_loop();
         }
         if STARTED.load(Ordering::Acquire) == before {
@@ -218,5 +227,36 @@ pub fn start_aps(max_cpus: usize) -> usize {
             IDLE_THREADS.lock()[id] = None;
         }
     }
+    log_tsc_sync();
     STARTED.load(Ordering::Acquire) as usize
+}
+
+/// Says how the APs' TSCs compared with the BSP's, and what was corrected:
+/// the firmware's adjustments, and what an exchange of readings found.
+fn log_tsc_sync() {
+    let syncs = TSC_SYNC.lock();
+    let started: alloc::vec::Vec<(usize, time::TscSync)> =
+        syncs.iter().enumerate().filter_map(|(id, s)| s.map(|s| (id, s))).collect();
+    drop(syncs);
+    let ns = time::ticks_to_ns;
+    for &(id, s) in &started {
+        if s.failed {
+            crate::kwarn!("smp: CPU {} could not compare its TSC with CPU 0's", id);
+        } else if s.firmware_adjust != 0 || s.behind != s.left {
+            crate::kinfo!(
+                "smp: CPU {}'s TSC: the firmware's adjustment {} ns set to 0; then {} ns behind CPU 0's, now {} ns (within {} ns)",
+                id,
+                ns(s.firmware_adjust),
+                ns(s.behind),
+                ns(s.left),
+                ns(s.uncertainty as i64)
+            );
+        }
+    }
+    let worst = started.iter().filter(|(_, s)| !s.failed).map(|(_, s)| s.left.unsigned_abs()).max().unwrap_or(0);
+    crate::kinfo!("smp: the TSCs of {} CPU(s) agree with CPU 0's within {} ns", started.len(), ns(worst as i64));
+    let off = cpu::CACHES_WERE_OFF.load(Ordering::Relaxed);
+    if off > 0 {
+        crate::kinfo!("smp: {} CPU(s) started with their caches off (CR0.CD); they are on", off);
+    }
 }

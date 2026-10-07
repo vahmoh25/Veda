@@ -338,8 +338,13 @@ impl Vmo {
     /// Like [`Vmo::create_contiguous`], below 4 GiB (for devices that can
     /// only address 32 bits).
     pub fn create_contiguous_below_4g(res: &Resource, size: usize) -> Result<Vmo, Error> {
-        call(nr::VMO_CREATE_CONTIGUOUS, [res.raw() as usize, size, vabi::dma_flags::BELOW_4G, 0, 0, 0])
-            .map(|h| Vmo(Handle(h as RawHandle)))
+        Vmo::create_dma(res, size, vabi::dma_flags::BELOW_4G)
+    }
+
+    /// Physically contiguous memory for a device, as `flags`
+    /// ([`vabi::dma_flags`]) ask: below 4 GiB, write-combining.
+    pub fn create_dma(res: &Resource, size: usize, flags: usize) -> Result<Vmo, Error> {
+        call(nr::VMO_CREATE_CONTIGUOUS, [res.raw() as usize, size, flags, 0, 0, 0]).map(|h| Vmo(Handle(h as RawHandle)))
     }
 
     pub fn size(&self) -> Result<usize, Error> {
@@ -356,6 +361,14 @@ impl Vmo {
 
     pub fn phys_addr(&self, offset: usize) -> Result<u64, Error> {
         call(nr::VMO_PHYS_ADDR, [self.raw() as usize, offset, 0, 0, 0, 0]).map(|a| a as u64)
+    }
+
+    /// The physical addresses of the pages from `offset` (page-aligned),
+    /// one per element of `out`, committed first: for a device to reach
+    /// them (`res` is a DMA resource).
+    pub fn pages(&self, res: &Resource, offset: usize, out: &mut [u64]) -> Result<(), Error> {
+        call(nr::VMO_PAGES, [res.raw() as usize, self.raw() as usize, offset, out.len(), out.as_mut_ptr() as usize, 0])
+            .map(|_| ())
     }
 
     /// Maps the VMO into the current process; see [`crate::vm::map`].

@@ -445,12 +445,14 @@ fn framebuffer_completeness() {
     assert_eq!(c.check_framebuffer_status(gl::FRAMEBUFFER), gl::FRAMEBUFFER_INCOMPLETE_ATTACHMENT);
     c.tex_image_2d(gl::TEXTURE_2D, 0, gl::RGBA8, 4, 4, 0, gl::RGBA, gl::UNSIGNED_BYTE, Pixels::None);
     assert_eq!(c.check_framebuffer_status(gl::FRAMEBUFFER), gl::FRAMEBUFFER_COMPLETE);
-    // Mixed sample counts.
+    // Mixed sample counts, where the renderer has multisampling.
     let rb = c.gen_renderbuffer();
     c.bind_renderbuffer(gl::RENDERBUFFER, rb);
-    c.renderbuffer_storage_multisample(gl::RENDERBUFFER, 4, gl::DEPTH_COMPONENT16, 4, 4);
     c.framebuffer_renderbuffer(gl::FRAMEBUFFER, gl::DEPTH_ATTACHMENT, gl::RENDERBUFFER, rb);
-    assert_eq!(c.check_framebuffer_status(gl::FRAMEBUFFER), gl::FRAMEBUFFER_INCOMPLETE_MULTISAMPLE);
+    if multisampling(&mut c) {
+        c.renderbuffer_storage_multisample(gl::RENDERBUFFER, 4, gl::DEPTH_COMPONENT16, 4, 4);
+        assert_eq!(c.check_framebuffer_status(gl::FRAMEBUFFER), gl::FRAMEBUFFER_INCOMPLETE_MULTISAMPLE);
+    }
     // Depth and stencil from different images.
     c.renderbuffer_storage(gl::RENDERBUFFER, gl::DEPTH_COMPONENT16, 4, 4);
     let rb2 = c.gen_renderbuffer();

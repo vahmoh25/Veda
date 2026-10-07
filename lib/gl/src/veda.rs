@@ -43,9 +43,33 @@ pub fn context(config: Config) -> Context {
 
 /// A context on the host's GPU, if there is one.
 pub fn gpu_context(config: Config) -> Option<Context> {
-    let t = GpuTransport::connect()?;
+    backend_context(GpuTransport::connect()?, config)
+}
+
+/// A context through the renderer serving the `gpu` protocol under
+/// `service` (tests start one of their own), waiting up to `wait_ns` for it
+/// to register.
+pub fn gpu_context_on(service: &str, wait_ns: u64, config: Config) -> Option<Context> {
+    backend_context(GpuTransport::connect_to(service, wait_ns)?, config)
+}
+
+fn backend_context(t: GpuTransport, config: Config) -> Option<Context> {
+    let renderer = String::from(t.renderer());
     match VirglBackend::new(Box::new(t)) {
-        Ok(b) => Some(Context::new(Box::new(b), config)),
+        Ok(b) => {
+            let mut c = Context::new(Box::new(b), config);
+            // A framebuffer without the buffers asked for draws, but wrongly
+            // (with no depth buffer every depth test passes): say so.
+            for (bits, pname, what) in [
+                (config.depth_bits, crate::gl::DEPTH_BITS, "depth"),
+                (config.stencil_bits, crate::gl::STENCIL_BITS, "stencil"),
+            ] {
+                if bits > 0 && c.get_integer(pname) == 0 {
+                    vrt::println!("{renderer}: the window has no {what} buffer: the renderer could not make one");
+                }
+            }
+            Some(c)
+        }
         Err(e) => {
             vrt::println!("cannot render on the GPU: {:?}", e);
             None
@@ -83,9 +107,14 @@ impl GpuTransport {
         if !registered && !booting {
             return None;
         }
-        // Connections to a service not yet registered wait for it.
-        let client = gpu::Client::new(vproto::connect(gpu::NAME).ok()?);
-        client.set_timeout(if registered { CALL_NS } else { BOOT_WAIT_NS });
+        GpuTransport::connect_to(gpu::NAME, if registered { CALL_NS } else { BOOT_WAIT_NS })
+    }
+
+    /// Opens a context through the service `name`, giving it `wait_ns` to
+    /// answer (connections to a service not registered yet wait for it).
+    pub fn connect_to(name: &str, wait_ns: u64) -> Option<GpuTransport> {
+        let client = gpu::Client::new(vproto::connect(name).ok()?);
+        client.set_timeout(wait_ns);
         let session = match client.open(SHARED) {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
@@ -179,14 +208,16 @@ impl Transport for GpuTransport {
         }
         match self.client.submit(commands.len() as u32) {
             Ok(Ok(())) => Ok(()),
-            _ => Err(Lost),
+            Ok(Err(e)) => lost(&self.renderer, format_args!("refused commands ({e})")),
+            Err(e) => lost(&self.renderer, format_args!("did not answer ({e:?})")),
         }
     }
 
     fn fence(&mut self) -> Result<u64, Lost> {
         match self.client.fence() {
             Ok(Ok(f)) => Ok(f),
-            _ => Err(Lost),
+            Ok(Err(e)) => lost(&self.renderer, format_args!("refused a fence ({e})")),
+            Err(e) => lost(&self.renderer, format_args!("did not answer ({e:?})")),
         }
     }
 
@@ -203,8 +234,15 @@ impl Transport for GpuTransport {
                 return Ok(());
             }
             if self.fences.wait(vabi::signals::SIGNALED, vrt::time::now_ns() + CALL_NS).is_err() {
-                return Err(Lost);
+                return lost(&self.renderer, format_args!("left fence {fence} unsignaled"));
             }
         }
     }
+}
+
+/// Says why the GPU's context is lost (the renderer draws nothing from
+/// then on).
+fn lost<T>(renderer: &str, why: core::fmt::Arguments) -> Result<T, Lost> {
+    vrt::println!("the GPU service ({renderer}) {why}: rendering stops");
+    Err(Lost)
 }

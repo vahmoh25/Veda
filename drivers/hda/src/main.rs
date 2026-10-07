@@ -24,7 +24,8 @@
 //!   interrupts after each period (MSI), or the driver polls.
 //!
 //! HDMI and DisplayPort codecs are left alone: their audio needs the
-//! graphics driver's help, and Veda has no graphics driver.
+//! graphics driver to set the display's link up for it, and Veda's
+//! (`intel-gpu`) keeps the firmware's mode as it is.
 
 #![no_std]
 #![no_main]

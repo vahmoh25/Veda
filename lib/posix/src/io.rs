@@ -25,6 +25,8 @@ fn read_desc(desc: &Description, buf: &mut [u8], offset: Option<u64>) -> SysResu
         (Object::Stream(s), None) => s.read(buf, desc.nonblocking()),
         (Object::Dir(_), _) => Err(EISDIR),
         (Object::Null | Object::Log, None) => Ok(0),
+        // No events to read (Linux's are for displays).
+        (Object::Drm(_), _) => Err(EINVAL),
     }
 }
 
@@ -44,6 +46,7 @@ fn write_desc(desc: &Description, data: &[u8], offset: Option<u64>) -> SysResult
             vrt::sys::debug_write(data);
             Ok(data.len())
         }
+        (Object::Drm(_), _) => Err(EINVAL),
     }
 }
 
@@ -184,7 +187,7 @@ pub fn lseek(fd: i32, offset: i64, whence: u32) -> SysResult {
         Object::File(f) => f.seek(offset, whence).map(|o| o as usize),
         Object::Dir(d) => d.seek(offset, whence).map(|o| o as usize),
         Object::Stream(_) => Err(ESPIPE),
-        Object::Null | Object::Log => Ok(0),
+        Object::Null | Object::Log | Object::Drm(_) => Ok(0),
     }
 }
 
@@ -251,6 +254,8 @@ pub unsafe fn fcntl(fd: i32, cmd: u32, arg: usize) -> SysResult {
             let desc = fd::get(fd)?;
             fd::insert(desc, cmd == fcntl::DUPFD_CLOEXEC, arg).map(|n| n as usize)
         }
+        // Whether `arg` refers to the same open file description.
+        fcntl::DUPFD_QUERY => Ok(Arc::ptr_eq(&fd::get(fd)?, &fd::get(arg as i32)?) as usize),
         fcntl::GETFD => Ok(if fd::cloexec(fd)? { fcntl::FD_CLOEXEC as usize } else { 0 }),
         fcntl::SETFD => fd::set_cloexec(fd, arg as u32 & fcntl::FD_CLOEXEC != 0).map(|_| 0),
         fcntl::GETFL => Ok(fd::get(fd)?.flags() as usize),
@@ -307,8 +312,12 @@ pub unsafe fn ioctl(fd: i32, request: u32, arg: usize) -> SysResult {
         }
         ioctl::FIOCLEX => fd::set_cloexec(fd, true).map(|_| 0),
         ioctl::FIONCLEX => fd::set_cloexec(fd, false).map(|_| 0),
-        // SAFETY: per the request.
-        _ => unsafe { tty::ioctl(fd, request, arg) },
+        _ => match &desc.object {
+            // SAFETY: per the request.
+            Object::Drm(drm) => unsafe { drm.ioctl(request, arg) },
+            // SAFETY: as above.
+            _ => unsafe { tty::ioctl(fd, request, arg) },
+        },
     }
 }
 

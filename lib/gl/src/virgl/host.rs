@@ -25,22 +25,22 @@ use std::{format, println, vec};
 use crate::backend::OutOfMemory;
 use crate::virgl::{Lost, ResourceArgs, Transport};
 
-type Module = *mut c_void;
+pub(super) type Module = *mut c_void;
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
-    fn LoadLibraryW(name: *const u16) -> Module;
+    pub(super) fn LoadLibraryW(name: *const u16) -> Module;
     fn GetProcAddress(m: Module, name: *const c_char) -> *mut c_void;
     fn SetDllDirectoryW(path: *const u16) -> i32;
     fn GetModuleHandleW(name: *const u16) -> Module;
 }
 
-fn wide(s: &str) -> Vec<u16> {
+pub(super) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
 /// A function of a loaded library.
-unsafe fn sym<T: Copy>(m: Module, name: &str) -> T {
+pub(super) unsafe fn sym<T: Copy>(m: Module, name: &str) -> T {
     let c = CString::new(name).unwrap();
     // SAFETY: the caller gives the symbol's real type.
     unsafe {

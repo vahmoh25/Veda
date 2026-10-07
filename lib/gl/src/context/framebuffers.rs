@@ -134,6 +134,14 @@ impl Context {
         }
         self.default_fb.color = color.and_then(|c| make(self, c.format));
         self.default_fb.depth_stencil = depth.and_then(|d| make(self, d.format));
+        // What the renderer could not make the framebuffer has not, and the
+        // GL's queries (DEPTH_BITS, ...) say so.
+        if self.default_fb.color.is_none() {
+            self.default_fb.color_internal = None;
+        }
+        if self.default_fb.depth_stencil.is_none() {
+            self.default_fb.depth_internal = None;
+        }
         self.default_samples = samples;
     }
 

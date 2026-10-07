@@ -425,6 +425,7 @@ dependencies = [
  "vacpi",
  "vbuild",
  "vgpio",
+ "vigpu",
  "vipc",
  "vproto",
  "vrt",
@@ -561,6 +562,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
+name = "flipsim"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
+name = "gemsim"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgem",
+ "vigpu",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -691,6 +714,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4250ce6452e92010fdf7268ccc5d14faa80bb12fc741938534c58f16804e03c7"
 dependencies = [
  "hybrid-array",
+]
+
+[[package]]
+name = "intel-gpu"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vbuild",
+ "vgem",
+ "vigpu",
+ "vproto",
+ "vrt",
 ]
 
 [[package]]
@@ -1225,6 +1260,7 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
+ "vgl",
  "vipc",
  "vproto",
  "vrt",
@@ -1358,6 +1394,7 @@ dependencies = [
  "vacpi",
  "vcs35l41",
  "vgpio",
+ "vigpu",
  "vspi",
 ]
 
@@ -1418,6 +1455,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vgem"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vigpu",
+ "vipc",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
 name = "vgfx"
 version = "0.1.0"
 dependencies = [
@@ -1454,6 +1502,10 @@ version = "0.1.0"
 
 [[package]]
 name = "vheap"
+version = "0.1.0"
+
+[[package]]
+name = "vigpu"
 version = "0.1.0"
 
 [[package]]
@@ -1861,6 +1913,7 @@ dependencies = [
  "sha1",
  "sha2",
  "vbuild",
+ "vimage",
  "vpe",
 ]
 

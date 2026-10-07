@@ -59,14 +59,20 @@ impl Vmo {
     }
 
     /// Physically contiguous, zeroed memory for DMA, entirely below
-    /// `max_addr`.
-    pub fn new_contiguous(size: u64, max_addr: u64) -> Option<Arc<Vmo>> {
+    /// `max_addr`, mapped with `cache`.
+    pub fn new_contiguous(size: u64, max_addr: u64, cache: Cache) -> Option<Arc<Vmo>> {
         let size = super::checked_page_align_up(size)?;
         if size == 0 || size > (256 << 20) {
             return None;
         }
         let base = phys::alloc_contiguous(size / PAGE_SIZE, PAGE_SIZE, max_addr)?;
-        let vmo = Vmo::new(size, VmoKind::Contiguous { base }, Cache::WriteBack);
+        if cache != Cache::WriteBack {
+            // It was zeroed through the direct map (write-back): none of
+            // those lines may stay in a cache, to be written back later over
+            // what is written to the memory without the caches.
+            crate::arch::cpu::flush_cache_range(phys_to_virt(base), size);
+        }
+        let vmo = Vmo::new(size, VmoKind::Contiguous { base }, cache);
         vmo.committed.store(size, Ordering::Relaxed);
         Some(vmo)
     }

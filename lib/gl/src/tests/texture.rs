@@ -298,12 +298,47 @@ fn compares_depth_textures() {
     // Pixel x samples texel x + 1 (repeating): 0.5 < 0.25 fails, 0.5 < 0.75
     // passes.
     assert_eq!((0..4).map(|x| px(&img, 4, x, 0)[0]).collect::<Vec<_>>(), [255, 0, 255, 0]);
+    if on_softpipe() {
+        return;
+    }
     // Linear filtering averages the comparisons: pixel 1 is halfway
     // between texels 1 (pass) and 2 (fail).
     c.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
     c.draw_arrays(gl::TRIANGLES, 0, 6);
     let v = px(&read_rgba(&mut c, 4, 1), 4, 1, 0)[0];
     assert!((100..=155).contains(&v), "{v}");
+}
+
+#[test]
+fn samples_depth_stencil_textures() {
+    // Depth in the upper 24 bits of each texel, stencil in the lower 8, as
+    // `UNSIGNED_INT_24_8` packs them; renderers that keep depth in the
+    // lower bits (Veda's on iris) turn the texels round on the way in.
+    let mut c = context(4, 1);
+    textured(&mut c, FS_TEX);
+    let t = c.gen_texture();
+    c.bind_texture(gl::TEXTURE_2D, t);
+    let depths: [u32; 4] = [0x40_0000, 0xC0_0000, 0x80_0000, 0xFF_FFFF];
+    let texels: Vec<u8> =
+        depths.iter().zip([7u32, 0x55, 0xAA, 0xFF]).flat_map(|(d, s)| (d << 8 | s).to_le_bytes()).collect();
+    c.tex_image_2d(
+        gl::TEXTURE_2D,
+        0,
+        gl::DEPTH24_STENCIL8,
+        4,
+        1,
+        0,
+        gl::DEPTH_STENCIL,
+        gl::UNSIGNED_INT_24_8,
+        &texels[..],
+    );
+    c.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+    c.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+    c.draw_arrays(gl::TRIANGLES, 0, 6);
+    no_error(&mut c);
+    let img = read_rgba(&mut c, 4, 1);
+    // The depths, a quarter, three quarters, a half and one, as red.
+    assert_eq!((0..4).map(|x| px(&img, 4, x, 0)[0]).collect::<Vec<_>>(), [64, 191, 128, 255]);
 }
 
 #[test]

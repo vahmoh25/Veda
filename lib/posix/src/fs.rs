@@ -11,7 +11,7 @@ use crate::linux::errno::*;
 use crate::linux::{self, Statfs, Timespec, access, at, o};
 use crate::path::Resolved;
 use crate::stream::Stream;
-use crate::{tty, user, vfs};
+use crate::{drm, tty, user, vfs};
 
 /// The VFS flags for POSIX open flags.
 fn vfs_flags(flags: u32) -> u32 {
@@ -36,9 +36,13 @@ fn vfs_flags(flags: u32) -> u32 {
 }
 
 /// Descriptions for the names of `/dev` that differ between processes:
-/// the terminal and the program's own descriptors.
+/// the terminal, the program's own descriptors, and the GPU's render node
+/// (a session of its own with the GPU's driver).
 fn open_special(path: &str) -> Option<Result<alloc::sync::Arc<Description>, isize>> {
     let fd_alias = match path {
+        drm::PATH => {
+            return Some(drm::open().map(|d| Description::new(Object::Drm(alloc::boxed::Box::new(d)), o::RDWR)));
+        }
         "/dev/stdin" => 0,
         "/dev/stdout" => 1,
         "/dev/stderr" => 2,
@@ -118,6 +122,7 @@ pub fn stat_desc(desc: &Description) -> Result<linux::Stat, isize> {
         Object::Stream(s) if s.is_tty() => pseudo(linux::mode::IFCHR | 0o620, s.koid),
         Object::Stream(s) => pseudo(linux::mode::IFIFO | 0o600, s.koid),
         Object::Null | Object::Log => pseudo(linux::mode::IFCHR | 0o666, 0),
+        Object::Drm(_) => linux::Stat { rdev: drm::RDEV, ..pseudo(linux::mode::IFCHR | 0o666, 0) },
     })
 }
 

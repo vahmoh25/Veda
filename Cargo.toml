@@ -43,6 +43,8 @@ members = [
     "lib/spi",
     "lib/boardsim",
     "lib/splash",
+    "lib/igpu",
+    "lib/gem",
     "lib/glsl",
     "lib/gl",
     "services/init",
@@ -82,6 +84,9 @@ members = [
     "drivers/xhci",
     "drivers/hda",
     "drivers/lpss-spi",
+    "drivers/intel-gpu",
+    "drivers/flipsim",
+    "drivers/gemsim",
     "tests/systest",
     "tests/nettest",
     "tests/testmic",
@@ -139,6 +144,8 @@ vusb = { path = "lib/usb" }
 vhda = { path = "lib/hda" }
 vacpi = { path = "lib/acpi" }
 vcs35l41 = { path = "lib/cs35l41" }
+vigpu = { path = "lib/igpu" }
+vgem = { path = "lib/gem" }
 vgpio = { path = "lib/gpio" }
 vspi = { path = "lib/spi" }
 vsplash = { path = "lib/splash" }

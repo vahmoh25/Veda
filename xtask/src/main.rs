@@ -317,6 +317,11 @@ fn build_system(o: &Options) -> Result<System> {
     for (name, exe) in toolchain::c_tests()? {
         initrd.add(&format!("tests/c/{name}"), exe);
     }
+    // The renderer: OpenGL ES on Mesa's Gallium drivers (once Mesa is
+    // configured, by `cargo xtask toolchain`).
+    if let Some(exe) = toolchain::renderer()? {
+        initrd.add("bin/renderer.exe", exe);
+    }
     // The C toolchain (`cargo xtask toolchain`): gcc, as, ld, the C library
     // and its headers, as /system has them.
     toolchain::relink_native()?;
@@ -590,6 +595,9 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     if let Some(input) = automate::input_devices(script)? {
         vm.input = input;
     }
+    if let Some(gpu) = automate::gpu(script)? {
+        vm.gpu = Some(gpu);
+    }
     if live {
         // A stick with the ISO on it, and no home disk.
         vm.usb_stick = true;
@@ -649,6 +657,7 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vacpi", &[]),
     ("vcs35l41", &[]),
     ("vgpio", &[]),
+    ("vigpu", &[]),
     ("vboardsim", &[]),
     ("vsplash", &[]),
     ("vglsl", &[]),
@@ -673,6 +682,19 @@ fn test(o: &Options) -> Result {
             cmd.env("VEDA_QEMU_DIR", dir);
         }
         util::run(&mut cmd)?;
+    }
+    // And through Veda's renderer, on softpipe, where it has been built.
+    if let Some(dll) = toolchain::vgallium()? {
+        // As OpenGL hosts keep depth, then as iris does (VR_DEPTH_LOW).
+        for (depth, how) in [("0", ""), ("1", ", depth kept as on iris")] {
+            util::status("Testing", format!("OpenGL ES through Veda's renderer (Mesa's softpipe{how})"));
+            let mut cmd = util::cargo();
+            cmd.args(["test", "--quiet", "--package", "vgl"])
+                .env("VGL_TEST_BACKEND", "gallium")
+                .env("VGL_GALLIUM_DLL", &dll)
+                .env("VR_DEPTH_LOW", depth);
+            util::run(&mut cmd)?;
+        }
     }
     if let Some(dir) = &virgl {
         // On ANGLE, as headless QEMU renders, and on the host's desktop

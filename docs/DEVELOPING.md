@@ -34,10 +34,15 @@ cargo xtask run --net wifi     # boot with the virtual Wi-Fi radio and airsim
 cargo xtask run --net both     # ... plus the wired card (or --net none)
 cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
 cargo xtask run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in software)
+cargo xtask script tests/ui/flips.vts      # the window system's flips, on a stand-in display that flips
 cargo xtask script tests/ui/prism.vts      # OpenGL ES: Prism renders (on the GPU if QEMU has one)
 VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (Windows; ANGLE)
 VGL_TEST_HOST=desktop VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on its desktop OpenGL
-cargo xtask toolchain          # build the C toolchain from ports/ (GCC, binutils, musl) -> target/toolchain
+VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mesa's softpipe (vgallium.dll)
+VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl   # ... with depth kept as on iris (lower 24 bits)
+cargo xtask script tests/ui/renderer.vts   # Prism through the renderer service (softpipe) in Veda
+cargo xtask script tests/ui/iris.vts       # ... on iris (Intel's driver), with a stand-in Intel GPU that runs nothing
+cargo xtask toolchain          # build the C toolchain from ports/ (GCC, binutils, musl; Mesa configured) -> target/toolchain
 cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
 ```
 
@@ -48,8 +53,10 @@ cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile an
   ANGLE): the window then uses `-display gtk,gl=on` (the host's desktop
   OpenGL), and headless runs `-display egl-headless` (ANGLE). `--no-gpu`
   makes it plain VGA and `--gpu` insists on the GPU.
-  OpenGL ES programs render on it through the `virtio-gpu` driver, and in
-  software without it (VirtualBox, real PCs).
+  OpenGL ES programs render on it through the `virtio-gpu` driver, on a
+  PC with Intel's Iris Xe (Tiger Lake to Raptor Lake) through the
+  renderer on iris and `intel-gpu`, and in software elsewhere
+  (VirtualBox).
 * `cargo xtask test` also runs the OpenGL ES tests on the host's GPU,
   through the virglrenderer that QEMU ships, on ANGLE and on the host's
   desktop OpenGL, as headless QEMU and its window render (`VEDA_QEMU_DIR`
@@ -83,9 +90,12 @@ cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile an
   (digital silence over 20 ms between the first sound and the last),
   which is what a driver that falls behind sounds like.
 * The startup sequence ends with `compositor: desktop shown after N ms
-  (F frames, R a second)`, counted from the window system's start: how
+  (F frames, R a second; ...)`, counted from the window system's start: how
   long the splash stayed (at least 1.8 s, then until the desktop has drawn
-  itself) and how smoothly it ran. `shell: startup sound: playing` says
+  itself), how smoothly it ran, and where its frames went: into the
+  firmware's framebuffer, or flipped by a display driver, with how many
+  flips over how many vertical blanks (as many as there were blanks: not
+  a frame missed). `shell: startup sound: playing` says
   the sound started, or why not. `tests/ui/startup.vts` checks both, and
   that the sound reaches the recording. Its look is in
   `services/compositor/src/startup.rs` (timings, colours, the tagline);
@@ -93,6 +103,30 @@ cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile an
   on the kernel command line (`--cmdline`, or the `BOOT.CFG` of an image)
   leaves the sound out; the scripts that check a recording of the sound
   output, or feed it back into the microphone, boot with it.
+* On a PC with Intel's integrated graphics (Tiger Lake to Raptor Lake),
+  `dmesg intel-gpu` shows the display engine as the firmware left it
+  (every pipe's mode, scaling, panel self refresh and planes), whether the
+  driver took the picture over or why not, where its pictures went in the
+  GPU's address space, the screen's measured rate, and whether vertical
+  blank interrupts come; `dmesg compositor` shows the driver attaching.
+  Lines starting `GT:` are the GPU's engines: their execution units,
+  timestamp clock and frequencies, whether their golden contexts ran (or
+  the engine's state if not), the frequency the GT ran at when it was
+  first busy, and any hang; `dmesg renderer` shows the renderer serving
+  `gpu` on Mesa Intel. Its logic is tested on the host against a
+  simulated display engine and a model of the GT (`cargo test -p
+  vboardsim`). QEMU has no display that flips, so tests
+  give it one: `flipsim` (`drivers/flipsim`) plays QEMU's VGA as one,
+  copying the picture asked for into the video memory at each vertical
+  blank. `devmgr` starts it for the VGA when the kernel command line has
+  `flipsim` (`flipsim=N`: it goes away after N flips, as a crashed driver
+  would), and a script that boots with it says `gpu off` (plain VGA rather
+  than the 3D GPU). `expect-same A.png B.png [left top right bottom]`
+  fails unless two screenshots are alike, pixel for pixel, in a region
+  (fractions of the screen): `tests/ui/flips.vts` checks with it that a
+  window that came and went left nothing behind in either picture.
+  Screenshots that a script saves under `target/veda/` go to `$VEDA_OUT`
+  when that is set.
 * `--sound hda` gives QEMU the ICH9's HD Audio controller with QEMU's
   codec (`hda-output` when recording to a WAV file, `hda-duplex`, with a
   line input, otherwise), and VirtualBox its HD Audio with an emulated

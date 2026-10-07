@@ -79,6 +79,7 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::VMO_CREATE_PHYSICAL => vm::vmo_create_physical(a[0] as RawHandle, a[1], a[2], a[3]),
         nr::VMO_CREATE_CONTIGUOUS => vm::vmo_create_contiguous(a[0] as RawHandle, a[1], a[2]),
         nr::VMO_PHYS_ADDR => vm::vmo_phys_addr(a[0] as RawHandle, a[1]),
+        nr::VMO_PAGES => vm::vmo_pages(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4]),
         nr::VM_MAP => vm::vm_map(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4], a[5]),
         nr::VM_UNMAP => vm::vm_unmap(a[0] as RawHandle, a[1], a[2]),
         nr::VM_PROTECT => vm::vm_protect(a[0] as RawHandle, a[1], a[2], a[3]),

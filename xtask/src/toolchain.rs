@@ -68,9 +68,9 @@ fn cross_tool(name: &str) -> PathBuf {
     root().join("cross").join("bin").join(format!("{TARGET}-{name}{exe}"))
 }
 
-/// The symbols the POSIX layer gives the C library; all else in it stays
-/// private.
-const POSIX_LAYER_EXPORTS: [&str; 7] = [
+/// The symbols the POSIX layer gives the C library (and, for the `veda_`
+/// ones, C programs: `<veda/ipc.h>`); all else in it stays private.
+const POSIX_LAYER_EXPORTS: [&str; 21] = [
     "__veda_syscall",
     "__veda_init",
     "__veda_spawn",
@@ -78,6 +78,20 @@ const POSIX_LAYER_EXPORTS: [&str; 7] = [
     "__veda_set_thread_area",
     "__veda_unmapself",
     "__veda_bootstrap",
+    "veda_close",
+    "veda_duplicate",
+    "veda_service_register",
+    "veda_service_accept",
+    "veda_service_connect",
+    "veda_channel_write",
+    "veda_channel_read",
+    "veda_wait",
+    "veda_now_ns",
+    "veda_vmo_create",
+    "veda_vmo_map",
+    "veda_vmo_unmap",
+    "veda_event_create",
+    "veda_object_signal",
 ];
 
 /// Builds the POSIX layer (`lib/posix`) as a static library for
@@ -134,13 +148,92 @@ pub fn refresh_posix_layer() -> Result {
         std::fs::create_dir_all(object.parent().unwrap()).map_err(|e| format!("{e}"))?;
         posix_object(&library, &object)?;
     }
+    let headers = util::workspace_root().join("lib").join("posix").join("include").join("veda");
     for sysroot in [root().join("cross").join("sysroot"), root().join("native")] {
         let libc = sysroot.join("system").join("lib").join("libc.a");
         if libc.is_file() && !is_newer(&libc, &[&object]) {
             util::run(Command::new(cross_tool("ar")).arg("rcs").arg(&libc).arg(&object))?;
         }
+        // Its own header, `<veda/ipc.h>`.
+        if libc.is_file() {
+            let dir = sysroot.join("system").join("include").join("veda");
+            std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+            for entry in
+                std::fs::read_dir(&headers).map_err(|e| format!("reading {}: {e}", headers.display()))?.flatten()
+            {
+                let to = dir.join(entry.file_name());
+                if !is_newer(&to, &[&entry.path()]) {
+                    std::fs::copy(entry.path(), &to).map_err(|e| format!("copying to {}: {e}", to.display()))?;
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// Mesa's build directories, which `ports/build.sh` configures: for Veda,
+/// and for this machine (Windows only: the renderer as a library, for the
+/// OpenGL ES tests).
+fn mesa_build() -> PathBuf {
+    root().join("build").join("mesa")
+}
+
+fn mesa_host_build() -> PathBuf {
+    root().join("build").join("mesa-host")
+}
+
+/// Runs ninja for `target` in a build directory of Mesa's (showing its
+/// output only if it fails). The generators it runs are meson's, which is
+/// MSYS2's own and says so unless MSYSTEM agrees.
+fn ninja(dir: &Path, target: &str) -> Result {
+    let log = dir.join("ninja.log.txt");
+    let mut sh = shell()?;
+    sh.arg("-c").arg(format!(
+        "MSYSTEM=MSYS ninja -C '{}' '{}' > '{}' 2>&1 || {{ tail -n 40 '{}'; exit 1; }}",
+        mixed(dir),
+        target,
+        mixed(&log),
+        mixed(&log)
+    ));
+    util::run(&mut sh)
+}
+
+/// Veda's renderer service (`services/renderer` on Mesa's Gallium), up to
+/// date and stripped; None if Mesa has not been configured
+/// (`cargo xtask toolchain`).
+pub fn renderer() -> Result<Option<Vec<u8>>> {
+    let dir = mesa_build();
+    if !dir.join("build.ninja").is_file() {
+        return Ok(None);
+    }
+    refresh_posix_layer()?;
+    let exe = dir.join("src").join("gallium").join("targets").join("veda").join("renderer");
+    // ninja does not see the C library: the program is linked again when
+    // it has changed.
+    let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
+    if exe.is_file() && !is_newer(&exe, &[&libc]) {
+        std::fs::remove_file(&exe).map_err(|e| format!("removing {}: {e}", exe.display()))?;
+    }
+    util::status("Building", "the renderer (Mesa)");
+    ninja(&dir, "src/gallium/targets/veda/renderer")?;
+    let stripped = root().join("build").join("renderer");
+    if !is_newer(&stripped, &[&exe]) {
+        util::run(Command::new(cross_tool("strip")).arg("-o").arg(&stripped).arg(&exe))?;
+    }
+    Ok(Some(util::read(&stripped)?))
+}
+
+/// The renderer as a library on softpipe for this machine
+/// (`vgallium.dll`), up to date; None if Mesa has not been configured for
+/// it (Windows only).
+pub fn vgallium() -> Result<Option<PathBuf>> {
+    let dir = mesa_host_build();
+    if !dir.join("build.ninja").is_file() {
+        return Ok(None);
+    }
+    util::status("Building", "the renderer on softpipe for the host (Mesa)");
+    ninja(&dir, "src/gallium/targets/veda/vgallium.dll")?;
+    Ok(Some(dir.join("src").join("gallium").join("targets").join("veda").join("vgallium.dll")))
 }
 
 /// How each C test program is linked: once at a fixed address, as GCC links

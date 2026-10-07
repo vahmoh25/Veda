@@ -326,9 +326,11 @@ fn points_have_size_and_coordinates() {
     let img = read_rgba(&mut c, 8, 8);
     assert_eq!(img.chunks(4).filter(|p| p[3] == 255).count(), 16);
     // gl_PointCoord: s from the left, t from the top: pixel (2, 5) is the
-    // top-left one, coordinates (1/8, 1/8).
-    assert_eq!(px(&img, 8, 2, 5), [32, 32, 0, 255]);
-    assert_eq!(px(&img, 8, 5, 2), [223, 223, 0, 255]);
+    // top-left one, coordinates (1/8, 1/8). (Softpipe's are a 32nd off.)
+    let t = if on_softpipe() { 8 } else { 0 };
+    let near = |got: [u8; 4], want: [u8; 4]| got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= t);
+    assert!(near(px(&img, 8, 2, 5), [32, 32, 0, 255]), "{:?}", px(&img, 8, 2, 5));
+    assert!(near(px(&img, 8, 5, 2), [223, 223, 0, 255]), "{:?}", px(&img, 8, 5, 2));
 }
 
 #[test]

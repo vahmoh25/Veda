@@ -1,0 +1,22 @@
+[package]
+name = "flipsim"
+description = "Test stand-in: QEMU's standard VGA played as a display that flips at the vertical blank, for the compositor's flips"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "flipsim"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vproto = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

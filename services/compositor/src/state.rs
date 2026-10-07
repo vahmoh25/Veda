@@ -13,7 +13,7 @@ use vrt::object::Channel;
 
 use crate::decor::{Decor, DecorState};
 use crate::keymap::Keyboard;
-use crate::render::Screen;
+use crate::screen::Screen;
 use crate::startup::Startup;
 use crate::switcher::{self, Switcher};
 use crate::window::{Anim, AnimKind, Part, TITLE_HEIGHT, Window};

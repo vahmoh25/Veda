@@ -1,0 +1,361 @@
+--- a/include/drm-uapi/drm.h
++++ b/include/drm-uapi/drm.h
+@@ -45,7 +45,8 @@
+ 
+ #include <stdint.h>
+ #include <sys/types.h>
+-#if defined(__GNU__)
++#if defined(__GNU__) || defined(__veda__)
++/* Veda: musl's, with Linux's ioctl numbers. */
+ #include <sys/ioctl.h>
+ #else
+ #include <sys/ioccom.h>
+--- a/include/drm-uapi/sync_file.h
++++ b/include/drm-uapi/sync_file.h
+@@ -15,7 +15,12 @@
+ 
+ #include <stdint.h>
+ #include <sys/types.h>
++#if defined(__veda__)
++/* Veda: musl's, with Linux's ioctl numbers. */
++#include <sys/ioctl.h>
++#else
+ #include <sys/ioccom.h>
++#endif
+ 
+ typedef int8_t   __s8;
+ typedef uint8_t  __u8;
+--- a/meson.build
++++ b/meson.build
+@@ -954,7 +954,9 @@
+ endif
+ 
+ with_driver_using_cl = [
+-  with_gallium_iris, with_gallium_crocus, with_intel_vk, with_intel_hasvk,
++  # Veda's renderer builds iris without the shaders written in OpenCL C.
++  with_gallium_iris and get_option('veda-renderer') == '',
++  with_gallium_crocus, with_intel_vk, with_intel_hasvk,
+   with_gallium_asahi, with_asahi_vk, with_tools.contains('asahi'),
+   with_gallium_panfrost, with_panfrost_vk,
+   with_gallium_rusticl,
+@@ -998,6 +1000,8 @@
+   with_clc,
+   with_gallium_va and with_video_encode,
+   with_gallium_mediafoundation and with_video_encode,
++  # Veda's renderer: Gallium's own state handling, without an API.
++  get_option('veda-renderer') != '',
+ ].contains(true)
+ if with_gfx_compute
+   pre_args += '-DHAVE_GFX_COMPUTE'
+@@ -1917,7 +1921,14 @@
+ allow_fallback_for_libdrm = get_option('allow-fallback-for').contains('libdrm')
+ 
+ with_gallium_drisw_kms = false
+-if system_has_kms_drm
++if system_has_kms_drm and get_option('veda-renderer') != ''
++  # Veda: its own libdrm, of what Mesa uses (the renderer's drm/), over
++  # Veda's DRM device. The renderer's program compiles it in.
++  dep_libdrm = declare_dependency(
++    include_directories : include_directories(get_option('veda-renderer') / 'drm'),
++    version : '2.4.125',
++  )
++elif system_has_kms_drm
+   dep_libdrm = dependency(
+     'libdrm', version : '>=' + _drm_ver,
+     required : with_dri2 or with_dri or with_gbm,
+--- a/meson.options
++++ b/meson.options
+@@ -915,3 +915,10 @@
+   value : false,
+   description : 'Build panfrost Rust components.'
+ )
++
++option(
++  'veda-renderer',
++  type : 'string',
++  value : '',
++  description : 'Veda: build its renderer (virgl command streams on Gallium) from the sources in this directory.'
++)
+--- a/src/gallium/drivers/iris/iris_draw.c
++++ b/src/gallium/drivers/iris/iris_draw.c
+@@ -179,8 +179,12 @@
+ iris_use_draw_indirect_generation(const struct iris_screen *screen,
+                                   const struct pipe_draw_indirect_info *dindirect)
+ {
++#ifdef IRIS_NO_INDIRECT_GENERATION
++   return false;
++#else
+    return dindirect != NULL &&
+           dindirect->draw_count >= screen->driconf.generated_indirect_threshold;
++#endif
+ }
+ 
+ static void
+--- a/src/gallium/drivers/iris/iris_indirect_gen_none.c
++++ b/src/gallium/drivers/iris/iris_indirect_gen_none.c
+@@ -0,0 +1,32 @@
++/*
++ * Copyright © 2026 Vahid Mohammadi
++ * SPDX-License-Identifier: MIT
++ */
++
++/**
++ * @file iris_indirect_gen_none.c
++ *
++ * iris_indirect_gen.c's interface for builds without the shaders that
++ * generate indirect draws (mesa_clc compiles them from OpenCL C; Veda's
++ * build has no LLVM). iris never generates indirect draws then (see
++ * iris_use_draw_indirect_generation).
++ */
++
++#include "iris_context.h"
++#include "iris_genx_macros.h"
++
++void
++genX(init_screen_gen_state)(struct iris_screen *screen)
++{
++   screen->vtbl.call_generation_shader = NULL;
++}
++
++struct iris_gen_indirect_params *
++genX(emit_indirect_generate)(struct iris_batch *batch,
++                             const struct pipe_draw_info *draw,
++                             const struct pipe_draw_indirect_info *indirect,
++                             const struct pipe_draw_start_count_bias *sc,
++                             struct iris_address *out_params_addr)
++{
++   UNREACHABLE("indirect draws are not generated without mesa_clc");
++}
+--- a/src/gallium/drivers/iris/meson.build
++++ b/src/gallium/drivers/iris/meson.build
+@@ -55,6 +55,9 @@
+ )
+ 
+ iris_per_hw_ver_libs = []
++# Without mesa_clc's shaders (Veda), no indirect draws are generated.
++iris_indirect_gen = with_intel_clc_shaders ? 'iris_indirect_gen.c' : 'iris_indirect_gen_none.c'
++iris_indirect_gen_args = with_intel_clc_shaders ? [] : ['-DIRIS_NO_INDIRECT_GENERATION']
+ foreach v : ['80', '90', '110', '120', '125', '200', '300', '350']
+   if v == '80' and not with_intel_elk
+     continue
+@@ -62,12 +65,13 @@
+ 
+   iris_per_hw_ver_libs += static_library(
+     'iris_per_hw_ver@0@'.format(v),
+-    ['iris_blorp.c', 'iris_query.c', 'iris_state.c', 'iris_indirect_gen.c', gen_xml_pack],
++    ['iris_blorp.c', 'iris_query.c', 'iris_state.c', iris_indirect_gen, gen_xml_pack],
+     include_directories : [inc_include, inc_src, inc_mesa, inc_gallium, inc_gallium_aux, inc_intel],
+     c_args : [
+       intel_common_args,
+       no_override_init_args, sse2_args,
+       '-DGFX_VERx10=@0@'.format(v),
++      iris_indirect_gen_args,
+     ],
+     gnu_symbol_visibility : 'hidden',
+     dependencies : [dep_libdrm, dep_valgrind, idep_genxml, idep_nir_headers,
+@@ -85,7 +89,7 @@
+     # these should not be necessary, but main/macros.h...
+     inc_mesa
+   ],
+-  c_args : [intel_common_args, sse2_args],
++  c_args : [intel_common_args, sse2_args, iris_indirect_gen_args],
+   cpp_args : [intel_common_args, sse2_args],
+   gnu_symbol_visibility : 'hidden',
+   dependencies : [dep_libdrm, dep_valgrind, idep_genxml, idep_nir_headers,
+--- a/src/gallium/meson.build
++++ b/src/gallium/meson.build
+@@ -260,3 +260,7 @@
+   subdir('frontends/teflon')
+   subdir('targets/teflon')
+ endif
++
++if get_option('veda-renderer') != ''
++  subdir('targets/veda')
++endif
+--- a/src/gallium/targets/veda/meson.build
++++ b/src/gallium/targets/veda/meson.build
+@@ -0,0 +1,51 @@
++# Copyright © 2026 Vahid Mohammadi
++# SPDX-License-Identifier: MIT
++#
++# Veda's renderer: the virgl command streams of Veda's OpenGL ES library
++# carried out by a Gallium driver. Its sources are in the Veda repository
++# (services/renderer), which -Dveda-renderer names.
++
++veda_dir = get_option('veda-renderer')
++veda_sources = files(
++  veda_dir / 'src' / 'device.c',
++  veda_dir / 'src' / 'context.c',
++  veda_dir / 'src' / 'commands.c',
++  veda_dir / 'src' / 'formats.c',
++)
++veda_includes = [
++  inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_gallium_drivers,
++  inc_gallium_winsys, inc_gallium_winsys_sw, inc_virtio_gpu,
++]
++
++if host_machine.system() == 'windows'
++  # For the host tests of Veda's OpenGL ES: softpipe, which vgl's tests
++  # call through vgallium.dll.
++  shared_library(
++    'vgallium',
++    veda_sources,
++    include_directories : veda_includes,
++    c_args : ['-DVR_EXPORTS', '-DVR_SOFTPIPE'],
++    link_with : [libgallium, libws_null],
++    dependencies : [idep_nir, idep_mesautil, driver_softpipe],
++    name_prefix : '',
++  )
++else
++  # The renderer service, for Veda (x86_64-veda-gcc): softpipe, and iris
++  # for Intel's GPUs.
++  veda_args = ['-DVR_SOFTPIPE']
++  veda_deps = [idep_nir, idep_mesautil, driver_softpipe]
++  if with_gallium_iris
++    veda_args += '-DVR_IRIS'
++    veda_deps += [driver_iris, idep_xmlconfig]
++  endif
++  executable(
++    'renderer',
++    [veda_sources, files(veda_dir / 'src' / 'main.c', veda_dir / 'drm' / 'xf86drm.c')],
++    include_directories : veda_includes,
++    c_args : veda_args,
++    # BLAKE3's assembly marks its stack note for Linux only.
++    link_args : ['-Wl,-z,noexecstack'],
++    link_with : [libgallium, libws_null],
++    dependencies : veda_deps,
++  )
++endif
+--- a/src/intel/blorp/meson.build
++++ b/src/intel/blorp/meson.build
+@@ -1,6 +1,16 @@
+ # Copyright © 2017 Intel Corporation
+ # SPDX-License-Identifier: MIT
+ 
++files_libblorp = files(
++  'blorp.c',
++  'blorp.h',
++  'blorp_blit.c',
++  'blorp_clear.c',
++  'blorp_nir_builder.h',
++  'blorp_priv.h',
++)
++
++if with_intel_clc_shaders
+ blorp_shader_files = files(
+   'blorp_shaders.cl',
+ )
+@@ -32,15 +42,13 @@
+   include_directories : include_directories('.'),
+ )
+ 
+-files_libblorp = files(
+-  'blorp.c',
+-  'blorp.h',
+-  'blorp_blit.c',
+-  'blorp_clear.c',
+-  'blorp_indirect_copy.c',
+-  'blorp_nir_builder.h',
+-  'blorp_priv.h',
+-)
++files_libblorp += files('blorp_indirect_copy.c')
++else
++  # Without mesa_clc: the bounds check in NIR, and no indirect copies.
++  idep_blorp_shaders = declare_dependency(
++    include_directories : include_directories('.', 'no-clc'),
++  )
++endif
+ 
+ files_blorp_brw = files(
+   'blorp_genX_exec_brw.h',
+--- a/src/intel/blorp/no-clc/blorp_shaders.h
++++ b/src/intel/blorp/no-clc/blorp_shaders.h
+@@ -0,0 +1,32 @@
++/*
++ * Copyright © 2026 Vahid Mohammadi
++ * SPDX-License-Identifier: MIT
++ */
++
++/**
++ * @file blorp_shaders.h
++ *
++ * For builds without mesa_clc (Veda's): what blorp's blits and clears use
++ * of blorp_shaders.cl, written as NIR. The indirect copies (Vulkan's) are
++ * left out of such builds.
++ */
++
++#ifndef BLORP_SHADERS_H
++#define BLORP_SHADERS_H
++
++#include "compiler/nir/nir_builder.h"
++
++/* Whether pos (x, y) lies in bounds_rect (x0, x1, y0, y1; x1 and y1 past
++ * the end), as blorp_shaders.cl's blorp_check_in_bounds. */
++static inline nir_def *
++blorp_check_in_bounds(nir_builder *b, nir_def *bounds_rect, nir_def *pos)
++{
++   nir_def *x = nir_channel(b, pos, 0), *y = nir_channel(b, pos, 1);
++   nir_def *in_x = nir_iand(b, nir_uge(b, x, nir_channel(b, bounds_rect, 0)),
++                            nir_ult(b, x, nir_channel(b, bounds_rect, 1)));
++   nir_def *in_y = nir_iand(b, nir_uge(b, y, nir_channel(b, bounds_rect, 2)),
++                            nir_ult(b, y, nir_channel(b, bounds_rect, 3)));
++   return nir_iand(b, in_x, in_y);
++}
++
++#endif
+--- a/src/intel/meson.build
++++ b/src/intel/meson.build
+@@ -15,6 +15,12 @@
+   endif
+ endif
+ 
++# Veda's renderer builds iris without the shaders mesa_clc compiles from
++# OpenCL C (Veda's build has no LLVM): they generate indirect draws and
++# copies, which OpenGL ES 3.0 does not have, and check bounds, which blorp
++# does with a function written in NIR instead (blorp/no-clc).
++with_intel_clc_shaders = with_intel_vk or (with_gallium_iris and get_option('veda-renderer') == '')
++
+ subdir('mda')
+ subdir('genxml')
+ subdir('dev')
+@@ -25,8 +31,10 @@
+   subdir('blorp')
+ endif
+ subdir('decoder')
+-if with_intel_vk or with_gallium_iris
++if with_intel_clc_shaders
+   subdir('shaders')
++else
++  idep_intel_shaders = null_dep
+ endif
+ if with_intel_hasvk or with_intel_vk or with_gallium_crocus or with_gallium_iris or with_intel_tools
+   subdir('perf')
+--- a/src/util/detect_os.h
++++ b/src/util/detect_os.h
+@@ -21,6 +21,16 @@
+ #endif
+ 
+ /*
++ * Veda: musl over Veda's POSIX layer, which carries out Linux's system
++ * calls. Linux, as far as Mesa is concerned.
++ */
++#if defined(__veda__)
++#define DETECT_OS_VEDA 1
++#define DETECT_OS_LINUX 1
++#define DETECT_OS_POSIX 1
++#endif
++
++/*
+  * Android defines __linux__, so DETECT_OS_LINUX and DETECT_OS_POSIX will
+  * also be defined.
+  */
+@@ -125,6 +135,9 @@
+ #ifndef DETECT_OS_LINUX
+ #define DETECT_OS_LINUX 0
+ #endif
++#ifndef DETECT_OS_VEDA
++#define DETECT_OS_VEDA 0
++#endif
+ #ifndef DETECT_OS_NETBSD
+ #define DETECT_OS_NETBSD 0
+ #endif

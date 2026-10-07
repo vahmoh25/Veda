@@ -24,6 +24,7 @@ use vrt::println;
 use vrt::sync::{Condvar, Mutex};
 
 mod posix;
+mod renderer;
 
 vrt::entry!(main);
 
@@ -246,7 +247,7 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 15] = [
+    let tests: [Test; 17] = [
         ("ipc primitives", test_ipc_primitives),
         ("sockets", posix::test_sockets),
         ("memory protection", posix::test_memory_protection),
@@ -258,6 +259,8 @@ fn main() -> i32 {
         ("vfs space", test_vfs_space),
         ("vfs open files", posix::test_vfs_open_files),
         ("c programs", posix::test_c_programs),
+        ("renderer", renderer::test_renderer),
+        ("render node", renderer::test_render_node),
         ("killing a job", posix::test_kill_job),
         ("launcher", test_launcher),
         ("crash report", test_crash_report),

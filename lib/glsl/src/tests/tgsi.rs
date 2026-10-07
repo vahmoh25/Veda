@@ -95,6 +95,28 @@ fn check(text: &str) {
     for i in index_after(text, "IMM") {
         assert!(i < imms, "IMM[{i}] not declared:\n{text}");
     }
+    // An IF names its ELSE or ENDIF, an ELSE its ENDIF: where TGSI's
+    // interpreter goes on when no invocation takes the branch.
+    let code: Vec<&str> = lines[1..]
+        .iter()
+        .copied()
+        .filter(|l| !matches!(l.split([' ', '[']).next(), Some("DCL" | "IMM" | "PROPERTY")))
+        .collect();
+    let label = |l: &str| l.rsplit_once(" :").and_then(|(_, n)| n.parse::<usize>().ok());
+    let mut open = Vec::new();
+    for (i, l) in code.iter().enumerate() {
+        match l.split(' ').next().unwrap_or("") {
+            "UIF" | "IF" => open.push(i),
+            w @ ("ELSE" | "ENDIF") => {
+                let at = open.pop().expect("balanced");
+                assert_eq!(label(code[at]), Some(i), "`{}` does not go on at `{l}`:\n{text}", code[at]);
+                if w == "ELSE" {
+                    open.push(i);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[test]
