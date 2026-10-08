@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>document.documentElement.className = 'js'</script>
+<title>Veda — The Agentic-Native Operating System</title>
+<meta name="description" content="Veda is a free, open-source operating system with an AI agent built in. Talk to it, and it works in every app — asking before anything hard to undo.">
+<link rel="canonical" href="https://www.vedaos.org/">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="theme-color" content="#070a16">
+<meta name="color-scheme" content="dark">
+<meta name="author" content="Veda">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Veda">
+<meta property="og:title" content="Veda — The Agentic-Native Operating System">
+<meta property="og:description" content="An operating system with an AI agent at its heart. Ask, and it gets it done in every app — checking with you before anything you can't undo.">
+<meta property="og:url" content="https://www.vedaos.org/">
+<meta property="og:image" content="https://www.vedaos.org/assets/img/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Veda ring above the words: Veda, the agentic-native operating system">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Veda — The Agentic-Native Operating System">
+<meta name="twitter:description" content="An operating system with an AI agent at its heart. Ask, and it gets it done in every app.">
+<meta name="twitter:image" content="https://www.vedaos.org/assets/img/og.jpg">
+<meta name="twitter:image:alt" content="The Veda ring above the words: Veda, the agentic-native operating system">
+<link rel="icon" href="favicon.ico" sizes="32x32">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="site.webmanifest">
+<link rel="preload" href="assets/fonts/inter-600.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/inter-400.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face{font-family:Inter;font-style:normal;font-weight:400;font-display:swap;src:url(assets/fonts/inter-400.woff2) format("woff2")}
+@font-face{font-family:Inter;font-style:normal;font-weight:600;font-display:swap;src:url(assets/fonts/inter-600.woff2) format("woff2")}
+@font-face{font-family:"Inter Fallback";src:local("Arial"),local("ArialMT"),local("Helvetica");size-adjust:107.12%;ascent-override:90.44%;descent-override:22.54%;line-gap-override:0%}
+:root{
+  --night:#05081a;--night-1:#070a16;--night-3:#121a35;--indigo:#171325;
+  --text:#f4f7ff;--text-2:#b4bdd8;--text-3:#8a94b4;
+  --light:#8eb1ff;--accent:#5b8cff;--accent-2:#8b5cf6;
+  --cyan:#2fe6ff;--blue:#5c7cff;--violet:#c264ff;--pink:#ff5ca8;--mint:#34f5c0;
+  --line:rgba(255,255,255,.08);--line-2:rgba(255,255,255,.14);
+  --font:Inter,"Inter Fallback",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
+  --ease:cubic-bezier(.22,1,.36,1);--ease-out:cubic-bezier(.33,1,.68,1);
+  --pad:clamp(20px,5vw,48px);
+}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%;scroll-behavior:smooth;scroll-padding-top:84px;background:var(--night)}
+body{margin:0;font-family:var(--font);font-size:1.0625rem;line-height:1.65;color:var(--text-2);background:var(--night);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+img,svg,canvas{display:block;max-width:100%}
+a{color:inherit}
+h1,h2,h3{color:var(--text);font-weight:600;line-height:1.1;letter-spacing:-.02em;margin:0}
+p,ol,ul,figure{margin:0}
+button{font:inherit;color:inherit}
+::selection{background:rgba(142,177,255,.35);color:#fff}
+:focus-visible{outline:2px solid var(--light);outline-offset:3px;border-radius:10px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.skip{position:fixed;left:16px;top:-80px;z-index:100;padding:12px 18px;border-radius:12px;background:var(--text);color:var(--night);font-weight:600;text-decoration:none}
+.skip:focus{top:16px}
+.i{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.wrap{max-width:1180px;margin:0 auto}
+.space{position:fixed;inset:0;z-index:-1;pointer-events:none;background:
+  radial-gradient(1px 1px at 12% 18%,rgba(255,255,255,.55),transparent),
+  radial-gradient(1px 1px at 72% 12%,rgba(255,255,255,.45),transparent),
+  radial-gradient(1.5px 1.5px at 42% 64%,rgba(190,210,255,.5),transparent),
+  radial-gradient(1px 1px at 88% 78%,rgba(255,255,255,.4),transparent),
+  radial-gradient(1px 1px at 24% 86%,rgba(255,235,210,.4),transparent),
+  radial-gradient(1px 1px at 58% 34%,rgba(255,255,255,.35),transparent);background-size:420px 420px;opacity:.6}
+.space::after{content:"";position:absolute;inset:0;background:
+  radial-gradient(1px 1px at 30% 40%,rgba(255,255,255,.6),transparent),
+  radial-gradient(1.5px 1.5px at 80% 60%,rgba(200,215,255,.5),transparent),
+  radial-gradient(1px 1px at 55% 90%,rgba(255,255,255,.5),transparent);background-size:290px 290px;animation:twinkle 7s ease-in-out infinite alternate}
+@keyframes twinkle{from{opacity:.25}to{opacity:.85}}
+
+/* ---- header ---- */
+.hdr{position:fixed;inset:0 0 auto;z-index:50;height:64px;display:flex;align-items:center;gap:8px;padding:0 var(--pad);padding-top:env(safe-area-inset-top);border-bottom:1px solid transparent;transition:background .4s,border-color .4s}
+.hdr.solid{background:rgba(7,10,22,.66);border-bottom-color:var(--line);-webkit-backdrop-filter:blur(18px) saturate(150%);backdrop-filter:blur(18px) saturate(150%)}
+.brand{display:flex;align-items:center;gap:11px;color:var(--text);font-weight:600;font-size:1.15rem;letter-spacing:-.01em;text-decoration:none;padding:8px 4px}
+.brand-ring{width:22px;height:22px;border-radius:50%;border:2.45px solid #fff;transition:opacity .25s}
+.js .hdr:not(.docked) .brand-ring{opacity:0}
+.nav{display:none;margin-left:auto;gap:2px}
+.nav a{padding:8px 14px;border-radius:999px;color:var(--text-2);font-size:.9375rem;text-decoration:none;transition:color .2s,background .2s}
+.nav a:hover{color:var(--text);background:rgba(255,255,255,.07)}
+.gh{display:inline-flex;align-items:center;gap:9px;margin-left:auto;padding:9px 16px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid var(--line-2);color:var(--text);font-size:.9375rem;font-weight:600;text-decoration:none;transition:background .2s,border-color .2s,box-shadow .3s}
+.gh:hover{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.24);box-shadow:0 0 30px -6px rgba(142,177,255,.5)}
+.gh svg{width:18px;height:18px;fill:currentColor}
+.menu{display:grid;place-items:center;width:44px;height:44px;margin-right:-8px;border:0;border-radius:12px;background:none;cursor:pointer}
+.menu .i{width:24px;height:24px}
+.menu .x,.menu-open .menu .m{display:none}
+.menu-open .menu .x{display:block}
+@media (min-width:920px){.nav{display:flex}.gh{margin-left:10px}.menu{display:none}}
+@media (max-width:420px){.gh span{display:none}.gh{padding:10px}}
+.sheet{position:fixed;inset:0;z-index:45;display:flex;flex-direction:column;justify-content:center;gap:4px;padding:96px var(--pad) 48px;background:rgba(5,8,26,.94);-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);opacity:0;visibility:hidden;transition:opacity .35s,visibility 0s linear .35s}
+.sheet a{color:var(--text);font-size:clamp(1.8rem,8vw,2.4rem);font-weight:600;letter-spacing:-.03em;text-decoration:none;padding:8px 0;transform:translateY(12px);transition:transform .5s var(--ease)}
+.sheet .sheet-gh{margin-top:28px;font-size:1.05rem;letter-spacing:0;display:inline-flex;align-items:center;gap:10px;color:var(--light)}
+.sheet .sheet-gh svg{width:20px;height:20px;fill:currentColor}
+.menu-open .sheet{opacity:1;visibility:visible;transition:opacity .35s,visibility 0s}
+.menu-open .sheet a{transform:none}
+.menu-open{overflow:hidden}
+
+/* ---- hero ---- */
+.hero{position:relative;isolation:isolate;overflow:hidden;min-height:100vh;min-height:100svh;display:grid;place-items:center;padding:110px var(--pad) 96px;background:
+  radial-gradient(70% 55% at 20% 26%,rgba(43,72,214,.34),transparent 70%),
+  radial-gradient(60% 50% at 86% 72%,rgba(122,43,217,.30),transparent 70%),
+  radial-gradient(45% 40% at 60% 8%,rgba(22,155,209,.16),transparent 70%),
+  linear-gradient(180deg,#070a16,#121a35 72%,#05081a)}
+.hero::after{content:"";position:absolute;inset:auto 0 -1px;height:32%;z-index:-1;background:linear-gradient(180deg,transparent,var(--night))}
+#aurora{position:absolute;inset:0;width:100%;height:100%;z-index:-2;opacity:0;transition:opacity 1.8s var(--ease)}
+#aurora.on{opacity:1}
+.hero-in{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;max-width:900px}
+.hero-in::before{content:"";position:absolute;left:50%;top:52%;z-index:-1;width:min(150vw,1300px);height:118%;transform:translate(-50%,-50%);background:radial-gradient(closest-side,rgba(5,8,26,.62),rgba(5,8,26,.34) 55%,transparent);pointer-events:none}
+.hero-stars{position:absolute;inset:0;z-index:-1;pointer-events:none;mix-blend-mode:screen;background:radial-gradient(1px 1px at 12% 18%,rgba(255,255,255,.7),transparent),radial-gradient(1px 1px at 72% 12%,rgba(255,255,255,.6),transparent),radial-gradient(1.5px 1.5px at 42% 44%,rgba(190,210,255,.6),transparent),radial-gradient(1px 1px at 88% 30%,rgba(255,255,255,.5),transparent),radial-gradient(1px 1px at 24% 6%,rgba(255,235,210,.5),transparent),radial-gradient(1px 1px at 58% 24%,rgba(255,255,255,.45),transparent);background-size:360px 360px;-webkit-mask:linear-gradient(180deg,#000 45%,transparent 80%);mask:linear-gradient(180deg,#000 45%,transparent 80%)}
+.hero-stars::after{content:"";position:absolute;inset:0;background:radial-gradient(1px 1px at 30% 40%,rgba(255,255,255,.8),transparent),radial-gradient(1.5px 1.5px at 80% 16%,rgba(200,215,255,.7),transparent),radial-gradient(1px 1px at 55% 8%,rgba(255,255,255,.6),transparent);background-size:250px 250px;animation:twinkle 6s ease-in-out infinite alternate}
+.ring-wrap{--r:clamp(42px,8.5vmin,78px);position:relative;width:calc(var(--r)*2);height:calc(var(--r)*2);margin-bottom:clamp(30px,5.5vh,52px)}
+.ring-fly{position:absolute;inset:0;transform-origin:50% 50%;will-change:transform}
+.ring{position:absolute;inset:0;border-radius:50%;border:calc(var(--r)*.2222) solid #fff}
+.glow{position:absolute;left:50%;top:50%;width:calc(var(--r)*3.9);height:calc(var(--r)*3.9);margin:calc(var(--r)*-1.95) 0 0 calc(var(--r)*-1.95);pointer-events:none;animation:gather .6s var(--ease-out) both}
+.glow-f{position:absolute;inset:0}
+.glow-b{position:absolute;inset:0;border-radius:50%;mix-blend-mode:screen;background:radial-gradient(closest-side,rgba(142,177,255,0) 17.9%,rgba(142,177,255,.037) 25.6%,rgba(142,177,255,.147) 33.3%,rgba(142,177,255,.3) 39.9%,rgba(142,177,255,.3) 51.3%,rgba(142,177,255,.187) 61.5%,rgba(142,177,255,.1) 71.8%,rgba(142,177,255,.041) 82.1%,rgba(142,177,255,.0075) 92.3%,rgba(142,177,255,0) 100%);animation:breathe 2.6s linear .6s infinite}
+.glow-b::after{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(rgba(142,177,255,0) 0deg,rgba(142,177,255,.018) 30deg,rgba(142,177,255,.051) 45deg,rgba(142,177,255,.103) 60deg,rgba(142,177,255,.158) 75deg,rgba(142,177,255,.18) 90deg,rgba(142,177,255,.158) 105deg,rgba(142,177,255,.103) 120deg,rgba(142,177,255,.051) 135deg,rgba(142,177,255,.018) 150deg,rgba(142,177,255,0) 180deg,rgba(142,177,255,0) 360deg);-webkit-mask:radial-gradient(closest-side,transparent 17.9%,rgba(0,0,0,.123) 25.6%,rgba(0,0,0,.491) 33.3%,#000 39.9%,#000 51.3%,rgba(0,0,0,.623) 61.5%,rgba(0,0,0,.335) 71.8%,rgba(0,0,0,.136) 82.1%,rgba(0,0,0,.025) 92.3%,transparent 100%);mask:radial-gradient(closest-side,transparent 17.9%,rgba(0,0,0,.123) 25.6%,rgba(0,0,0,.491) 33.3%,#000 39.9%,#000 51.3%,rgba(0,0,0,.623) 61.5%,rgba(0,0,0,.335) 71.8%,rgba(0,0,0,.136) 82.1%,rgba(0,0,0,.025) 92.3%,transparent 100%);transform:rotate(-90deg);animation:orbit 2s linear infinite}
+@keyframes gather{from{opacity:0;transform:scale(.86)}}
+@keyframes breathe{0%{opacity:.78}12.5%{opacity:.936}25%{opacity:1}37.5%{opacity:.936}50%{opacity:.78}62.5%{opacity:.624}75%{opacity:.56}87.5%{opacity:.624}100%{opacity:.78}}
+@keyframes orbit{to{transform:rotate(270deg)}}
+@keyframes rise{from{opacity:0;transform:translateY(12px)}}
+.hero h1{display:flex;flex-direction:column;align-items:center}
+.wordmark{font-size:clamp(4.4rem,17vw,9.25rem);line-height:.92;letter-spacing:-.05em;animation:rise .6s var(--ease-out) .1s both}
+.tagline,.hero-lead,.meta{text-shadow:0 1px 22px rgba(5,8,26,.9)}
+.tagline{margin-top:.62em;font-size:clamp(1.1rem,2.5vw,1.55rem);font-weight:400;line-height:1.3;letter-spacing:-.005em;color:#c3cbe6;animation:rise .6s var(--ease-out) .35s both}
+.hero-lead{margin-top:clamp(22px,3.5vh,32px);max-width:38ch;font-size:clamp(1.06rem,1.7vw,1.25rem);line-height:1.6;color:var(--text-2);animation:rise .7s var(--ease-out) .55s both}
+.ctas{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:clamp(28px,4.5vh,40px);animation:rise .7s var(--ease-out) .7s both}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:52px;padding:0 26px;border-radius:999px;font-size:1rem;font-weight:600;letter-spacing:-.005em;text-decoration:none;cursor:pointer;border:1px solid transparent;transition:transform .35s var(--ease),box-shadow .35s var(--ease),background .25s,border-color .25s}
+.btn:active{transform:scale(.97)}
+.btn-1{background:var(--text);color:#0b1024}
+.btn-1:hover{box-shadow:0 0 0 6px rgba(142,177,255,.16),0 14px 44px -6px rgba(142,177,255,.55);transform:translateY(-1px)}
+.btn-1 svg{width:19px;height:19px;fill:currentColor}
+.btn-2{background:rgba(255,255,255,.06);border-color:var(--line-2);color:var(--text)}
+.btn-2:hover{background:rgba(255,255,255,.11);border-color:rgba(255,255,255,.24)}
+.btn .i{width:19px;height:19px}
+.meta{margin-top:26px;font-size:.875rem;color:var(--text-3);animation:rise .7s var(--ease-out) .85s both}
+.meta span+span::before{content:"·";margin:0 .6em;opacity:.7}
+.cue{position:absolute;left:50%;bottom:28px;width:2px;height:44px;margin-left:-1px;border-radius:2px;background:linear-gradient(180deg,rgba(255,255,255,0),rgba(255,255,255,.35));overflow:hidden;animation:rise 1s var(--ease-out) 1.4s both}
+.cue::after{content:"";position:absolute;left:0;top:-14px;width:2px;height:14px;background:#fff;border-radius:2px;animation:drop 2.2s var(--ease) 1.8s infinite}
+@keyframes drop{to{top:44px}}
+
+/* ---- sections ---- */
+.sec{position:relative;padding:clamp(96px,13vw,176px) var(--pad)}
+.fx{position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:-1}
+@supports (overflow:clip){.fx{overflow:visible;overflow-x:clip}}
+.fx::before,.fx::after{content:"";position:absolute;border-radius:50%;filter:blur(10px)}
+.eyebrow{display:inline-flex;align-items:center;gap:10px;font-size:.78rem;font-weight:600;letter-spacing:.22em;text-transform:uppercase;color:var(--light)}
+.eyebrow::before{content:"";width:13px;height:13px;border-radius:50%;border:2.6px solid currentColor}
+.h2{margin-top:18px;font-size:clamp(2.25rem,5.6vw,4.3rem);line-height:1.04;letter-spacing:-.038em}
+.lead{margin-top:22px;max-width:62ch;font-size:clamp(1.06rem,1.45vw,1.22rem)}
+.grad{background:linear-gradient(92deg,#2fe6ff,#6f8bff 42%,#c264ff 78%,#ff5ca8);-webkit-background-clip:text;background-clip:text;color:transparent}
+.center{text-align:center}.center .lead{margin-left:auto;margin-right:auto}
+.motion [data-reveal]{opacity:0;transform:translateY(26px);transition:opacity .9s var(--ease),transform .9s var(--ease);transition-delay:var(--d,0s)}
+.motion [data-reveal].in{opacity:1;transform:none}
+.glass{background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.018));border:1px solid var(--line);border-radius:22px}
+
+/* meet */
+#meet .fx::before{width:60vw;height:60vw;max-width:900px;max-height:900px;left:-20vw;top:10%;background:radial-gradient(closest-side,rgba(47,230,255,.10),transparent)}
+.statement{margin-top:22px;max-width:19ch;font-size:clamp(2rem,5vw,3.85rem);line-height:1.1;letter-spacing:-.035em}
+.motion .statement .w{opacity:.17;transition:opacity .35s var(--ease)}
+.motion .statement .w.on{opacity:1}
+.meet-grid{display:grid;gap:36px;margin-top:clamp(40px,6vw,64px)}
+.meet-grid .lead{margin-top:0}
+.points{display:grid;gap:18px;list-style:none;padding:0}
+.points li{display:flex;gap:16px;align-items:flex-start}
+.points .i{width:22px;height:22px;margin-top:3px;color:var(--light)}
+.points b{display:block;color:var(--text);font-weight:600}
+.points span{font-size:.98rem}
+@media (min-width:900px){.meet-grid{grid-template-columns:1.15fr 1fr;gap:72px}}
+.screen-wrap{margin-top:clamp(56px,8vw,96px);perspective:1600px}
+.screen{position:relative;border-radius:clamp(10px,1.6vw,18px);overflow:hidden;border:1px solid var(--line-2);background:#0b1024;box-shadow:0 50px 140px -30px rgba(0,0,0,.85),0 0 140px -40px rgba(92,124,255,.55);transform:rotateX(var(--tilt,0deg)) scale(var(--sc,1));transform-origin:50% 100%}
+.screen img{width:100%;height:auto;aspect-ratio:16/10}
+.screen-cap{margin-top:16px;text-align:center;font-size:.92rem;color:var(--text-3)}
+
+/* agentic ai */
+#agentic-ai .fx::before{width:70vw;height:70vw;max-width:1000px;max-height:1000px;right:-25vw;top:-10%;background:radial-gradient(closest-side,rgba(139,92,246,.13),transparent)}
+.steps{display:grid;gap:14px;margin-top:48px;padding:0;list-style:none;counter-reset:s;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr))}
+.step{position:relative;padding:24px 24px 26px}
+.step::before{counter-increment:s;content:"0" counter(s);font-size:.78rem;font-weight:600;letter-spacing:.16em;color:var(--light)}
+.step .i{position:absolute;right:22px;top:22px;width:22px;height:22px;color:var(--text-3)}
+.step h3{margin-top:12px;font-size:1.3rem}
+.step p{margin-top:8px;font-size:.98rem}
+.demo{display:grid;gap:28px;margin-top:clamp(56px,7vw,88px);align-items:center}
+@media (min-width:980px){.demo{grid-template-columns:1fr 1.05fr;gap:56px}}
+.demo h3{font-size:clamp(1.6rem,3vw,2.2rem);letter-spacing:-.03em}
+.demo-intro p{margin-top:12px}
+.prompts{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+.chip{appearance:none;display:inline-flex;align-items:center;gap:8px;padding:11px 16px;border-radius:999px;border:1px solid var(--line-2);background:rgba(255,255,255,.04);color:var(--text);font-size:.95rem;line-height:1.3;text-align:left;cursor:pointer;transition:background .25s,border-color .25s,transform .3s var(--ease)}
+.chip:hover{background:rgba(255,255,255,.09)}
+.chip:active{transform:scale(.97)}
+.chip[aria-pressed=true]{background:rgba(142,177,255,.17);border-color:rgba(142,177,255,.55)}
+.chip .i{width:16px;height:16px;color:var(--light)}
+.demo-note{margin-top:18px;font-size:.875rem;color:var(--text-3)}
+.win{position:relative;display:flex;flex-direction:column;min-height:540px;border-radius:26px;overflow:hidden;background:rgba(20,20,28,.74);border:1px solid var(--line-2);box-shadow:0 40px 120px -30px rgba(0,0,0,.9),0 0 100px -40px rgba(142,177,255,.35);-webkit-backdrop-filter:blur(22px);backdrop-filter:blur(22px)}
+.win-bar{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);font-size:.85rem;color:var(--text-3)}
+.win-bar i{width:10px;height:10px;border-radius:50%;background:rgba(255,255,255,.14)}
+.win-bar b{margin-left:6px;font-weight:600;color:var(--text-2)}
+.orb{display:flex;flex-direction:column;align-items:center;padding:26px 0 6px}
+.orb canvas{width:150px;height:150px}
+.caption{min-height:1.5em;margin-top:6px;font-size:.875rem;color:var(--text-3);text-align:center}
+.log{display:flex;flex-direction:column;gap:10px;flex:1;list-style:none;margin:0;padding:10px 20px 22px;overflow:hidden}
+.log li{animation:pop .5s var(--ease) both}
+@keyframes pop{from{opacity:0;transform:translateY(10px) scale(.98)}}
+.log .you{align-self:flex-end;max-width:88%;padding:10px 15px;border-radius:18px 18px 5px 18px;background:rgba(91,140,255,.2);border:1px solid rgba(142,177,255,.3);color:var(--text)}
+.act{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid var(--line)}
+.act .t{display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:linear-gradient(180deg,var(--a,#98a2b8),var(--b,#56607a));color:#fff;flex:none}
+.act .t .i{width:17px;height:17px}
+.act div{flex:1;min-width:0;line-height:1.35}
+.act b{display:block;color:var(--text);font-weight:600;font-size:.93rem}
+.act small{display:block;font-family:var(--mono);font-size:.74rem;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.act .st{width:20px;height:20px;flex:none;border-radius:50%;border:2px solid rgba(142,177,255,.25);border-top-color:var(--light);animation:spin .8s linear infinite}
+.act.done .st{border:0;animation:none;background:#30a46c url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E") center/14px no-repeat}
+.act.held .st{border-color:rgba(245,165,36,.35);border-top-color:#f5a524}
+@keyframes spin{to{transform:rotate(360deg)}}
+.log .veda{align-self:flex-start;max-width:92%;color:var(--text)}
+.ask{padding:14px 14px 12px;border-radius:16px;background:rgba(255,255,255,.075);border:1px solid rgba(255,255,255,.13)}
+.ask .k{font-size:.75rem;color:var(--text-3)}
+.ask .tt{margin-top:4px;color:var(--text);font-weight:600}
+.ask .dd{margin-top:4px;font-size:.85rem}
+.ask .row{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+.ask button,.approval button{min-height:36px;padding:0 18px;border-radius:10px;font-size:.9rem;font-weight:600;cursor:pointer;border:1px solid var(--line-2);background:rgba(255,255,255,.07);color:var(--text);transition:background .2s,transform .2s}
+.ask button:hover,.approval button:hover{background:rgba(255,255,255,.13)}
+.ask .ok,.approval .ok{background:linear-gradient(180deg,#6e9bff,#5b8cff);border-color:transparent;color:#fff}
+.ask .ok:hover,.approval .ok:hover{background:linear-gradient(180deg,#7da6ff,#6e9bff)}
+.ask button:active,.approval button:active{transform:scale(.96)}
+.ask .ok{animation:nudge 2.4s var(--ease) 1.2s infinite}
+@keyframes nudge{0%,70%,100%{box-shadow:0 0 0 0 rgba(91,140,255,0)}35%{box-shadow:0 0 0 6px rgba(91,140,255,.25)}}
+
+/* wake (the coil) */
+.wake{position:relative;height:270vh;background:radial-gradient(70% 45% at 50% 50%,rgba(194,100,255,.10),transparent 70%)}
+.wake-stage{position:sticky;top:0;height:100vh;height:100svh;overflow:hidden;display:grid;place-items:center}
+.wake-stage::before{content:"";position:absolute;left:50%;top:50%;width:min(120vw,1100px);aspect-ratio:1;transform:translate(-50%,-50%);background:radial-gradient(closest-side,rgba(255,92,168,.10),rgba(139,92,246,.08) 45%,transparent 75%);opacity:var(--warm,.6)}
+#coil{position:absolute;inset:0;width:100%;height:100%}
+.wake-copy{position:absolute;left:var(--pad);right:var(--pad);text-align:center;max-width:780px;margin:0 auto;transition:opacity .2s linear}
+.wake-1{top:12vh;top:11svh}
+.wake-2{bottom:10vh;bottom:9svh}
+.wake .h2{font-size:clamp(2.1rem,5.2vw,4rem)}
+.wake-copy p{margin:16px auto 0;max-width:58ch;font-size:clamp(1rem,1.4vw,1.15rem)}
+.wake-copy .hey{margin:0;max-width:none;font-size:clamp(2.4rem,6.5vw,4.8rem);font-weight:600;color:var(--text);letter-spacing:-.04em;line-height:1}
+.wake-copy .reply{margin-top:14px;min-height:1.6em;font-size:clamp(1.05rem,1.6vw,1.25rem);color:var(--text)}
+.motion .wake-1,.motion .wake-2{opacity:0}
+.wake-spot{display:none}
+
+/* apps */
+#apps .fx::before{width:60vw;height:60vw;max-width:900px;max-height:900px;left:20%;top:25%;background:radial-gradient(closest-side,rgba(64,184,255,.09),transparent)}
+.apps{display:grid;gap:14px;margin-top:56px;padding:0;list-style:none;grid-template-columns:repeat(auto-fill,minmax(min(100%,208px),1fr))}
+.app{position:relative;overflow:hidden;padding:22px 22px 24px;border-radius:22px;background:rgba(255,255,255,.028);border:1px solid var(--line);transition:transform .5s var(--ease),border-color .3s,background .3s}
+.app::before{content:"";position:absolute;inset:0;background:radial-gradient(280px 180px at var(--mx,30%) var(--my,0%),color-mix(in srgb,var(--a) 24%,transparent),transparent 72%);opacity:.35;transition:opacity .4s}
+.app:hover{transform:translateY(-4px);border-color:var(--line-2);background:rgba(255,255,255,.045)}
+.app:hover::before{opacity:1}
+.tile{position:relative;display:grid;place-items:center;width:52px;height:52px;border-radius:14px;color:#fff;background:linear-gradient(180deg,var(--a),var(--b));box-shadow:0 12px 30px -10px var(--b),inset 0 1px 0 rgba(255,255,255,.22)}
+.tile .i{width:30px;height:30px}
+.app h3{position:relative;margin-top:18px;font-size:1.18rem}
+.app .say{position:relative;margin-top:10px;color:var(--text);font-size:.98rem;line-height:1.5}
+.app .what{position:relative;margin-top:8px;font-size:.92rem;line-height:1.55;color:var(--text-3)}
+.apps-note{margin-top:28px;font-size:.95rem;color:var(--text-3)}
+@media (max-width:560px){.app{display:grid;grid-template-columns:48px 1fr;column-gap:16px;padding:18px}.app .tile{grid-row:span 3;width:48px;height:48px}.app h3{margin-top:2px}.app .say{margin-top:6px}.app .what{margin-top:6px}}
+
+/* control */
+#control .fx::before{width:70vw;height:70vw;max-width:1000px;max-height:1000px;left:-20vw;bottom:-20%;background:radial-gradient(closest-side,rgba(52,245,192,.07),transparent)}
+.tiers{display:grid;gap:14px;margin-top:52px;padding:0;list-style:none;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr))}
+.tier{padding:26px 24px}
+.lv{display:flex;gap:6px}
+.lv i{width:30px;height:6px;border-radius:3px;background:rgba(255,255,255,.12)}
+.lv i.on{background:var(--c);box-shadow:0 0 14px -2px var(--c)}
+.tier h3{margin-top:18px;font-size:1.3rem}
+.tier p{margin-top:8px;font-size:.98rem}
+.tier .when{display:block;margin-top:14px;font-size:.85rem;font-weight:600;color:var(--c)}
+.routine{--c:#34f5c0}.sensitive{--c:#f5b64a}.destructive{--c:#ff6b8b}
+.consent{display:grid;gap:48px;margin-top:clamp(64px,8vw,104px);align-items:center}
+@media (min-width:980px){.consent{grid-template-columns:1fr 1fr;gap:80px}}
+.approval{position:relative;width:100%;max-width:430px;margin:0 auto;padding:20px 20px 18px;border-radius:22px;background:rgba(26,26,38,.86);border:1px solid rgba(255,255,255,.13);box-shadow:0 40px 110px -24px rgba(0,0,0,.9),0 0 90px -40px rgba(91,140,255,.45)}
+.approval .who{display:flex;align-items:center;gap:12px;font-size:.8rem;color:var(--text-3)}
+.mini-ring{width:30px;height:30px;border-radius:50%;border:3.3px solid #fff;flex:none;box-shadow:0 0 18px rgba(142,177,255,.45)}
+.approval h3{margin-top:14px;font-size:1.08rem;line-height:1.35}
+.approval p{margin-top:6px;font-size:.92rem;line-height:1.5}
+.approval .row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px}
+.approval .note{font-size:.8rem;color:var(--text-3)}
+.approval .btns{display:flex;gap:8px}
+.approval .result{display:none;margin-top:16px;padding:12px 14px;border-radius:12px;background:rgba(48,164,108,.14);border:1px solid rgba(48,164,108,.35);color:var(--text);font-size:.93rem}
+.approval.denied .result{background:rgba(255,255,255,.05);border-color:var(--line-2)}
+.approval.answered .row{display:none}
+.approval.answered .result{display:block;animation:pop .45s var(--ease) both}
+.again{margin-left:6px;padding:0;border:0;background:none;color:var(--light);font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.assure{display:grid;gap:26px;padding:0;list-style:none}
+.assure li{display:flex;gap:16px}
+.assure .i{width:24px;height:24px;margin-top:2px;color:var(--light)}
+.assure b{display:block;color:var(--text);font-size:1.08rem;font-weight:600}
+.assure span{display:block;margin-top:4px;font-size:.98rem}
+
+/* inside */
+#inside .fx::before{width:80vw;height:80vw;max-width:1100px;max-height:1100px;left:50%;top:0;transform:translateX(-50%);background:radial-gradient(closest-side,rgba(92,124,255,.10),transparent)}
+.stack{display:flex;flex-direction:column;gap:10px;max-width:820px;margin:56px auto 0;padding:0;list-style:none}
+.layer{position:relative;overflow:hidden;display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 18px;margin:0 calc((4 - var(--i)) * 2.2%);padding:17px 22px;border-radius:16px;border:1px solid var(--line);background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.015));transition:border-color .6s,box-shadow .6s;transition-delay:calc(var(--i) * .16s);text-align:left}
+.layer b{color:var(--text);font-weight:600}
+.layer span{font-size:.9rem;color:var(--text-3)}
+.layer::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(142,177,255,.22),transparent);transform:translateX(-100%)}
+.stack.in .layer{border-color:rgba(142,177,255,.26);box-shadow:0 0 40px -18px rgba(142,177,255,.6)}
+.stack.in .layer::after{animation:sweep 1.4s var(--ease) both;animation-delay:calc(var(--i) * .16s)}
+@keyframes sweep{to{transform:translateX(100%)}}
+.layer-you{background:linear-gradient(90deg,rgba(142,177,255,.12),rgba(194,100,255,.08))}
+.specs{display:grid;gap:14px;margin-top:clamp(56px,7vw,88px);padding:0;list-style:none;grid-template-columns:repeat(auto-fill,minmax(min(100%,250px),1fr))}
+.spec{padding:22px}
+.spec .i{color:var(--light)}
+.spec h3{margin-top:14px;font-size:1.08rem}
+.spec p{margin-top:6px;font-size:.93rem;line-height:1.55}
+
+/* gallery */
+.gal-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:24px}
+.gal-nav{display:flex;gap:10px}
+.gal-nav button{display:grid;place-items:center;width:48px;height:48px;border-radius:50%;border:1px solid var(--line-2);background:rgba(255,255,255,.05);cursor:pointer;transition:background .2s}
+.gal-nav button:hover{background:rgba(255,255,255,.12)}
+.shots{display:flex;gap:18px;margin:44px calc(var(--pad) * -1) 0;padding:10px var(--pad) 30px;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding:0 var(--pad);scrollbar-width:none;overscroll-behavior-x:contain}
+.shots::-webkit-scrollbar{display:none}
+.shot{flex:0 0 min(86vw,920px);scroll-snap-align:center}
+.shot img{width:100%;height:auto;aspect-ratio:16/10;border-radius:clamp(10px,1.4vw,16px);border:1px solid var(--line-2);background:#0b1024;box-shadow:0 30px 90px -30px rgba(0,0,0,.85)}
+.shot figcaption{margin-top:14px;font-size:.95rem}
+.shot figcaption b{color:var(--text);font-weight:600}
+
+/* faq */
+.faq{max-width:840px;margin:44px auto 0}
+.faq details{border-bottom:1px solid var(--line)}
+.faq summary{position:relative;padding:22px 48px 22px 0;color:var(--text);font-size:clamp(1.05rem,1.6vw,1.2rem);font-weight:600;line-height:1.4;list-style:none;cursor:pointer}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::before,.faq summary::after{content:"";position:absolute;right:8px;top:50%;width:16px;height:2px;margin-top:-1px;border-radius:2px;background:var(--light);transition:transform .35s var(--ease)}
+.faq summary::after{transform:rotate(90deg)}
+.faq details[open] summary::after{transform:rotate(0)}
+.faq details p{max-width:70ch;padding:0 0 24px}
+@supports (interpolate-size:allow-keywords){:root{interpolate-size:allow-keywords}.faq details::details-content{height:0;overflow:clip;transition:height .45s var(--ease),content-visibility .45s allow-discrete}.faq details[open]::details-content{height:auto}}
+
+/* open source */
+.cta{text-align:center}
+.cta .ring-wrap{--r:clamp(38px,6vmin,58px);margin:0 auto 40px}
+.cta .h2{max-width:16ch;margin-left:auto;margin-right:auto}
+.cta .lead{margin-left:auto;margin-right:auto}
+.code{display:inline-flex;align-items:center;gap:16px;max-width:100%;margin-top:32px;padding:10px 10px 10px 20px;border-radius:14px;background:rgba(0,0,0,.4);border:1px solid var(--line-2);font-family:var(--mono);font-size:.98rem;color:var(--text)}
+.code code{white-space:nowrap;overflow-x:auto}
+.code .p{color:var(--light);user-select:none}
+.copy{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:9px;border:1px solid var(--line-2);background:rgba(255,255,255,.06);font-family:var(--font);font-size:.85rem;font-weight:600;cursor:pointer}
+.copy .i{width:16px;height:16px}
+.cta .ctas{animation:none}
+.cta-note{margin-top:22px;font-size:.92rem;color:var(--text-3)}
+
+/* footer */
+.foot{padding:64px var(--pad) calc(36px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:linear-gradient(180deg,rgba(5,8,26,.4),rgba(3,4,12,.9))}
+.foot-grid{display:grid;gap:36px}
+@media (min-width:820px){.foot-grid{grid-template-columns:2fr 1fr 1fr}}
+.foot .brand{padding:0}
+.foot-tag{margin-top:14px;max-width:34ch;font-size:.95rem;color:var(--text-3)}
+.foot h2{font-size:.78rem;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--text-3)}
+.foot ul{margin-top:14px;padding:0;list-style:none;display:grid;gap:8px}
+.foot a{color:var(--text-2);text-decoration:none;transition:color .2s}
+.foot a:hover{color:var(--text)}
+.legal{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;margin-top:48px;padding-top:24px;border-top:1px solid var(--line);font-size:.85rem;color:var(--text-3)}
+
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001s!important;animation-iteration-count:1!important;transition-duration:.001s!important}
+  .glow-b,.glow-b::after{animation:none!important}
+  .wake{height:auto}.wake-stage{position:relative;height:auto;min-height:100vh;padding:120px var(--pad)}
+  .motion .wake-1,.motion .wake-2{opacity:1}
+  .wake-copy{position:relative;inset:auto}
+  .wake-stage{grid-template-rows:auto auto auto;gap:24px}.wake-spot{display:block;width:100%;height:min(44vmin,340px)}
+}
+.below{content-visibility:auto;contain-intrinsic-size:auto 1100px}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[
+{"@type":"Organization","@id":"https://www.vedaos.org/#org","name":"Veda","url":"https://www.vedaos.org/","logo":"https://www.vedaos.org/assets/img/icon-512.png","email":"contact@vedaos.org","sameAs":["https://github.com/vahmoh25/Veda"]},
+{"@type":"WebSite","@id":"https://www.vedaos.org/#site","url":"https://www.vedaos.org/","name":"Veda","description":"The agentic-native operating system.","inLanguage":"en","publisher":{"@id":"https://www.vedaos.org/#org"}},
+{"@type":"SoftwareApplication","name":"Veda","description":"A free, open-source operating system with an AI agent built in: you talk to it, it does the work in every application, and it asks before anything that is hard to undo.","url":"https://www.vedaos.org/","applicationCategory":"OperatingSystem","operatingSystem":"x86-64 PCs (UEFI), QEMU, VirtualBox","image":"https://www.vedaos.org/assets/img/og.jpg","screenshot":"https://www.vedaos.org/assets/img/desktop-1280.jpg","license":"https://www.gnu.org/licenses/gpl-3.0.html","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"author":{"@id":"https://www.vedaos.org/#org"}},
+{"@type":"SoftwareSourceCode","name":"Veda","codeRepository":"https://github.com/vahmoh25/Veda","programmingLanguage":"Rust","license":"https://www.gnu.org/licenses/gpl-3.0.html"},
+{"@type":"FAQPage","mainEntity":[
+{"@type":"Question","name":"What is Veda?","acceptedAnswer":{"@type":"Answer","text":"Veda is an operating system — like Windows or macOS — with an AI agent built into it. You ask it to do things by voice, and it carries them out in its apps, checking with you first before anything that is hard to undo."}},
+{"@type":"Question","name":"What does “agentic-native” mean?","acceptedAnswer":{"@type":"Answer","text":"Most AI assistants are added on top of a system designed for clicks, so they have to read the screen and imitate a mouse. Veda was designed for an agent from the start: every app tells the agent what it can do and does it reliably, and the system itself enforces your consent."}},
+{"@type":"Question","name":"Is Veda free?","acceptedAnswer":{"@type":"Answer","text":"Yes. Veda is free, open-source software, released under the GNU General Public License version 3. Its complete source code is on GitHub."}},
+{"@type":"Question","name":"Can I try it on my computer?","acceptedAnswer":{"@type":"Answer","text":"Today Veda runs in a virtual machine (QEMU or VirtualBox) on Windows, or on a real PC from a USB stick, where it runs from memory and never touches your disks. It is a young project, so hardware support is still limited. The guide on GitHub shows how to build and start it with one command."}},
+{"@type":"Question","name":"What do I need to talk to it?","acceptedAnswer":{"@type":"Answer","text":"A microphone, speakers, and an API key for Deepgram, the voice service Veda uses for speech recognition, its language model and its voice. You enter the key in Settings, on the Agent page. Your audio is opted out of Deepgram's model improvement."}},
+{"@type":"Question","name":"Is it always listening?","acceptedAnswer":{"@type":"Answer","text":"While it sleeps, a voice detector runs on your computer, and nothing leaves the computer while nobody speaks. Veda wakes when you call its name, tap the ring on the taskbar or press Super + Space, and goes back to sleep when you say goodbye."}},
+{"@type":"Question","name":"Can the agent do things without asking?","acceptedAnswer":{"@type":"Answer","text":"Only routine things that are easy to undo, such as opening an app or playing a song. Anything that matters waits for your OK, and anything destructive — like emptying the Trash — is asked about every time. Veda's system enforces this, not the AI model."}},
+{"@type":"Question","name":"How can I get involved?","acceptedAnswer":{"@type":"Answer","text":"Explore the code, open issues and follow the work on GitHub, or write to contact@vedaos.org."}}
+]}
+]}
+</script>
+<script src="assets/site.js?v=1" defer></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<defs>
+<symbol id="i-github" viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></symbol>
+<symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3h8l5 5v13H6zM14 3v5h5M9 12.5h7M9 16h7"/></symbol>
+<symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9" r="1.8" fill="currentColor" stroke="none"/><path d="M3.5 18l6-6 3.5 3.5 3-3 4.5 4.5"/></symbol>
+<symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.6"/><circle cx="17.5" cy="16" r="2.6"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7v11h18V8.5h-9l-2-3H3z"/></symbol>
+<symbol id="i-terminal" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="M6.5 9l3 3-3 3M11.5 15h5"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24"><path d="M3.5 3.5v17h17M7 16l4-5 3 2.5 5.5-7"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="6.5"/><path d="M18.5 12H21M16.6 16.6l1.77 1.77M12 18.5V21M7.4 16.6l-1.77 1.77M5.5 12H3M7.4 7.4L5.64 5.64M12 5.5V3M16.6 7.4l1.77-1.77"/></symbol>
+<symbol id="i-car" viewBox="0 0 24 24"><path d="M3 16v-3.5l2.5-5h13l2.5 5V16zM3.5 12.5h17"/><circle cx="7.5" cy="16.5" r="2"/><circle cx="16.5" cy="16.5" r="2"/></symbol>
+<symbol id="i-rocket" viewBox="0 0 24 24"><path d="M12 2.5C16.5 6 16.5 12 15 16H9C7.5 12 7.5 6 12 2.5z"/><circle cx="12" cy="9" r="1.8"/><path d="M9 13l-3.5 3v3.5L9 16M15 13l3.5 3v3.5L15 16M12 18v3.5"/></symbol>
+<symbol id="i-cube" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/></symbol>
+<symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M18 11a6 6 0 0 1-12 0M12 17v4M8.5 21h7"/></symbol>
+<symbol id="i-mic-off" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M18 11a6 6 0 0 1-12 0M12 17v4M8.5 21h7M4 4l16 16"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M7.5 11a4.5 4.5 0 0 1 9 0"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l5 5L19.5 7"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+<symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 6.5h16M9 6.5l.5-3h5l.5 3M6 6.5l1 14h10l1-14M10 10.5v6M14 10.5v6"/></symbol>
+<symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></symbol>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M3.5 11L12 3.5l8.5 7.5M6 9v11h12V9M10 20v-6h4v6"/></symbol>
+<symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M9 20.5h6M12 17v3.5"/></symbol>
+<symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9.5 2.5V6M9.5 18v3.5M2.5 9.5H6M18 9.5h3.5M14.5 2.5V6M14.5 18v3.5M2.5 14.5H6M18 14.5h3.5"/></symbol>
+<symbol id="i-wifi" viewBox="0 0 24 24"><path d="M8.11 16.11a5.5 5.5 0 0 1 7.78 0M4.93 12.93a10 10 0 0 1 14.14 0M1.75 9.75a14.5 14.5 0 0 1 20.5 0"/><circle cx="12" cy="20" r="1.9" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4zM15.83 9.17a4 4 0 0 1 0 5.66M17.82 6.26a7.5 7.5 0 0 1 0 11.49"/></symbol>
+<symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3.5V11M15.75 6.5a7.5 7.5 0 1 1-7.5 0"/></symbol>
+<symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></symbol>
+<symbol id="i-ring" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" stroke-width="3"/></symbol>
+<symbol id="i-code" viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="12" height="12" rx="2"/><path d="M15.5 8.5v-3l-2-2h-8l-2 2v8l2 2h3"/></symbol>
+<symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5L12 13l8.5-6.5"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+<symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+<symbol id="i-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+<symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+<symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+</defs>
+</svg>
+<div class="space" aria-hidden="true"></div>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="hdr" id="hdr">
+  <a class="brand" href="#top" aria-label="Veda, back to the top"><span class="brand-ring" id="brand-ring" aria-hidden="true"></span>Veda</a>
+  <nav class="nav" aria-label="Sections">
+    <a href="#agentic-ai">Agentic AI</a>
+    <a href="#apps">Apps</a>
+    <a href="#control">Privacy</a>
+    <a href="#inside">Inside</a>
+    <a href="#faq">FAQ</a>
+  </nav>
+  <a class="gh" href="https://github.com/vahmoh25/Veda" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
+  <button class="menu" id="menu" type="button" aria-expanded="false" aria-controls="sheet" aria-label="Menu"><svg class="i m" aria-hidden="true"><use href="#i-menu"/></svg><svg class="i x" aria-hidden="true"><use href="#i-close"/></svg></button>
+</header>
+<div class="sheet" id="sheet">
+  <a href="#agentic-ai">Agentic AI</a>
+  <a href="#wake">Meet the agent</a>
+  <a href="#apps">Apps</a>
+  <a href="#control">Privacy &amp; safety</a>
+  <a href="#inside">Under the hood</a>
+  <a href="#faq">FAQ</a>
+  <a class="sheet-gh" href="https://github.com/vahmoh25/Veda" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>Explore Veda on GitHub</a>
+</div>
+
+<main id="main">
+<section class="hero" id="top" aria-labelledby="hero-title">
+  <canvas id="aurora" aria-hidden="true"></canvas>
+  <div class="hero-stars" aria-hidden="true"></div>
+  <div class="hero-in">
+    <div class="ring-wrap" id="hero-ring" aria-hidden="true">
+      <div class="ring-fly" id="ring-fly"><div class="glow"><div class="glow-f"><div class="glow-b"></div></div></div><div class="ring"></div></div>
+    </div>
+    <h1 id="hero-title"><span class="wordmark">Veda</span><span class="sr-only">, </span><span class="tagline">The agentic-native operating system</span></h1>
+    <p class="hero-lead">A computer you can simply talk to. Ask for what you need and Veda gets it done, in any app — checking with you before anything you can’t undo.</p>
+    <div class="ctas">
+      <a class="btn btn-1" href="https://github.com/vahmoh25/Veda" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>Explore on GitHub</a>
+      <a class="btn btn-2" href="#agentic-ai">See it in action<svg class="i" aria-hidden="true"><use href="#i-down"/></svg></a>
+    </div>
+    <p class="meta"><span>Free &amp; open source</span><span>Written from scratch in Rust</span></p>
+  </div>
+  <div class="cue" aria-hidden="true"></div>
+</section>
+
+<section class="sec" id="meet" aria-labelledby="meet-title">
+  <div class="fx" aria-hidden="true"></div>
+  <div class="wrap">
+    <p class="eyebrow" data-reveal>Meet Veda</p>
+    <h2 class="statement" id="meet-title" data-words>Most computers wait for your clicks. Veda listens, understands and does the work for you.</h2>
+    <div class="meet-grid">
+      <p class="lead" data-reveal>Veda is a new kind of operating system, with an AI agent at its heart — not an assistant added to a desktop, but a part of the system that every app is made to work with. You talk to it the way you would talk to someone in the room: <span style="color:var(--text)">“Hey Veda, switch my wallpaper to the dunes.”</span></p>
+      <ul class="points">
+        <li data-reveal><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg><div><b>Voice first</b><span>A real-time conversation. Interrupt it, and it stops and listens.</span></div></li>
+        <li data-reveal style="--d:.08s"><svg class="i" aria-hidden="true"><use href="#i-grid"/></svg><div><b>At home in every app</b><span>It works through the apps themselves, so you see every step happen.</span></div></li>
+        <li data-reveal style="--d:.16s"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><div><b>On your side</b><span>It asks before anything that is hard to undo.</span></div></li>
+      </ul>
+    </div>
+    <figure class="screen-wrap" data-reveal>
+      <div class="screen" id="screen"><img src="assets/img/desktop-1280.jpg" srcset="assets/img/desktop-640.jpg 640w, assets/img/desktop-960.jpg 960w, assets/img/desktop-1280.jpg 1280w" sizes="(min-width: 1260px) 1180px, 92vw" width="1280" height="800" alt="The Veda desktop: a starry wallpaper with ribbons of light, desktop icons, the taskbar, and the agent’s window showing its white ring, listening" loading="lazy" decoding="async"></div>
+      <figcaption class="screen-cap">The Veda desktop, with the agent listening.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="sec" id="agentic-ai" aria-labelledby="ai-title">
+  <div class="fx" aria-hidden="true"></div>
+  <div class="wrap">
+    <p class="eyebrow" data-reveal>Agentic AI, in plain words</p>
+    <h2 class="h2" id="ai-title" data-reveal>A chatbot tells you how.<br><span class="grad">An agent does it.</span></h2>
+    <p class="lead" data-reveal>Agentic AI is software that can act for you: it understands what you want, plans the steps and carries them out. Veda is an operating system built around that idea — so its agent can use every app, reliably and safely.</p>
+    <ol class="steps">
+      <li class="step glass" data-reveal><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg><h3>You ask</h3><p>Say what you need in your own words, the way you would ask a person.</p></li>
+      <li class="step glass" data-reveal style="--d:.08s"><svg class="i" aria-hidden="true"><use href="#i-ring"/></svg><h3>It plans</h3><p>Veda works out the steps, and which apps can do them.</p></li>
+      <li class="step glass" data-reveal style="--d:.16s"><svg class="i" aria-hidden="true"><use href="#i-grid"/></svg><h3>It acts</h3><p>It uses those apps just as you would — and you see it happen on screen.</p></li>
+      <li class="step glass" data-reveal style="--d:.24s"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><h3>You decide</h3><p>Anything that is hard to undo waits for your OK.</p></li>
+    </ol>
+    <div class="demo" id="demo">
+      <div class="demo-intro" data-reveal>
+        <h3>Try it</h3>
+        <p>Pick a request, and watch how Veda handles it — from listening, to working in the apps, to asking you when it matters.</p>
+        <div class="prompts" id="prompts">
+          <button class="chip" type="button" data-demo="remind" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg>“Remind me to stretch in twenty minutes”</button>
+          <button class="chip" type="button" data-demo="photo" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg>“Show me the lighthouse photo, full screen”</button>
+          <button class="chip" type="button" data-demo="list" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg>“Write a shopping list with eggs, milk and coffee”</button>
+          <button class="chip" type="button" data-demo="memory" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg>“What’s using the most memory?”</button>
+          <button class="chip" type="button" data-demo="delete" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg>“Delete the City Lights photo”</button>
+        </div>
+        <p class="demo-note">A simulation in your browser. In Veda, you simply talk.</p>
+      </div>
+      <div class="win" data-reveal style="--d:.1s" role="group" aria-label="A simulated conversation with Veda">
+        <div class="win-bar" aria-hidden="true"><i></i><i></i><i></i><b>Veda</b></div>
+        <div class="orb"><canvas id="orb" width="300" height="300" aria-hidden="true"></canvas><p class="caption" id="caption">Say “Hey Veda”</p></div>
+        <ol class="log" id="log" aria-live="polite"></ol>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="wake" id="wake" aria-labelledby="wake-title">
+  <div class="wake-stage" id="wake-stage">
+    <canvas id="coil" aria-hidden="true"></canvas>
+    <div class="wake-copy wake-1" id="wake-1">
+      <p class="eyebrow">Bringing it to life</p>
+      <h2 class="h2" id="wake-title">Add a key. Watch it wake.</h2>
+      <p>Enter your voice key in Settings, and Veda comes alive: a spinning ribbon of light — a nod to the film <i>Her</i> — turns to face you, and becomes the ring that listens for its name.</p>
+    </div>
+    <div class="wake-spot" id="wake-spot" aria-hidden="true"></div>
+    <div class="wake-copy wake-2" id="wake-2">
+      <p class="hey">“Hey Veda.”</p>
+      <p class="reply" id="reply" aria-live="polite"></p>
+      <p>Call it by name, tap the ring on the taskbar, or press Super + Space. It wakes, listens and answers — and you can interrupt it any time, just as you would a friend.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec below" id="apps" aria-labelledby="apps-title">
+  <div class="fx" aria-hidden="true"></div>
+  <div class="wrap">
+    <p class="eyebrow" data-reveal>Agentic-native apps</p>
+    <h2 class="h2" id="apps-title" data-reveal>Every app<br><span class="grad">speaks agent.</span></h2>
+    <p class="lead" data-reveal>Each Veda app tells the agent what it can do — and does it through the same code as your mouse and keyboard, so the window shows the result exactly as if you had done it yourself. No screen reading, no simulated clicks: more than 70 actions across the built-in apps.</p>
+    <ul class="apps" id="app-grid">
+      <li class="app" style="--a:#5b95ff;--b:#2f5bdb" data-reveal><span class="tile"><svg class="i" aria-hidden="true"><use href="#i-doc"/></svg></span><h3>Text Editor</h3><p class="say">“Write a shopping list with eggs, milk and coffee.”</p><p class="what">Tabs, syntax highlighting, find and replace, unlimited undo.</p></li>
+      <li class="app" style="--a:#ff7ab2;--b:#a64dff" data-reveal><span class="tile"><svg class="i" aria-hidden="true"><use href="#i-image"/></svg></span><h3>Photos</h3><p class="say">“Show me the lighthouse photo, full screen.”</p><p class="what">Your picture library, with zoom, slideshows and wallpapers.</p></li>
+      <li class="app" style="--a:#ff6b7a;--b:#d12f6e" data-reveal><span class="tile"><svg class="i" aria-hidden="true"><use href="#i-music"/></svg></span><h3>Music</h3><p class="say">“Play Neon Horizon.”</p><p class="what">Your songs with cover art and a live spectrum visualiser.</p></li>
+      <li class="app" style="--a:#ffc857;--b:#f08a24" data-reveal><span class="tile"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg></span><h3>Files</h3><p class="say">“Move the trip photos into Documents.”</p><p class="what">Copy, move, rename, search — and a Trash to restore from.</p></li>
+      <li class="app" style="--a:#35d9ae;--b:#10897a" data-reveal><span class="tile"><svg class="i" aria-hidden="true"><use href="#i-chart"/></svg></span><h3>Task Manager</h3><p class="say">“What’s using the most memory?”</p><p class="what">Programs with their CPU and memory use, and live graphs.</p></li>
+      <li class="app" style="--a:#98a2b8;--b:#56607a" data-reveal><span class="tile"><svg class="i" aria-hidden="true"><use href="#i-gear"/></svg></span><h3>Settings</h3><p class="say">“Speak a little slower.”</p><p class="what">Wallpapers, Wi-Fi, and the agent’s name, voice and memory.</p></li>
+      <li class="app" style="--a:#454b59;--b:#1c1f26" data-reveal><span class="tile"><svg class="i" aria-hidden="true"><use href="#i-terminal"/></svg></span><h3>Terminal</h3><p class="say">“Check the network with a ping.”</p><p class="what">About fifty built-in commands, and C programs compiled with GCC.</p></li>
+      <li class="app" style="--a:#ff9a4a;--b:#e0402f" data-reveal><span class="tile"><svg class="i" aria-hidden="true"><use href="#i-car"/></svg></span><h3>Velocity</h3><p class="say">“Start a race in Velocity.”</p><p class="what">Arcade 3D racing against computer opponents.</p></li>
+      <li class="app" style="--a:#7a6bff;--b:#231c78" data-reveal><span class="tile"><svg class="i" aria-hidden="true"><use href="#i-rocket"/></svg></span><h3>Starfall</h3><p class="say">“Start a new game of Starfall.”</p><p class="what">A 3D space shooter through asteroid fields and enemy waves.</p></li>
+      <li class="app" style="--a:#5ce1e6;--b:#3a5bd9" data-reveal><span class="tile"><svg class="i" aria-hidden="true"><use href="#i-cube"/></svg></span><h3>Prism</h3><p class="say">“Open Prism.”</p><p class="what">OpenGL ES 3.0 at work: reflections, shadows and a fountain of sparks.</p></li>
+    </ul>
+    <p class="apps-note" data-reveal>Apps installed later join in on their own: the agent reaches every app the same way.</p>
+  </div>
+</section>
+
+<section class="sec below" id="control" aria-labelledby="control-title">
+  <div class="fx" aria-hidden="true"></div>
+  <div class="wrap">
+    <p class="eyebrow" data-reveal>Safety &amp; privacy</p>
+    <h2 class="h2" id="control-title" data-reveal>Helpful, and always<br><span class="grad">on your side.</span></h2>
+    <p class="lead" data-reveal>An agent that can act needs firm limits. In Veda they are built into the system itself — not left to the AI to remember.</p>
+    <ol class="tiers">
+      <li class="tier glass routine" data-reveal><div class="lv" aria-hidden="true"><i class="on"></i><i></i><i></i></div><h3>Routine</h3><p>Looking, opening, playing, creating something new.</p><span class="when">Just happens</span></li>
+      <li class="tier glass sensitive" data-reveal style="--d:.08s"><div class="lv" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i></div><h3>Sensitive</h3><p>Replacing a file, moving things to the Trash, running a command.</p><span class="when">Waits for your OK — unless you choose “Always allow”</span></li>
+      <li class="tier glass destructive" data-reveal style="--d:.16s"><div class="lv" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i></div><h3>Destructive</h3><p>Emptying the Trash, ending a program, shutting down.</p><span class="when">Asks you every single time</span></li>
+    </ol>
+    <div class="consent">
+      <div data-reveal>
+        <div class="approval" id="approval">
+          <div class="who"><span class="mini-ring" aria-hidden="true"></span>Veda needs your OK</div>
+          <h3>Move “City Lights.jpg” to the Trash</h3>
+          <p>~/Pictures/City Lights.jpg can be restored from the Trash until it is emptied.</p>
+          <div class="row"><span class="note">Try it — this one is safe.</span><div class="btns"><button type="button" data-answer="deny">Deny</button><button type="button" class="ok" data-answer="allow">Allow</button></div></div>
+          <p class="result" id="approval-result" aria-live="polite"></p>
+        </div>
+      </div>
+      <ul class="assure">
+        <li data-reveal><svg class="i" aria-hidden="true"><use href="#i-lock"/></svg><div><b>Enforced by the system</b><span>Veda holds every risky action until you answer, and only you, at the desktop, can approve it. Nothing the agent reads — a document, a web page — can say yes for you.</span></div></li>
+        <li data-reveal style="--d:.08s"><svg class="i" aria-hidden="true"><use href="#i-user"/></svg><div><b>Your memory stays yours</b><span>Veda remembers only what you plainly tell it, keeps it on your computer, and shows all of it in Settings — where you can make it forget anything.</span></div></li>
+        <li data-reveal style="--d:.16s"><svg class="i" aria-hidden="true"><use href="#i-mic-off"/></svg><div><b>Quiet when you are</b><span>While it sleeps, a voice detector on your computer listens for speech, so nothing leaves the computer while nobody is speaking.</span></div></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="sec below" id="inside" aria-labelledby="inside-title">
+  <div class="fx" aria-hidden="true"></div>
+  <div class="wrap center">
+    <p class="eyebrow" data-reveal>Under the hood</p>
+    <h2 class="h2" id="inside-title" data-reveal>Built from scratch.<br><span class="grad">Every layer.</span></h2>
+    <p class="lead" data-reveal>From the moment your PC starts to the apps on your screen, Veda is its own: the bootloader, a microkernel, the drivers, the window system, the apps and the agent — written in Rust, in one open repository.</p>
+    <ol class="stack" id="stack" aria-label="The layers of Veda, from you down to the microkernel">
+      <li class="layer layer-you" style="--i:4"><b>You</b><span>voice · keyboard · mouse</span></li>
+      <li class="layer" style="--i:3"><b>Agent &amp; desktop</b><span>conversation · memory · consent · the ring</span></li>
+      <li class="layer" style="--i:2"><b>Apps</b><span>actions · state · the same code as your clicks</span></li>
+      <li class="layer" style="--i:1"><b>Services</b><span>windows · files · audio · network · Wi‑Fi</span></li>
+      <li class="layer" style="--i:0"><b>Microkernel</b><span>capabilities · isolation · scheduling</span></li>
+    </ol>
+  </div>
+  <div class="wrap">
+    <ul class="specs">
+      <li class="spec glass" data-reveal><svg class="i" aria-hidden="true"><use href="#i-cpu"/></svg><h3>A microkernel</h3><p>Drivers and services run isolated from each other. If the window system crashes, it restarts and the desktop comes back on its own.</p></li>
+      <li class="spec glass" data-reveal style="--d:.06s"><svg class="i" aria-hidden="true"><use href="#i-monitor"/></svg><h3>A desktop composed on the GPU</h3><p>Smooth animations, window snapping and live thumbnails — every frame shown whole on Intel graphics.</p></li>
+      <li class="spec glass" data-reveal style="--d:.12s"><svg class="i" aria-hidden="true"><use href="#i-speaker"/></svg><h3>Made for voice</h3><p>Echo cancellation so the agent never hears itself, and music that dips while you talk.</p></li>
+      <li class="spec glass" data-reveal style="--d:.18s"><svg class="i" aria-hidden="true"><use href="#i-wifi"/></svg><h3>Wi-Fi and the web</h3><p>WPA2 and WPA3 Wi-Fi, IPv4 and IPv6, and TLS 1.3 for secure connections.</p></li>
+      <li class="spec glass" data-reveal><svg class="i" aria-hidden="true"><use href="#i-cube"/></svg><h3>3D graphics</h3><p>OpenGL ES 3.0 on the GPU — or a fast software renderer where there is none.</p></li>
+      <li class="spec glass" data-reveal style="--d:.06s"><svg class="i" aria-hidden="true"><use href="#i-code"/></svg><h3>C and GCC inside</h3><p>Write C programs and compile them with GCC, right in Veda.</p></li>
+      <li class="spec glass" data-reveal style="--d:.12s"><svg class="i" aria-hidden="true"><use href="#i-home"/></svg><h3>Your files, kept safe</h3><p>A home folder on its own disk, with crash-safe snapshots — and a Trash.</p></li>
+      <li class="spec glass" data-reveal style="--d:.18s"><svg class="i" aria-hidden="true"><use href="#i-power"/></svg><h3>Runs where you are</h3><p>On a real PC from a USB stick, or in QEMU and VirtualBox.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section class="sec below" id="gallery" aria-labelledby="gallery-title">
+  <div class="wrap">
+    <div class="gal-head">
+      <div>
+        <p class="eyebrow" data-reveal>A look inside</p>
+        <h2 class="h2" id="gallery-title" data-reveal>A desktop that<br><span class="grad">feels alive.</span></h2>
+      </div>
+      <div class="gal-nav" data-reveal><button type="button" id="prev" aria-label="Previous screenshot"><svg class="i" aria-hidden="true"><use href="#i-left"/></svg></button><button type="button" id="next" aria-label="Next screenshot"><svg class="i" aria-hidden="true"><use href="#i-right"/></svg></button></div>
+    </div>
+    <div class="shots" id="shots" tabindex="0" role="region" aria-label="Screenshots of Veda">
+      <figure class="shot"><img src="assets/img/editor-960.jpg" srcset="assets/img/editor-640.jpg 640w, assets/img/editor-960.jpg 960w, assets/img/editor-1280.jpg 1280w" sizes="(min-width: 1070px) 920px, 86vw" width="1280" height="800" alt="The Text Editor showing a Rust program with syntax highlighting" loading="lazy" decoding="async"><figcaption><b>Text Editor</b> — tabs, highlighting, find and replace.</figcaption></figure>
+      <figure class="shot"><img src="assets/img/photos-960.jpg" srcset="assets/img/photos-640.jpg 640w, assets/img/photos-960.jpg 960w, assets/img/photos-1280.jpg 1280w" sizes="(min-width: 1070px) 920px, 86vw" width="1280" height="800" alt="Photos showing a library of picture thumbnails" loading="lazy" decoding="async"><figcaption><b>Photos</b> — your library, a viewer and slideshows.</figcaption></figure>
+      <figure class="shot"><img src="assets/img/music-960.jpg" srcset="assets/img/music-640.jpg 640w, assets/img/music-960.jpg 960w, assets/img/music-1280.jpg 1280w" sizes="(min-width: 1070px) 920px, 86vw" width="1280" height="800" alt="Music playing a song, with cover art and a spectrum visualiser" loading="lazy" decoding="async"><figcaption><b>Music</b> — cover art and a live visualiser.</figcaption></figure>
+      <figure class="shot"><img src="assets/img/files-960.jpg" srcset="assets/img/files-640.jpg 640w, assets/img/files-960.jpg 960w, assets/img/files-1280.jpg 1280w" sizes="(min-width: 1070px) 920px, 86vw" width="1280" height="800" alt="Files showing pictures as thumbnails, with the Trash in its sidebar" loading="lazy" decoding="async"><figcaption><b>Files</b> — thumbnails, search, and a Trash.</figcaption></figure>
+      <figure class="shot"><img src="assets/img/velocity-960.jpg" srcset="assets/img/velocity-640.jpg 640w, assets/img/velocity-960.jpg 960w, assets/img/velocity-1280.jpg 1280w" sizes="(min-width: 1070px) 920px, 86vw" width="1280" height="800" alt="Velocity, a 3D racing game, with cars on a track" loading="lazy" decoding="async"><figcaption><b>Velocity</b> — arcade racing in 3D.</figcaption></figure>
+      <figure class="shot"><img src="assets/img/starfall-960.jpg" srcset="assets/img/starfall-640.jpg 640w, assets/img/starfall-960.jpg 960w, assets/img/starfall-1280.jpg 1280w" sizes="(min-width: 1070px) 920px, 86vw" width="1280" height="800" alt="Starfall, a 3D space shooter among asteroids" loading="lazy" decoding="async"><figcaption><b>Starfall</b> — a space shooter among the asteroids.</figcaption></figure>
+      <figure class="shot"><img src="assets/img/prism-960.jpg" srcset="assets/img/prism-640.jpg 640w, assets/img/prism-960.jpg 960w, assets/img/prism-1280.jpg 1280w" sizes="(min-width: 1070px) 920px, 86vw" width="1280" height="800" alt="Prism: a reflective knot, crystals with shadows and sparks, in OpenGL ES 3.0" loading="lazy" decoding="async"><figcaption><b>Prism</b> — OpenGL ES 3.0 on the GPU.</figcaption></figure>
+      <figure class="shot"><img src="assets/img/gcc-960.jpg" srcset="assets/img/gcc-640.jpg 640w, assets/img/gcc-960.jpg 960w, assets/img/gcc-1280.jpg 1280w" sizes="(min-width: 1070px) 920px, 86vw" width="1280" height="800" alt="The Terminal, where GCC points out a mistake in a C program" loading="lazy" decoding="async"><figcaption><b>Terminal</b> — GCC, right inside Veda.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="sec below" id="faq" aria-labelledby="faq-title">
+  <div class="wrap center">
+    <p class="eyebrow" data-reveal>Questions</p>
+    <h2 class="h2" id="faq-title" data-reveal>Questions, answered.</h2>
+  </div>
+  <div class="faq">
+    <details><summary>What is Veda?</summary><p>Veda is an operating system — like Windows or macOS — with an AI agent built into it. You ask it to do things by voice, and it carries them out in its apps, checking with you first before anything that is hard to undo.</p></details>
+    <details><summary>What does “agentic-native” mean?</summary><p>Most AI assistants are added on top of a system designed for clicks, so they have to read the screen and imitate a mouse. Veda was designed for an agent from the start: every app tells the agent what it can do and does it reliably, and the system itself enforces your consent.</p></details>
+    <details><summary>Is Veda free?</summary><p>Yes. Veda is free, open-source software, released under the GNU General Public License version 3. Its complete source code is on GitHub.</p></details>
+    <details><summary>Can I try it on my computer?</summary><p>Today Veda runs in a virtual machine (QEMU or VirtualBox) on Windows, or on a real PC from a USB stick, where it runs from memory and never touches your disks. It is a young project, so hardware support is still limited. The guide on GitHub shows how to build and start it with one command.</p></details>
+    <details><summary>What do I need to talk to it?</summary><p>A microphone, speakers, and an API key for Deepgram, the voice service Veda uses for speech recognition, its language model and its voice. You enter the key in Settings, on the Agent page. Your audio is opted out of Deepgram’s model improvement.</p></details>
+    <details><summary>Is it always listening?</summary><p>While it sleeps, a voice detector runs on your computer, and nothing leaves the computer while nobody speaks. Veda wakes when you call its name, tap the ring on the taskbar or press Super + Space, and goes back to sleep when you say goodbye.</p></details>
+    <details><summary>Can the agent do things without asking?</summary><p>Only routine things that are easy to undo, such as opening an app or playing a song. Anything that matters waits for your OK, and anything destructive — like emptying the Trash — is asked about every time. Veda’s system enforces this, not the AI model.</p></details>
+    <details><summary>How can I get involved?</summary><p>Explore the code, open issues and follow the work on GitHub, or write to <a href="mailto:contact@vedaos.org">contact@vedaos.org</a>.</p></details>
+  </div>
+</section>
+
+<section class="sec below cta" id="open-source" aria-labelledby="os-title">
+  <div class="wrap">
+    <div class="ring-wrap" aria-hidden="true"><div class="ring-fly"><div class="glow"><div class="glow-f"><div class="glow-b"></div></div></div><div class="ring"></div></div></div>
+    <h2 class="h2" id="os-title" data-reveal>Open source, <span class="grad">from the first line.</span></h2>
+    <p class="lead" data-reveal>Read the code, build Veda with a single command, and try it in a virtual machine — or on a real PC, from a USB stick.</p>
+    <div class="code" data-reveal><span class="p" aria-hidden="true">$</span><code id="cmd">cargo xtask run</code><button class="copy" type="button" id="copy" aria-label="Copy the command"><svg class="i" aria-hidden="true"><use href="#i-copy"/></svg><span>Copy</span></button></div>
+    <div class="ctas" data-reveal>
+      <a class="btn btn-1" href="https://github.com/vahmoh25/Veda" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>Explore Veda on GitHub</a>
+      <a class="btn btn-2" href="https://github.com/vahmoh25/Veda#quick-start" rel="noopener">Read the quick start</a>
+    </div>
+    <p class="cta-note" data-reveal>Questions or ideas? Write to <a href="mailto:contact@vedaos.org">contact@vedaos.org</a></p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <a class="brand" href="#top"><span class="brand-ring" style="opacity:1" aria-hidden="true"></span>Veda</a>
+        <p class="foot-tag">The agentic-native operating system. An AI agent at the heart of your computer — open source, from the first line.</p>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/vahmoh25/Veda" rel="noopener">GitHub</a></li>
+          <li><a href="https://github.com/vahmoh25/Veda#quick-start" rel="noopener">Quick start</a></li>
+          <li><a href="https://github.com/vahmoh25/Veda/blob/main/docs/AGENT.md" rel="noopener">How the agent works</a></li>
+          <li><a href="https://github.com/vahmoh25/Veda/blob/main/docs/ARCHITECTURE.md" rel="noopener">Architecture</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Contact</h2>
+        <ul>
+          <li><a href="mailto:contact@vedaos.org">contact@vedaos.org</a></li>
+          <li><a href="https://github.com/vahmoh25/Veda/issues" rel="noopener">Report an issue</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal"><span>© <span id="year">2026</span> Veda · Free software under the <a href="https://github.com/vahmoh25/Veda/blob/main/LICENSE" rel="noopener">GNU GPL v3</a></span><span>vedaos.org</span></div>
+  </div>
+</footer>
+</body>
+</html>
