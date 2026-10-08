@@ -1,15 +1,16 @@
 # Files (1280x800 with the taskbar): copy and paste, rename (F2), new
-# folder, cut and paste into a folder, delete with confirmation, the
-# read-only system folder, typing a path, drag and drop onto the sidebar,
-# properties from the context menu (keyboard), the icon view, search, and
-# opening a file with its default app. Files logs each operation, which the
-# script checks.
+# folder, cut and paste into a folder, deleting for good (Shift+Del) with
+# confirmation, the read-only system folder, typing a path, drag and drop
+# onto the sidebar, properties from the context menu (keyboard), the icon
+# view, search, and opening a file with its default app. Files logs each
+# operation, which the script checks. (The Trash: trash.vts.)
 boot-cmdline "run=files"
 wait-serial "desktop ready" 90
 wait-serial "started files" 60
 wait 3
 # Maximise the window (Super+Up): the positions below assume it. Sidebar
-# rows: Documents y=0.276, Pictures 0.321, Music 0.366, System 0.506;
+# rows: Documents y=0.276, Pictures 0.321, Music 0.366, Trash 0.411,
+# System 0.551;
 # list rows: 0.18, 0.22, 0.26, ...
 key meta_l-up
 wait 2
@@ -46,16 +47,17 @@ double-click 0.25 0.18
 wait 1
 key ctrl-v
 wait-serial "files: moved 1 item into /home/user/Documents/Trips" 20
-# Back up (Trips is selected) and delete it, confirming with Enter.
+# Back up (Trips is selected) and delete it for good, confirming with
+# Enter.
 key backspace
 wait 1
-key delete
+key shift-delete
 wait 1
 shot target/veda/files-2-confirm.png
 key ret
 wait-serial "files: deleted 1 item from /home/user/Documents" 20
 # The system image is read-only: creating a folder there is refused.
-click 0.08 0.5063
+click 0.08 0.5513
 wait 1
 key ctrl-shift-n
 wait-serial "files: Can't create folder: /system is part of the read-only system image." 20

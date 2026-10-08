@@ -38,6 +38,9 @@ pub enum Icon {
     Save,
     Open,
     Trash,
+    /// The Trash with something in it: a page and a crumpled ball in an open
+    /// bin.
+    TrashFull,
     Info,
     Warning,
     Star,
@@ -277,6 +280,16 @@ fn build(icon: Icon) -> Builder {
             b.poly(&[(6.0, 6.5), (7.0, 20.5), (17.0, 20.5), (18.0, 6.5)], false);
             b.line(10.0, 10.5, 10.0, 16.5);
             b.line(14.0, 10.5, 14.0, 16.5);
+        }
+        Icon::TrashFull => {
+            // The bin without its lid, a page and a crumpled ball (solid,
+            // to tell them from the lid's handle) above the rim.
+            b.line(4.0, 9.5, 20.0, 9.5);
+            b.poly(&[(6.0, 9.5), (7.0, 20.5), (17.0, 20.5), (18.0, 9.5)], false);
+            b.line(10.0, 13.0, 10.0, 17.0);
+            b.line(14.0, 13.0, 14.0, 17.0);
+            b.fill_poly(&[(6.6, 9.5), (7.6, 2.6), (12.9, 3.5), (12.3, 9.5)]);
+            b.dot(16.2, 6.9, 2.7);
         }
         Icon::Info => {
             b.circle(12.0, 12.0, 9.0);
@@ -553,7 +566,7 @@ impl Icon {
     }
 
     /// Every icon (for galleries and tests).
-    pub const ALL: [Icon; 77] = [
+    pub const ALL: [Icon; 78] = [
         Icon::Folder,
         Icon::File,
         Icon::Document,
@@ -587,6 +600,7 @@ impl Icon {
         Icon::Save,
         Icon::Open,
         Icon::Trash,
+        Icon::TrashFull,
         Icon::Info,
         Icon::Warning,
         Icon::Star,
@@ -642,6 +656,7 @@ impl Icon {
             "agent" => Icon::Agent,
             "mic" | "microphone" => Icon::Mic,
             "file" => Icon::File,
+            "trash" => Icon::Trash,
             "document" | "editor" | "text" => Icon::Document,
             "image" | "photos" => Icon::Image,
             "music" => Icon::Music,

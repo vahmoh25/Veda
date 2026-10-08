@@ -246,11 +246,24 @@ has ended and left its stack, which is how thread libraries join threads.
   working directory and `~`, the read-only `/system`, wildcards, natural
   name order, free names for new items), size and time formatting, a VFS
   client with whole-file reads and writes, recursive copies, moves and
-  removals and the space left on a file system, and, with the `thumbnails`
-  feature, image thumbnails made on a background thread. Its table of file
-  types is the system's only list of which application opens which file:
-  Files, the Terminal's `open`, the desktop icons and the pickers of Photos,
-  Music and Settings all use it.
+  removals and the space left on a file system, the Trash, and, with the
+  `thumbnails` feature, image thumbnails made on a background thread. Its
+  table of file types is the system's only list of which application opens
+  which file: Files, the Terminal's `open`, the desktop icons and the
+  pickers of Photos, Music and Settings all use it.
+* The Trash (`vfiles::trash`) is the home trash of freedesktop.org's Trash
+  specification: deleted items go to `~/.local/share/Trash/files`, and for
+  each a `NAME.trashinfo` in `info` records where it was and when it was
+  deleted. The info is created first, as a file that must not exist yet,
+  which reserves the name against other programs trashing at the same time;
+  then the item is renamed into the Trash in one step (`/home` and `/tmp`
+  are one file system). Files deletes to the Trash (Shift+Delete deletes
+  for good), lists it with where each item was deleted from and when, and
+  restores and empties it; the desktop's first icon is the Trash, which
+  shows whether anything is in it and takes items of the desktop dragged
+  onto it. The agent's `files` function and Files' agent actions delete to
+  the Trash with the user's OK, restore without asking, and ask every time
+  before emptying it. The Terminal's `rm` deletes for good, as Unix's does.
 
 ## USB
 

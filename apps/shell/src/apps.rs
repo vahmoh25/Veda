@@ -28,6 +28,8 @@ pub fn tile_colors(id: &str) -> (Color, Color) {
         "racer" => (Color::hex(0xFF9A4A), Color::hex(0xE0402F)),
         "starfall" => (Color::hex(0x7A6BFF), Color::hex(0x231C78)),
         "prism" => (Color::hex(0x5CE1E6), Color::hex(0x3A5BD9)),
+        // The Trash: brushed metal, with a dark glyph (see `glyph_color`).
+        "trash" => (Color::hex(0xEEF1F6), Color::hex(0xAAB3C3)),
         // Notifications about problems.
         "warning" => (Color::hex(0xFFC14D), Color::hex(0xE0761F)),
         _ => {
@@ -51,6 +53,12 @@ pub fn icon_for(app: &AppInfo) -> Icon {
     Icon::by_name(&app.icon).or_else(|| Icon::by_name(&app.id)).unwrap_or(Icon::Grid)
 }
 
+/// The colour of the glyph on a tile: white, but dark on the Trash's light
+/// one.
+fn glyph_color(id: &str) -> Color {
+    if id == "trash" { Color::hex(0x3D4657) } else { Color::WHITE }
+}
+
 /// Draws a tile for app `id` with `icon` filling the square `r`.
 pub fn draw_tile(c: &mut Canvas, r: Rect, id: &str, icon: Icon) {
     let (top, bottom) = tile_colors(id);
@@ -61,7 +69,7 @@ pub fn draw_tile(c: &mut Canvas, r: Rect, id: &str, icon: Icon) {
     c.clip_to(Rect::new(r.x, r.y, r.w, r.h / 2));
     c.stroke_rounded_rect(r, radius, 1.0, Color::rgba(255, 255, 255, 46));
     c.restore();
-    icon.draw(c, r, r.w as f32 * 0.58, Color::WHITE);
+    icon.draw(c, r, r.w as f32 * 0.58, glyph_color(id));
 }
 
 /// Case-insensitive match of a search query against an app.

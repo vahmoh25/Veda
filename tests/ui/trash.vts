@@ -1,0 +1,110 @@
+# The Trash (1280x800), the first icon on the desktop. Files moves what is
+# deleted there (with Delete, or dragged onto the Trash in the sidebar),
+# with a notice whose Undo, like Ctrl+Z, puts it back; the Trash lists its
+# items with where they were deleted from and when, restores them there,
+# and is emptied after a confirmation. On the desktop, the Trash shows
+# whether anything is in it, takes items of the desktop dragged onto it,
+# and its menu empties it (Files asks first).
+fail-on "PANIC"
+boot-cmdline "run=files"
+wait-serial "desktop ready" 90
+wait-serial "started files" 60
+wait 3
+# Maximise Files (Super+Up): the positions below assume it. Sidebar rows:
+# Desktop y=0.231, Pictures 0.321, Trash 0.411; list rows 0.18, 0.22, ...,
+# in the Trash 0.2425, 0.2825, ... (below its bar, whose Restore button is
+# at x=0.828 and Empty Trash at x=0.933, y=0.146).
+key meta_l-up
+wait 2
+# A picture (selected by typing the start of its name) goes to the Trash
+# with Delete, and comes back with Ctrl+Z.
+click 0.08 0.3213
+wait 1
+type "alpine"
+wait 1
+key delete
+wait-serial "files: moved 1 item from /home/user/Pictures to the Trash" 20
+wait 1
+shot target/veda/trash-1-notice.png
+key ctrl-z
+wait-serial "files: restored 1 item from the Trash" 20
+# Another with Delete, and City Lights (the second row) dragged onto the
+# Trash in the sidebar, slowly enough for a busy host.
+checkpoint
+type "light"
+wait 1
+key delete
+wait-serial "files: moved 1 item from /home/user/Pictures to the Trash" 20
+checkpoint
+mouse-down 0.25 0.22
+wait 0.5
+move 0.2 0.26
+wait 0.5
+move 0.1 0.38
+wait 0.5
+move 0.08 0.4113
+wait 1
+mouse-up
+wait-serial "files: moved 1 item from /home/user/Pictures to the Trash" 20
+# The desktop's Trash shows that something is in it.
+key meta_l-d
+wait 3
+shot target/veda/trash-2-desktop-full.png
+key meta_l-d
+wait 2
+# The Trash, newest first: City Lights is restored to Pictures, and the
+# Trash (Lighthouse) emptied once the user confirms.
+click 0.08 0.4113
+wait 2
+shot target/veda/trash-3-list.png
+checkpoint
+click 0.25 0.2425
+wait 1
+click 0.828 0.146
+wait-serial "files: restored 1 item from the Trash" 20
+click 0.933 0.146
+wait 2
+shot target/veda/trash-4-confirm.png
+key ret
+wait-serial "files: emptied the Trash (1 item)" 20
+wait 1
+shot target/veda/trash-5-empty.png
+# A document made on the desktop appears there (the desktop looks every
+# second and a half), sixth after the Trash, Home, Velocity, Starfall and
+# Prism, and is dragged onto the Trash.
+click 0.08 0.2313
+wait 1
+key ctrl-n
+wait 1
+key ret
+wait-serial "files: created document /home/user/Desktop/New document.txt" 20
+key meta_l-d
+wait 4
+shot target/veda/trash-6-desktop-item.png
+mouse-down 0.0469 0.6875
+wait 0.5
+move 0.06 0.5
+wait 0.5
+move 0.05 0.2
+wait 0.5
+move 0.0469 0.08
+wait 1
+shot target/veda/trash-7-dragging.png
+mouse-up
+wait-serial "shell: moved /home/user/Desktop/New document.txt to the Trash" 20
+wait 2
+# The Trash's menu empties it: Files opens and asks first.
+checkpoint
+click 0.0469 0.075 right
+wait 1
+shot target/veda/trash-8-menu.png
+click 0.105 0.15
+wait-serial "started files" 30
+wait 3
+shot target/veda/trash-9-ask.png
+key ret
+wait-serial "files: emptied the Trash (1 item)" 20
+wait 4
+key meta_l-d
+wait 3
+shot target/veda/trash-10-desktop-empty.png

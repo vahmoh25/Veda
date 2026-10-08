@@ -3,13 +3,19 @@
 //! Browses the virtual file system with a places sidebar, a breadcrumb
 //! path bar with back/forward/up, a sortable list view and an icon grid
 //! (with image thumbnails), a search filter, and the usual operations: open
-//! with the default app, new folder or document, rename (inline), delete
-//! (with confirmation), cut/copy/paste, properties. Everything works from
-//! the keyboard as well as the mouse; `/system` is shown read-only.
-//! [`agent`] lets the voice agent do the same.
+//! with the default app, new folder or document, rename (inline), move to
+//! the Trash (with undo) or delete for good (with confirmation),
+//! cut/copy/paste, properties. Everything works from the keyboard as well
+//! as the mouse; `/system` is shown read-only.
+//!
+//! The Trash ([`vfiles::trash`]) is a place of its own: its items are
+//! listed with where they were deleted from and when, and can be restored
+//! there (or dragged anywhere else) or deleted for good, one by one or by
+//! emptying the Trash. [`agent`] lets the voice agent do the same.
 //!
 //! Usage: `files [PATH]` opens a folder, or the folder containing a file
-//! with that file selected.
+//! with that file selected; `files --empty-trash` opens the Trash and asks
+//! whether to empty it.
 
 #![no_std]
 #![no_main]
@@ -20,7 +26,7 @@ mod agent;
 mod icons;
 mod view;
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -34,7 +40,7 @@ use vfiles::path::{
     display_path, extension, file_name, is_read_only, is_within, join, natural_cmp, normalize, parent, resolve,
 };
 use vfiles::thumbs::Thumbnailer;
-use vfiles::{Fs, HOME};
+use vfiles::{Fs, HOME, trash};
 use vproto::display::modifiers;
 use vproto::init::{LaunchError, launcher};
 use vproto::input::keys;
@@ -49,7 +55,31 @@ struct Entry {
     is_dir: bool,
     size: u64,
     modified: u64,
+    /// For an item in the Trash: where it was deleted from, if known.
+    origin: Option<String>,
+    /// For an item in the Trash: when it was deleted (0 if not known).
+    deleted: u64,
 }
+
+impl Entry {
+    /// The name shown: an item in the Trash has the name it was deleted
+    /// with (its own may have a number added).
+    fn shown_name(&self) -> &str {
+        self.origin.as_deref().map(file_name).filter(|n| !n.is_empty()).unwrap_or(&self.name)
+    }
+}
+
+/// Items moved to the Trash by the last delete, which Ctrl+Z (or the
+/// notice's Undo) puts back.
+struct Trashed {
+    /// Each item's name in the Trash, and where it was.
+    items: Vec<(String, String)>,
+    /// When (`vrt::time::now_ns`).
+    at: u64,
+}
+
+/// How long the notice of a move to the Trash stays.
+const TRASHED_NOTICE_NS: u64 = 8_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SortKey {
@@ -75,12 +105,18 @@ struct Props {
     modified: String,
     read_only: bool,
     is_dir: bool,
+    /// For an item in the Trash: where it was deleted from and when.
+    deleted_from: Option<(String, String)>,
 }
 
 /// A dialog on top of the window.
 enum Dialog {
-    /// Delete these paths?
+    /// Delete these paths for good?
     ConfirmDelete(Vec<String>),
+    /// Empty the Trash (of this many items)?
+    ConfirmEmpty(usize),
+    /// These items do not fit in the Trash: delete them for good?
+    NoRoomInTrash(Vec<String>),
     Error {
         title: String,
         message: String,
@@ -159,11 +195,33 @@ struct Files {
     /// A press on an already selected item: select only it on release
     /// unless the press turns into a drag.
     pending_single: Option<usize>,
+    /// What is known about items in the Trash, by name and inode (an item
+    /// trashed later under the same name is another file).
+    trash_info: BTreeMap<(String, u64), Option<trash::Info>>,
+    /// The last move to the Trash, for undo.
+    trashed: Option<Trashed>,
+    /// The sort order of other folders while the Trash, sorted by when its
+    /// items were deleted, is shown.
+    saved_sort: Option<(SortKey, bool)>,
 }
 
 /// "1 item", "3 items".
 fn items(n: usize) -> String {
     if n == 1 { "1 item".to_string() } else { format!("{n} items") }
+}
+
+/// Where an item in the Trash was deleted from, as shown (`~/Documents`;
+/// empty if not known).
+fn location(e: &Entry) -> String {
+    e.origin.as_deref().map(|o| display_path(parent(o))).unwrap_or_default()
+}
+
+/// "“notes.txt”" for one path, "3 items" for more.
+fn what(paths: &[String]) -> String {
+    match paths {
+        [one] => format!("“{}”", file_name(one)),
+        _ => items(paths.len()),
+    }
 }
 
 /// "12.3 MiB free of 32.0 MiB", plus a note for file systems kept only in
@@ -217,8 +275,14 @@ impl Files {
             drag: None,
             drop_target: None,
             pending_single: None,
+            trash_info: BTreeMap::new(),
+            trashed: None,
+            saved_sort: None,
         };
         let start = resolve(HOME, start);
+        if trash::contains(&start) {
+            let _ = trash::ensure(&f.fs);
+        }
         match f.fs.stat(&start) {
             Ok(st) if st.is_dir => f.cwd = start,
             Ok(_) => {
@@ -234,6 +298,7 @@ impl Files {
                 });
             }
         }
+        f.sort_for_place();
         f.reload();
         if f.mode == ViewMode::List && f.cwd.starts_with("/home/user/Pictures") {
             f.mode = ViewMode::Grid;
@@ -261,12 +326,14 @@ impl Files {
         if failed.iter().any(|(_, e)| e.is_no_space()) {
             let what = if failed.len() == 1 { format!("“{first}”") } else { items(failed.len()) };
             let space = self.fs.space(&self.cwd).map(|s| format!(" ({})", space_text(&s))).unwrap_or_default();
+            let hint = if trash::count(&self.fs) > 0 {
+                "Empty the Trash, or delete files you no longer need, and try again."
+            } else {
+                "Delete files you no longer need and try again."
+            };
             self.error(
                 "Not enough space",
-                format!(
-                    "There is not enough free space{space}, so {what} could not be saved. \
-                     Delete files you no longer need and try again."
-                ),
+                format!("There is not enough free space{space}, so {what} could not be saved. {hint}"),
             );
             return;
         }
@@ -288,10 +355,38 @@ impl Files {
         self.view.clear();
         match self.fs.read_dir(&self.cwd) {
             Ok(list) => {
+                let trash_root = self.trash_root();
+                let mut known = BTreeMap::new();
                 self.entries = list
                     .into_iter()
-                    .map(|e| Entry { name: e.name, is_dir: e.is_dir, size: e.size, modified: e.modified })
+                    .map(|e| {
+                        let mut entry = Entry {
+                            name: e.name,
+                            is_dir: e.is_dir,
+                            size: e.size,
+                            modified: e.modified,
+                            origin: None,
+                            deleted: 0,
+                        };
+                        if trash_root {
+                            let key = (entry.name.clone(), e.inode);
+                            let info = match self.trash_info.remove(&key) {
+                                Some(info) => info,
+                                None => trash::info(&self.fs, &entry.name),
+                            };
+                            if let Some(i) = &info {
+                                entry.origin = Some(i.origin.clone());
+                                entry.deleted = i.deleted;
+                            }
+                            known.insert(key, info);
+                        }
+                        entry
+                    })
                     .collect();
+                // Only what is in the Trash now stays known.
+                if trash_root {
+                    self.trash_info = known;
+                }
                 self.list_error = None;
             }
             Err(e) => {
@@ -328,25 +423,35 @@ impl Files {
     /// Rebuilds the view, keeping the cursor on the entry called `cursor_name`.
     fn rebuild_view_keeping(&mut self, cursor_name: Option<String>) {
         let q = self.search.to_lowercase();
+        // Everything in the Trash is shown: hidden files are as deleted as
+        // any.
+        let trash_root = self.trash_root();
+        let show_hidden = self.show_hidden || trash_root;
         let mut v: Vec<usize> = (0..self.entries.len())
             .filter(|&i| {
-                let n = &self.entries[i].name;
-                (self.show_hidden || !n.starts_with('.')) && (q.is_empty() || n.to_lowercase().contains(&q))
+                let n = self.entries[i].shown_name();
+                (show_hidden || !n.starts_with('.')) && (q.is_empty() || n.to_lowercase().contains(&q))
             })
             .collect();
         let (sort, asc, entries) = (self.sort, self.ascending, &self.entries);
         v.sort_by(|&a, &b| {
             let (ea, eb) = (&entries[a], &entries[b]);
-            // Folders always come first.
-            if ea.is_dir != eb.is_dir {
+            // Folders always come first, except in the Trash, which is
+            // sorted as a list of what was deleted.
+            if ea.is_dir != eb.is_dir && !trash_root {
                 return eb.is_dir.cmp(&ea.is_dir);
             }
+            // In the Trash, the type and date columns are where items were
+            // deleted from and when.
             let ord = match sort {
                 SortKey::Name => Ordering::Equal,
                 SortKey::Size => ea.size.cmp(&eb.size),
+                SortKey::Kind if trash_root => location(ea).cmp(&location(eb)),
                 SortKey::Kind => kind_name(&ea.name, ea.is_dir).cmp(&kind_name(&eb.name, eb.is_dir)),
+                SortKey::Modified if trash_root => ea.deleted.cmp(&eb.deleted),
                 SortKey::Modified => ea.modified.cmp(&eb.modified),
             }
+            .then_with(|| natural_cmp(ea.shown_name(), eb.shown_name()))
             .then_with(|| natural_cmp(&ea.name, &eb.name));
             if asc { ord } else { ord.reverse() }
         });
@@ -373,6 +478,58 @@ impl Files {
 
     fn read_only(&self) -> bool {
         is_read_only(&self.cwd)
+    }
+
+    /// The Trash, or a folder in it, is shown.
+    fn in_trash(&self) -> bool {
+        trash::contains(&self.cwd)
+    }
+
+    /// The Trash itself (its items) is shown.
+    fn trash_root(&self) -> bool {
+        self.cwd == trash::FILES
+    }
+
+    /// Nothing contains the folder shown that can be gone up to: the
+    /// computer, or the Trash.
+    fn at_top(&self) -> bool {
+        self.cwd == "/" || self.trash_root()
+    }
+
+    /// Items can be made, renamed and pasted here: not in the system image,
+    /// and not in the Trash, whose items are restored before they change.
+    fn can_change(&self) -> bool {
+        !self.read_only() && !self.in_trash()
+    }
+
+    /// The Trash is sorted newest deletion first; other folders keep the
+    /// order chosen for them.
+    fn sort_for_place(&mut self) {
+        if self.trash_root() {
+            if self.saved_sort.is_none() {
+                self.saved_sort = Some((self.sort, self.ascending));
+                self.sort = SortKey::Modified;
+                self.ascending = false;
+            }
+        } else if let Some((sort, ascending)) = self.saved_sort.take() {
+            self.sort = sort;
+            self.ascending = ascending;
+        }
+    }
+
+    /// The name of the item at `path` before it went to the Trash (its own
+    /// name for anything else).
+    fn original_name(&self, path: &str) -> String {
+        let name = file_name(path);
+        if parent(path) != trash::FILES {
+            return name.to_string();
+        }
+        let listed = self.entries.iter().find(|e| self.trash_root() && e.name == name);
+        listed
+            .map(|e| e.shown_name().to_string())
+            .or_else(|| trash::info(&self.fs, name).map(|i| file_name(&i.origin).to_string()))
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| name.to_string())
     }
 
     /// Selected paths in display order.
@@ -436,6 +593,10 @@ impl Files {
     /// Shows folder `path`; `record` adds the current folder to the history.
     fn navigate(&mut self, path: &str, record: bool) -> bool {
         let path = normalize(path);
+        if path == trash::FILES {
+            // Nothing has been deleted yet: the Trash is made now.
+            let _ = trash::ensure(&self.fs);
+        }
         match self.fs.stat(&path) {
             Ok(st) if st.is_dir => {}
             Ok(_) => {
@@ -473,6 +634,7 @@ impl Files {
         if let Some(t) = &mut self.thumbs {
             t.cancel_queued();
         }
+        self.sort_for_place();
         self.reload();
         // Going up selects the folder we came from.
         if let Some(prev) = came_from
@@ -506,7 +668,7 @@ impl Files {
     }
 
     fn go_up(&mut self) {
-        if self.cwd != "/" {
+        if !self.at_top() {
             let child = self.cwd.clone();
             let up = parent(&self.cwd).to_string();
             if self.navigate(&up, true) {
@@ -615,8 +777,18 @@ impl Files {
         true
     }
 
+    /// As [`Files::ensure_writable`], and refuses the Trash, where nothing
+    /// is made, renamed or pasted.
+    fn ensure_changeable(&mut self, what: &str) -> bool {
+        if self.in_trash() {
+            self.error(what, "Items in the Trash can't be changed. Restore them first.".into());
+            return false;
+        }
+        self.ensure_writable(what)
+    }
+
     fn new_folder(&mut self) {
-        if !self.ensure_writable("Can't create folder") {
+        if !self.ensure_changeable("Can't create folder") {
             return;
         }
         let name = self.fs.unique_name(&self.cwd, "New folder");
@@ -644,7 +816,7 @@ impl Files {
     }
 
     fn new_document(&mut self) {
-        if !self.ensure_writable("Can't create document") {
+        if !self.ensure_changeable("Can't create document") {
             return;
         }
         let name = self.fs.unique_name(&self.cwd, "New document.txt");
@@ -661,8 +833,7 @@ impl Files {
     }
 
     fn start_rename(&mut self) {
-        if self.read_only() {
-            self.error("Can't rename", format!("{} is part of the read-only system image.", display_path(&self.cwd)));
+        if !self.ensure_changeable("Can't rename") {
             return;
         }
         let Some(c) = self.cursor else { return };
@@ -701,7 +872,10 @@ impl Files {
         }
     }
 
-    fn ask_delete(&mut self) {
+    /// Del: moves the selection to the Trash. With Shift (`permanently`),
+    /// and for items in the Trash already, it is deleted for good once the
+    /// user confirms.
+    fn delete_selection(&mut self, permanently: bool) {
         let paths = self.selected_paths();
         if paths.is_empty() {
             return;
@@ -709,26 +883,151 @@ impl Files {
         if !self.ensure_writable("Can't delete") {
             return;
         }
-        self.dialog = Some(Dialog::ConfirmDelete(paths));
+        if permanently || self.in_trash() {
+            self.dialog = Some(Dialog::ConfirmDelete(paths));
+        } else {
+            self.move_to_trash(paths);
+        }
     }
 
+    /// Selects the item that took the place of the cursor's after items
+    /// left the folder.
+    fn after_removal(&mut self, cursor: Option<usize>) {
+        self.selected.clear();
+        self.reload();
+        if let Some(c) = cursor.filter(|_| !self.view.is_empty()) {
+            self.select_only(c.min(self.view.len() - 1));
+        }
+    }
+
+    /// Moves `paths` to the Trash; what is too big for the room left is
+    /// offered for deleting for good instead.
+    fn move_to_trash(&mut self, paths: Vec<String>) {
+        let (mut moved, mut errors, mut no_room) = (Vec::new(), Vec::new(), Vec::new());
+        for p in &paths {
+            match trash::put(&self.fs, p) {
+                Ok(name) => moved.push((name, p.clone())),
+                Err(e) if e.is_no_space() => no_room.push(p.clone()),
+                Err(e) => errors.push((file_name(p).to_string(), e)),
+            }
+            if let Some(t) = &mut self.thumbs {
+                t.invalidate(p);
+            }
+        }
+        if !moved.is_empty() {
+            vrt::println!("moved {} from {} to the Trash", items(moved.len()), self.cwd);
+            self.trashed = Some(Trashed { items: moved, at: vrt::time::now_ns() });
+        }
+        self.after_removal(self.cursor);
+        if !no_room.is_empty() {
+            self.dialog = Some(Dialog::NoRoomInTrash(no_room));
+        }
+        self.report("Some items could not be moved to the Trash", errors);
+    }
+
+    /// Puts back what the last move to the Trash took (Ctrl+Z), unless it
+    /// has left the Trash since.
+    fn undo_trash(&mut self) {
+        let Some(t) = self.trashed.take() else { return };
+        let (mut restored, mut errors) = (Vec::new(), Vec::new());
+        for (name, origin) in &t.items {
+            // The name may belong to another item by now.
+            if !trash::info(&self.fs, name).is_some_and(|i| i.origin == *origin) {
+                continue;
+            }
+            match trash::restore(&self.fs, name) {
+                Ok(path) => restored.push(path),
+                Err(e) => errors.push((file_name(origin).to_string(), e)),
+            }
+        }
+        self.restored(restored, errors);
+    }
+
+    /// Restores the selected items of the Trash where they were deleted
+    /// from (`all`: every item).
+    fn restore(&mut self, all: bool) {
+        if !self.trash_root() {
+            return;
+        }
+        let names: Vec<String> = if all {
+            self.entries.iter().map(|e| e.name.clone()).collect()
+        } else {
+            self.selected_paths().iter().map(|p| file_name(p).to_string()).collect()
+        };
+        self.restore_names(names);
+    }
+
+    /// Restores the items of the Trash called `names` (their names there);
+    /// returns where they are now.
+    fn restore_names(&mut self, names: Vec<String>) -> Vec<String> {
+        let (mut restored, mut errors) = (Vec::new(), Vec::new());
+        for name in names {
+            match trash::restore(&self.fs, &name) {
+                Ok(path) => restored.push(path),
+                Err(e) => errors.push((self.original_name(&join(trash::FILES, &name)), e)),
+            }
+        }
+        self.restored(restored.clone(), errors);
+        restored
+    }
+
+    /// Reports items put back from the Trash (and those that could not be).
+    fn restored(&mut self, restored: Vec<String>, errors: Vec<(String, Error)>) {
+        if !restored.is_empty() {
+            vrt::println!("restored {} from the Trash", items(restored.len()));
+        }
+        self.after_removal(self.cursor);
+        // Items put back into the folder shown are selected.
+        let here: Vec<&str> = restored.iter().filter(|p| parent(p) == self.cwd).map(|p| file_name(p)).collect();
+        if let Some(first) = here.first() {
+            self.cursor = self.view_index(first);
+            self.anchor = self.cursor;
+            self.reveal_cursor = true;
+            self.selected = here.iter().map(|n| n.to_string()).collect();
+        }
+        self.report("Some items could not be restored", errors);
+    }
+
+    /// Empty Trash: asks first.
+    fn ask_empty_trash(&mut self) {
+        let n = trash::count(&self.fs);
+        if n > 0 {
+            self.dialog = Some(Dialog::ConfirmEmpty(n));
+        }
+    }
+
+    /// Deletes everything in the Trash for good.
+    fn empty_trash(&mut self) {
+        match trash::empty(&self.fs) {
+            Ok(n) => vrt::println!("emptied the Trash ({})", items(n)),
+            Err(e) => self.report("The Trash could not be emptied", vec![("Trash".into(), e)]),
+        }
+        self.trashed = None;
+        // A folder of the Trash that was shown is gone with it.
+        if self.in_trash() && !self.trash_root() {
+            self.navigate(trash::FILES, false);
+        }
+        self.after_removal(None);
+    }
+
+    /// Deletes `paths` for good (in the Trash: with what is known about
+    /// them).
     fn delete(&mut self, paths: Vec<String>) {
         let mut errors = Vec::new();
         for p in &paths {
-            if let Err(e) = self.fs.remove_all(p) {
-                errors.push((file_name(p).to_string(), e));
+            let r = match trash::item_name(p) {
+                Some(name) if parent(p) == trash::FILES => trash::delete(&self.fs, name),
+                _ => self.fs.remove_all(p),
+            };
+            if let Err(e) = r {
+                errors.push((self.original_name(p), e));
             }
             if let Some(t) = &mut self.thumbs {
                 t.invalidate(p);
             }
         }
         vrt::println!("deleted {} from {}", items(paths.len() - errors.len()), self.cwd);
-        let next = self.cursor;
-        self.selected.clear();
-        self.reload();
-        if let Some(c) = next.filter(|_| !self.view.is_empty()) {
-            self.select_only(c.min(self.view.len() - 1));
-        }
+        self.after_removal(self.cursor);
         self.report("Some items could not be deleted", errors);
     }
 
@@ -741,6 +1040,13 @@ impl Files {
             self.error("Can't cut", "Items in the read-only system image can only be copied.".into());
             return;
         }
+        if cut && self.in_trash() {
+            self.error(
+                "Can't cut",
+                "Items in the Trash can only be copied. Restore them, or drag them to a folder, to move them.".into(),
+            );
+            return;
+        }
         // Also put the paths on the text clipboard (for the Terminal).
         let _ = vproto::connect(vproto::display::display::NAME)
             .ok()
@@ -750,7 +1056,7 @@ impl Files {
 
     fn paste(&mut self) {
         let Some((paths, cut)) = self.clipboard.clone() else { return };
-        if !self.ensure_writable("Can't paste") {
+        if !self.ensure_changeable("Can't paste") {
             return;
         }
         let (_, failed) = self.paste_paths(&paths, cut);
@@ -775,11 +1081,9 @@ impl Files {
                 errors.push((name, Error::IntoItself));
                 continue;
             }
-            let target_name = self.fs.unique_name(&self.cwd, &name);
-            let target = self.path_of(&target_name);
-            let r = if cut { self.fs.move_to(src, &target) } else { self.fs.copy(src, &target) };
-            match r {
-                Ok(()) => pasted.push(target_name),
+            let dir = self.cwd.clone();
+            match self.transfer(src, &dir, !cut) {
+                Ok(target_name) => pasted.push(target_name),
                 Err(e) => errors.push((name, e)),
             }
         }
@@ -798,8 +1102,34 @@ impl Files {
         (pasted, failed)
     }
 
-    /// Moves (or copies) dragged items into folder `target`.
+    /// Moves (or copies) `src` into the folder `dir` under a free name, and
+    /// returns that name. An item leaving the Trash gets back the name it
+    /// was deleted with, and what the Trash knew of it goes.
+    fn transfer(&mut self, src: &str, dir: &str, copy: bool) -> Result<String, Error> {
+        let base = self.original_name(src);
+        if !copy && parent(src) == trash::FILES {
+            return trash::restore_to(&self.fs, file_name(src), dir, &base).map(|p| file_name(&p).to_string());
+        }
+        let name = self.fs.unique_name(dir, &base);
+        let dst = join(dir, &name);
+        let r = if copy { self.fs.copy(src, &dst) } else { self.fs.move_to(src, &dst) };
+        r.map(|()| name)
+    }
+
+    /// Moves (or copies) dragged items into folder `target`. Dropped on the
+    /// Trash, they go to the Trash.
     fn drop_into(&mut self, paths: Vec<String>, target: &str, copy: bool) {
+        if target == trash::FILES {
+            let paths: Vec<String> = paths.into_iter().filter(|p| !trash::contains(p)).collect();
+            if !paths.is_empty() {
+                self.move_to_trash(paths);
+            }
+            return;
+        }
+        if trash::contains(target) {
+            self.error("Can't drop here", "Items can't be put into folders in the Trash.".into());
+            return;
+        }
         if is_read_only(target) {
             self.error("Can't drop here", format!("{} is part of the read-only system image.", display_path(target)));
             return;
@@ -817,11 +1147,9 @@ impl Files {
             if !copy && parent(src) == target {
                 continue;
             }
-            let dst = join(target, &self.fs.unique_name(target, &name));
-            let r = if copy { self.fs.copy(src, &dst) } else { self.fs.move_to(src, &dst) };
-            match r {
-                Ok(()) if copy => copied += 1,
-                Ok(()) => moved += 1,
+            match self.transfer(src, target, copy) {
+                Ok(_) if copy => copied += 1,
+                Ok(_) => moved += 1,
                 Err(e) => errors.push((name, e)),
             }
             if let Some(t) = &mut self.thumbs {
@@ -841,7 +1169,17 @@ impl Files {
 
     fn show_properties(&mut self, path: &str) {
         let Ok(st) = self.fs.stat(path) else { return };
-        let name = if path == "/" { "Computer".to_string() } else { file_name(path).to_string() };
+        let name = match path {
+            "/" => "Computer".to_string(),
+            trash::FILES => "Trash".to_string(),
+            _ => self.original_name(path),
+        };
+        let deleted_from = match trash::item_name(path) {
+            Some(item) if parent(path) == trash::FILES => {
+                trash::info(&self.fs, item).map(|i| (display_path(parent(&i.origin)), friendly_time(i.deleted)))
+            }
+            _ => None,
+        };
         let (size, contents) = if st.is_dir {
             let (mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64);
             self.measure(path, &mut files, &mut dirs, &mut bytes, 0);
@@ -858,6 +1196,7 @@ impl Files {
             modified: friendly_time(st.modified),
             read_only: st.read_only,
             is_dir: st.is_dir,
+            deleted_from,
         }));
     }
 
@@ -921,7 +1260,7 @@ impl Files {
                 keys::PAGEUP => self.move_cursor(cur.map_or(0, |c| c.saturating_sub(self.page_rows * step_v)), shift),
                 keys::ENTER | keys::KPENTER => self.open_selection(),
                 keys::BACKSPACE => self.go_up(),
-                keys::DELETE => self.ask_delete(),
+                keys::DELETE => self.delete_selection(shift),
                 keys::F2 => self.start_rename(),
                 keys::F5 => self.reload(),
                 keys::ESC => {
@@ -933,6 +1272,7 @@ impl Files {
                     }
                 }
                 keys::A if ctrl => self.select_all(),
+                keys::Z if ctrl => self.undo_trash(),
                 keys::C if ctrl => self.copy_selection(false),
                 keys::X if ctrl => self.copy_selection(true),
                 keys::V if ctrl => self.paste(),
@@ -992,7 +1332,8 @@ impl Files {
         mix(self.ascending as u64 | (self.show_hidden as u64) << 1 | (self.rename.is_some() as u64) << 2);
         mix((self.path_edit.is_some() as u64)
             | (self.clipboard.is_some() as u64) << 1
-            | (self.dialog.is_some() as u64) << 2);
+            | (self.dialog.is_some() as u64) << 2
+            | (self.trashed.is_some() as u64) << 3);
         mix(self.back.len() as u64 | (self.forward.len() as u64) << 32);
         h
     }
@@ -1004,16 +1345,49 @@ impl Files {
         let keep = match &dialog {
             Dialog::ConfirmDelete(paths) => {
                 let (title, msg) = if paths.len() == 1 {
-                    let name = file_name(&paths[0]);
+                    let name = self.original_name(&paths[0]);
                     let what = if self.fs.is_dir(&paths[0]) { "folder and everything in it" } else { "file" };
-                    (format!("Delete “{name}”?"), format!("This permanently deletes the {what}. This can't be undone."))
+                    (
+                        format!("Delete “{name}” permanently?"),
+                        format!("This permanently deletes the {what}. This can't be undone."),
+                    )
                 } else {
                     (
-                        format!("Delete {} items?", paths.len()),
+                        format!("Delete {} items permanently?", paths.len()),
                         "This permanently deletes the selected items. This can't be undone.".to_string(),
                     )
                 };
-                match ui.message_box(&title, &msg, &["Delete", "Cancel"]) {
+                match ui.destructive_box(&title, &msg, &["Delete", "Cancel"]) {
+                    Some(0) => {
+                        self.delete(paths.clone());
+                        false
+                    }
+                    Some(_) => false,
+                    None => true,
+                }
+            }
+            Dialog::ConfirmEmpty(n) => {
+                let msg = if *n == 1 {
+                    "The item in the Trash will be deleted for good. This can't be undone.".to_string()
+                } else {
+                    format!("All {n} items in the Trash will be deleted for good. This can't be undone.")
+                };
+                match ui.destructive_box("Empty the Trash?", &msg, &["Empty Trash", "Cancel"]) {
+                    Some(0) => {
+                        self.empty_trash();
+                        false
+                    }
+                    Some(_) => false,
+                    None => true,
+                }
+            }
+            Dialog::NoRoomInTrash(paths) => {
+                let msg = format!(
+                    "There isn't enough free space to keep {} in the Trash. Delete permanently instead? \
+                     This can't be undone.",
+                    what(paths)
+                );
+                match ui.destructive_box("Not enough space in the Trash", &msg, &["Delete", "Cancel"]) {
                     Some(0) => {
                         self.delete(paths.clone());
                         false
@@ -1061,6 +1435,12 @@ impl App for Files {
         }
         self.was_focused = focused;
         ui.repaint_at(self.last_refresh + 3_000_000_000);
+        // The notice of a move to the Trash goes away by itself.
+        if let Some(t) = &self.trashed
+            && now < t.at + TRASHED_NOTICE_NS
+        {
+            ui.repaint_at(t.at + TRASHED_NOTICE_NS);
+        }
         if let Some(t) = &mut self.thumbs {
             t.collect();
         }
@@ -1114,8 +1494,16 @@ impl App for Files {
 
 fn main() -> i32 {
     let args = vrt::env::args();
-    let start = args.get(1).cloned().unwrap_or_else(|| HOME.to_string());
-    let files = Files::new(&start);
+    let empty_trash = args.get(1).is_some_and(|a| a == "--empty-trash");
+    let start = match args.get(1) {
+        _ if empty_trash => trash::FILES.to_string(),
+        Some(path) => path.clone(),
+        None => HOME.to_string(),
+    };
+    let mut files = Files::new(&start);
+    if empty_trash {
+        files.ask_empty_trash();
+    }
     let mut spec = WindowSpec::new("Files", 940, 600);
     spec.app_id = "files".into();
     spec.min_width = 560;

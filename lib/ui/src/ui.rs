@@ -316,6 +316,15 @@ impl<'a> Ui<'a> {
         self.pointer().is_some_and(|(x, y)| r.contains(x, y))
     }
 
+    /// Hides the pointer from the widgets that follow in this frame while it
+    /// is over `r`: for something that floats over them (a notice), which
+    /// handles its own pointer input before them and is drawn after them.
+    pub fn cover(&mut self, r: Rect) {
+        if self.hovered(r) {
+            self.blocked = true;
+        }
+    }
+
     /// Requests another frame at `deadline` (monotonic ns) for animation.
     pub fn repaint_at(&mut self, deadline: u64) {
         self.repaint_at = Some(self.repaint_at.map_or(deadline, |d| d.min(deadline)));

@@ -1,8 +1,9 @@
 # The Files agent interface, with a simulated Voice Agent service: the agent
 # shows folders, makes one, changes the view, selects, filters and opens
 # items, as the user would with the mouse. Copying, renaming, moving and
-# deleting wait for the user's OK and then act on the items they name by
-# path, whatever folder is shown by then.
+# deleting (to the Trash) wait for the user's OK and then act on the items
+# they name by path, whatever folder is shown by then. The Trash lists what
+# was deleted; restoring needs no OK, emptying the Trash is asked every time.
 fail-on "PANIC"
 wait-serial "desktop ready" 120
 mic-silence 1
@@ -78,8 +79,8 @@ agent-expect "it was done" 20
 wait-serial "files: moved 1 item into /home/user/Documents" 10
 agent-call files '{"operation":"info","path":"~/Documents/Beacon.jpg"}' 30
 agent-result '"kind":"JPEG image"'
-# Deleting waits for the user's OK, which applies to the folder it names
-# although another folder is shown by then.
+# Deleting (to the Trash) waits for the user's OK, which applies to the
+# folder it names although another folder is shown by then.
 agent-call use_app '{"app":"files","action":"delete","arguments":{"paths":"~/Pictures/Trips"}}' 30
 agent-result waiting_for_approval
 wait-serial "approval 4 requested" 10
@@ -91,7 +92,7 @@ click 0.9375 0.8275
 wait-serial "approval 4 allowed" 10
 agent-expect "it was done" 20
 agent-expect "~/Pictures/Trips" 5
-wait-serial "files: deleted 1 item from /home/user/Pictures" 10
+wait-serial "files: moved 1 item from /home/user/Pictures to the Trash" 10
 agent-call files '{"operation":"info","path":"~/Pictures/Trips"}' 30
 agent-result "no such file"
 agent-call read_app '{"app":"files"}' 30
@@ -117,3 +118,34 @@ agent-call use_app '{"app":"files","action":"open","arguments":{"item":"beacon.j
 agent-result '"opened":"~/Documents/Beacon.jpg","with":"photos"'
 wait-serial "files: opened /home/user/Documents/Beacon.jpg with photos" 20
 wait-serial "started photos" 30
+# The Trash lists what was deleted and where from; restoring needs no OK.
+agent-call use_app '{"app":"files","action":"open_folder","arguments":{"path":"Trash"}}' 30
+agent-result '"showing":"Trash","items":1'
+agent-call read_app '{"app":"files"}' 30
+agent-result '"deleted_from":"~/Pictures"'
+agent-call use_app '{"app":"files","action":"restore","arguments":{"names":"trips"}}' 30
+agent-result '"restored":["~/Pictures/Trips"]'
+wait-serial "files: restored 1 item from the Trash" 10
+agent-call files '{"operation":"info","path":"~/Pictures/Trips"}' 30
+agent-result '"folder":true'
+# Deleted again (with the files function), and the Trash emptied: asked
+# every time, in a notification while the agent's window is closed.
+agent-call files '{"operation":"delete","path":"~/Pictures/Trips"}' 30
+agent-result waiting_for_approval
+wait-serial "approval 6 requested" 10
+wait 2
+agent-mark
+click 0.9438 0.8875
+wait-serial "approval 6 allowed" 10
+agent-expect "it was done" 20
+agent-call files '{"operation":"list_trash"}' 30
+agent-result '"name":"Trips"'
+agent-call use_app '{"app":"files","action":"empty_trash"}' 30
+agent-result waiting_for_approval
+wait-serial "approval 7 requested" 10
+wait 2
+agent-mark
+click 0.9438 0.8875
+wait-serial "approval 7 allowed" 10
+agent-expect "it was done" 20
+wait-serial "files: emptied the Trash (1 item)" 10

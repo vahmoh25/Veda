@@ -476,6 +476,17 @@ impl<'a> Ui<'a> {
     /// A standard message box with buttons; returns the index of the button
     /// pressed this frame (Esc picks the last button).
     pub fn message_box(&mut self, title: &str, message: &str, buttons: &[&str]) -> Option<usize> {
+        self.message_box_with(title, message, buttons, ButtonKind::Primary)
+    }
+
+    /// A message box whose first button destroys something for good
+    /// (deleting files): that button is red. Returns as
+    /// [`Ui::message_box`].
+    pub fn destructive_box(&mut self, title: &str, message: &str, buttons: &[&str]) -> Option<usize> {
+        self.message_box_with(title, message, buttons, ButtonKind::Danger)
+    }
+
+    fn message_box_with(&mut self, title: &str, message: &str, buttons: &[&str], first: ButtonKind) -> Option<usize> {
         let mut result = None;
         if self.input.key(keys::ESC) {
             result = Some(buttons.len().saturating_sub(1));
@@ -490,7 +501,7 @@ impl<'a> Ui<'a> {
             for (i, label) in buttons.iter().enumerate().rev() {
                 let w = (ui.measure(label, Font::Bold, size) as i32 + 32).max(92);
                 x -= w;
-                let kind = if i == 0 { ButtonKind::Primary } else { ButtonKind::Secondary };
+                let kind = if i == 0 { first } else { ButtonKind::Secondary };
                 if ui.button_full(Rect::new(x, inner.bottom() - 36, w, 36), None, label, kind) {
                     picked = Some(i);
                 }

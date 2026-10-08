@@ -1,20 +1,21 @@
 //! Drawing and mouse interaction of the Files window: toolbar with the
 //! breadcrumb path bar and search box, places sidebar, list and grid views,
-//! status bar, context menus and the Properties dialog.
+//! the Trash's bar and the notice of a move to the Trash, status bar,
+//! context menus and the Properties dialog.
 
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vfiles::HOME;
 use vfiles::format::{friendly_time, human_size};
 use vfiles::kind::{FileKind, file_kind, kind_name};
 use vfiles::path::{display_path, file_name, is_read_only, is_within, join, parent, resolve};
+use vfiles::{HOME, trash};
 use vui::{Align, ButtonKind, Color, Cursor, Font, Icon, MenuItem, Rect, Ui};
 
 use crate::icons;
-use crate::{Drag, Files, Props, SortKey, ViewMode};
+use crate::{Drag, Files, Props, SortKey, TRASHED_NOTICE_NS, ViewMode, location, what};
 
 const TOOLBAR_H: i32 = 56;
 const STATUS_H: i32 = 30;
@@ -23,6 +24,8 @@ const ROW_H: i32 = 32;
 const HEADER_H: i32 = 32;
 const TILE_W: i32 = 118;
 const TILE_H: i32 = 128;
+/// The bar above the Trash's items.
+const TRASH_BAR_H: i32 = 50;
 
 /// Gives keyboard focus to the text input `label` and selects `sel`
 /// (anchor, cursor) in it.
@@ -52,7 +55,12 @@ enum Action {
     Copy,
     Paste,
     Rename,
+    /// Del: to the Trash, or for good in the Trash.
     Delete,
+    DeletePermanently,
+    Restore,
+    RestoreAll,
+    EmptyTrash,
     CopyPath,
     Properties,
     FolderProperties,
@@ -74,9 +82,14 @@ pub fn draw(f: &mut Files, ui: &mut Ui) {
     let (sidebar, main) = body.split_left(SIDEBAR_W);
     let mut typing = false;
     f.drop_target = None;
+    // The notice floats over the items: it takes the pointer first.
+    let notice = trashed_notice(f, ui, main);
     draw_toolbar(f, ui, toolbar, &mut typing);
     draw_sidebar(f, ui, sidebar);
     draw_main(f, ui, main, &mut typing);
+    if let Some(n) = &notice {
+        draw_notice(ui, n);
+    }
     draw_status(f, ui, status);
     f.typing = typing;
     finish_drag(f, ui);
@@ -108,6 +121,8 @@ fn finish_drag(f: &mut Files, ui: &mut Ui) {
             format!("{} items", d.paths.len())
         };
         let text = match &f.drop_target {
+            // Whatever the keys say, what is dropped on the Trash goes there.
+            Some(target) if target == trash::FILES => format!("Move {what} to the Trash"),
             Some(target) => {
                 let name = if target == HOME {
                     "Home"
@@ -152,7 +167,10 @@ fn finish_drag(f: &mut Files, ui: &mut Ui) {
 
 fn breadcrumbs(cwd: &str) -> Vec<(String, String, Option<Icon>)> {
     let mut out = Vec::new();
-    let rest = if is_within(cwd, HOME) {
+    let rest = if trash::contains(cwd) {
+        out.push(("Trash".to_string(), trash::FILES.to_string(), Some(Icon::Trash)));
+        &cwd[trash::FILES.len()..]
+    } else if is_within(cwd, HOME) {
         out.push(("Home".to_string(), HOME.to_string(), Some(Icon::Home)));
         &cwd[HOME.len()..]
     } else {
@@ -181,7 +199,7 @@ fn draw_toolbar(f: &mut Files, ui: &mut Ui, r: Rect, typing: &mut bool) {
         f.go_forward();
     }
     x += 36;
-    if tool_button(ui, Rect::new(x, y, 34, 34), Icon::Up, "Up one level (Backspace)", f.cwd != "/") {
+    if tool_button(ui, Rect::new(x, y, 34, 34), Icon::Up, "Up one level (Backspace)", !f.at_top()) {
         f.go_up();
     }
     x += 44;
@@ -214,7 +232,9 @@ fn draw_toolbar(f: &mut Files, ui: &mut Ui, r: Rect, typing: &mut bool) {
     let sort_label = match f.sort {
         SortKey::Name => "Name",
         SortKey::Size => "Size",
+        SortKey::Kind if f.trash_root() => "Location",
         SortKey::Kind => "Type",
+        SortKey::Modified if f.trash_root() => "Deleted",
         SortKey::Modified => "Date",
     };
     if ui.button_full(
@@ -231,8 +251,7 @@ fn draw_toolbar(f: &mut Files, ui: &mut Ui, r: Rect, typing: &mut bool) {
     }
     let new_r = Rect::new(right - 34, y, 34, 34);
     right = new_r.x - 10;
-    let ro = f.read_only();
-    if tool_button(ui, new_r, Icon::Plus, "New folder (Ctrl+Shift+N)", !ro) {
+    if tool_button(ui, new_r, Icon::Plus, "New folder (Ctrl+Shift+N)", f.can_change()) {
         f.new_folder();
     }
 
@@ -378,12 +397,13 @@ fn draw_sidebar(f: &mut Files, ui: &mut Ui, r: Rect) {
     let t = ui.theme().clone();
     ui.canvas.fill_rect(r, t.surface);
     ui.canvas.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), t.border);
-    let places: [(&str, Icon, &str); 5] = [
+    let places: [(&str, Icon, &str); 6] = [
         ("Home", Icon::Home, HOME),
         ("Desktop", Icon::Monitor, "/home/user/Desktop"),
         ("Documents", Icon::Document, "/home/user/Documents"),
         ("Pictures", Icon::Image, "/home/user/Pictures"),
         ("Music", Icon::Music, "/home/user/Music"),
+        ("Trash", Icon::Trash, trash::FILES),
     ];
     let locations: [(&str, Icon, &str); 3] =
         [("Computer", Icon::Cpu, "/"), ("System", Icon::Lock, "/system"), ("Temporary", Icon::Clock, "/tmp")];
@@ -447,6 +467,13 @@ fn draw_sidebar(f: &mut Files, ui: &mut Ui, r: Rect) {
 // ---- main area -------------------------------------------------------------
 
 fn draw_main(f: &mut Files, ui: &mut Ui, r: Rect, typing: &mut bool) {
+    let r = if f.in_trash() {
+        let (bar, rest) = r.split_top(TRASH_BAR_H);
+        draw_trash_bar(f, ui, bar);
+        rest
+    } else {
+        r
+    };
     if let Some(err) = f.list_error.clone() {
         empty_state(ui, r, Icon::Warning, "Can't show this folder", &err);
         return;
@@ -530,9 +557,19 @@ fn draw_main(f: &mut Files, ui: &mut Ui, r: Rect, typing: &mut bool) {
         });
     }
     if n == 0 {
-        if f.search.is_empty() {
+        if f.search.is_empty() && f.trash_root() {
+            empty_state(
+                ui,
+                rows_r,
+                Icon::Trash,
+                "The Trash is empty",
+                "What you delete stays here until you empty the Trash, so you can restore it.",
+            );
+        } else if f.search.is_empty() {
             let msg = if f.read_only() {
                 "This part of the system image has no files."
+            } else if f.in_trash() {
+                "This folder was deleted with nothing in it."
             } else {
                 "Right-click to create a folder or a text document."
             };
@@ -563,6 +600,109 @@ fn draw_main(f: &mut Files, ui: &mut Ui, r: Rect, typing: &mut bool) {
     }
 }
 
+/// A button of the Trash's bar; drawn faded and inert when disabled.
+fn bar_button(ui: &mut Ui, r: Rect, icon: Icon, label: &str, kind: ButtonKind, enabled: bool) -> bool {
+    if enabled {
+        return ui.button_full(r, Some(icon), label, kind);
+    }
+    let t = ui.theme().clone();
+    ui.canvas.fill_rounded_rect(r, t.radius, t.control);
+    ui.canvas.stroke_rounded_rect(r, t.radius, 1.0, t.border);
+    let c = t.text_faint.fade(0.7);
+    let tw = ui.measure(label, Font::Bold, t.font_size) as i32;
+    let x = r.x + (r.w - (18 + 8 + tw)) / 2;
+    ui.icon(Rect::new(x, r.y, 18, r.h), icon, 18.0, c);
+    ui.label(Rect::new(x + 26, r.y, tw + 4, r.h), label, Font::Bold, t.font_size, c, Align::Left);
+    false
+}
+
+/// The bar above the Trash's items: what the Trash is for, Restore and
+/// Empty Trash.
+fn draw_trash_bar(f: &mut Files, ui: &mut Ui, r: Rect) {
+    let t = ui.theme().clone();
+    ui.canvas.fill_rect(r, t.surface);
+    ui.canvas.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), t.border);
+    let root = f.trash_root();
+    let width = |ui: &mut Ui, label: &str| ui.measure(label, Font::Bold, t.font_size) as i32 + 18 + 8 + 32;
+    let y = r.y + (r.h - 34) / 2;
+    let empty_w = width(ui, "Empty Trash");
+    let empty_r = Rect::new(r.right() - 14 - empty_w, y, empty_w, 34);
+    let restore_w = width(ui, "Restore");
+    let restore_r = Rect::new(empty_r.x - 8 - restore_w, y, restore_w, 34);
+    // Inside a deleted folder, the Trash has an item at least.
+    let has_items = !root || !f.entries.is_empty();
+    if bar_button(ui, empty_r, Icon::Trash, "Empty Trash", ButtonKind::Danger, has_items) {
+        f.ask_empty_trash();
+    }
+    if bar_button(ui, restore_r, Icon::Undo, "Restore", ButtonKind::Secondary, root && !f.selected.is_empty()) {
+        f.restore(false);
+    }
+    let text = if !root {
+        "This folder is in the Trash. Restore it to use what is inside."
+    } else if !has_items {
+        "Items you delete appear here."
+    } else if f.selected.is_empty() {
+        "Select items to restore them where they were deleted from."
+    } else {
+        "Restore puts the selected items back where they were deleted from."
+    };
+    ui.icon(Rect::new(r.x + 16, r.y, 20, r.h), Icon::Trash, 17.0, t.text_dim);
+    let text_r = Rect::new(r.x + 46, r.y, restore_r.x - r.x - 56, r.h);
+    ui.label(text_r, text, Font::Regular, t.font_size - 0.5, t.text_dim, Align::Left);
+}
+
+/// The notice of the last move to the Trash, with its Undo button.
+struct Notice {
+    card: Rect,
+    undo: Rect,
+    text: String,
+    undo_hovered: bool,
+}
+
+/// The notice of the last move to the Trash, at the bottom of the main
+/// area for a few seconds: handles its Undo button and covers what is under
+/// it. `None` once it is gone.
+fn trashed_notice(f: &mut Files, ui: &mut Ui, r: Rect) -> Option<Notice> {
+    let tr = f.trashed.as_ref()?;
+    if ui.now() >= tr.at + TRASHED_NOTICE_NS || f.dialog.is_some() {
+        return None;
+    }
+    let origins: Vec<String> = tr.items.iter().map(|(_, origin)| origin.clone()).collect();
+    let text = format!("{} moved to the Trash", what(&origins));
+    let t = ui.theme().clone();
+    let tw = ui.measure(&text, Font::Regular, t.font_size) as i32;
+    let undo_w = ui.measure("Undo", Font::Bold, t.font_size) as i32 + 28;
+    let w = (42 + tw + 16 + undo_w + 8).min(r.w - 32);
+    let card = Rect::new(r.x + (r.w - w) / 2, r.bottom() - 62, w, 44);
+    let undo = Rect::new(card.right() - undo_w - 8, card.y + 6, undo_w, card.h - 12);
+    let id = ui.id("trashed-undo");
+    let resp = ui.interact(id, undo);
+    if resp.hovered {
+        ui.set_cursor(Cursor::Hand);
+        ui.tooltip(id, undo, "Put back (Ctrl+Z)");
+    }
+    ui.cover(card);
+    if resp.clicked {
+        f.undo_trash();
+        return None;
+    }
+    Some(Notice { card, undo, text, undo_hovered: resp.hovered })
+}
+
+fn draw_notice(ui: &mut Ui, n: &Notice) {
+    let t = ui.theme().clone();
+    ui.canvas.draw_shadow(n.card.translate(0, 4), 10, 18, Color::rgba(0, 0, 0, 130));
+    ui.canvas.fill_rounded_rect(n.card, 10.0, Color::hex(0x2E2E36).with_alpha(248));
+    ui.canvas.stroke_rounded_rect(n.card, 10.0, 1.0, t.border_strong);
+    ui.icon(Rect::new(n.card.x + 14, n.card.y, 18, n.card.h), Icon::Trash, 16.0, t.text_dim);
+    let text_r = Rect::new(n.card.x + 42, n.card.y, n.undo.x - n.card.x - 50, n.card.h);
+    ui.label(text_r, &n.text, Font::Regular, t.font_size, t.text, Align::Left);
+    if n.undo_hovered {
+        ui.canvas.fill_rounded_rect(n.undo, t.radius, Color::rgba(255, 255, 255, 18));
+    }
+    ui.label(n.undo, "Undo", Font::Bold, t.font_size, t.accent_hover, Align::Center);
+}
+
 fn empty_state(ui: &mut Ui, r: Rect, icon: Icon, title: &str, message: &str) {
     let t = ui.theme().clone();
     let cy = r.y + r.h / 2 - 50;
@@ -579,11 +719,14 @@ fn draw_header(f: &mut Files, ui: &mut Ui, r: Rect) {
     let t = ui.theme().clone();
     ui.canvas.fill_rect(Rect::new(r.x, r.bottom() - 1, r.w, 1), t.border);
     let cols = columns(r);
+    // In the Trash, the type and date columns say where items were deleted
+    // from and when.
+    let trash_root = f.trash_root();
     let headers = [
         ("Name", SortKey::Name, cols.name),
         ("Size", SortKey::Size, cols.size),
-        ("Type", SortKey::Kind, cols.kind),
-        ("Modified", SortKey::Modified, cols.modified),
+        (if trash_root { "Deleted from" } else { "Type" }, SortKey::Kind, cols.kind),
+        (if trash_root { "Deleted" } else { "Modified" }, SortKey::Modified, cols.modified),
     ];
     for (label, key, cr) in headers {
         if cr.w <= 0 {
@@ -618,6 +761,9 @@ fn draw_header(f: &mut Files, ui: &mut Ui, r: Rect) {
                 f.ascending = key == SortKey::Name || key == SortKey::Kind;
             }
             f.rebuild_view();
+        }
+        if trash_root && key == SortKey::Kind && resp.hovered {
+            ui.tooltip(id, cr, "Where each item was deleted from: Restore puts it back there");
         }
     }
 }
@@ -715,36 +861,39 @@ fn item(
     }
     let cut = f.clipboard.as_ref().is_some_and(|(paths, cut)| *cut && paths.contains(&path));
     let op = if cut { 0.45 } else { 1.0 };
-    let color = icons::kind_color(&e.name, e.is_dir).fade(op);
+    // Items in the Trash go by the names they were deleted with.
+    let name = e.shown_name();
+    let trash_root = f.trash_root();
+    let color = icons::kind_color(name, e.is_dir).fade(op);
     if grid {
         let icon_r = Rect::new(inner.x + (inner.w - 76) / 2, inner.y + 8, 76, 64);
         let mut drawn = false;
         if !e.is_dir
-            && file_kind(&e.name) == FileKind::Image
+            && file_kind(name) == FileKind::Image
             && let Some(bmp) = f.thumbs.as_mut().and_then(|th| th.get(&path))
         {
             icons::draw_thumbnail(ui, icon_r.inset(2, 2, 2, 2), bmp, op);
             drawn = true;
         }
         if !drawn {
-            icons::draw_large(ui, Rect::new(icon_r.x + 6, icon_r.y, 64, 64), &e.name, e.is_dir, op);
+            icons::draw_large(ui, Rect::new(icon_r.x + 6, icon_r.y, 64, 64), name, e.is_dir, op);
         }
         let name_r = Rect::new(inner.x + 4, icon_r.bottom() + 6, inner.w - 8, 40);
         if renaming {
             rename_box(f, ui, Rect::new(inner.x - 2, name_r.y, inner.w + 4, 30), typing);
         } else {
-            draw_wrapped_name(ui, name_r, &e.name, if cut { t.text_dim } else { t.text });
+            draw_wrapped_name(ui, name_r, name, if cut { t.text_dim } else { t.text });
         }
     } else {
         let cols = columns(r);
-        let small = icons::small_icon(&e.name, e.is_dir);
+        let small = icons::small_icon(name, e.is_dir);
         small.draw(&mut ui.canvas, Rect::new(cols.name.x + 12, r.y, 20, r.h), 18.0, color);
         let name_r = Rect::new(cols.name.x + 44, r.y, cols.name.w - 48, r.h);
         if renaming {
             rename_box(f, ui, Rect::new(name_r.x - 8, r.y + 2, name_r.w + 8, r.h - 4), typing);
         } else {
             let tc = if cut { t.text_dim } else { t.text };
-            ui.label(name_r, &e.name, Font::Regular, t.font_size, tc, Align::Left);
+            ui.label(name_r, name, Font::Regular, t.font_size, tc, Align::Left);
         }
         let size = if e.is_dir {
             match e.size {
@@ -758,28 +907,27 @@ fn item(
         let dim = t.text_dim.fade(op);
         ui.label(cols.size.inset(4, 0, 8, 0), &size, Font::Regular, t.font_size - 1.0, dim, Align::Right);
         if cols.kind.w > 0 {
-            ui.label(
-                cols.kind.inset(8, 0, 6, 0),
-                &kind_name(&e.name, e.is_dir),
-                Font::Regular,
-                t.font_size - 1.0,
-                dim,
-                Align::Left,
-            );
+            let kind = match &e.origin {
+                Some(_) if trash_root => location(&e),
+                None if trash_root => "Not known".to_string(),
+                _ => kind_name(name, e.is_dir),
+            };
+            ui.label(cols.kind.inset(8, 0, 6, 0), &kind, Font::Regular, t.font_size - 1.0, dim, Align::Left);
         }
         if cols.modified.w > 0 {
-            ui.label(
-                cols.modified.inset(8, 0, 4, 0),
-                &friendly_time(e.modified),
-                Font::Regular,
-                t.font_size - 1.0,
-                dim,
-                Align::Left,
-            );
+            let when = friendly_time(if trash_root { e.deleted } else { e.modified });
+            ui.label(cols.modified.inset(8, 0, 4, 0), &when, Font::Regular, t.font_size - 1.0, dim, Align::Left);
         }
     }
-    if resp.hovered && !renaming && grid && !e.is_dir {
-        let tip = format!("{} · {} · {}", e.name, kind_name(&e.name, false), human_size(e.size));
+    if resp.hovered && !renaming && grid && (!e.is_dir || e.origin.is_some()) {
+        let mut tip = if e.is_dir {
+            name.to_string()
+        } else {
+            format!("{name} · {} · {}", kind_name(name, false), human_size(e.size))
+        };
+        if e.origin.is_some() {
+            tip.push_str(&format!(" · deleted from {}", location(&e)));
+        }
         ui.tooltip(id, inner, &tip);
     }
     hit
@@ -905,8 +1053,9 @@ fn draw_status(f: &mut Files, ui: &mut Ui, r: Rect) {
 // ---- context menus ---------------------------------------------------------
 
 fn context_menus(f: &mut Files, ui: &mut Ui) {
-    let ro = f.read_only();
-    let can_paste = f.clipboard.is_some() && !ro;
+    let changeable = f.can_change();
+    let can_paste = f.clipboard.is_some() && changeable;
+    let (in_trash, trash_root) = (f.in_trash(), f.trash_root());
     // Item menu.
     let sel = f.selected_paths();
     let single = sel.len() == 1;
@@ -916,16 +1065,31 @@ fn context_menus(f: &mut Files, ui: &mut Ui) {
     if single && !single_dir {
         items.push((MenuItem::new("Open in Text Editor"), Some(Action::OpenInEditor)));
     }
-    if single_dir {
+    if single_dir && !trash_root {
         items.push((MenuItem::new("Open in Terminal"), Some(Action::OpenTerminal)));
     }
     items.push((MenuItem::separator(), None));
-    items.push((MenuItem::new("Cut").shortcut("Ctrl+X").enabled(!ro), Some(Action::Cut)));
-    items.push((MenuItem::new("Copy").shortcut("Ctrl+C"), Some(Action::Copy)));
-    items.push((MenuItem::new("Paste").shortcut("Ctrl+V").enabled(can_paste), Some(Action::Paste)));
-    items.push((MenuItem::separator(), None));
-    items.push((MenuItem::new("Rename").shortcut("F2").enabled(single && !ro), Some(Action::Rename)));
-    items.push((MenuItem::new("Delete").shortcut("Del").enabled(!ro), Some(Action::Delete)));
+    if in_trash {
+        // What is in the Trash is restored, copied or deleted for good.
+        if trash_root {
+            items.push((MenuItem::new("Restore"), Some(Action::Restore)));
+        }
+        items.push((MenuItem::new("Copy").shortcut("Ctrl+C"), Some(Action::Copy)));
+        items.push((MenuItem::separator(), None));
+        items.push((MenuItem::new("Delete permanently").shortcut("Del"), Some(Action::Delete)));
+    } else {
+        let ro = f.read_only();
+        items.push((MenuItem::new("Cut").shortcut("Ctrl+X").enabled(!ro), Some(Action::Cut)));
+        items.push((MenuItem::new("Copy").shortcut("Ctrl+C"), Some(Action::Copy)));
+        items.push((MenuItem::new("Paste").shortcut("Ctrl+V").enabled(can_paste), Some(Action::Paste)));
+        items.push((MenuItem::separator(), None));
+        items.push((MenuItem::new("Rename").shortcut("F2").enabled(single && !ro), Some(Action::Rename)));
+        items.push((MenuItem::new("Move to Trash").shortcut("Del").enabled(!ro), Some(Action::Delete)));
+        items.push((
+            MenuItem::new("Delete permanently").shortcut("Shift+Del").enabled(!ro),
+            Some(Action::DeletePermanently),
+        ));
+    }
     items.push((MenuItem::separator(), None));
     items.push((MenuItem::new("Copy path"), Some(Action::CopyPath)));
     items.push((MenuItem::new("Properties").enabled(single), Some(Action::Properties)));
@@ -937,13 +1101,7 @@ fn context_menus(f: &mut Files, ui: &mut Ui) {
     }
 
     // Background menu.
-    let bg: Vec<(MenuItem, Option<Action>)> = vec![
-        (MenuItem::new("New folder").shortcut("Ctrl+Shift+N").enabled(!ro), Some(Action::NewFolder)),
-        (MenuItem::new("New text document").shortcut("Ctrl+N").enabled(!ro), Some(Action::NewDocument)),
-        (MenuItem::separator(), None),
-        (MenuItem::new("Paste").shortcut("Ctrl+V").enabled(can_paste), Some(Action::Paste)),
-        (MenuItem::new("Select all").shortcut("Ctrl+A"), Some(Action::SelectAll)),
-        (MenuItem::separator(), None),
+    let views = [
         (
             MenuItem::new("List view").shortcut("Ctrl+1").checked(f.mode == ViewMode::List),
             Some(Action::Mode(ViewMode::List)),
@@ -952,12 +1110,41 @@ fn context_menus(f: &mut Files, ui: &mut Ui) {
             MenuItem::new("Icon view").shortcut("Ctrl+2").checked(f.mode == ViewMode::Grid),
             Some(Action::Mode(ViewMode::Grid)),
         ),
-        (MenuItem::new("Show hidden files").shortcut("Ctrl+H").checked(f.show_hidden), Some(Action::ToggleHidden)),
-        (MenuItem::new("Refresh").shortcut("F5"), Some(Action::Refresh)),
-        (MenuItem::separator(), None),
-        (MenuItem::new("Open in Terminal").shortcut("Ctrl+T"), Some(Action::OpenTerminalHere)),
-        (MenuItem::new("Properties"), Some(Action::FolderProperties)),
     ];
+    let bg: Vec<(MenuItem, Option<Action>)> = if trash_root {
+        let has_items = !f.entries.is_empty();
+        let mut bg = vec![
+            (MenuItem::new("Restore all").enabled(has_items), Some(Action::RestoreAll)),
+            (MenuItem::new("Empty Trash").enabled(has_items), Some(Action::EmptyTrash)),
+            (MenuItem::separator(), None),
+            (MenuItem::new("Select all").shortcut("Ctrl+A"), Some(Action::SelectAll)),
+            (MenuItem::separator(), None),
+        ];
+        bg.extend(views);
+        bg.push((MenuItem::new("Refresh").shortcut("F5"), Some(Action::Refresh)));
+        bg.push((MenuItem::separator(), None));
+        bg.push((MenuItem::new("Properties"), Some(Action::FolderProperties)));
+        bg
+    } else {
+        let mut bg = vec![
+            (MenuItem::new("New folder").shortcut("Ctrl+Shift+N").enabled(changeable), Some(Action::NewFolder)),
+            (MenuItem::new("New text document").shortcut("Ctrl+N").enabled(changeable), Some(Action::NewDocument)),
+            (MenuItem::separator(), None),
+            (MenuItem::new("Paste").shortcut("Ctrl+V").enabled(can_paste), Some(Action::Paste)),
+            (MenuItem::new("Select all").shortcut("Ctrl+A"), Some(Action::SelectAll)),
+            (MenuItem::separator(), None),
+        ];
+        bg.extend(views);
+        bg.push((
+            MenuItem::new("Show hidden files").shortcut("Ctrl+H").checked(f.show_hidden),
+            Some(Action::ToggleHidden),
+        ));
+        bg.push((MenuItem::new("Refresh").shortcut("F5"), Some(Action::Refresh)));
+        bg.push((MenuItem::separator(), None));
+        bg.push((MenuItem::new("Open in Terminal").shortcut("Ctrl+T"), Some(Action::OpenTerminalHere)));
+        bg.push((MenuItem::new("Properties"), Some(Action::FolderProperties)));
+        bg
+    };
     let menu: Vec<MenuItem> = bg.iter().map(|(m, _)| m.clone()).collect();
     if let Some(i) = ui.context_menu("background-menu", &menu)
         && let Some(a) = bg[i].1
@@ -966,11 +1153,12 @@ fn context_menus(f: &mut Files, ui: &mut Ui) {
     }
 
     // Sort menu (from the toolbar button).
+    let (kind, date) = if trash_root { ("Deleted from", "Date deleted") } else { ("Type", "Date modified") };
     let sorts: Vec<(MenuItem, Option<Action>)> = vec![
         (MenuItem::new("Name").checked(f.sort == SortKey::Name), Some(Action::Sort(SortKey::Name))),
         (MenuItem::new("Size").checked(f.sort == SortKey::Size), Some(Action::Sort(SortKey::Size))),
-        (MenuItem::new("Type").checked(f.sort == SortKey::Kind), Some(Action::Sort(SortKey::Kind))),
-        (MenuItem::new("Date modified").checked(f.sort == SortKey::Modified), Some(Action::Sort(SortKey::Modified))),
+        (MenuItem::new(kind).checked(f.sort == SortKey::Kind), Some(Action::Sort(SortKey::Kind))),
+        (MenuItem::new(date).checked(f.sort == SortKey::Modified), Some(Action::Sort(SortKey::Modified))),
         (MenuItem::separator(), None),
         (MenuItem::new("Ascending").checked(f.ascending), Some(Action::Ascending(true))),
         (MenuItem::new("Descending").checked(!f.ascending), Some(Action::Ascending(false))),
@@ -982,8 +1170,13 @@ fn context_menus(f: &mut Files, ui: &mut Ui) {
         run_action(f, ui, a);
     }
 
-    // Sidebar place menu.
-    let place = [MenuItem::new("Open"), MenuItem::new("Open in Terminal"), MenuItem::new("Properties")];
+    // Sidebar place menu (the Trash's offers to empty it).
+    let trash_place = f.context_target.as_deref() == Some(trash::FILES);
+    let place = if trash_place {
+        vec![MenuItem::new("Open"), MenuItem::new("Empty Trash")]
+    } else {
+        vec![MenuItem::new("Open"), MenuItem::new("Open in Terminal"), MenuItem::new("Properties")]
+    };
     if let Some(i) = ui.context_menu("place-menu", &place)
         && let Some(p) = f.context_target.take()
     {
@@ -991,6 +1184,7 @@ fn context_menus(f: &mut Files, ui: &mut Ui) {
             0 => {
                 f.navigate(&p, true);
             }
+            1 if trash_place => f.ask_empty_trash(),
             1 => f.open_terminal(&p),
             _ => f.show_properties(&p),
         }
@@ -1019,7 +1213,11 @@ fn run_action(f: &mut Files, ui: &mut Ui, a: Action) {
         Action::Copy => f.copy_selection(false),
         Action::Paste => f.paste(),
         Action::Rename => f.start_rename(),
-        Action::Delete => f.ask_delete(),
+        Action::Delete => f.delete_selection(false),
+        Action::DeletePermanently => f.delete_selection(true),
+        Action::Restore => f.restore(false),
+        Action::RestoreAll => f.restore(true),
+        Action::EmptyTrash => f.ask_empty_trash(),
         Action::CopyPath => {
             let text = if sel.is_empty() { f.cwd.clone() } else { sel.join("\n") };
             ui.set_clipboard(&text);
@@ -1062,7 +1260,17 @@ fn run_action(f: &mut Files, ui: &mut Ui, a: Action) {
 pub fn properties_dialog(ui: &mut Ui, p: &Props) -> bool {
     let mut closed = ui.input.key(vproto::input::keys::ESC) || ui.input.key(vproto::input::keys::ENTER);
     let rows: Vec<(&str, String)> = {
-        let mut v = vec![("Type", p.kind.clone()), ("Location", display_path(parent(&p.path)))];
+        let dir = parent(&p.path);
+        let location = if trash::contains(dir) {
+            breadcrumbs(dir).iter().map(|c| c.0.as_str()).collect::<Vec<_>>().join(" › ")
+        } else {
+            display_path(dir)
+        };
+        let mut v = vec![("Type", p.kind.clone()), ("Location", location)];
+        if let Some((from, when)) = &p.deleted_from {
+            v.push(("Deleted from", from.clone()));
+            v.push(("Deleted", when.clone()));
+        }
         v.push(("Size", p.size.clone()));
         if let Some(c) = &p.contents {
             v.push(("Contains", c.clone()));

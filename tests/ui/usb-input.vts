@@ -21,8 +21,9 @@ wait 3
 type "logger usb-keyboard-ok"
 key ret
 wait-serial "terminal: usb-keyboard-ok" 30
-# The tablet: a double-click on the Home icon opens Files.
-double-click 0.0469 0.075
+# The tablet: a double-click on the Home icon (after the Trash) opens
+# Files.
+double-click 0.0469 0.1975
 wait-serial "started files" 30
 wait 3
 shot target/veda/usb-input.png

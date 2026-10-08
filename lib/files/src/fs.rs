@@ -28,6 +28,12 @@ pub enum Error {
     Unavailable,
     /// A folder cannot be copied or moved into itself.
     IntoItself,
+    /// The item is in the Trash already.
+    InTrash,
+    /// The item holds the Trash, so it cannot go there.
+    HoldsTrash,
+    /// Where an item in the Trash was is not known.
+    UnknownOrigin,
 }
 
 impl Error {
@@ -45,6 +51,9 @@ impl fmt::Display for Error {
             Error::Ipc => f.write_str("the file system service is not responding"),
             Error::Unavailable => f.write_str("the file system service is unavailable"),
             Error::IntoItself => f.write_str("a folder cannot be copied or moved into itself"),
+            Error::InTrash => f.write_str("it is in the Trash already"),
+            Error::HoldsTrash => f.write_str("the Trash is inside it"),
+            Error::UnknownOrigin => f.write_str("where it was deleted from is not known"),
         }
     }
 }
@@ -178,6 +187,24 @@ impl Fs {
                 result = Err(e);
                 break;
             }
+        }
+        let _ = c.close(fd);
+        result
+    }
+
+    /// Creates a file with `data`, failing with `Exists` if there is one
+    /// already: of two programs creating it at once, one fails.
+    pub fn create_new(&self, path: &str, data: &[u8]) -> Result<()> {
+        let c = self.c()?;
+        let fd = flat(c.open(path.into(), open_flags::WRITE | open_flags::CREATE | open_flags::EXCLUSIVE))?;
+        let mut result = Ok(());
+        let mut offset = 0;
+        for chunk in data.chunks(MAX_IO as usize) {
+            if let Err(e) = flat(c.write(fd, offset, Bytes(chunk.to_vec()))) {
+                result = Err(e);
+                break;
+            }
+            offset += chunk.len() as u64;
         }
         let _ = c.close(fd);
         result

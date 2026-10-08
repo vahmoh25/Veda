@@ -11,10 +11,13 @@
 //! * [`format`]: sizes and modification times for people.
 //! * [`fs`]: a convenient client of the VFS service — whole-file reads and
 //!   writes, appends, recursive copies, moves and removals.
+//! * [`trash`]: the Trash, where deleted items wait to be restored or
+//!   deleted for good (freedesktop.org's layout, in `~/.local/share/Trash`).
 //! * [`thumbs`] (feature `thumbnails`): image thumbnails made on a background
 //!   thread.
 //!
-//! `path`, `kind` and `format` are pure and unit-tested on the host.
+//! `path`, `kind` and `format`, and the info records of `trash`, are pure and
+//! unit-tested on the host.
 
 #![no_std]
 
@@ -28,6 +31,7 @@ pub mod kind;
 pub mod path;
 #[cfg(feature = "thumbnails")]
 pub mod thumbs;
+pub mod trash;
 
 pub use fs::{Error, Fs};
 pub use kind::{App, FileKind, default_app, file_kind};

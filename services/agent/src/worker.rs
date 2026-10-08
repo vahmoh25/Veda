@@ -166,8 +166,11 @@ struct Ctx {
     shared: Arc<Mutex<Shared>>,
     q: Arc<Queue>,
     signal: Event,
-    /// Registered applications by id (the newest instance wins).
-    apps: BTreeMap<String, AppLink>,
+    /// Registered applications by id: every running instance, the newest
+    /// last, which the agent works with (see [`Ctx::link`]). An older one
+    /// keeps its link: dropping it would make that instance register again
+    /// and take over, and the two would take turns forever.
+    apps: BTreeMap<String, Vec<AppLink>>,
     fs: vfiles::Fs,
 }
 
@@ -251,10 +254,17 @@ impl Ctx {
             Ok(info) => {
                 vrt::println!("{} offers {} action(s)", name, info.actions.len());
                 self.shared.lock().set_app(&name, info);
-                self.apps.insert(name, AppLink { client, channel: raw });
+                let links = self.apps.entry(name).or_default();
+                links.retain(AppLink::alive);
+                links.push(AppLink { client, channel: raw });
             }
             Err(e) => vrt::println!("{} did not describe itself: {:?}", name, e),
         }
+    }
+
+    /// The link to the newest running instance of application `id`.
+    fn link(&self, id: &str) -> Option<&AppLink> {
+        self.apps.get(id)?.iter().rev().find(|l| l.alive())
     }
 
     /// The installed applications.
@@ -275,7 +285,7 @@ impl Ctx {
     /// The live link to an application, starting it if needed.
     fn ensure_running(&mut self, app: &AppInfo) -> Result<(), String> {
         self.take_registrations();
-        if self.apps.get(&app.id).is_some_and(AppLink::alive) {
+        if self.link(&app.id).is_some() {
             return Ok(());
         }
         self.apps.remove(&app.id);
@@ -294,7 +304,7 @@ impl Ctx {
         while vrt::time::now_ns() < end {
             vrt::time::sleep(Duration::from_millis(50));
             self.take_registrations();
-            if self.apps.get(&app.id).is_some_and(AppLink::alive) {
+            if self.link(&app.id).is_some() {
                 return Ok(());
             }
         }
@@ -414,7 +424,7 @@ impl Ctx {
                     "id" => a.id.as_str(),
                     "name" => a.name.as_str(),
                     "about" => a.description.as_str(),
-                    "running" => self.apps.get(&a.id).is_some_and(AppLink::alive),
+                    "running" => self.link(&a.id).is_some(),
                 };
                 if let Some(info) = infos.get(&a.id) {
                     v.set("actions", info.actions.iter().map(|x| Value::from(x.name.as_str())).collect::<Vec<_>>());
@@ -454,7 +464,7 @@ impl Ctx {
     fn app_actions(&mut self, args: &Value) -> Result<Value, String> {
         let app = self.app_arg(args)?;
         self.ensure_running(&app)?;
-        let link = self.apps.get(&app.id).ok_or("the application went away")?;
+        let link = self.link(&app.id).ok_or("the application went away")?;
         let info = link.client.describe().map_err(|_| format!("{} is not answering", app.name))?;
         self.shared.lock().set_app(&app.id, info.clone());
         Ok(describe_info(&info))
@@ -490,7 +500,7 @@ impl Ctx {
                     key,
                 }));
             }
-            let link = self.apps.get(&app.id).ok_or("the application went away")?;
+            let link = self.link(&app.id).ok_or("the application went away")?;
             link.client.set_timeout(INVOKE_TIMEOUT_NS);
             let result = link.client.invoke(action.clone(), call_args.to_string());
             link.client.set_timeout(APP_TIMEOUT_NS);
@@ -507,7 +517,7 @@ impl Ctx {
     fn read_app(&mut self, args: &Value) -> Result<Value, String> {
         let app = self.app_arg(args)?;
         self.take_registrations();
-        let link = self.apps.get(&app.id).filter(|l| l.alive()).ok_or_else(|| format!("{} is not open", app.name))?;
+        let link = self.link(&app.id).ok_or_else(|| format!("{} is not open", app.name))?;
         let state = link.client.state().map_err(|_| format!("{} did not answer", app.name))?;
         Ok(vjson::parse(&state).unwrap_or(Value::String(state)))
     }
@@ -641,8 +651,52 @@ impl Ctx {
                 if path == HOME || !path.starts_with("/home/user/") {
                     return Err("only files and folders inside the home folder can be deleted".into());
                 }
-                self.fs.remove_all(&path).map_err(err)?;
-                Ok(object! { "deleted" => show(&path) })
+                if vfiles::trash::contains(&path) {
+                    return Err(
+                        "that is in the Trash already; empty_trash deletes what is in the Trash for good".into()
+                    );
+                }
+                vfiles::trash::put(&self.fs, &path).map_err(err)?;
+                Ok(object! {
+                    "moved_to_trash" => show(&path),
+                    "note" => "restore puts it back until the Trash is emptied",
+                })
+            }
+            "list_trash" => {
+                let items = vfiles::trash::items(&self.fs).map_err(err)?;
+                let list: Vec<Value> = items
+                    .iter()
+                    .take(150)
+                    .map(|i| {
+                        let from = i.info.as_ref().map(|info| show(vfiles::path::parent(&info.origin)));
+                        object! {
+                            "name" => i.original_name(),
+                            "folder" => i.is_dir,
+                            "deleted_from" => from.unwrap_or_else(|| "not known".into()),
+                            "deleted" => vfiles::format::format_time(i.deleted()),
+                        }
+                    })
+                    .collect();
+                Ok(object! { "trash" => list, "total" => items.len() })
+            }
+            "restore" => {
+                let wanted = args.str("path").ok_or("which item? give where it was deleted from, or its name")?.trim();
+                let name = vfiles::path::file_name(wanted).to_lowercase();
+                // By where it was deleted from, else by name: the latest
+                // deleted first.
+                let items = vfiles::trash::items(&self.fs).map_err(err)?;
+                let item = items
+                    .iter()
+                    .find(|i| i.info.as_ref().is_some_and(|info| info.origin == path))
+                    .or_else(|| items.iter().find(|i| i.name == wanted || i.original_name().to_lowercase() == name))
+                    .ok_or_else(|| format!("nothing in the Trash is called {wanted}"))?;
+                let to = vfiles::trash::restore(&self.fs, &item.name).map_err(err)?;
+                Ok(object! { "restored" => show(&to) })
+            }
+            "empty_trash" => {
+                let n = vfiles::trash::empty(&self.fs).map_err(err)?;
+                let what = if n == 1 { "1 item".to_string() } else { format!("{n} items") };
+                Ok(object! { "emptied" => format!("{what} deleted for good") })
             }
             other => Err(format!("unknown file operation {other}")),
         }

@@ -1,29 +1,31 @@
 //! Files for the voice agent: what the window shows (the folder and its
 //! items, the selection, how they are listed, open dialogs) and what it does
 //! (showing folders, opening, selecting and filtering items, making folders,
-//! and renaming, moving, copying and deleting), through the same operations
-//! as the mouse and the keyboard.
+//! renaming, moving, copying, moving to the Trash, restoring from it and
+//! emptying it), through the same operations as the mouse and the keyboard.
 //!
 //! Renaming, moving, copying and deleting wait for the user's consent, so
 //! they may run minutes after the agent asked for them. They name their
 //! items by full path (a bare name would mean whichever folder is shown by
 //! then), every item is looked up again when the action runs, and they only
-//! change items in the home folder or in `/tmp`.
+//! change items in the home folder or in `/tmp`. Deleting moves items to the
+//! Trash; only emptying the Trash (or deleting items in it) destroys them,
+//! and that is asked every time.
 
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use vfiles::HOME;
 use vfiles::format::{format_time, human_size};
 use vfiles::kind::{EDITOR, default_app, kind_name};
 use vfiles::path::{extension, file_name, file_stem, is_within, join, parent, resolve};
+use vfiles::{HOME, trash};
 use vui::agent::{
     self, Action, AppAgentInfo, Risk, Value, arg_bool, arg_opt_str, arg_path, arg_str, clip, object, show_path,
 };
 
-use crate::{Dialog, Entry, Files, Props, Rename, SortKey, ViewMode, items, space_text};
+use crate::{Dialog, Entry, Files, Props, Rename, SortKey, ViewMode, items, location, space_text};
 
 /// The most items of a folder (or of a list in a result) the agent gets at
 /// once.
@@ -35,10 +37,16 @@ const TMP: &str = "/tmp";
 pub fn info() -> AppAgentInfo {
     agent::info(
         "The file manager: it shows the folders and files of the computer and opens them, makes folders, and \
-         renames, moves, copies and deletes files and folders.",
+         renames, moves, copies and deletes files and folders. Deleted items go to the Trash, from where they can \
+         be restored until the Trash is emptied.",
         vec![
             Action::new("open_folder", "Shows a folder (given a file, shows its folder with the file selected)")
-                .param("path", "string", "The folder, such as ~/Pictures, ~ for the home folder, or /tmp", true)
+                .param(
+                    "path",
+                    "string",
+                    "The folder, such as ~/Pictures, ~ for the home folder, /tmp, or Trash for what was deleted",
+                    true,
+                )
                 .build(),
             Action::new(
                 "go",
@@ -114,13 +122,31 @@ pub fn info() -> AppAgentInfo {
                 )
                 .risk(Risk::Sensitive)
                 .build(),
-            Action::new("delete", "Deletes files or folders for good")
+            Action::new("delete", "Moves files or folders to the Trash")
                 .param(
                     "paths",
                     "string",
-                    "The items' full paths, one per line. A folder goes with everything in it; there is no recycle \
-                     bin to restore anything from.",
+                    "The items' full paths, one per line. A folder goes with everything in it; restore brings them \
+                     back until the Trash is emptied.",
                     true,
+                )
+                .risk(Risk::Sensitive)
+                .build(),
+            Action::new("restore", "Puts items in the Trash back where they were deleted from (the Trash is shown)")
+                .param(
+                    "names",
+                    "string",
+                    "The items' names as the Trash lists them, or the paths they were deleted from, one per line",
+                    true,
+                )
+                .build(),
+            Action::new("empty_trash", "Deletes items in the Trash for good, or empties it")
+                .param(
+                    "names",
+                    "string",
+                    "The items' names as the Trash lists them, one per line; if not given, the whole Trash is emptied. \
+                 Nothing deleted so can be restored.",
+                    false,
                 )
                 .risk(Risk::Destructive)
                 .build(),
@@ -173,11 +199,26 @@ fn properties(p: &Props) -> Value {
     }
 }
 
+/// A folder as the agent hears of it: `~/Documents`, or `Trash` and
+/// `Trash/Trips` for the Trash and a folder in it.
+fn place(path: &str) -> String {
+    match path.strip_prefix(trash::FILES) {
+        Some("") => "Trash".into(),
+        Some(rest) if rest.starts_with('/') => format!("Trash{rest}"),
+        _ => show_path(path),
+    }
+}
+
 /// The dialog in front of the window.
 fn dialog(d: &Dialog) -> Value {
     match d {
         Dialog::ConfirmDelete(paths) => object! {
-            "asks_to_delete" => paths.iter().take(MAX_ITEMS).map(|p| show_path(p)).collect::<Vec<_>>(),
+            "asks_to_delete_for_good" => paths.iter().take(MAX_ITEMS).map(|p| place(p)).collect::<Vec<_>>(),
+        },
+        Dialog::ConfirmEmpty(n) => object! { "asks_to_empty_trash" => format!("{} in the Trash", items(*n)) },
+        Dialog::NoRoomInTrash(paths) => object! {
+            "asks_to_delete_for_good" => paths.iter().take(MAX_ITEMS).map(|p| show_path(p)).collect::<Vec<_>>(),
+            "because" => "there is not enough free space to keep them in the Trash",
         },
         Dialog::Error { title, message } => object! { "error" => title.as_str(), "message" => clip(message, 600).0 },
         Dialog::Properties(p) => object! { "properties" => properties(p) },
@@ -186,22 +227,34 @@ fn dialog(d: &Dialog) -> Value {
 }
 
 pub fn state(f: &Files) -> Value {
+    let trash_root = f.trash_root();
     let listed: Vec<Value> = f
         .view
         .iter()
         .take(MAX_ITEMS)
         .map(|&i| {
             let e = &f.entries[i];
-            object! {
-                "name" => e.name.as_str(),
-                "kind" => kind_name(&e.name, e.is_dir),
+            let name = e.shown_name();
+            let mut item = object! {
+                "name" => name,
+                "kind" => kind_name(name, e.is_dir),
                 "size" => size_text(e),
-                "modified" => format_time(e.modified),
+            };
+            if !trash_root {
+                item.set("modified", format_time(e.modified));
+            } else {
+                // The Trash lists what was deleted, from where and when.
+                if name != e.name {
+                    item.set("name_in_trash", e.name.as_str());
+                }
+                item.set("deleted_from", if e.origin.is_some() { location(e) } else { "not known".into() });
+                item.set("deleted", format_time(e.deleted));
             }
+            item
         })
         .collect();
     let mut v = object! {
-        "folder" => show_path(&f.cwd),
+        "folder" => place(&f.cwd),
         "items" => listed,
         "item_count" => f.view.len(),
         "selected" => selected_names(f),
@@ -223,6 +276,12 @@ pub fn state(f: &Files) -> Value {
     }
     if f.read_only() {
         v.set("read_only", true);
+    }
+    if !trash_root {
+        let n = trash::count(&f.fs);
+        if n > 0 {
+            v.set("in_trash", items(n));
+        }
     }
     if let Some(s) = &f.space {
         v.set("free_space", space_text(s));
@@ -302,6 +361,28 @@ impl Files {
             .or_else(|| only(self.entries.iter().filter(|e| file_stem(&e.name).to_lowercase() == lower).collect()))
     }
 
+    /// The name in the Trash (which is shown) of the item `wanted` names:
+    /// its name there, the name it was deleted with (ignoring case, then
+    /// also the extension), or the path it was deleted from. Of several
+    /// items deleted with one name, the latest.
+    fn trash_item(&self, wanted: &str) -> Result<String, String> {
+        let w = wanted.trim();
+        if let Some(e) = self.entries.iter().find(|e| e.name == w) {
+            return Ok(e.name.clone());
+        }
+        let latest = |found: Vec<&Entry>| found.into_iter().max_by_key(|e| e.deleted).map(|e| e.name.clone());
+        let lower = w.to_lowercase();
+        let by_path = (w.contains('/') || w.starts_with('~')).then(|| resolve(HOME, w));
+        latest(self.entries.iter().filter(|e| e.origin.is_some() && e.origin == by_path).collect())
+            .or_else(|| latest(self.entries.iter().filter(|e| e.shown_name().to_lowercase() == lower).collect()))
+            .or_else(|| {
+                let found: Vec<&Entry> =
+                    self.entries.iter().filter(|e| file_stem(e.shown_name()).to_lowercase() == lower).collect();
+                if found.len() == 1 { Some(found[0].name.clone()) } else { None }
+            })
+            .ok_or_else(|| format!("there is nothing called \u{201c}{w}\u{201d} in the Trash"))
+    }
+
     /// The item an action names: a name in the current folder, or a path. It
     /// must exist.
     fn item_arg(&self, args: &Value, key: &str) -> Result<String, String> {
@@ -372,7 +453,7 @@ impl Files {
 
     /// Where the window is now, for results.
     fn location(&self) -> Value {
-        let mut v = object! { "showing" => show_path(&self.cwd), "items" => self.view.len() };
+        let mut v = object! { "showing" => place(&self.cwd), "items" => self.view.len() };
         let selected = selected_names(self);
         if !selected.is_empty() {
             v.set("selected", selected);
@@ -407,9 +488,19 @@ impl Files {
         self.refresh();
         match action {
             "open_folder" => {
-                let path = arg_path(args, "path")?;
+                // "Trash" (and "Trash/Trips") is the Trash; ~/Trash would be
+                // a folder of that name.
+                let raw = arg_str(args, "path")?.trim();
+                let in_trash = raw.get(..5).is_some_and(|w| w.eq_ignore_ascii_case("trash"))
+                    && (raw.len() == 5 || raw.as_bytes()[5] == b'/');
+                let path = if in_trash {
+                    let _ = trash::ensure(&self.fs);
+                    resolve(trash::FILES, raw[5..].trim_start_matches('/'))
+                } else {
+                    arg_path(args, "path")?
+                };
                 if !self.fs.exists(&path) {
-                    return Err(format!("there is no {}", show_path(&path)));
+                    return Err(format!("there is no {}", place(&path)));
                 }
                 self.show_folder(&path)?;
                 Ok(self.location())
@@ -422,6 +513,9 @@ impl Files {
                     "forward" => self.go_forward(),
                     "up" if self.cwd == "/" => {
                         return Err("this is the top of the computer: no folder contains it".into());
+                    }
+                    "up" if self.trash_root() => {
+                        return Err("the Trash is a place of its own: no folder contains it".into());
                     }
                     "up" => self.go_up(),
                     other => return Err(format!("'to' cannot be {other}: say back, forward or up")),
@@ -643,8 +737,11 @@ impl Files {
             }
             "delete" => {
                 let paths = self.targets(args, "paths", true)?;
+                if let Some(p) = paths.iter().find(|p| trash::contains(p)) {
+                    return Err(format!("{} is in the Trash already: empty_trash deletes it for good", place(p)));
+                }
                 // Folder by folder, as the user would: each folder is shown
-                // and its items deleted there.
+                // and its items moved to the Trash there.
                 let mut groups: Vec<(String, Vec<String>)> = Vec::new();
                 for p in paths {
                     let dir = parent(&p).to_string();
@@ -653,7 +750,7 @@ impl Files {
                         None => groups.push((dir, vec![p])),
                     }
                 }
-                let (mut deleted, mut problems) = (Vec::new(), Vec::new());
+                let (mut moved, mut problems) = (Vec::new(), Vec::new());
                 for (dir, group) in groups {
                     if dir != self.cwd
                         && let Err(e) = self.show_folder(&dir)
@@ -667,18 +764,93 @@ impl Files {
                     {
                         self.dialog = None;
                     }
-                    self.delete(group.clone());
+                    self.move_to_trash(group.clone());
+                    if let Some(Dialog::NoRoomInTrash(left)) = &self.dialog {
+                        let left: Vec<String> = left.iter().map(|p| show_path(p)).collect();
+                        problems.push(format!(
+                            "there is not enough free space to keep {} in the Trash: the user is asked whether to \
+                             delete it for good instead",
+                            left.join(", ")
+                        ));
+                    }
                     if let Err(e) = self.failed() {
                         problems.push(e);
                     }
-                    deleted.extend(group.iter().filter(|p| !self.fs.exists(p)).map(|p| show_path(p)));
+                    moved.extend(group.iter().filter(|p| !self.fs.exists(p)).map(|p| show_path(p)));
                 }
-                if deleted.is_empty() {
+                if moved.is_empty() {
                     return Err(problems.join("; "));
                 }
-                let mut v = object! { "deleted" => deleted };
+                let mut v = object! { "moved_to_trash" => moved };
                 if !problems.is_empty() {
                     v.set("problems", problems.join("; "));
+                }
+                Ok(v)
+            }
+            "restore" => {
+                let wanted = list_arg(args, "names");
+                if wanted.is_empty() {
+                    return Err("which items? give their names as the Trash lists them, one per line".into());
+                }
+                // As the user would: the Trash is shown and the items
+                // restored from there.
+                self.show_folder(trash::FILES)?;
+                let mut names = Vec::new();
+                for w in &wanted {
+                    let name = self.trash_item(w)?;
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                }
+                let restored = self.restore_names(names);
+                let problems = self.failed().err();
+                if restored.is_empty() {
+                    return Err(problems.unwrap_or_else(|| "nothing could be restored".into()));
+                }
+                let restored: Vec<String> = restored.iter().map(|p| show_path(p)).collect();
+                let mut v = object! { "restored" => restored };
+                if let Some(p) = problems {
+                    v.set("problems", p);
+                }
+                Ok(v)
+            }
+            "empty_trash" => {
+                let wanted = list_arg(args, "names");
+                self.show_folder(trash::FILES)?;
+                if wanted.is_empty() {
+                    let n = self.entries.len();
+                    if n == 0 {
+                        return Err("the Trash is empty already".into());
+                    }
+                    if matches!(self.dialog, Some(Dialog::ConfirmEmpty(_))) {
+                        self.dialog = None;
+                    }
+                    self.empty_trash();
+                    self.failed()?;
+                    return Ok(object! { "emptied" => format!("{} deleted for good", items(n)) });
+                }
+                let mut paths = Vec::new();
+                for w in &wanted {
+                    let path = join(trash::FILES, &self.trash_item(w)?);
+                    if !paths.contains(&path) {
+                        paths.push(path);
+                    }
+                }
+                let names: Vec<String> = paths.iter().map(|p| self.original_name(p)).collect();
+                if matches!(&self.dialog, Some(Dialog::ConfirmDelete(asked)) if asked.iter().any(|p| paths.contains(p)))
+                {
+                    self.dialog = None;
+                }
+                self.delete(paths.clone());
+                let problems = self.failed().err();
+                let gone: Vec<String> =
+                    paths.iter().zip(names).filter(|(p, _)| !self.fs.exists(p)).map(|(_, n)| n).collect();
+                if gone.is_empty() {
+                    return Err(problems.unwrap_or_else(|| "nothing could be deleted".into()));
+                }
+                let mut v = object! { "deleted_for_good" => gone };
+                if let Some(p) = problems {
+                    v.set("problems", p);
                 }
                 Ok(v)
             }

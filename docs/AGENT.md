@@ -145,7 +145,7 @@ The agent's own functions (`vagent::tools`):
 | `list_apps`, `open_app` | Installed applications; open one (with a file) |
 | `app_actions`, `use_app`, `read_app` | An application's actions; run one; what it shows |
 | `window` | List, focus, minimise, maximise, restore, snap or close windows; show the desktop |
-| `files` | List, find, read, write, copy, move, rename and delete files and folders in your home |
+| `files` | List, find, read, write, copy, move, rename and delete (to the Trash) files and folders in your home; list, restore from and empty the Trash |
 | `volume`, `wifi`, `wallpaper` | Sound, Wi-Fi networks, the wallpaper |
 | `notify`, `timer` | A notification; timers and reminders (they wake the agent) |
 | `memory` | Remember, search and forget what it knows about you |
@@ -161,10 +161,11 @@ in one line; `app_actions` gives the details.
 
 * Every action has a **risk**: *routine* (looking, navigating, writing a
   new file, playing music…), *sensitive* (hard to undo or reaching beyond
-  the computer: replacing a file, renaming the agent, changing its
-  language model, running a terminal command…) or *destructive* (deleting,
-  discarding unsaved work, ending programs, shutting down). Routine actions
-  just happen. Sensitive and destructive ones wait for your OK.
+  the computer: replacing a file, moving files to the Trash, renaming the
+  agent, changing its language model, running a terminal command…) or
+  *destructive* (emptying the Trash, discarding unsaved work, ending
+  programs, shutting down). Routine actions just happen. Sensitive and
+  destructive ones wait for your OK.
 * **The agent service enforces this**, not the language model: a function
   call that needs consent is held and only runs after you click Allow.
   Only the desktop shell may answer an approval, and only Settings may

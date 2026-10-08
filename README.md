@@ -121,10 +121,11 @@ the voice pipeline, consent, memory and how the agent is tested.
   shadows, animations, window snapping and an Alt+Tab switcher with live
   thumbnails, which composes on the GPU with OpenGL ES on PCs with Intel
   graphics, every frame flipped whole at the vertical blank, and on the
-  processor elsewhere; a shell with wallpaper, desktop icons, a taskbar, a
-  searchable start menu, a calendar and notifications; the `vui` toolkit
-  (widgets, menus, dialogs, vector icons, anti-aliased text with the Inter
-  and JetBrains Mono fonts), whose applications are agent-compatible.
+  processor elsewhere; a shell with wallpaper, desktop icons (the Trash
+  first), a taskbar, a searchable start menu, a calendar and notifications;
+  the `vui` toolkit (widgets, menus, dialogs, vector icons, anti-aliased
+  text with the Inter and JetBrains Mono fonts), whose applications are
+  agent-compatible.
 * **Networking and Wi-Fi.** A user-space network service (IPv4 and IPv6,
   DHCP, DNS, routing, TCP, UDP, ICMP) and a Wi-Fi service that scans,
   joins WPA2, WPA3 and open networks with management frame protection,
@@ -348,6 +349,10 @@ Things to ask:
   middle-click opens another window. Click the clock for the calendar.
 * Double-click desktop icons. Right-click the desktop to change the
   wallpaper.
+* What you delete goes to the **Trash**, the first icon on the desktop:
+  open it to restore items where they were, or to empty it. Drag items of
+  the desktop onto it, or press **Delete** in Files (**Ctrl+Z** puts them
+  back; **Shift+Delete** deletes for good).
 * Drag a window to the top of the screen to maximise it, or to a side to
   fill that half (or use **Super+Left/Right/Up/Down**). **Super+D** shows
   the desktop, **Alt+Tab** switches windows and **Alt+F4** closes the
@@ -369,7 +374,7 @@ keyboard, the agent can do too, through the application's own actions.
 | **Text Editor** | Tabs, syntax highlighting (Rust, C, TOML, Markdown), find and replace, word wrap, line numbers, zoom, unlimited undo, open/save dialogs. | Create, open, read and write documents; find and replace, select, undo, save; save under another name or discard changes (with your OK). |
 | **Photos** | A thumbnail library of `~/Pictures` and a viewer with zoom, pan, rotation, full screen, slideshows, details and "set as wallpaper"; PNG, JPEG (including progressive), BMP and QOI. | Show any picture, zoom, rotate, go full screen, run a slideshow, show details, set a picture as the wallpaper. |
 | **Music** | A library of `~/Music`, now playing with cover art and a live spectrum visualiser, seeking, shuffle and repeat; plays QOA and WAV through the audio service. | Play a song by its name, pause, stop, skip, seek, shuffle, repeat, set the volume. |
-| **Files** | Places sidebar, breadcrumbs, list and icon views with thumbnails, search, copy/cut/paste, rename, delete, new folders and documents, properties, free space. | Open folders and files, search, show properties, make folders; copy, move and rename (with your OK); delete (asked every time). |
+| **Files** | Places sidebar, breadcrumbs, list and icon views with thumbnails, search, copy/cut/paste, rename, new folders and documents, properties, free space; delete to the Trash (with undo), which lists where each item came from and when, and restores or empties. | Open folders and files, search, show properties, make folders; copy, move, rename and delete to the Trash (with your OK); restore from the Trash; empty it (asked every time). |
 | **Terminal** | A command shell with about fifty built-in commands for files, processes, the network (`wifi`, `ifconfig`, `ping`, `nslookup`, `curl`, ...) and the system, history and tab completion. Runs programs, C programs and GCC included, as a Unix terminal does: line editing, `termios`, Ctrl+C, pipes and redirections. | Run a command (with your OK), read its output, interrupt it. |
 | **Task Manager** | Processes with CPU and memory use, "end task", and live performance graphs. | List processes, show and read the performance graphs, end a program (asked every time). |
 | **Settings** | Wallpaper gallery, the agent (Deepgram key, name, voice, language and speech models, listening, memory, permissions), network and Wi-Fi (connection, networks in range, saved networks, interfaces, diagnostics), display information and system details. | Open a page, change the agent's voice and speaking rate; rename the agent or change its language model (with your OK). Never the key. |

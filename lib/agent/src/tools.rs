@@ -174,7 +174,8 @@ pub fn definitions() -> Vec<Value> {
         ),
         function(
             FILES,
-            "Works with the user's files under ~ (the home folder: Documents, Pictures, Music, Desktop). Paths may start with ~.",
+            "Works with the user's files under ~ (the home folder: Documents, Pictures, Music, Desktop). Paths may start with ~. \
+             delete moves items to the Trash, from where restore puts them back until empty_trash deletes them for good.",
             &[
                 choice(
                     "operation",
@@ -191,10 +192,18 @@ pub fn definitions() -> Vec<Value> {
                         "copy",
                         "move",
                         "rename",
-                        "delete"
+                        "delete",
+                        "list_trash",
+                        "restore",
+                        "empty_trash"
                     ]
                 ),
-                req("path", "string", "The file or folder (for find: the folder to search, default ~)"),
+                opt(
+                    "path",
+                    "string",
+                    "The file or folder (for find: the folder to search, default ~; for restore: where the item was \
+                     deleted from, or its name in the Trash; not needed for list_trash and empty_trash)"
+                ),
                 opt("to", "string", "Destination for copy, move and rename"),
                 opt("text", "string", "Content for write and append; what to look for with find"),
             ],
@@ -292,7 +301,10 @@ pub fn risk(name: &str, args: &Value, exists: &dyn Fn(&str) -> bool) -> Risk {
     let op = args.str("operation").unwrap_or("");
     match name {
         names::FILES => match op {
-            "delete" => Risk::Destructive,
+            // What is deleted can be restored from the Trash, until the
+            // Trash is emptied.
+            "delete" => Risk::Sensitive,
+            "empty_trash" => Risk::Destructive,
             "write" if args.str("path").is_some_and(exists) => Risk::Sensitive,
             "move" | "rename" if args.str("to").is_some_and(exists) => Risk::Destructive,
             _ => Risk::Routine,
@@ -312,8 +324,12 @@ pub fn describe(name: &str, args: &Value) -> (String, String) {
     let to = args.str("to").unwrap_or("");
     let quoted = |p: &str| alloc::format!("\u{201c}{}\u{201d}", p.rsplit('/').next().unwrap_or(p));
     match (name, op) {
-        (names::FILES, "delete") => {
-            (alloc::format!("Delete {}", quoted(path)), alloc::format!("{path} will be deleted for good."))
+        (names::FILES, "delete") => (
+            alloc::format!("Move {} to the Trash", quoted(path)),
+            alloc::format!("{path} can be restored from the Trash until it is emptied."),
+        ),
+        (names::FILES, "empty_trash") => {
+            ("Empty the Trash".into(), "Everything in the Trash will be deleted for good.".into())
         }
         (names::FILES, "write") => (
             alloc::format!("Replace {}", quoted(path)),
@@ -431,7 +447,11 @@ mod tests {
         let exists = |p: &str| p == "~/Documents/a.txt";
         let r = |name: &str, args: Value| risk(name, &args, &exists);
         assert_eq!(r("files", object! { "operation" => "read", "path" => "~/Documents/a.txt" }), Risk::Routine);
-        assert_eq!(r("files", object! { "operation" => "delete", "path" => "x" }), Risk::Destructive);
+        // Deleted items can be restored from the Trash; emptying it is for good.
+        assert_eq!(r("files", object! { "operation" => "delete", "path" => "x" }), Risk::Sensitive);
+        assert_eq!(r("files", object! { "operation" => "empty_trash" }), Risk::Destructive);
+        assert_eq!(r("files", object! { "operation" => "restore", "path" => "~/Documents/a.txt" }), Risk::Routine);
+        assert_eq!(r("files", object! { "operation" => "list_trash" }), Risk::Routine);
         assert_eq!(r("files", object! { "operation" => "write", "path" => "~/Documents/new.txt" }), Risk::Routine);
         assert_eq!(r("files", object! { "operation" => "write", "path" => "~/Documents/a.txt" }), Risk::Sensitive);
         assert_eq!(
@@ -445,8 +465,9 @@ mod tests {
         assert_eq!(r("open_app", object! { "app" => "editor" }), Risk::Routine);
         let (action, detail) =
             describe("files", &object! { "operation" => "delete", "path" => "~/Documents/report.txt" });
-        assert_eq!(action, "Delete \u{201c}report.txt\u{201d}");
+        assert_eq!(action, "Move \u{201c}report.txt\u{201d} to the Trash");
         assert!(detail.contains("~/Documents/report.txt"));
+        assert_eq!(describe("files", &object! { "operation" => "empty_trash" }).0, "Empty the Trash");
     }
 
     #[test]

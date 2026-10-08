@@ -2,7 +2,8 @@
 //!
 //! The shell owns the compositor's shell surfaces:
 //!
-//! * the **desktop** ([`desktop`]): wallpaper and desktop icons;
+//! * the **desktop** ([`desktop`]): wallpaper and desktop icons, the Trash
+//!   first;
 //! * the **taskbar** ([`taskbar`]): start button, pinned and running apps,
 //!   clock;
 //! * the **start menu** ([`start`]), **calendar** ([`calendar`]),
@@ -37,7 +38,7 @@ mod wallpaper;
 mod wifi;
 
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use vabi::{WaitItem, signals};
@@ -58,6 +59,9 @@ vrt::entry!(main);
 
 /// Where the chosen wallpaper is remembered.
 const WALLPAPER_CONFIG: &str = "/home/user/.config/wallpaper";
+
+/// How often the desktop looks whether `~/Desktop` or the Trash changed.
+const DESKTOP_POLL_NS: u64 = 1_500_000_000;
 
 /// How long after a popup was dismissed by an outside click a click on its
 /// taskbar button still counts as "close" rather than "open again".
@@ -114,6 +118,10 @@ pub enum Action {
     NextWallpaper,
     /// Re-reads the desktop folder.
     RefreshDesktop,
+    /// Moves an item of the desktop to the Trash.
+    Trash(String),
+    /// Moves an item of the desktop into a folder.
+    MoveInto(String, String),
 }
 
 /// State shared by all shell surfaces.
@@ -171,10 +179,14 @@ struct Popup<T> {
 struct Shell {
     display: Display,
     vfs: Option<vfs::Client>,
+    /// The files of the desktop and the Trash.
+    fs: vfiles::Fs,
     launcher: Option<launcher::Client>,
     model: Model,
     desktop_host: Host,
     desktop: desktop::Desktop,
+    /// When to next look whether the desktop's icons are out of date.
+    next_desktop_poll: u64,
     taskbar_host: Host,
     taskbar: taskbar::Taskbar,
     audio: Option<audio::Client>,
@@ -872,11 +884,52 @@ impl Shell {
                     }
                 }
                 Action::NextWallpaper => self.next_wallpaper(),
-                Action::RefreshDesktop => {
-                    self.desktop.refresh(&self.model, self.vfs.as_ref());
-                    self.desktop_host.invalidate();
+                Action::RefreshDesktop => self.refresh_desktop(),
+                Action::Trash(path) => {
+                    match vfiles::trash::put(&self.fs, &path) {
+                        Ok(_) => println!("moved {} to the Trash", path),
+                        Err(e) => {
+                            let name = vfiles::path::file_name(&path);
+                            let title = format!("Couldn't move “{name}” to the Trash");
+                            self.post_notification(&title, &format!("Because {e}."), "files");
+                        }
+                    }
+                    self.refresh_desktop();
+                }
+                Action::MoveInto(path, dir) => {
+                    let name = vfiles::path::file_name(&path).to_string();
+                    let to = vfiles::path::join(&dir, &self.fs.unique_name(&dir, &name));
+                    match self.fs.move_to(&path, &to) {
+                        Ok(()) => println!("moved {} into {}", path, dir),
+                        Err(e) => {
+                            let into = vfiles::path::display_path(&dir);
+                            let title = format!("Couldn't move “{name}” into {into}");
+                            self.post_notification(&title, &format!("Because {e}."), "files");
+                        }
+                    }
+                    self.refresh_desktop();
                 }
             }
+        }
+    }
+
+    /// Rebuilds the desktop's icons.
+    fn refresh_desktop(&mut self) {
+        self.desktop.refresh(&self.model, &self.fs);
+        self.desktop_host.invalidate();
+    }
+
+    /// Brings the desktop's icons up to date when `~/Desktop` or the Trash
+    /// changed (Files, the Terminal and the agent change them too), unless
+    /// an icon is being dragged or a menu is open.
+    fn poll_desktop(&mut self) {
+        let now = vrt::time::now_ns();
+        if now < self.next_desktop_poll {
+            return;
+        }
+        self.next_desktop_poll = now + DESKTOP_POLL_NS;
+        if !self.desktop.busy() && self.desktop.stale(&self.fs) {
+            self.refresh_desktop();
         }
     }
 
@@ -997,7 +1050,7 @@ impl Shell {
             }
             None => deadline = deadline.min(self.next_agent_try),
         }
-        deadline = deadline.min(self.next_net_poll);
+        deadline = deadline.min(self.next_net_poll).min(self.next_desktop_poll);
         if let Some(s) = &self.startup {
             deadline = deadline.min(s.deadline());
         }
@@ -1022,6 +1075,7 @@ impl Shell {
             self.serve();
             self.check_tasks();
             self.poll_network();
+            self.poll_desktop();
             self.check_wifi();
             self.check_agent();
             self.play_startup_sound();
@@ -1186,15 +1240,18 @@ fn main() -> i32 {
         agent: agent::AgentModel::default(),
         actions: Vec::new(),
     };
+    let fs = vfiles::Fs::connect();
     let mut desktop = desktop::Desktop::new();
-    desktop.refresh(&model, vfs.as_ref());
+    desktop.refresh(&model, &fs);
     let mut shell = Shell {
         display,
         vfs,
+        fs,
         launcher,
         model,
         desktop_host,
         desktop,
+        next_desktop_poll: 0,
         taskbar_host,
         taskbar: taskbar::Taskbar::new(),
         audio,
