@@ -19,6 +19,7 @@ vgfx = { workspace = true }
 vmath = { workspace = true }
 vraster = { workspace = true }
 vsplash = { workspace = true }
+vgl = { workspace = true, features = ["veda"] }
 
 [build-dependencies]
 vbuild = { workspace = true }

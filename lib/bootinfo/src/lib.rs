@@ -28,7 +28,7 @@ pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VEDABOOT");
 
 /// Version of this protocol. Bump on any layout change.
-pub const BOOTINFO_VERSION: u32 = 2;
+pub const BOOTINFO_VERSION: u32 = 3;
 
 /// Maximum length of the kernel command line, in bytes.
 pub const CMDLINE_MAX: usize = 256;
@@ -75,6 +75,65 @@ pub struct BootInfo {
     /// Random bytes from the firmware's `EFI_RNG_PROTOCOL` (if it has one),
     /// which seed the kernel's random number generator.
     pub entropy: [u8; ENTROPY_MAX],
+    /// How the loader painted the boot splash, for the kernel's log.
+    pub splash: SplashReport,
+}
+
+/// How the loader painted the boot splash: how long it took, and the
+/// framebuffer's memory type. Firmware often leaves the framebuffer
+/// uncached, where every write is a bus transaction of its own and the
+/// picture is seen being painted; write-combining makes it a burst.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SplashReport {
+    /// Timestamp-counter ticks the painting took (0: nothing was painted).
+    pub paint_ticks: u64,
+    /// Ticks spent making the framebuffer write-combining.
+    pub setup_ticks: u64,
+    /// The framebuffer's memory type ([`memory_type`]) as the loader found
+    /// it, and as it painted.
+    pub found: u8,
+    pub painted: u8,
+    /// How it was made write-combining ([`made_wc`]).
+    pub made_wc: u8,
+    pub _pad: [u8; 5],
+}
+
+/// The processor's memory types (the MTRRs' and PAT's encodings).
+pub mod memory_type {
+    pub const UNCACHED: u8 = 0;
+    pub const WRITE_COMBINING: u8 = 1;
+    pub const WRITE_THROUGH: u8 = 4;
+    pub const WRITE_PROTECTED: u8 = 5;
+    pub const WRITE_BACK: u8 = 6;
+    /// The PAT's UC- (uncached unless the MTRRs say write-combining).
+    pub const UNCACHED_MINUS: u8 = 7;
+    /// The loader could not tell.
+    pub const UNKNOWN: u8 = 0xFF;
+
+    /// A name for the log.
+    pub fn name(t: u8) -> &'static str {
+        match t {
+            UNCACHED | UNCACHED_MINUS => "uncached",
+            WRITE_COMBINING => "write-combining",
+            WRITE_THROUGH => "write-through",
+            WRITE_PROTECTED => "write-protected",
+            WRITE_BACK => "write-back",
+            _ => "of an unknown memory type",
+        }
+    }
+}
+
+/// How the framebuffer was made write-combining for the splash.
+pub mod made_wc {
+    /// It was not: it was already, or there is no framebuffer.
+    pub const ALREADY: u8 = 0;
+    /// The loader painted through page tables of its own, which map the
+    /// framebuffer write-combining by its page attributes (the PAT), the
+    /// firmware's MTRRs notwithstanding.
+    pub const PAGE_ATTRIBUTES: u8 = 1;
+    /// It could not be.
+    pub const NOT: u8 = 2;
 }
 
 impl BootInfo {
@@ -250,4 +309,5 @@ const _: () = {
     assert!(core::mem::size_of::<MemoryRegion>() == 24);
     assert!(core::mem::size_of::<Framebuffer>() == 32);
     assert!(core::mem::size_of::<BootTime>() == 16);
+    assert!(core::mem::size_of::<SplashReport>() == 24);
 };

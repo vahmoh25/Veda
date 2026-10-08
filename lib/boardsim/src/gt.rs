@@ -143,6 +143,8 @@ struct Engine {
     batches: Vec<u64>,
     /// Contexts it loaded whole (restore inhibited).
     fresh_loads: u32,
+    /// The root table of the address space it last ran in.
+    root: u64,
 }
 
 /// The GT.
@@ -207,6 +209,27 @@ impl Gt {
 
     pub fn resets(&self) -> u32 {
         *self.resets.borrow()
+    }
+
+    /// The page table entry that maps `address` in the address space
+    /// engine `e` last ran in (its PAT bits say how the GPU caches the
+    /// page).
+    pub fn page_entry(&self, e: usize, address: u64) -> Option<u64> {
+        let mut table = self.engines.borrow()[e].root;
+        for level in (1..=4).rev() {
+            let i = (address >> (12 + 9 * (level - 1))) & 511;
+            let lo = self.memory.read(table + i * 8)?;
+            let hi = self.memory.read(table + i * 8 + 4)?;
+            let entry = u64::from(lo) | u64::from(hi) << 32;
+            if entry & 1 == 0 {
+                return None;
+            }
+            if level == 1 {
+                return Some(entry);
+            }
+            table = entry & 0x0000_FFFF_FFFF_F000;
+        }
+        None
     }
 
     fn fault(&self, what: String) {
@@ -283,6 +306,7 @@ impl Gt {
         let ring = u64::from(reg(ctx::RING_START));
         let size = u64::from((reg(ctx::RING_CTL) & 0x1F_F000) + 4096);
         let root = u64::from(reg(ctx::PDP0_LDW)) | u64::from(reg(ctx::PDP0_UDW)) << 32;
+        self.engines.borrow_mut()[e].root = root;
         let mut head = u64::from(reg(ctx::RING_HEAD));
         let tail = u64::from(reg(ctx::RING_TAIL));
         let mut guard = 0;

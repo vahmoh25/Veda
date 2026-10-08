@@ -37,7 +37,18 @@ fn buffer(g: &mut G, mem: &Memory, pages: u32, words: &[u32]) -> (u32, u64) {
     let mut r: SimRegion = mem.region(pages);
     r.words()[..words.len()].copy_from_slice(words);
     let phys = r.phys();
-    let memory = BufferMemory { pages: (0..u64::from(pages)).map(|i| phys + i * 4096).collect(), keep: r };
+    let memory =
+        BufferMemory { pages: (0..u64::from(pages)).map(|i| phys + i * 4096).collect(), keep: r, uncached: false };
+    (g.create(1, memory).unwrap(), phys)
+}
+
+/// A buffer of `pages` the display reads (see `gem::import`): reached
+/// uncached. Its handle and its first page's physical address.
+fn picture(g: &mut G, mem: &Memory, pages: u32) -> (u32, u64) {
+    let r: SimRegion = mem.region(pages);
+    let phys = r.phys();
+    let memory =
+        BufferMemory { pages: (0..u64::from(pages)).map(|i| phys + i * 4096).collect(), keep: r, uncached: true };
     (g.create(1, memory).unwrap(), phys)
 }
 
@@ -83,6 +94,32 @@ fn runs_a_batch_where_the_driver_mapped_it() {
     let cause = gt::handle_gt_interrupt(&gt, master);
     assert_eq!(cause.render & vigpu::gtregs::GT_RENDER_USER_INTERRUPT as u16, 1);
     assert!(!gt.interrupting());
+}
+
+#[test]
+fn renders_into_a_picture_uncached() {
+    let mem = Memory::default();
+    let gt = Gt::new(mem.clone(), GTT_BASE);
+    let mut g = render(&gt);
+    let space = g.space_create(1).unwrap();
+    let ctx = g.context_create(1, space, &[RENDER, COPY]).unwrap();
+    // A picture the display shows (two pages) and an ordinary buffer.
+    let (picture, picture_phys) = picture(&mut g, &mem, 2);
+    let (target, _) = buffer(&mut g, &mem, 1, &[]);
+    let (batch, _) = buffer(&mut g, &mem, 1, &store(0x40_1008, 0xFF20_4060));
+    let uses = [(batch, 0x10000), (picture, 0x40_0000), (target, 0x80_0000)];
+    assert_eq!(g.execute(1, &submit(ctx, 0, &uses, 24)), Ok((0, 1)));
+    g.hardware_mut().poll(1);
+    no_faults(&gt);
+    assert_eq!(mem.read(picture_phys + 0x1008), Some(0xFF20_4060));
+    // The picture's pages are reached uncached (the display engine does
+    // not look in the last-level cache), ordinary buffers write-back.
+    let pat = vigpu::ppgtt::pat_bits(0xFF);
+    for page in [0x40_0000, 0x40_1000] {
+        let entry = gt.page_entry(0, page).unwrap();
+        assert_eq!(entry & pat, vigpu::ppgtt::pat_bits(vigpu::render::UNCACHED_PAT), "{page:#x}: {entry:#x}");
+    }
+    assert_eq!(gt.page_entry(0, 0x80_0000).unwrap() & pat, 0);
 }
 
 #[test]

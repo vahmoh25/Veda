@@ -541,3 +541,72 @@ fn stencil_only_framebuffers() {
         [green, green, black, black]
     );
 }
+
+#[test]
+fn renders_into_memory_it_is_given() {
+    // Rows of 8 pixels, 12 apart: the memory outlives the contexts.
+    let (w, h, stride) = (8i32, 4i32, 12usize);
+    let mut picture = vec![0xDEAD_BEEFu32; stride * h as usize];
+    let memory = crate::backend::External {
+        handle: 0,
+        address: picture.as_mut_ptr() as usize,
+        size: picture.len() * 4,
+        stride: stride as u32 * 4,
+        bgr: true,
+    };
+    // A renderer that cannot (the software one) says so.
+    let mut soft = Context::new(Box::new(SoftBackend::new(Box::new(StdWorkers(1)))), Config::default());
+    let rb = soft.gen_renderbuffer();
+    soft.bind_renderbuffer(gl::RENDERBUFFER, rb);
+    soft.renderbuffer_storage_external(gl::RENDERBUFFER, gl::RGB8, w, h, &memory);
+    assert_eq!(soft.get_error(), gl::INVALID_OPERATION);
+    // Veda's renderer draws into it (a display's picture).
+    if !on_softpipe() {
+        std::println!("skipped: only Veda's renderer (VGL_TEST_BACKEND=gallium) draws into memory it is given");
+        return;
+    }
+    let mut c = virgl_context(Config { width: 1, height: 1, ..Config::default() }).unwrap();
+    let rb = c.gen_renderbuffer();
+    c.bind_renderbuffer(gl::RENDERBUFFER, rb);
+    c.renderbuffer_storage_external(gl::RENDERBUFFER, gl::RGB8, w, h, &memory);
+    no_error(&mut c);
+    let f = c.gen_framebuffer();
+    c.bind_framebuffer(gl::FRAMEBUFFER, f);
+    c.framebuffer_renderbuffer(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::RENDERBUFFER, rb);
+    assert_eq!(c.check_framebuffer_status(gl::FRAMEBUFFER), gl::FRAMEBUFFER_COMPLETE);
+    // Blue everywhere, red in the window's row 0, green drawn over the
+    // right half.
+    c.viewport(0, 0, w, h);
+    c.clear_color(0.0, 0.0, 1.0, 1.0);
+    c.clear(gl::COLOR_BUFFER_BIT);
+    c.enable(gl::SCISSOR_TEST);
+    c.scissor(0, 0, w, 1);
+    c.clear_color(1.0, 0.0, 0.0, 1.0);
+    c.clear(gl::COLOR_BUFFER_BIT);
+    c.disable(gl::SCISSOR_TEST);
+    full(&mut c, "#version 300 es\nprecision mediump float; out vec4 o; void main() { o = vec4(0.0, 1.0, 0.0, 1.0); }");
+    c.viewport(w / 2, 0, w / 2, h);
+    c.draw_arrays(gl::TRIANGLES, 0, 6);
+    c.finish();
+    no_error(&mut c);
+    drop(c);
+    // In the memory, as a display reads it (0xXXRRGGBB): the window's row 0
+    // is the first row, and nothing is written beyond the rows' pixels.
+    for y in 0..h as usize {
+        for x in 0..stride {
+            let px = picture[y * stride + x];
+            if x >= w as usize {
+                assert_eq!(px, 0xDEAD_BEEF, "({x}, {y}) is past the row");
+                continue;
+            }
+            let want = if x >= w as usize / 2 {
+                0x00FF00
+            } else if y == 0 {
+                0xFF0000
+            } else {
+                0x0000FF
+            };
+            assert_eq!(px & 0xFF_FFFF, want, "({x}, {y}): {px:#010x}");
+        }
+    }
+}

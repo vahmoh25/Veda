@@ -13,17 +13,23 @@
 //! Until then windows are composed as usual into the back buffer, but the
 //! screen shows the splash layer, redrawn where it moves. During the
 //! dissolve every frame mixes the splash layer with the composed screen.
+//! Where the GPU composes (`gpu`), it draws the splash itself, from the
+//! same look: the gradient, the light and the ring in a shader, the words
+//! as textures, over the desktop as it comes in.
 //! A compositor restarted after a crash shows the desktop straight away:
 //! init asks for the sequence (`splash`) only when the system starts.
 
 use alloc::vec::Vec;
 use core::f32::consts::PI;
 
+use alloc::string::String;
+
 use vgfx::{Bitmap, Canvas, Color, Rect, Text};
 use vmath::FloatExt;
 use vrt::println;
 use vsplash::Ring;
 
+use crate::gpu::{Gpu, Slot, Splash};
 use crate::screen::Screen;
 
 const MS: u64 = 1_000_000;
@@ -91,6 +97,20 @@ fn ease_in(p: f32) -> f32 {
 
 fn ease_in_out(p: f32) -> f32 {
     if p < 0.5 { 4.0 * p * p * p } else { 1.0 - (2.0 - 2.0 * p).powi(3) / 2.0 }
+}
+
+/// `r` without `hole` (inside it, or empty): up to four rectangles, those
+/// above and below it across `r`, and those beside it.
+fn outside(r: Rect, hole: Rect) -> [Rect; 4] {
+    if hole.is_empty() {
+        return [r, Rect::default(), Rect::default(), Rect::default()];
+    }
+    [
+        Rect::new(r.x, r.y, r.w, hole.y - r.y),
+        Rect::new(r.x, hole.bottom(), r.w, r.bottom() - hole.bottom()),
+        Rect::new(r.x, hole.y, hole.x - r.x, hole.h),
+        Rect::new(hole.right(), hole.y, r.right() - hole.right(), hole.h),
+    ]
 }
 
 /// How far `t` is through its cycle of `period`, 0 to 1.
@@ -164,6 +184,8 @@ pub(crate) struct Startup {
     around: Rect,
     distance: Vec<u16>,
     direction: Vec<u8>,
+    /// The ring at rest: its coverage of each pixel of the box (of 256).
+    rest: Vec<u16>,
     name: Option<Words>,
     tagline: Option<Words>,
     /// What the animation redraws.
@@ -186,12 +208,14 @@ impl Startup {
         let around = Rect::new(cx as i32 - reach, cy as i32 - reach, 2 * reach, 2 * reach).intersect(&screen);
         let mut distance = Vec::with_capacity((around.w * around.h) as usize);
         let mut direction = Vec::with_capacity((around.w * around.h) as usize);
+        let mut rest = Vec::with_capacity((around.w * around.h) as usize);
         for y in around.y..around.bottom() {
             for x in around.x..around.right() {
                 let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
                 distance.push(((dx * dx + dy * dy).sqrt() * 4.0).min(65_535.0) as u16);
                 let turn = dx.atan2(-dy) / (2.0 * PI);
                 direction.push(((turn + 1.0) * 256.0) as i32 as u8);
+                rest.push(ring.coverage(x, y) as u16);
             }
         }
 
@@ -220,6 +244,7 @@ impl Startup {
             around,
             distance,
             direction,
+            rest,
             name,
             tagline,
             region: region.intersect(&screen),
@@ -233,10 +258,11 @@ impl Startup {
         &self.layer
     }
 
-    /// Draws the sequence's next frame on the screen; `ready`: the desktop
-    /// has drawn itself. False once the sequence is over: the composed
-    /// screen is to be shown as it is from then on.
-    pub(crate) fn frame(&mut self, screen: &mut Screen, now: u64, ready: bool) -> bool {
+    /// The sequence at `now` (`ready`: the desktop has drawn itself): how
+    /// the splash looks, and how far the desktop has come in (0 to 1).
+    /// `None` once it is over (logged, with `how` frames were made): the
+    /// composed screen is to be shown as it is from then on.
+    fn advance(&mut self, now: u64, ready: bool, how: &dyn Fn() -> String) -> Option<(Look, f32)> {
         let t = now.saturating_sub(self.started);
         if matches!(self.phase, Phase::Splash) && ((ready && t >= MIN_SPLASH) || t >= MAX_SPLASH) {
             if !ready {
@@ -244,8 +270,8 @@ impl Startup {
             }
             self.phase = Phase::Reveal(now);
         }
-        let (look, desktop) = match self.phase {
-            Phase::Splash => (self.splash(t), 0.0),
+        match self.phase {
+            Phase::Splash => Some((self.splash(t), 0.0)),
             Phase::Reveal(start) => {
                 let r = now - start;
                 if r >= REVEAL {
@@ -254,13 +280,31 @@ impl Startup {
                         t / MS,
                         self.frames,
                         self.frames as u64 * 1_000_000_000 / t.max(1),
-                        screen.describe()
+                        how()
                     );
-                    return false;
+                    return None;
                 }
-                (self.reveal(t, r), ease_in_out(progress(r, DESKTOP_IN)))
+                Some((self.reveal(t, r), ease_in_out(progress(r, DESKTOP_IN))))
             }
-        };
+        }
+    }
+
+    /// Whether the desktop is coming in: frames show it (under the splash),
+    /// all of the screen at a time.
+    pub(crate) fn revealing(&self) -> bool {
+        matches!(self.phase, Phase::Reveal(_))
+    }
+
+    /// What the splash redraws while the desktop is not coming in.
+    pub(crate) fn region(&self) -> Rect {
+        self.region
+    }
+
+    /// Draws the sequence's next frame on the screen; `ready`: the desktop
+    /// has drawn itself. False once the sequence is over: the composed
+    /// screen is to be shown as it is from then on.
+    pub(crate) fn frame(&mut self, screen: &mut Screen, now: u64, ready: bool, how: &dyn Fn() -> String) -> bool {
+        let Some((look, desktop)) = self.advance(now, ready, how) else { return false };
         self.paint(&look);
         let alpha = (desktop * 256.0) as u32;
         if alpha == 0 {
@@ -268,6 +312,57 @@ impl Startup {
         } else {
             let all = screen.rect();
             screen.flush_mixed(&self.layer, alpha, all);
+        }
+        self.frames += 1;
+        true
+    }
+
+    /// Draws the sequence's next frame with the GPU, within `clip`: the
+    /// splash, over the desktop the caller drew while it comes in. As
+    /// [`Startup::frame`] otherwise.
+    pub(crate) fn frame_gpu(
+        &mut self,
+        g: &mut Gpu,
+        clip: Rect,
+        now: u64,
+        ready: bool,
+        how: &dyn Fn() -> String,
+    ) -> bool {
+        let Some((look, desktop)) = self.advance(now, ready, how) else { return false };
+        let ring = self.ring.scaled((look.scale * 256.0) as i32, 256);
+        let above = 1.0 - desktop;
+        let splash = Splash {
+            top: vsplash::TOP,
+            bottom: vsplash::BOTTOM,
+            centre: (ring.cx as f32 / 16.0, ring.cy as f32 / 16.0),
+            outer: ring.outer as f32 / 16.0,
+            inner: ring.inner as f32 / 16.0,
+            ring: look.ring,
+            strength: look.glow * GLOW_PEAK,
+            glow: GLOW,
+            glint: look.glint,
+            opacity: above,
+        };
+        // Where the light reaches, the gradient, the light and the ring; the
+        // gradient alone everywhere else (each pixel drawn once: as the
+        // splash dissolves, it is mixed with the desktop once).
+        let screen = Rect::new(0, 0, self.layer.width, self.layer.height).intersect(&clip);
+        let lit = self.around.intersect(&screen);
+        for r in outside(screen, lit) {
+            g.splash_rows(r, &splash);
+        }
+        g.splash(lit, &splash);
+        for (i, (words, (opacity, dy))) in
+            [(&self.name, look.name), (&self.tagline, look.tagline)].into_iter().enumerate()
+        {
+            let Some(words) = words else { continue };
+            let slot = Slot::Words(i as u8);
+            let t = match g.cached(slot, 1) {
+                Some(t) => t,
+                None => g.upload(slot, 1, &words.bitmap),
+            };
+            let at = words.rect().translate(0, dy.round() as i32);
+            g.image(t, Rect::new(0, 0, t.w, t.h), at, opacity * above, false, None);
         }
         self.frames += 1;
         true
@@ -334,6 +429,8 @@ impl Startup {
             *g = (256.0 * (1.0 + GLINT * ((1.0 + away.cos()) / 2.0).powi(GLINT_POWER))) as u16;
         }
         let ring_alpha = (look.ring * 256.0) as u32;
+        // The ring changes size only as it dissolves.
+        let at_rest = ring == self.ring;
         let around = self.around;
         let region = self.region;
         for y in region.y..region.bottom() {
@@ -350,7 +447,8 @@ impl Startup {
                 let i = lut + (x - around.x) as usize;
                 let lit = (light[self.distance[i] as usize] as u32 * glint[self.direction[i] as usize] as u32) >> 8;
                 let mut c = if lit > 0 { vsplash::mix(row, GLOW, lit.min(256)) } else { row };
-                let cover = (ring.coverage(x, y) * ring_alpha) >> 8;
+                let ring_cover = if at_rest { u32::from(self.rest[i]) } else { ring.coverage(x, y) };
+                let cover = (ring_cover * ring_alpha) >> 8;
                 if cover > 0 {
                     c = vsplash::mix(c, vsplash::RING, cover);
                 }

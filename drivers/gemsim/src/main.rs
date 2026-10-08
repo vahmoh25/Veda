@@ -98,6 +98,11 @@ impl vgem::Driver for Sim {
         Ok((Memory { _vmo: vmo, size }, theirs))
     }
 
+    fn import(&mut self, memory: Vmo) -> Result<(Memory, u64), GemError> {
+        let size = memory.size().map_err(|_| GemError::Invalid)? as u64;
+        Ok((Memory { _vmo: memory, size }, size))
+    }
+
     fn timestamp(&mut self) -> u64 {
         // The clock's ticks since boot.
         (u128::from(vrt::time::now_ns()) * u128::from(TIMESTAMP_HZ) / 1_000_000_000) as u64

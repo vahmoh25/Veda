@@ -33,7 +33,14 @@ that communicate over kernel channels.
    GOP graphics mode, paints the splash screen (`vsplash`), loads the
    kernel's PE sections, builds page tables (identity map, direct map at
    `0xFFFF800000000000`, kernel at `0xFFFFFFFF80000000`), exits boot services
-   and jumps to the kernel with a `bootinfo::BootInfo`.
+   and jumps to the kernel with a `bootinfo::BootInfo`. Firmware usually
+   leaves its framebuffer uncached, where every write is a bus transaction
+   of its own and a PC's screen shows the picture being painted from the
+   top down; so the loader paints through page tables of its own that map
+   the framebuffer write-combining by its page attributes (which the
+   firmware's MTRRs cannot overrule), and the picture is there at once.
+   The kernel logs how it went (`boot: the loader painted its splash in
+   ...`).
 3. The kernel initialises memory, ACPI, APICs, timers and the other CPUs, then
    starts `bin/init.exe` from the initrd (the only program it loads itself).
 4. `init` starts the system services and the desktop shell, then supervises
@@ -319,11 +326,29 @@ driver.
   compositor answers `FrameDone` once the previous buffer is no longer
   needed, which paces every client to the display without copying pixels.
 * **Composition** is damage driven: changed rectangles are recomposed from
-  the bottom up into a back buffer (premultiplied alpha, shadows,
-  open/close/minimise animations) and copied to the screen, at most once
-  per display frame. At system start the screen shows the startup
-  sequence instead (see [Boot](#boot)) until the desktop has drawn itself
-  and dissolved in.
+  the bottom up (premultiplied alpha, shadows, rounded corners,
+  open/close/minimise animations), at most once per display frame. At
+  system start the screen shows the startup sequence instead (see
+  [Boot](#boot)) until the desktop has drawn itself and dissolved in.
+* **On the GPU** (`gpu.rs`). Where a display flips and the GPU can draw
+  into its pictures (on a PC with Intel graphics: `intel-gpu` and the
+  renderer on iris), the GPU composes every frame with OpenGL ES (`vgl`),
+  straight into the picture the display shows next, as modern window
+  systems do. Each window is a texture, brought up to date where its
+  client drew; shadows, borders, rounded corners and the startup
+  sequence's gradient, light and ring are shaders, from the formulas the
+  processor draws with; title bars, cursors, the switcher and the
+  sequence's words are drawn once by the processor into textures. What a
+  picture lacks of the screen is copied from the one that shows it, and a
+  picture is asked for once the GPU's fence after its frame has
+  signaled. The GPU is set up in a thread of its own once a driver
+  attaches (the screen keeps moving meanwhile), then checked: the
+  processor reads back what the GPU drew into a picture. If that fails,
+  or the GPU later takes two seconds over a frame, frames are composed by
+  the processor again (`compositor: frames are drawn by ...` says which).
+* **On the processor** frames are composed into a back buffer and copied
+  to the screen: in a virtual machine, or wherever the GPU cannot draw
+  into the display's pictures.
 * **The screen** (`screen.rs`). Frames go into the framebuffer the
   firmware left, written in place and paced by a 60 Hz timer, until a
   display driver that can flip attaches (`displaydev`; see
@@ -557,6 +582,15 @@ simulated with transform feedback.
   (`VR_DEPTH_LOW=1` makes it do so on softpipe too, for the host's tests).
   When a context is destroyed it unbinds the views it bound on the driver
   first: softpipe cannot be destroyed with views bound.
+  It also draws into memory it is given (`gpu::import`): a display's
+  picture, which the compositor makes a render target of
+  (`renderbuffer_storage_external`, as `glEGLImageTargetRenderbufferStorageOES`
+  makes one of a display's buffer). On iris the memory becomes a dma-buf
+  (`veda_dmabuf_fd`), which iris imports as Linux's would, linear, through
+  the render node (`PRIME_FD_TO_HANDLE`, then `gem::import`); softpipe
+  draws into it as the renderer maps it, through a window system of the
+  renderer's own (`device.c`). The virtio-gpu driver cannot (its host
+  draws into memory of its own).
 
 * **iris** reaches the GPU as on Linux, through i915's render node,
   `/dev/dri/renderD128`, which the POSIX layer carries out
@@ -595,6 +629,10 @@ simulated with transform feedback.
   submission still running after 4 s is lost, its engine reset and its
   context banned, as i915 does; Mesa makes another. The GT runs at its
   highest frequency while it has work and at its lowest once idle.
+  Memory a client imports (the display's pictures, which the compositor
+  has the GPU draw into) is mapped uncached, as i915 maps what the display
+  engine scans out: the display engine does not look in the last-level
+  cache, and iris draws into imported buffers uncached too.
   devmgr starts the renderer on iris beside `intel-gpu` (it waits for
   `gem` a while, and leaves if the engines do not come up). The host
   tests drive all of it against a model of the GT (`lib/boardsim`: page
@@ -805,7 +843,8 @@ policy, the wake word) are in `vagent`, tested on the host. See
   and after a window came and went, in both of its pictures;
   `flips-driver-gone.vts` has that driver go away during the startup
   sequence, and `flips-restart.vts` the window system restart while it is
-  attached.
+  attached. `flips-gpu.vts` has the GPU compose: the renderer on softpipe
+  draws every frame into `flipsim`'s pictures, slowly, under emulation.
 * The agent's scripts (`tests/agent/*.vts`) with a stand-in for Deepgram on
   the host and a test microphone fed from the host; `tests/real/` talks to
   the real Deepgram.

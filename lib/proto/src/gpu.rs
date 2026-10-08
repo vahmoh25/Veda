@@ -18,6 +18,10 @@
 //!   driver updates (and signals the session's event) as fences signal.
 //!   Waiting for a fence needs no call: wait for the event until the word
 //!   reaches it.
+//!
+//! The renderer (`services/renderer`) serves the protocol too, on a PC's
+//! own GPU, and can render into memory it is given ([`gpu::import`]): the
+//! display's pictures, into which the compositor draws its frames.
 
 use alloc::string::String;
 use vipc::{Bytes, enumeration, message, protocol};
@@ -106,5 +110,12 @@ protocol! {
         /// Queues a fence after everything submitted. Replies at once with
         /// its number; it signals when the GPU has done that work.
         5 => fn fence() -> Result<u64, GpuError>;
+        /// Creates a 2D render target (`spec`: one level, single sampled,
+        /// a format of 32-bit pixels) whose storage is `memory`, rows
+        /// `stride` bytes apart: a display's picture, which the GPU renders
+        /// into in place (the compositor draws its frames so). Once a fence
+        /// after the drawing has signaled, the memory holds what was drawn.
+        /// Returns its handle; `Unavailable` if the GPU cannot.
+        6 => fn import(spec: ResourceSpec, stride: u32, memory: Vmo) -> Result<u32, GpuError>;
     }
 }

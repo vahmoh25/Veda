@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <veda/ipc.h>
 
@@ -44,8 +45,18 @@ static const char *service = SERVICE;
 #define OPEN_RETRY_NS 10000000l
 
 /* `gpu` methods and errors. */
-enum { OPEN = 1, CREATE = 2, DESTROY = 3, SUBMIT = 4, FENCE = 5 };
+enum { OPEN = 1, CREATE = 2, DESTROY = 3, SUBMIT = 4, FENCE = 5, IMPORT = 6 };
 enum { E_UNAVAILABLE = 1, E_NO_MEMORY = 2, E_INVALID = 3, E_STATE = 4 };
+/* Memory from outside a client may have the device render into at once
+ * (a display's pictures). */
+#define MAX_IMPORTS 4
+
+/* Memory from outside, mapped for softpipe (VR_IMPORT_MEMORY) for as long
+ * as the session lasts. */
+struct import {
+   void *map;
+   size_t size;
+};
 
 struct client {
    veda_handle_t channel;
@@ -55,6 +66,8 @@ struct client {
    size_t size;
    /* The last fence queued, and the last written to the fence word. */
    uint64_t queued, signaled;
+   struct import imports[MAX_IMPORTS];
+   unsigned num_imports;
 };
 
 static struct vr_device *device;
@@ -167,6 +180,10 @@ close_session(struct client *c)
 {
    if (c->ctx)
       vr_context_destroy(c->ctx);
+   /* Once the context's resources are gone. */
+   for (unsigned i = 0; i < c->num_imports; i++)
+      veda_vmo_unmap(c->imports[i].map, c->imports[i].size);
+   c->num_imports = 0;
    if (c->map)
       veda_vmo_unmap(c->map, c->size);
    if (c->memory)
@@ -258,6 +275,55 @@ create_resource(struct client *c, struct reader *r, struct writer *w)
    put_u32(w, id);
 }
 
+/* `import`: a render target of memory the client gives (a display's
+ * picture). `memory` is the handle the request carried, which this takes. */
+static void
+import_resource(struct client *c, struct reader *r, struct writer *w, veda_handle_t memory)
+{
+   struct vr_resource_args a;
+   uint32_t *f = (uint32_t *)&a;
+   for (unsigned i = 0; i < sizeof(a) / 4; i++)
+      f[i] = get_u32(r);
+   uint32_t stride = get_u32(r);
+   uint32_t index = get_u32(r);
+   int e = r->bad || index != 0 || !memory ? VR_INVALID : !c->ctx ? -100 : VR_OK;
+   uint32_t id = 0;
+   enum vr_import kind = c->ctx ? vr_device_import(device) : VR_IMPORT_NONE;
+   if (e == VR_OK && kind == VR_IMPORT_NONE)
+      e = -101;
+   if (e == VR_OK && kind == VR_IMPORT_FD) {
+      /* The GPU's driver takes the memory through the render node, as a
+       * dma-buf; what the device keeps of it outlives the descriptor. */
+      int fd = veda_dmabuf_fd(memory);
+      memory = 0;
+      e = fd < 0 ? VR_NO_MEMORY : vr_resource_import(c->ctx, &a, fd, NULL, stride, &id);
+      if (fd >= 0)
+         close(fd);
+   } else if (e == VR_OK) {
+      /* softpipe draws into it as this process maps it. */
+      size_t size = ((size_t)stride * a.height + 4095) & ~(size_t)4095;
+      void *map = NULL;
+      if (c->num_imports == MAX_IMPORTS || (uint64_t)stride * a.height > (1ull << 30) ||
+          veda_vmo_map(memory, 0, size, VEDA_MAP_READ | VEDA_MAP_WRITE, &map) < 0) {
+         e = VR_NO_MEMORY;
+      } else {
+         c->imports[c->num_imports++] = (struct import){map, size};
+         e = vr_resource_import(c->ctx, &a, -1, map, stride, &id);
+      }
+   }
+   if (memory)
+      veda_close(memory);
+   if (e) {
+      put_u8(w, 1);
+      put_u32(w, e == -100 ? E_STATE : e == -101 ? E_UNAVAILABLE : error_of(e));
+      if (e != -100 && e != -101 && c->ctx)
+         fprintf(stderr, "memory to render into refused: %s\n", vr_context_error(c->ctx));
+      return;
+   }
+   put_u8(w, 0);
+   put_u32(w, id);
+}
+
 static void
 submit(struct client *c, struct reader *r, struct writer *w)
 {
@@ -297,17 +363,27 @@ fence(struct client *c, struct writer *w)
    publish_fences(c);
 }
 
-/* Carries out one request; returns 0 if the client is to be dropped. */
+/* Carries out one request, which came with `count` handles (only `import`
+ * takes one; the rest are closed); returns 0 if the client is to be
+ * dropped. */
 static int
-serve(struct client *c, const uint8_t *msg, size_t len)
+serve(struct client *c, const uint8_t *msg, size_t len, veda_handle_t *handles, size_t count)
 {
    struct reader r = {msg + VEDA_MSG_HEADER, len >= VEDA_MSG_HEADER ? len - VEDA_MSG_HEADER : 0, 0};
    uint32_t head[3] = {0};
-   if (len < VEDA_MSG_HEADER)
+   memcpy(head, msg, len >= sizeof(head) ? sizeof(head) : 0);
+   veda_handle_t given = 0;
+   if (head[0] == IMPORT && count == 1) {
+      given = handles[0];
+      count = 0;
+   }
+   for (size_t i = 0; i < count; i++)
+      veda_close(handles[i]);
+   if (len < VEDA_MSG_HEADER || head[2] != VEDA_MSG_REQUEST) {
+      if (given)
+         veda_close(given);
       return 0;
-   memcpy(head, msg, sizeof(head));
-   if (head[2] != VEDA_MSG_REQUEST)
-      return 0;
+   }
    static struct writer w;
    w.len = w.count = 0;
    put_u32(&w, head[0]);
@@ -319,6 +395,9 @@ serve(struct client *c, const uint8_t *msg, size_t len)
       break;
    case CREATE:
       create_resource(c, &r, &w);
+      break;
+   case IMPORT:
+      import_resource(c, &r, &w, given);
       break;
    case DESTROY: {
       uint32_t id = get_u32(&r);
@@ -361,10 +440,7 @@ read_client(struct client *c)
          return 1;
       if (r < 0)
          return 0;
-      /* No request of `gpu` carries handles. */
-      for (size_t i = 0; i < count; i++)
-         veda_close(handles[i]);
-      if (!serve(c, msg, len))
+      if (!serve(c, msg, len, handles, count))
          return 0;
    }
 }

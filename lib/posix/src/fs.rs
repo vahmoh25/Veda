@@ -123,6 +123,10 @@ pub fn stat_desc(desc: &Description) -> Result<linux::Stat, isize> {
         Object::Stream(s) => pseudo(linux::mode::IFIFO | 0o600, s.koid),
         Object::Null | Object::Log => pseudo(linux::mode::IFCHR | 0o666, 0),
         Object::Drm(_) => linux::Stat { rdev: drm::RDEV, ..pseudo(linux::mode::IFCHR | 0o666, 0) },
+        Object::Dmabuf(vmo) => linux::Stat {
+            size: vmo.size().map_err(crate::error::kernel)? as i64,
+            ..pseudo(linux::mode::IFREG | 0o600, vmo.0.koid())
+        },
     })
 }
 

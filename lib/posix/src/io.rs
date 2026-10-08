@@ -26,7 +26,7 @@ fn read_desc(desc: &Description, buf: &mut [u8], offset: Option<u64>) -> SysResu
         (Object::Dir(_), _) => Err(EISDIR),
         (Object::Null | Object::Log, None) => Ok(0),
         // No events to read (Linux's are for displays).
-        (Object::Drm(_), _) => Err(EINVAL),
+        (Object::Drm(_) | Object::Dmabuf(_), _) => Err(EINVAL),
     }
 }
 
@@ -46,7 +46,7 @@ fn write_desc(desc: &Description, data: &[u8], offset: Option<u64>) -> SysResult
             vrt::sys::debug_write(data);
             Ok(data.len())
         }
-        (Object::Drm(_), _) => Err(EINVAL),
+        (Object::Drm(_) | Object::Dmabuf(_), _) => Err(EINVAL),
     }
 }
 
@@ -188,6 +188,11 @@ pub fn lseek(fd: i32, offset: i64, whence: u32) -> SysResult {
         Object::Dir(d) => d.seek(offset, whence).map(|o| o as usize),
         Object::Stream(_) => Err(ESPIPE),
         Object::Null | Object::Log | Object::Drm(_) => Ok(0),
+        // Its size, from the end (how Mesa learns it), as Linux has it.
+        Object::Dmabuf(vmo) => match whence {
+            linux::seek::END => Ok(vmo.size().map_err(error::kernel)?),
+            _ => Ok(0),
+        },
     }
 }
 

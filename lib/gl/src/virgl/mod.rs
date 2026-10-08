@@ -1004,6 +1004,32 @@ impl Backend for VirglBackend {
         self.destroy(id);
     }
 
+    fn import_resource(&mut self, desc: &ResourceDesc, memory: &External) -> Result<ResourceId, OutOfMemory> {
+        let plain = desc.target == Target::Renderbuffer && desc.samples == 0 && desc.depth == 1 && desc.levels == 1;
+        if !plain || desc.format != Format::Rgbx8Unorm {
+            return Err(OutOfMemory);
+        }
+        // Kept in the memory's own order, which the host renders.
+        let virgl = if memory.bgr { format::B8G8R8X8_UNORM } else { format::R8G8B8X8_UNORM };
+        let args = ResourceArgs {
+            target: TARGET_2D,
+            format: virgl,
+            bind: BIND_RENDER_TARGET | BIND_SAMPLER_VIEW,
+            width: desc.width,
+            height: desc.height,
+            depth: 1,
+            array_size: 1,
+            ..Default::default()
+        };
+        let handle = self.t.import_resource(&args, memory)?;
+        let host = formats::HostFormat { virgl, layout: None, swizzle: [0, 1, 2, 3], renderable: true };
+        self.resources.insert(
+            handle,
+            Res { desc: *desc, host: Some(host), views: Vec::new(), surfaces: Vec::new(), shadow: None },
+        );
+        Ok(handle)
+    }
+
     fn write(&mut self, id: ResourceId, level: u32, region: Region, data: &[u8], row_pitch: usize, image_pitch: usize) {
         match self.resources.get(&id).map(|r| r.desc.target) {
             Some(Target::Buffer) => self.write_buffer(id, region.x as usize, &data[..region.w as usize]),

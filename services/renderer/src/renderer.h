@@ -76,6 +76,27 @@ VR_API int vr_resource_create(struct vr_context *ctx, const struct vr_resource_a
                               uint64_t backing_offset, uint64_t backing_len, uint32_t *id);
 VR_API void vr_resource_destroy(struct vr_context *ctx, uint32_t id);
 
+/* How a device takes memory from outside to render into
+ * (vr_resource_import): none, a dma-buf's file descriptor (a GPU's), or
+ * the memory's address in this process (softpipe). */
+enum vr_import {
+   VR_IMPORT_NONE = 0,
+   VR_IMPORT_FD = 1,
+   VR_IMPORT_MEMORY = 2,
+};
+VR_API enum vr_import vr_device_import(struct vr_device *dev);
+
+/* Creates a 2D render target (`args`: one level, single sampled, a format
+ * of 32-bit pixels) whose storage is memory from outside, rows `stride`
+ * bytes apart: a display's picture, which the device renders into in
+ * place. It is the dma-buf `fd` (VR_IMPORT_FD: the device takes what it
+ * needs of it, and the caller closes it) or `memory` (VR_IMPORT_MEMORY:
+ * mapped by the caller for as long as the context lives). Once a fence
+ * after the drawing has signaled, the memory holds what was drawn. Its
+ * handle goes to `*id`. */
+VR_API int vr_resource_import(struct vr_context *ctx, const struct vr_resource_args *args, int fd, void *memory,
+                              uint32_t stride, uint32_t *id);
+
 /* Carries out `count` words of commands. When it returns, what transfers
  * read from the shared memory has been read and what they write there has
  * been written (the GPU may still be working on the rest). */

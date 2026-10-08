@@ -1,14 +1,29 @@
-//! Drawing of window decorations, client surfaces and the mouse cursor.
+//! Drawing of window decorations, client surfaces and the mouse cursor:
+//! by the processor into a canvas, or by the GPU (`gpu`), which draws the
+//! same shapes from the same formulas and takes what is text or a drawing
+//! (title bars, cursors, the switcher) from bitmaps drawn here.
 
 use alloc::vec::Vec;
 
 use vgfx::color::{over, scale};
 use vgfx::{Bitmap, Canvas, Color, FillRule, Path, Rect, ShadowTemplate, StrokeStyle, Text};
 use vmath::FloatExt;
-use vproto::display::Cursor;
+use vproto::display::{Cursor, WindowKind, WindowState};
 
+use crate::gpu::{Gpu, Slot, Texture, rgba};
 use crate::switcher::Switcher;
 use crate::window::{CORNER_RADIUS, Part, TITLE_HEIGHT, Window};
+
+/// Decorated windows' shadows: blurred this far around their frame, which
+/// they are below by this much.
+const SHADOW_BLUR: i32 = 22;
+const SHADOW_DROP: i32 = 6;
+/// Popups' and notifications' shadows: their corners' radius, the blur,
+/// how far below, and their colour.
+const POPUP_RADIUS: i32 = 12;
+const POPUP_BLUR: i32 = 18;
+const POPUP_DROP: i32 = 8;
+const POPUP_SHADOW: Color = Color::rgba(0, 0, 0, 120);
 
 /// Visual theme of the window system (dark).
 pub mod theme {
@@ -50,8 +65,8 @@ pub struct DecorState {
 impl Decor {
     pub fn new(text: Text, title_font: usize) -> Decor {
         Decor {
-            shadow: ShadowTemplate::new(CORNER_RADIUS, 22),
-            popup_shadow: ShadowTemplate::new(12, 18),
+            shadow: ShadowTemplate::new(CORNER_RADIUS, SHADOW_BLUR),
+            popup_shadow: ShadowTemplate::new(POPUP_RADIUS, POPUP_BLUR),
             text,
             title_font,
             cursors: build_cursors(),
@@ -72,37 +87,123 @@ impl Decor {
         let frame = w.frame().translate(0, dy);
         let client = w.client_rect.translate(0, dy);
         match w.kind {
-            vproto::display::WindowKind::Normal if w.decorated() => {
-                let maximized = w.state == vproto::display::WindowState::Maximized;
+            WindowKind::Normal if w.decorated() => {
+                let maximized = w.state == WindowState::Maximized;
                 let radius = if maximized { 0 } else { CORNER_RADIUS };
                 if !maximized {
                     let sc = if focused { theme::SHADOW } else { theme::SHADOW_INACTIVE };
-                    self.shadow.draw(c, frame.translate(0, 6), sc.fade(opacity), op < 255);
+                    self.shadow.draw(c, frame.translate(0, SHADOW_DROP), sc.fade(opacity), op < 255);
                 }
-                // Title bar with rounded top corners.
-                let tc = if focused { theme::TITLE_ACTIVE } else { theme::TITLE_INACTIVE };
                 let title = Rect::new(frame.x, frame.y, frame.w, TITLE_HEIGHT);
-                c.save();
-                c.clip_to(title);
-                c.fill_rounded_rect(
-                    Rect::new(frame.x, frame.y, frame.w, TITLE_HEIGHT + radius * 2),
-                    radius as f32,
-                    tc.fade(opacity),
-                );
-                c.restore();
+                self.draw_title_bar(c, w, title, focused, st, opacity);
                 self.draw_client(c, w, client, op, radius);
-                self.draw_title_content(c, w, title, focused, st, opacity);
                 if !maximized {
                     let bc = if focused { theme::BORDER } else { theme::BORDER_INACTIVE };
                     c.stroke_rounded_rect(frame, radius as f32, 1.0, bc.fade(opacity));
                 }
             }
-            vproto::display::WindowKind::Popup | vproto::display::WindowKind::Notification => {
-                self.popup_shadow.draw(c, frame.translate(0, 8), Color::rgba(0, 0, 0, 120).fade(opacity), true);
+            WindowKind::Popup | WindowKind::Notification => {
+                self.popup_shadow.draw(c, frame.translate(0, POPUP_DROP), POPUP_SHADOW.fade(opacity), true);
                 self.draw_client(c, w, client, op, 0);
             }
             _ => self.draw_client(c, w, client, op, 0),
         }
+    }
+
+    /// A decorated window's title bar in `title`: its background, rounded
+    /// at the top unless the window is maximised, its title and buttons.
+    fn draw_title_bar(&mut self, c: &mut Canvas, w: &Window, title: Rect, focused: bool, st: DecorState, opacity: f32) {
+        let radius = if w.state == WindowState::Maximized { 0 } else { CORNER_RADIUS };
+        let tc = if focused { theme::TITLE_ACTIVE } else { theme::TITLE_INACTIVE };
+        c.save();
+        c.clip_to(title);
+        c.fill_rounded_rect(
+            Rect::new(title.x, title.y, title.w, TITLE_HEIGHT + radius * 2),
+            radius as f32,
+            tc.fade(opacity),
+        );
+        c.restore();
+        self.draw_title_content(c, w, title, focused, st, opacity);
+    }
+
+    /// A decorated window's title bar alone, as [`Decor::draw_window`]
+    /// draws it (for the GPU's texture).
+    fn title_bitmap(&mut self, w: &Window, focused: bool, st: DecorState) -> Bitmap {
+        let f = w.frame();
+        let mut b = Bitmap::new(f.w.max(1), TITLE_HEIGHT);
+        let mut c = Canvas::for_bitmap(&mut b);
+        c.translate(-f.x, -f.y);
+        self.draw_title_bar(&mut c, w, Rect::new(f.x, f.y, f.w, TITLE_HEIGHT), focused, st, 1.0);
+        drop(c);
+        b
+    }
+
+    /// Draws a complete window with the GPU, as [`Decor::draw_window`]
+    /// does: its shadow and border by shaders, its title bar from a texture
+    /// drawn here (again when it changes), its client's pixels from
+    /// `content`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_window_gpu(
+        &mut self,
+        g: &mut Gpu,
+        w: &Window,
+        focused: bool,
+        st: DecorState,
+        opacity: f32,
+        dy: i32,
+        content: Option<Texture>,
+    ) {
+        let opacity = opacity.clamp(0.0, 1.0);
+        if (opacity * 255.0) as u32 == 0 {
+            return;
+        }
+        let frame = w.frame().translate(0, dy);
+        let client = w.client_rect.translate(0, dy);
+        match w.kind {
+            WindowKind::Normal if w.decorated() => {
+                let maximized = w.state == WindowState::Maximized;
+                let radius = if maximized { 0 } else { CORNER_RADIUS };
+                if !maximized {
+                    let sc = if focused { theme::SHADOW } else { theme::SHADOW_INACTIVE };
+                    let r = frame.translate(0, SHADOW_DROP);
+                    let hollow = (opacity * 255.0) as u32 >= 255;
+                    g.shadow(r, CORNER_RADIUS as f32, SHADOW_BLUR, rgba(sc.fade(opacity).premul()), hollow);
+                }
+                let key = title_key(w, focused, st);
+                let t = match g.cached(Slot::Title(w.id), key) {
+                    Some(t) => t,
+                    None => {
+                        let b = self.title_bitmap(w, focused, st);
+                        g.upload(Slot::Title(w.id), key, &b)
+                    }
+                };
+                let title = Rect::new(frame.x, frame.y, frame.w, TITLE_HEIGHT);
+                g.image(t, Rect::new(0, 0, title.w, title.h), title, opacity, false, None);
+                draw_client_gpu(g, w, client, opacity, radius, content);
+                if !maximized {
+                    let bc = if focused { theme::BORDER } else { theme::BORDER_INACTIVE };
+                    g.stroke(frame, radius as f32, 1.0, rgba(bc.fade(opacity).premul()));
+                }
+            }
+            WindowKind::Popup | WindowKind::Notification => {
+                let r = frame.translate(0, POPUP_DROP);
+                g.shadow(r, POPUP_RADIUS as f32, POPUP_BLUR, rgba(POPUP_SHADOW.fade(opacity).premul()), false);
+                draw_client_gpu(g, w, client, opacity, 0, content);
+            }
+            _ => draw_client_gpu(g, w, client, opacity, 0, content),
+        }
+    }
+
+    /// The switcher alone, as [`Decor::draw_switcher`] draws it: a bitmap
+    /// of `s.bounds()` (for the GPU's texture).
+    pub fn switcher_bitmap(&mut self, s: &Switcher, titles: &[&str]) -> Bitmap {
+        let b = s.bounds();
+        let mut bitmap = Bitmap::new(b.w.max(1), b.h.max(1));
+        let mut c = Canvas::for_bitmap(&mut bitmap);
+        c.translate(-b.x, -b.y);
+        self.draw_switcher(&mut c, s, titles);
+        drop(c);
+        bitmap
     }
 
     /// Draws the Alt+Tab switcher overlay; `titles` are the window titles in
@@ -293,11 +394,62 @@ fn draw_button_glyph(c: &mut Canvas, part: Part, r: Rect, color: Color, maximize
     c.stroke_path(&p, &stroke, color);
 }
 
+/// Draws a window's client area with the GPU, as `Decor::draw_client`
+/// does: its pixels from `content`, the bottom corners rounded by `radius`,
+/// at `opacity`; where the client has not drawn (yet, or since it was made
+/// larger), the placeholder.
+fn draw_client_gpu(g: &mut Gpu, w: &Window, dst: Rect, opacity: f32, radius: i32, content: Option<Texture>) {
+    let background = rgba(theme::CLIENT_BACKGROUND.premul());
+    let (Some(buf), Some(_), Some(t)) = (&w.buffers, w.current, content) else {
+        if w.decorated() {
+            g.fill(dst, 0.0, background);
+        }
+        return;
+    };
+    if w.decorated() && (buf.width < dst.w || buf.height < dst.h) {
+        g.fill(Rect::new(dst.x + buf.width, dst.y, dst.w - buf.width, dst.h), 0.0, background);
+        g.fill(Rect::new(dst.x, dst.y + buf.height, buf.width.min(dst.w), dst.h - buf.height), 0.0, background);
+    }
+    let vis = dst.intersect(&Rect::new(dst.x, dst.y, buf.width, buf.height));
+    let round = (radius > 0).then_some((dst, radius as f32));
+    g.image(t, Rect::new(0, 0, vis.w, vis.h), vis, opacity, w.opaque(), round);
+}
+
+/// What a decorated window's title bar is drawn from: its texture is
+/// drawn again when this changes (never 0).
+fn title_key(w: &Window, focused: bool, st: DecorState) -> u64 {
+    let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+    let mut eat = |v: u64| h = (h ^ v).wrapping_mul(0x0000_0100_0000_01B3);
+    for b in w.title.bytes() {
+        eat(u64::from(b));
+    }
+    let part = |p: Option<(u32, Part)>| match p.filter(|(id, _)| *id == w.id).map(|(_, p)| p) {
+        None => 0,
+        Some(Part::Client) => 1,
+        Some(Part::Title) => 2,
+        Some(Part::Minimize) => 3,
+        Some(Part::Maximize) => 4,
+        Some(Part::Close) => 5,
+        Some(Part::Edge(..)) => 6,
+    };
+    eat(w.frame().w as u64);
+    eat(u64::from(focused) | u64::from(w.resizable) << 1 | u64::from(w.state == WindowState::Maximized) << 2);
+    eat(part(st.hover) | part(st.pressed) << 8);
+    h | 1
+}
+
 /// The translucent rectangle showing where a dragged window will snap.
 pub fn draw_snap_preview(c: &mut Canvas, r: Rect) {
     let r = r.inset(8, 8, 8, 8);
     c.fill_rounded_rect(r, 12.0, Color::rgba(91, 140, 255, 46));
     c.stroke_rounded_rect(r, 12.0, 2.0, Color::rgba(150, 185, 255, 170));
+}
+
+/// [`draw_snap_preview`] with the GPU.
+pub fn draw_snap_preview_gpu(g: &mut Gpu, r: Rect) {
+    let r = r.inset(8, 8, 8, 8);
+    g.fill(r, 12.0, rgba(Color::rgba(91, 140, 255, 46).premul()));
+    g.stroke(r, 12.0, 2.0, rgba(Color::rgba(150, 185, 255, 170).premul()));
 }
 
 /// Renders a cursor shape: white fill with a dark outline and a soft shadow.
@@ -403,4 +555,9 @@ fn build_cursors() -> Vec<(Cursor, Bitmap, i32, i32)> {
 /// Background shown where no desktop window covers the screen.
 pub fn draw_background(c: &mut Canvas, screen: Rect) {
     c.fill_vertical_gradient(screen, theme::DESKTOP_TOP, theme::DESKTOP_BOTTOM);
+}
+
+/// [`draw_background`] with the GPU.
+pub fn draw_background_gpu(g: &mut Gpu, screen: Rect) {
+    g.gradient(screen, rgba(theme::DESKTOP_TOP.premul()), rgba(theme::DESKTOP_BOTTOM.premul()));
 }

@@ -9,9 +9,11 @@
 //! * `displaydev` — a display driver hands over pictures it flips between
 //!   at the vertical blank (see `screen`).
 //!
-//! Rendering is damage driven: only regions that changed are recomposited
-//! into the back buffer and copied to the screen, at most once per display
-//! frame.
+//! Rendering is damage driven: only regions that changed are recomposited,
+//! at most once per display frame: by the GPU, straight into the picture
+//! the display shows next, where a driver flips and the GPU can draw into
+//! its pictures (`gpu`); otherwise by the processor into the back buffer,
+//! which is copied to the screen.
 
 #![no_std]
 #![no_main]
@@ -19,6 +21,7 @@
 extern crate alloc;
 
 mod decor;
+mod gpu;
 mod input;
 mod keymap;
 mod render;
@@ -165,6 +168,10 @@ fn main() -> i32 {
         snap: None,
         desktop_shown: Vec::new(),
         startup: None,
+        gpu: None,
+        gpu_ready: None,
+        gpu_setup: None,
+        gpu_tried: None,
     };
     // At system start (not after a restart), the boot splash comes to
     // life and dissolves into the desktop once it has drawn itself.
@@ -185,16 +192,29 @@ fn main() -> i32 {
     const INPUT_KEY: u64 = 2;
     const DRIVER_KEY: u64 = 3;
     const FLIP_DONE_KEY: u64 = 4;
+    const GPU_SETUP_KEY: u64 = 5;
+    const GPU_FENCE_KEY: u64 = 6;
     const INPUT_BASE: u64 = 1 << 40;
     const DRIVER_BASE: u64 = 1 << 41;
     loop {
         let now = vrt::time::now_ns();
         comp.screen.check(now);
+        // A driver that flips gives pictures the GPU may draw into: it is
+        // set up for them (once for each driver's).
+        if let Some(driver) = comp.screen.driver()
+            && comp.gpu_tried != Some(driver)
+        {
+            comp.gpu_tried = Some(driver);
+            comp.gpu_setup = comp.screen.pictures().and_then(gpu::Pending::start);
+        }
         let mut deadline = vabi::DEADLINE_INFINITE;
         if comp.wants_frame() {
             deadline = comp.screen.next_frame(comp.last_frame).max(now);
         }
         if let Some(t) = comp.screen.timeout() {
+            deadline = deadline.min(t);
+        }
+        if let Some(t) = comp.gpu_deadline() {
             deadline = deadline.min(t);
         }
         if let Some(r) = comp.keyboard.repeat_deadline() {
@@ -206,6 +226,14 @@ fn main() -> i32 {
         ws.add(driver_listener.raw(), signals::READABLE, DRIVER_KEY);
         if let Some(done) = comp.screen.done_event() {
             ws.add(done, signals::SIGNALED, FLIP_DONE_KEY);
+        }
+        if let Some(setup) = &comp.gpu_setup {
+            ws.add(setup.event(), signals::SIGNALED, GPU_SETUP_KEY);
+        }
+        if let Some(g) = &comp.gpu
+            && comp.screen.drawing().is_some()
+        {
+            ws.add(g.fence_event(), signals::SIGNALED, GPU_FENCE_KEY);
         }
         for (&k, (c, _)) in &drivers {
             ws.add(c.raw(), signals::READABLE | signals::PEER_CLOSED, DRIVER_BASE | k);
@@ -240,6 +268,16 @@ fn main() -> i32 {
                     }
                 }
                 FLIP_DONE_KEY => comp.screen.flip_done(),
+                GPU_SETUP_KEY => {
+                    if let Some(result) = comp.gpu_setup.as_ref().and_then(|s| s.take()) {
+                        comp.gpu_setup = None;
+                        match result {
+                            Ok(g) => comp.gpu_ready = Some(g),
+                            Err(why) => println!("frames stay with the processor: {}", why),
+                        }
+                    }
+                }
+                GPU_FENCE_KEY => comp.gpu_signaled(vrt::time::now_ns()),
                 k if k & DRIVER_BASE != 0 => {
                     let k = k & !DRIVER_BASE;
                     if observed & signals::READABLE != 0 {
@@ -317,6 +355,10 @@ fn main() -> i32 {
         let now = vrt::time::now_ns();
         while let Some(out) = comp.keyboard.poll_repeat(now) {
             comp.deliver_key(out);
+        }
+        // A frame the GPU draws that takes too long.
+        if comp.gpu_deadline().is_some_and(|t| now >= t) {
+            comp.gpu_signaled(now);
         }
         comp.screen.check(now);
         if comp.wants_frame() && now >= comp.screen.next_frame(comp.last_frame) {

@@ -17,8 +17,8 @@
 
 #ifdef VR_SOFTPIPE
 #include "frontend/sw_winsys.h"
+#include "frontend/winsys_handle.h"
 #include "softpipe/sp_public.h"
-#include "sw/null/null_sw_winsys.h"
 #endif
 
 #ifdef VR_IRIS
@@ -68,15 +68,118 @@ vr_device_create_iris(int fd)
    struct pipe_screen *screen = iris_drm_screen_create(fd, &config);
    driDestroyOptionCache(&options);
    driDestroyOptionInfo(&info);
-   return device_create(screen);
+   struct vr_device *dev = device_create(screen);
+   if (dev)
+      dev->import = VR_IMPORT_FD;
+   return dev;
 }
 #endif
 
+VR_API enum vr_import
+vr_device_import(struct vr_device *dev)
+{
+   return dev->import;
+}
+
 #ifdef VR_SOFTPIPE
+/* softpipe's window system: none, but for memory from outside, which
+ * softpipe renders into as a display target (a display's picture,
+ * vr_resource_import, given by its address). */
+struct vr_display_target {
+   void *data;
+};
+
+static bool
+dt_format_supported(struct sw_winsys *ws, unsigned usage, enum pipe_format format)
+{
+   return false;
+}
+
+static struct sw_displaytarget *
+dt_create(struct sw_winsys *ws, unsigned usage, enum pipe_format format, unsigned width, unsigned height,
+          unsigned alignment, const void *front, unsigned *stride)
+{
+   return NULL;
+}
+
+static struct sw_displaytarget *
+dt_create_mapped(struct sw_winsys *ws, unsigned usage, enum pipe_format format, unsigned width, unsigned height,
+                 unsigned stride, void *data, struct winsys_handle *whandle)
+{
+   return NULL;
+}
+
+static struct sw_displaytarget *
+dt_from_handle(struct sw_winsys *ws, const struct pipe_resource *templ, struct winsys_handle *whandle,
+               unsigned *stride)
+{
+   if (whandle->type != VR_HANDLE_MEMORY || !whandle->com_obj)
+      return NULL;
+   struct vr_display_target *dt = calloc(1, sizeof(*dt));
+   if (!dt)
+      return NULL;
+   dt->data = whandle->com_obj;
+   *stride = whandle->stride;
+   return (struct sw_displaytarget *)dt;
+}
+
+static bool
+dt_get_handle(struct sw_winsys *ws, struct sw_displaytarget *dt, struct winsys_handle *whandle)
+{
+   return false;
+}
+
+static void *
+dt_map(struct sw_winsys *ws, struct sw_displaytarget *dt, unsigned flags)
+{
+   return ((struct vr_display_target *)dt)->data;
+}
+
+static void
+dt_unmap(struct sw_winsys *ws, struct sw_displaytarget *dt)
+{
+}
+
+static void
+dt_display(struct sw_winsys *ws, struct sw_displaytarget *dt, void *context, unsigned nboxes, struct pipe_box *box)
+{
+}
+
+static void
+dt_destroy(struct sw_winsys *ws, struct sw_displaytarget *dt)
+{
+   free(dt);
+}
+
+static void
+winsys_destroy(struct sw_winsys *ws)
+{
+   free(ws);
+}
+
+static struct sw_winsys *
+winsys_create(void)
+{
+   struct sw_winsys *ws = calloc(1, sizeof(*ws));
+   if (!ws)
+      return NULL;
+   ws->destroy = winsys_destroy;
+   ws->is_displaytarget_format_supported = dt_format_supported;
+   ws->displaytarget_create = dt_create;
+   ws->displaytarget_create_mapped = dt_create_mapped;
+   ws->displaytarget_from_handle = dt_from_handle;
+   ws->displaytarget_get_handle = dt_get_handle;
+   ws->displaytarget_map = dt_map;
+   ws->displaytarget_unmap = dt_unmap;
+   ws->displaytarget_display = dt_display;
+   ws->displaytarget_destroy = dt_destroy;
+   return ws;
+}
+
 VR_API struct vr_device *
 vr_device_create_softpipe(void)
 {
-   struct sw_winsys *ws = null_sw_create();
+   struct sw_winsys *ws = winsys_create();
    if (!ws)
       return NULL;
    struct pipe_screen *screen = softpipe_create_screen(ws);
@@ -84,7 +187,10 @@ vr_device_create_softpipe(void)
       ws->destroy(ws);
       return NULL;
    }
-   return device_create(screen);
+   struct vr_device *dev = device_create(screen);
+   if (dev)
+      dev->import = VR_IMPORT_MEMORY;
+   return dev;
 }
 #endif
 

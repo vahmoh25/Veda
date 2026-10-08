@@ -537,6 +537,13 @@ impl gpu::Server for Request<'_> {
     fn fence(&mut self) -> Result<u64, GpuError> {
         self.gpu.fence(self.key, self.clients)
     }
+
+    fn import(&mut self, _spec: ResourceSpec, _stride: u32, _memory: Vmo) -> Result<u32, GpuError> {
+        // The host renders into memory of its own, not the guest's: what
+        // is drawn would have to be copied back. Displays stay on the
+        // firmware's framebuffer here (see the top).
+        Err(GpuError::Unavailable)
+    }
 }
 
 fn main() -> i32 {

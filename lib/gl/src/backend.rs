@@ -481,6 +481,23 @@ pub enum QueryKind {
     PrimitivesWritten,
 }
 
+/// Memory from outside that a resource is made of: a display's picture,
+/// which the GPU renders into in place. Rows of 32-bit pixels.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct External {
+    /// The memory object (a Veda handle the renderer duplicates, keeping
+    /// its own), or 0 ...
+    pub handle: u32,
+    /// ... and its address in this process (host tests).
+    pub address: usize,
+    /// Its bytes.
+    pub size: usize,
+    /// Bytes from one row to the next.
+    pub stride: u32,
+    /// Blue in the low byte of each pixel (`0xXXRRGGBB`); otherwise red.
+    pub bgr: bool,
+}
+
 /// What a renderer can do.
 #[derive(Clone, Debug)]
 pub struct Caps {
@@ -510,6 +527,13 @@ pub trait Backend {
 
     fn create_resource(&mut self, desc: &ResourceDesc) -> Result<ResourceId, OutOfMemory>;
     fn destroy_resource(&mut self, id: ResourceId);
+    /// A render target `desc` (a renderbuffer of 8-bit RGB, single
+    /// sampled) whose storage is `memory`: the GPU renders into the memory
+    /// itself, in its pixels' order. Renderers that cannot refuse.
+    fn import_resource(&mut self, desc: &ResourceDesc, memory: &External) -> Result<ResourceId, OutOfMemory> {
+        let _ = (desc, memory);
+        Err(OutOfMemory)
+    }
 
     /// Writes data laid out in the resource's format (rows `row_pitch`
     /// bytes apart, slices `image_pitch`) into a region of a level.

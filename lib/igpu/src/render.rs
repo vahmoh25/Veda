@@ -59,7 +59,14 @@ pub trait Dma {
 pub struct BufferMemory<K> {
     pub pages: Vec<u64>,
     pub keep: K,
+    /// Reached without the caches (the PAT's uncached entry), rather than
+    /// write-back: memory the display engine reads, which does not look in
+    /// the last-level cache.
+    pub uncached: bool,
 }
+
+/// The PAT entry of buffers reached without the caches (`init_gt`'s).
+pub const UNCACHED_PAT: u8 = 3;
 
 /// Time, for bringing up: the clock, and waiting.
 pub trait Time {
@@ -618,8 +625,10 @@ impl<M: Mmio, D: Dma> Hardware for Render<M, D> {
     }
 
     fn bind(&mut self, space: &mut Space, address: u64, memory: &Self::Memory) -> Result<(), GemError> {
-        // Write-back (PAT 0), coherent with the processor's caches.
-        let r = space.tables.map(&mut self.tables, address, &memory.pages, ppgtt::pat_bits(0));
+        // Write-back (PAT 0), coherent with the processor's caches; or
+        // uncached, for the display engine.
+        let pat = if memory.uncached { UNCACHED_PAT } else { 0 };
+        let r = space.tables.map(&mut self.tables, address, &memory.pages, ppgtt::pat_bits(pat));
         if r.is_err() {
             space.tables.unmap(&mut self.tables, address, memory.pages.len() as u64);
         }

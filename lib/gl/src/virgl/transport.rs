@@ -9,7 +9,7 @@
 
 use core::ops::Range;
 
-use crate::backend::OutOfMemory;
+use crate::backend::{External, OutOfMemory};
 
 /// A resource as virglrenderer creates it
 /// (`virgl_renderer_resource_create_args`, without the handle).
@@ -49,6 +49,14 @@ pub trait Transport {
     fn create_resource(&mut self, args: &ResourceArgs, backing: Option<Range<usize>>) -> Result<u32, OutOfMemory>;
 
     fn destroy_resource(&mut self, handle: u32);
+
+    /// Creates a 2D render target (`args`) whose storage is memory from
+    /// outside, which the host renders into in place; returns its handle.
+    /// Hosts that cannot refuse.
+    fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, OutOfMemory> {
+        let _ = (args, memory);
+        Err(OutOfMemory)
+    }
 
     /// The most words one submission may have.
     fn max_submit_words(&self) -> usize;

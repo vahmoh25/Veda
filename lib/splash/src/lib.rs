@@ -98,3 +98,25 @@ pub fn draw(w: u32, h: u32, mut put: impl FnMut(u32, u32, u32)) {
         }
     }
 }
+
+/// Row `y` of the splash on a `w` x `h` screen into `out` (`0xRRGGBB`
+/// each, `out.len()` pixels from the left), as [`draw`] paints it.
+pub fn row(w: u32, h: u32, y: u32, out: &mut [u32]) {
+    let ring = Ring::place(w, h);
+    let background = background(y, h);
+    out.fill(background);
+    // Only the ring's rows have more than the gradient, and only across it.
+    let reach = ring.outer / 16 + 2;
+    let (cx, cy) = (ring.cx / 16, ring.cy / 16);
+    if (y as i32 - cy).abs() > reach {
+        return;
+    }
+    let from = (cx - reach).max(0) as usize;
+    let to = ((cx + reach + 1).max(0) as usize).min(out.len());
+    for (x, px) in out.iter_mut().enumerate().take(to).skip(from) {
+        let cover = ring.coverage(x as i32, y as i32);
+        if cover > 0 {
+            *px = mix(background, RING, cover);
+        }
+    }
+}

@@ -4,15 +4,16 @@
 
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Range;
 
 use vproto::gpu::{ResourceSpec, gpu};
-use vrt::object::Event;
+use vrt::object::{Event, Vmo};
 use vrt::pool::ThreadPool;
 use vrt::vm::Mapping;
 
-use crate::backend::OutOfMemory;
+use crate::backend::{External, OutOfMemory};
 use crate::soft::{SoftBackend, Workers};
 use crate::virgl::{Lost, ResourceArgs, Transport, VirglBackend};
 use crate::{Config, Context};
@@ -91,11 +92,11 @@ const CALL_NS: u64 = 10_000_000_000;
 pub struct GpuTransport {
     client: gpu::Client,
     caps: Vec<u8>,
-    map: Mapping,
+    map: Arc<Mapping>,
     command: Range<usize>,
     shared: Range<usize>,
     fence_word: usize,
-    fences: Event,
+    fences: Arc<Event>,
     renderer: String,
 }
 
@@ -131,11 +132,11 @@ impl GpuTransport {
         Some(GpuTransport {
             client,
             caps: session.caps.0,
-            map,
+            map: Arc::new(map),
             command: co..co + session.command_size as usize,
             shared: so..so + session.shared_size as usize,
             fence_word: session.fence_offset as usize,
-            fences: session.fences,
+            fences: Arc::new(session.fences),
             renderer: session.renderer,
         })
     }
@@ -143,6 +144,18 @@ impl GpuTransport {
     /// The host's renderer.
     pub fn renderer(&self) -> &str {
         &self.renderer
+    }
+
+    /// How long a call may take before the context counts as lost (10 s
+    /// unless set).
+    pub fn set_call_timeout(&self, ns: u64) {
+        self.client.set_timeout(ns);
+    }
+
+    /// A watch over this context's fences, for a program that waits for
+    /// them among other things (it shares the context's event and memory).
+    pub fn watch(&self) -> FenceWatch {
+        FenceWatch { event: self.fences.clone(), map: self.map.clone(), word: self.fence_word }
     }
 
     /// The last fence that signaled.
@@ -186,6 +199,36 @@ impl Transport for GpuTransport {
 
     fn destroy_resource(&mut self, handle: u32) {
         let _ = self.client.destroy(handle);
+    }
+
+    fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, OutOfMemory> {
+        let a = args;
+        let spec = ResourceSpec {
+            target: a.target,
+            format: a.format,
+            bind: a.bind,
+            width: a.width,
+            height: a.height,
+            depth: a.depth,
+            array_size: a.array_size,
+            last_level: a.last_level,
+            nr_samples: a.nr_samples,
+            flags: a.flags,
+        };
+        // The caller keeps its handle: the renderer gets one of its own.
+        let theirs = {
+            // SAFETY: borrowed for the duplication, never closed here.
+            let h = core::mem::ManuallyDrop::new(unsafe { vrt::object::Handle::from_raw(memory.handle) });
+            Vmo::from_handle(h.duplicate(None).map_err(|_| OutOfMemory)?)
+        };
+        match self.client.import(spec, memory.stride, theirs) {
+            Ok(Ok(h)) => Ok(h),
+            Ok(Err(e)) => {
+                vrt::println!("{}: cannot render into memory it is given: {}", self.renderer, e);
+                Err(OutOfMemory)
+            }
+            Err(_) => Err(OutOfMemory),
+        }
     }
 
     fn max_submit_words(&self) -> usize {
@@ -237,6 +280,34 @@ impl Transport for GpuTransport {
                 return lost(&self.renderer, format_args!("left fence {fence} unsignaled"));
             }
         }
+    }
+}
+
+/// A context's fences, as a program that waits for several things at once
+/// watches them: the event the GPU's driver signals as fences signal (for
+/// its wait set), and the number of the last that did.
+pub struct FenceWatch {
+    event: Arc<Event>,
+    map: Arc<Mapping>,
+    word: usize,
+}
+
+impl FenceWatch {
+    /// The event: signaled whenever a fence signals.
+    pub fn event(&self) -> vabi::RawHandle {
+        self.event.raw()
+    }
+
+    /// Clears the event; look at [`signaled`](Self::signaled) after.
+    pub fn clear(&self) {
+        let _ = self.event.clear();
+    }
+
+    /// The last fence that signaled.
+    pub fn signaled(&self) -> u64 {
+        // SAFETY: the fence word, inside the mapping, aligned; the driver
+        // writes it at any time.
+        unsafe { core::ptr::read_volatile(self.map.as_ptr().add(self.word) as *const u64) }
     }
 }
 

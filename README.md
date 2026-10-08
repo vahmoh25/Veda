@@ -119,7 +119,9 @@ the voice pipeline, consent, memory and how the agent is tested.
   in, a startup sound) and dissolves it into the desktop once that is
   ready; a compositing window manager with server-side decorations,
   shadows, animations, window snapping and an Alt+Tab switcher with live
-  thumbnails; a shell with wallpaper, desktop icons, a taskbar, a
+  thumbnails, which composes on the GPU with OpenGL ES on PCs with Intel
+  graphics, every frame flipped whole at the vertical blank, and on the
+  processor elsewhere; a shell with wallpaper, desktop icons, a taskbar, a
   searchable start menu, a calendar and notifications; the `vui` toolkit
   (widgets, menus, dialogs, vector icons, anti-aliased text with the Inter
   and JetBrains Mono fonts), whose applications are agent-compatible.

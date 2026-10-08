@@ -36,6 +36,13 @@ pub trait Driver {
     /// the memory object its client maps.
     fn buffer(&mut self, size: u64) -> Result<(<Self::Hardware as Hardware>::Memory, Vmo), GemError>;
 
+    /// A buffer of `memory` the client holds (see `gem::import`): its
+    /// memory as the model keeps it, and its size.
+    fn import(&mut self, memory: Vmo) -> Result<(<Self::Hardware as Hardware>::Memory, u64), GemError> {
+        let _ = memory;
+        Err(GemError::Unsupported)
+    }
+
     /// The render engine's timestamp counter.
     fn timestamp(&mut self) -> u64;
 
@@ -194,6 +201,16 @@ impl<D: Driver> gem::Server for Request<'_, D> {
     fn hwconfig(&mut self) -> Result<Bytes, GemError> {
         // Mesa knows Gfx12's GPUs from its own tables.
         Err(GemError::Unsupported)
+    }
+
+    fn import(&mut self, memory: Vmo) -> Result<(u32, u64), GemError> {
+        let size = memory.size().map_err(|_| GemError::Invalid)? as u64;
+        if size == 0 || size > MAX_BUFFER || !size.is_multiple_of(4096) {
+            return Err(GemError::Invalid);
+        }
+        let (memory, size) = self.server.driver.import(memory)?;
+        let handle = self.server.gem.create(self.key, memory).map_err(error)?;
+        Ok((handle, size))
     }
 }
 

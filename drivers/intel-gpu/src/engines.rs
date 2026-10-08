@@ -181,7 +181,16 @@ impl vgem::Driver for Gt {
         let mut pages = vec![0u64; (size / 4096) as usize];
         vmo.pages(&self.dev.dma, 0, &mut pages).map_err(|_| GemError::NoMemory)?;
         let theirs = vgem::client_handle(&vmo)?;
-        Ok((BufferMemory { pages, keep: vmo }, theirs))
+        Ok((BufferMemory { pages, keep: vmo, uncached: false }, theirs))
+    }
+
+    fn import(&mut self, memory: Vmo) -> Result<(BufferMemory<Vmo>, u64), GemError> {
+        // A display's picture (the display's half of this driver made it):
+        // its pages, kept while the GPU may use them, reached uncached.
+        let size = memory.size().map_err(|_| GemError::Invalid)? as u64;
+        let mut pages = vec![0u64; (size / 4096) as usize];
+        memory.pages(&self.dev.dma, 0, &mut pages).map_err(|_| GemError::Invalid)?;
+        Ok((BufferMemory { pages, keep: memory, uncached: true }, size))
     }
 
     fn timestamp(&mut self) -> u64 {

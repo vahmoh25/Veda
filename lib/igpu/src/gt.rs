@@ -320,7 +320,8 @@ pub fn init_gt(mmio: &impl Mmio, topology: &Topology) {
         w.apply(mmio);
     }
     // `tgl_setup_private_ppat`: index 0 write-back, 1 write-combining, 2
-    // write-through, 3 uncached, the rest write-back.
+    // write-through, 3 uncached (`render::UNCACHED_PAT`), the rest
+    // write-back.
     for (i, v) in [PPAT_WB, PPAT_WC, PPAT_WT, PPAT_UC, PPAT_WB, PPAT_WB, PPAT_WB, PPAT_WB].iter().enumerate() {
         mmio.write(pat_index(i as u32), *v);
     }

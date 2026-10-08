@@ -29,7 +29,13 @@ struct vr_device {
     * take, are kept with depth in the lower 24 bits: the driver has only
     * those (iris). See vr_format. */
    bool depth_low;
+   /* How it takes memory from outside (vr_resource_import). */
+   enum vr_import import;
 };
+
+/* A winsys_handle's type for memory given by its address (softpipe's
+ * display targets, device.c). */
+#define VR_HANDLE_MEMORY 0x7600
 
 /* A shader, whose text may come in several commands. */
 struct vr_shader {

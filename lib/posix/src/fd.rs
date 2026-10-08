@@ -12,6 +12,7 @@
 //! | [`Object::Null`] | nothing: reads end at once, writes vanish | (not passed) |
 //! | [`Object::Log`] | the kernel log (output of programs without a terminal) | (not passed) |
 //! | [`Object::Drm`] | the GPU's render node: a session with its driver | (not passed) |
+//! | [`Object::Dmabuf`] | memory shared between devices (Linux's dma-buf): a memory object | (not passed) |
 //!
 //! The table itself is per process; descriptors carry only the close-on-exec
 //! flag.
@@ -37,6 +38,10 @@ pub enum Object {
     Null,
     Log,
     Drm(alloc::boxed::Box<crate::drm::Drm>),
+    /// A buffer for devices to share, which the render node imports
+    /// (`PRIME_FD_TO_HANDLE`); a Veda service makes one of a memory object
+    /// it was given (`veda_dmabuf_fd`).
+    Dmabuf(vrt::object::Vmo),
 }
 
 /// An open file description.

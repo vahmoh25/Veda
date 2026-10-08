@@ -1171,6 +1171,56 @@ impl Context {
         self.destroy_renderbuffer(old);
     }
 
+    /// Makes the bound renderbuffer's storage memory from outside: a
+    /// display's picture of `width` x `height` pixels, which the GPU then
+    /// renders into in place (what `glEGLImageTargetRenderbufferStorageOES`
+    /// does with an image of a display's buffer). `internalformat` is
+    /// `GL_RGB8`: the pixels' fourth byte is never read. Fails with
+    /// `GL_INVALID_OPERATION` if the renderer cannot.
+    pub fn renderbuffer_storage_external(
+        &mut self,
+        target: u32,
+        internalformat: u32,
+        width: i32,
+        height: i32,
+        memory: &crate::backend::External,
+    ) {
+        if target != gl::RENDERBUFFER {
+            return self.err(gl::INVALID_ENUM);
+        }
+        let Some(i) = format::sized(internalformat).copied().filter(|i| i.gl == gl::RGB8) else {
+            return self.err(gl::INVALID_ENUM);
+        };
+        let max = self.backend.caps().max_renderbuffer_size as i32;
+        let rows = (memory.stride as usize).checked_mul(height.max(0) as usize);
+        if width <= 0 || height <= 0 || width > max || height > max || memory.stride < width as u32 * 4 {
+            return self.err(gl::INVALID_VALUE);
+        }
+        if rows.is_none_or(|bytes| bytes > memory.size) {
+            return self.err(gl::INVALID_VALUE);
+        }
+        let Some(key) = self.renderbuffer else { return self.err(gl::INVALID_OPERATION) };
+        let (w, h) = (width as u32, height as u32);
+        let desc = ResourceDesc {
+            target: Target::Renderbuffer,
+            format: i.format,
+            width: w,
+            height: h,
+            depth: 1,
+            levels: 1,
+            samples: 0,
+        };
+        let Ok(resource) = self.backend.import_resource(&desc, memory) else {
+            return self.err(gl::INVALID_OPERATION);
+        };
+        let rb = self.renderbuffers.get_mut(key);
+        let old = core::mem::replace(
+            rb,
+            Renderbuffer { internal: Some(i), width: w, height: h, samples: 0, resource: Some(resource) },
+        );
+        self.destroy_renderbuffer(old);
+    }
+
     /// `glGetRenderbufferParameteriv` (one value).
     pub fn get_renderbuffer_parameteri(&mut self, target: u32, pname: u32) -> i32 {
         if target != gl::RENDERBUFFER {

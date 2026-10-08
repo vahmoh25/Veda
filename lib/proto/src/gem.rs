@@ -178,6 +178,13 @@ protocol! {
         /// The GPU's own description of itself (i915's hardware
         /// configuration table), if it has one.
         11 => fn hwconfig() -> Result<Bytes, GemError>;
+        /// Makes a buffer of memory the client holds: a display's picture,
+        /// which the GPU then renders into while the display engine reads
+        /// it. The memory is the processor's write-combining memory, and
+        /// the GPU reaches it uncached too, so that what it writes is in
+        /// memory, where the display engine reads, once it is done. Its
+        /// handle and size.
+        12 => fn import(memory: Vmo) -> Result<(u32, u64), GemError>;
     }
 }
 

@@ -46,6 +46,17 @@ fn the_same_picture_as_the_loader_painted() {
 }
 
 #[test]
+fn rows_make_the_same_picture() {
+    for (w, h) in [(1280, 800), (1920, 1080), (800, 600), (3840, 2400), (320, 200), (100, 600)] {
+        let mut rows = vec![0; (w * h) as usize];
+        for (y, out) in rows.chunks_exact_mut(w as usize).enumerate() {
+            row(w, h, y as u32, out);
+        }
+        assert!(rows == reference(w, h), "{}x{}", w, h);
+    }
+}
+
+#[test]
 fn the_ring() {
     // 1280x800: 66 pixels across, centred 50 pixels above the middle.
     let r = Ring::place(1280, 800);

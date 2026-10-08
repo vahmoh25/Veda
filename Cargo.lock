@@ -265,6 +265,7 @@ dependencies = [
  "vabi",
  "vbuild",
  "vgfx",
+ "vgl",
  "vipc",
  "vmath",
  "vproto",

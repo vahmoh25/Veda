@@ -18,7 +18,7 @@ use std::vec;
 use std::vec::Vec;
 
 use super::host::{LoadLibraryW, sym, wide};
-use crate::backend::OutOfMemory;
+use crate::backend::{External, OutOfMemory};
 use crate::virgl::{Lost, ResourceArgs, Transport};
 
 type Device = *mut c_void;
@@ -33,6 +33,7 @@ struct Lib {
     context_destroy: unsafe extern "C" fn(Ctx),
     context_error: unsafe extern "C" fn(Ctx) -> *const c_char,
     resource_create: unsafe extern "C" fn(Ctx, *const ResourceArgs, u64, u64, *mut u32) -> c_int,
+    resource_import: unsafe extern "C" fn(Ctx, *const ResourceArgs, c_int, *mut c_void, u32, *mut u32) -> c_int,
     resource_destroy: unsafe extern "C" fn(Ctx, u32),
     submit: unsafe extern "C" fn(Ctx, *const u32, usize) -> c_int,
     fence: unsafe extern "C" fn(Ctx, *mut u64) -> c_int,
@@ -72,6 +73,7 @@ fn lib() -> Option<&'static Lib> {
                 context_destroy: sym(m, "vr_context_destroy"),
                 context_error: sym(m, "vr_context_error"),
                 resource_create: sym(m, "vr_resource_create"),
+                resource_import: sym(m, "vr_resource_import"),
                 resource_destroy: sym(m, "vr_resource_destroy"),
                 submit: sym(m, "vr_submit"),
                 fence: sym(m, "vr_fence"),
@@ -153,6 +155,23 @@ impl Transport for GalliumTransport {
     fn destroy_resource(&mut self, handle: u32) {
         // SAFETY: as above.
         unsafe { (self.lib.resource_destroy)(self.ctx, handle) }
+    }
+
+    fn import_resource(&mut self, args: &ResourceArgs, memory: &External) -> Result<u32, OutOfMemory> {
+        if memory.address == 0 {
+            return Err(OutOfMemory);
+        }
+        let mut id = 0;
+        // SAFETY: as above; the caller keeps the memory for as long as the
+        // context lives (softpipe draws into it).
+        let r = unsafe {
+            (self.lib.resource_import)(self.ctx, args, -1, memory.address as *mut c_void, memory.stride, &mut id)
+        };
+        if r != 0 {
+            std::eprintln!("vgallium: {} ({args:?})", self.error());
+            return Err(OutOfMemory);
+        }
+        Ok(id)
     }
 
     fn max_submit_words(&self) -> usize {

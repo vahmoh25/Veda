@@ -12,6 +12,7 @@ use vproto::input::keys;
 use vrt::object::Channel;
 
 use crate::decor::{Decor, DecorState};
+use crate::gpu::{Gpu, Pending};
 use crate::keymap::Keyboard;
 use crate::screen::Screen;
 use crate::startup::Startup;
@@ -107,6 +108,14 @@ pub(crate) struct Compositor {
     pub(crate) desktop_shown: Vec<u32>,
     /// The startup sequence, while it runs (see [`Startup`]).
     pub(crate) startup: Option<Startup>,
+    /// The GPU, while it composes (see `gpu`); one set up and waiting for
+    /// its check; its setup under way; whether the display's pictures
+    /// have been offered to it.
+    pub(crate) gpu: Option<Gpu>,
+    pub(crate) gpu_ready: Option<Gpu>,
+    pub(crate) gpu_setup: Option<Pending>,
+    /// The driver whose pictures the GPU was set up for (its connection).
+    pub(crate) gpu_tried: Option<u64>,
 }
 
 /// The client rectangle of an automatically placed `w` x `h` window, with a
@@ -425,6 +434,9 @@ impl Compositor {
     pub(crate) fn destroy_window(&mut self, id: u32) {
         self.damage_window(id);
         self.windows.remove(&id);
+        if let Some(g) = &mut self.gpu {
+            g.forget_window(id);
+        }
         self.order.retain(|&x| x != id);
         for c in self.clients.values_mut() {
             c.windows.retain(|&x| x != id);

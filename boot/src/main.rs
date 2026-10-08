@@ -15,6 +15,7 @@
 #![no_main]
 
 mod config;
+mod memtype;
 mod paging;
 mod serial;
 mod splash;
@@ -25,7 +26,7 @@ use core::ptr;
 
 use bootinfo::{
     BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, BootTime, Framebuffer, HHDM_BASE, KernelImage, MemoryKind, MemoryMap,
-    MemoryRegion, PhysRegion, PixelFormat,
+    MemoryRegion, PhysRegion, PixelFormat, SplashReport, made_wc, memory_type,
 };
 use uefi::{memory_type as mt, *};
 
@@ -279,6 +280,107 @@ fn setup_graphics(fw: &Firmware, preferred: Option<(u32, u32)>) -> Result<Frameb
     })
 }
 
+fn rdtsc() -> u64 {
+    let (lo, hi): (u32, u32);
+    // SAFETY: reading the timestamp counter.
+    unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack)) };
+    (hi as u64) << 32 | lo as u64
+}
+
+/// Paints the boot splash write-combining if the framebuffer is not (see
+/// `splash`); how it went, for the kernel's log.
+fn paint_splash(fw: &Firmware, fb: &Framebuffer) -> SplashReport {
+    let mut report = SplashReport::default();
+    let width = fb.stride.max(fb.width) as usize;
+    // A row of pixels to make each row in (scratch the kernel reuses).
+    let Ok(row) = fw.alloc_zeroed(width as u64 * 4, None) else { return report };
+    if fb.phys_base == 0 {
+        return report;
+    }
+    // SAFETY: freshly allocated pages, a row's worth of pixels.
+    let row = unsafe { core::slice::from_raw_parts_mut(row as *mut u32, width) };
+    let surface = splash::Surface {
+        base: fb.phys_base as *mut u32,
+        width: fb.width,
+        height: fb.height,
+        stride: fb.stride,
+        rgb: fb.format == PixelFormat::Rgbx,
+    };
+    let start = rdtsc();
+    report.found = memtype::memory_type(fb.phys_base);
+    if report.found == memory_type::WRITE_COMBINING {
+        splash::draw(&surface, row);
+        report.painted = report.found;
+        report.made_wc = made_wc::ALREADY;
+        report.paint_ticks = (rdtsc() - start).max(1);
+        return report;
+    }
+    let painted = ram_limit(fw).and_then(|limit| {
+        splash::draw_write_combining(&mut ScratchFrames(fw), &surface, limit, supports_1g_pages(), row)
+    });
+    match painted {
+        Ok(ticks) => {
+            report.painted = memory_type::WRITE_COMBINING;
+            report.made_wc = made_wc::PAGE_ATTRIBUTES;
+            report.paint_ticks = ticks.max(1);
+            report.setup_ticks = (rdtsc() - start).saturating_sub(ticks);
+        }
+        Err(e) => {
+            log!("cannot paint the splash write-combining: {e}");
+            let painting = rdtsc();
+            splash::draw(&surface, row);
+            report.painted = report.found;
+            report.made_wc = made_wc::NOT;
+            report.paint_ticks = (rdtsc() - painting).max(1);
+        }
+    }
+    log!(
+        "splash painted in {} ticks: the framebuffer is {}, painted {}",
+        report.paint_ticks,
+        memory_type::name(report.found),
+        memory_type::name(report.painted)
+    );
+    report
+}
+
+/// Page allocator for the splash's page tables (scratch the kernel reuses).
+struct ScratchFrames<'a>(&'a Firmware);
+
+impl paging::FrameSource for ScratchFrames<'_> {
+    fn alloc_zeroed_page(&mut self) -> Result<u64> {
+        self.0.alloc_zeroed(PAGE, None)
+    }
+}
+
+/// The end of what the direct map covers: all RAM, and at least the low
+/// 4 GiB (the MMIO hole), to a GiB.
+fn ram_limit(fw: &Firmware) -> Result<u64> {
+    let (bytes, desc_size) = memory_map_size(fw);
+    let capacity = bytes + 16 * desc_size;
+    let map = fw.alloc_zeroed(capacity as u64, None)?;
+    ram_limit_of(fw, map, capacity)
+}
+
+/// [`ram_limit`], reading the memory map into `map` (`capacity` bytes).
+fn ram_limit_of(fw: &Firmware, map: u64, capacity: usize) -> Result<u64> {
+    let mut limit = 4u64 << 30;
+    let (mut size, mut key, mut ds, mut ver) = (capacity, 0usize, 0usize, 0u32);
+    // SAFETY: a buffer of `capacity` bytes.
+    let s = unsafe { (fw.bs.get_memory_map)(&mut size, map as *mut MemoryDescriptor, &mut key, &mut ds, &mut ver) };
+    if is_error(s) || ds == 0 {
+        return Err("GetMemoryMap failed");
+    }
+    for i in 0..size / ds {
+        // SAFETY: within the returned map.
+        let d = unsafe { &*((map as usize + i * ds) as *const MemoryDescriptor) };
+        let end = d.physical_start + d.number_of_pages * PAGE;
+        if d.ty != mt::MMIO && d.ty != mt::RESERVED {
+            limit = limit.max(end);
+        }
+    }
+    Ok(limit.next_multiple_of(1 << 30))
+}
+
 /// Page allocator for the page-table builder (boot data pages).
 struct TableFrames<'a>(&'a Firmware);
 
@@ -406,13 +508,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
         framebuffer.stride,
         framebuffer.phys_base
     );
-    splash::draw(&splash::Surface {
-        base: framebuffer.phys_base as *mut u32,
-        width: framebuffer.width,
-        height: framebuffer.height,
-        stride: framebuffer.stride,
-        rgb: framebuffer.format == PixelFormat::Rgbx,
-    });
+    let splash = paint_splash(fw, &framebuffer);
 
     let kernel_file = fw.read_file(root, "\\VEDA\\VKERNEL.EXE", None)?.ok_or("\\VEDA\\VKERNEL.EXE not found")?;
     // SAFETY: the kernel file was read into kernel_file.base.
@@ -444,25 +540,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
         fw.alloc_zeroed((max_entries * core::mem::size_of::<MemoryRegion>()) as u64, Some(MemoryKind::BootData))?;
 
     // The direct map covers all RAM and at least the low 4 GiB (MMIO hole).
-    let mut phys_limit = 4u64 << 30;
-    {
-        let (mut size, mut key, mut ds, mut ver) = (map_capacity, 0usize, 0usize, 0u32);
-        // SAFETY: buffer of `map_capacity` bytes.
-        let s =
-            unsafe { (fw.bs.get_memory_map)(&mut size, raw_map as *mut MemoryDescriptor, &mut key, &mut ds, &mut ver) };
-        if is_error(s) {
-            return Err("GetMemoryMap failed");
-        }
-        for i in 0..size / ds {
-            // SAFETY: within the returned map.
-            let d = unsafe { &*((raw_map as usize + i * ds) as *const MemoryDescriptor) };
-            let end = d.physical_start + d.number_of_pages * PAGE;
-            if d.ty != mt::MMIO && d.ty != mt::RESERVED {
-                phys_limit = phys_limit.max(end);
-            }
-        }
-    }
-    phys_limit = phys_limit.next_multiple_of(1 << 30);
+    let phys_limit = ram_limit_of(fw, raw_map, map_capacity)?;
 
     let mut frames = TableFrames(fw);
     let mut pt = paging::PageTables::new(&mut frames, supports_1g_pages())?;
@@ -582,6 +660,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
             cmdline_len: cfg.cmdline_len as u32,
             entropy_len: entropy_len as u32,
             entropy,
+            splash,
         });
     }
     log!("handing over to the kernel ({} memory regions)", merged);

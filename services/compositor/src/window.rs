@@ -2,7 +2,7 @@
 
 use alloc::string::String;
 
-use vgfx::Rect;
+use vgfx::{Damage, Rect};
 use vproto::display::{Cursor, WindowKind, WindowState};
 use vrt::object::Channel;
 use vrt::vm::Mapping;
@@ -97,6 +97,10 @@ pub struct Window {
     pub events: Channel,
     pub buffers: Option<Buffers>,
     pub current: Option<u8>,
+    /// What changed in its buffer (its pixels) since the GPU's copy of it
+    /// was brought up to date; `upload_all`: everything did.
+    pub upload: Damage,
+    pub upload_all: bool,
     /// A FrameDone is owed for this buffer after the next composite.
     pub frame_owed: Option<u8>,
     pub cursor: Cursor,

@@ -35,6 +35,8 @@ cargo xtask run --net both     # ... plus the wired card (or --net none)
 cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
 cargo xtask run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in software)
 cargo xtask script tests/ui/flips.vts      # the window system's flips, on a stand-in display that flips
+cargo xtask script tests/ui/flips-gpu.vts  # ... its frames drawn by a GPU (the renderer on softpipe; slow)
+cargo xtask script tests/ui/flips-iris.vts # ... the pictures offered to iris on a stand-in GPU that runs nothing
 cargo xtask script tests/ui/prism.vts      # OpenGL ES: Prism renders (on the GPU if QEMU has one)
 VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (Windows; ANGLE)
 VGL_TEST_HOST=desktop VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on its desktop OpenGL
@@ -95,7 +97,14 @@ cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile an
   itself), how smoothly it ran, and where its frames went: into the
   firmware's framebuffer, or flipped by a display driver, with how many
   flips over how many vertical blanks (as many as there were blanks: not
-  a frame missed). `shell: startup sound: playing` says
+  a frame missed), and whether the GPU or the processor drew them. Where
+  a driver flips, `compositor: frames are drawn by the GPU (...) from now
+  on` says when the GPU took over, or `frames stay with the processor:`
+  why it did not; a frame the GPU took long over is logged too. The boot
+  loader's splash is reported by the kernel (`boot: the loader painted its
+  splash in N ms; ...`, with the framebuffer's memory type: firmware
+  leaves it uncached, and the loader paints it write-combining).
+  `shell: startup sound: playing` says
   the sound started, or why not. `tests/ui/startup.vts` checks both, and
   that the sound reaches the recording. Its look is in
   `services/compositor/src/startup.rs` (timings, colours, the tagline);

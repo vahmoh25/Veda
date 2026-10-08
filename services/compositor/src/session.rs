@@ -65,6 +65,8 @@ impl display::Server for Session<'_> {
             events: ours,
             buffers: None,
             current: None,
+            upload: vgfx::Damage::new(),
+            upload_all: true,
             frame_owed: None,
             cursor: Cursor::Arrow,
             anim: animate.then(|| Anim { kind: AnimKind::Open, start: vrt::time::now_ns(), duration: 180_000_000 }),
@@ -119,6 +121,7 @@ impl display::Server for Session<'_> {
         let w = self.comp.windows.get_mut(&id).unwrap();
         w.buffers = Some(Buffers { map, width: width as i32, height: height as i32, stride: stride as i32, count });
         w.current = None;
+        w.upload_all = true;
         Ok(())
     }
 
@@ -133,6 +136,15 @@ impl display::Server for Session<'_> {
         w.current = Some(index);
         // Acknowledged with FrameDone after the next composite.
         w.frame_owed = Some(index);
+        // What the GPU's copy lacks now (see `gpu`).
+        if first || damage.is_empty() {
+            w.upload_all = true;
+        } else {
+            let pixels = Rect::new(0, 0, b.width, b.height);
+            for d in &damage {
+                w.upload.add(Rect::new(d.x, d.y, d.w as i32, d.h as i32).intersect(&pixels));
+            }
+        }
         let c = w.client_rect;
         if first || w.anim.is_some() {
             // The window appears or is animating: redraw it with its frame.

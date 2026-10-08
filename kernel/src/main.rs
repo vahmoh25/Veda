@@ -57,6 +57,31 @@ fn parse_cmdline(cmdline: &str) -> Options {
     o
 }
 
+/// Logs how the loader painted its splash: a real PC's framebuffer is often
+/// uncached, which shows as the picture being painted from the top down,
+/// until something makes it write-combining.
+fn log_splash(s: &bootinfo::SplashReport) {
+    use bootinfo::{made_wc, memory_type};
+    if s.paint_ticks == 0 {
+        return;
+    }
+    let ms = |ticks: u64| {
+        let us = time::ticks_to_ns(ticks as i64) / 1000;
+        alloc::format!("{}.{} ms", us / 1000, us % 1000 / 100)
+    };
+    let found = memory_type::name(s.found);
+    let how = match s.made_wc {
+        made_wc::ALREADY => alloc::format!("the framebuffer is {}", found),
+        made_wc::PAGE_ATTRIBUTES => alloc::format!(
+            "the firmware's framebuffer is {}, painted write-combining through the loader's page tables (made in {})",
+            found,
+            ms(s.setup_ticks)
+        ),
+        _ => alloc::format!("the framebuffer is {}, and could not be painted write-combining", found),
+    };
+    kinfo!("boot: the loader painted its splash in {}; {}", ms(s.paint_ticks), how);
+}
+
 /// Kernel entry point, called by `vboot` (see the `bootinfo` crate for the
 /// machine state at this point).
 #[unsafe(no_mangle)]
@@ -124,6 +149,7 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
     if let Some(adjust) = firmware_adjust {
         kinfo!("time: the firmware's adjustment of CPU 0's TSC ({} ns) set to 0", time::ticks_to_ns(adjust));
     }
+    log_splash(&boot.splash);
     time::set_boot_time(&boot.boot_time, opts.tz);
     if features.tsc_deadline {
         apic::use_tsc_deadline(true);

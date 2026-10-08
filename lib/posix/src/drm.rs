@@ -19,9 +19,11 @@
 //!   ahead.
 //!
 //! Buffers are soft-pinned (iris places them all itself): relocations are
-//! refused, as are sync files, buffers shared with other processes (PRIME,
-//! flink), user memory (`USERPTR`) and timeline syncobjs, which i915 has
-//! and iris on Veda does without.
+//! refused, as are sync files, buffers exported to other processes (PRIME
+//! export, flink), user memory (`USERPTR`) and timeline syncobjs, which
+//! i915 has and iris on Veda does without. A dma-buf is imported
+//! (`PRIME_FD_TO_HANDLE`): a display's picture, given to the renderer to
+//! draw into (`veda_dmabuf_fd`).
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
@@ -390,6 +392,14 @@ struct Getparam {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
+struct PrimeHandle {
+    handle: u32,
+    flags: u32,
+    fd: i32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
 struct GemCreate {
     size: u64,
     handle: u32,
@@ -712,6 +722,9 @@ struct Buffer {
     reads: Vec<u64>,
     write: Option<Point>,
     caching: u32,
+    /// Imported (`PRIME_FD_TO_HANDLE`): its memory object's id, by which a
+    /// second import finds it (0: made here).
+    imported: u64,
 }
 
 /// What a syncobj holds.
@@ -916,7 +929,8 @@ impl Drm {
                 // globally.
                 nr::GET_MAGIC | nr::GEM_FLINK | nr::GEM_OPEN => Err(EACCES),
                 nr::SET_CLIENT_CAP => Err(EINVAL),
-                nr::PRIME_HANDLE_TO_FD | nr::PRIME_FD_TO_HANDLE => Err(EOPNOTSUPP),
+                nr::PRIME_FD_TO_HANDLE => with(arg, ioc, |p: &mut PrimeHandle| self.prime_import(p)),
+                nr::PRIME_HANDLE_TO_FD => Err(EOPNOTSUPP),
                 nr::SYNCOBJ_CREATE => with(arg, ioc, |c: &mut SyncobjCreate| self.syncobj_create(c)),
                 nr::SYNCOBJ_DESTROY => with(arg, ioc, |c: &mut Handle| self.syncobj_destroy(c)),
                 nr::SYNCOBJ_HANDLE_TO_FD | nr::SYNCOBJ_FD_TO_HANDLE => Err(EOPNOTSUPP),
@@ -1238,9 +1252,40 @@ impl Drm {
             }
         };
         let engines = self.device.engines.len();
-        s.buffers.insert(handle, Buffer { driver, vmo, size, reads: vec![0; engines], write: None, caching: 1 });
+        s.buffers.insert(
+            handle,
+            Buffer { driver, vmo, size, reads: vec![0; engines], write: None, caching: 1, imported: 0 },
+        );
         c.handle = handle;
         c.size = size;
+        Ok(())
+    }
+
+    /// `PRIME_FD_TO_HANDLE`: a buffer of a dma-buf's memory (a display's
+    /// picture, see `veda_dmabuf_fd`), which the driver gives the GPU
+    /// uncached. The same memory has the same handle, as in i915.
+    fn prime_import(&self, p: &mut PrimeHandle) -> Result<(), isize> {
+        let desc = crate::fd::get(p.fd)?;
+        let crate::fd::Object::Dmabuf(memory) = &desc.object else { return Err(EINVAL) };
+        let id = memory.0.koid();
+        let mut s = self.state.lock();
+        if let Some((&handle, _)) = s.buffers.iter().find(|(_, b)| b.imported == id) {
+            p.handle = handle;
+            return Ok(());
+        }
+        let dup = || memory.0.duplicate(None).map(Vmo::from_handle).map_err(|_| ENOMEM);
+        let vmo = dup()?;
+        let (driver, size) = call(s.gem.import(dup()?))?;
+        let handle = match s.buffer_ids.take() {
+            Ok(h) => h,
+            Err(e) => {
+                let _ = s.gem.close(driver);
+                return Err(e);
+            }
+        };
+        let reads = vec![0; self.device.engines.len()];
+        s.buffers.insert(handle, Buffer { driver, vmo, size, reads, write: None, caching: 0, imported: id });
+        p.handle = handle;
         Ok(())
     }
 
@@ -1936,6 +1981,7 @@ mod tests {
         assert_eq!(size_of::<SyncobjTimelineWait>(), 48);
         assert_eq!(size_of::<SyncobjTransfer>(), 32);
         assert_eq!(size_of::<PciInfo>(), 16);
+        assert_eq!(size_of::<PrimeHandle>(), 12);
         assert_eq!(size_of::<Getparam>(), 16);
         assert_eq!(size_of::<UserExtension>(), 32);
         assert_eq!(size_of::<MemoryRegions>(), 48);

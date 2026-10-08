@@ -16,6 +16,11 @@
 //! into a picture, that is brought up to date from what the screen is to
 //! show: the back buffer, or the startup sequence's layer.
 //!
+//! Where the GPU composes (`gpu`), it draws each frame into the picture
+//! itself, and what is stale there is copied from the picture the screen
+//! shows; the picture is asked for once the GPU's fence after the frame
+//! has signaled (no back buffer is kept meanwhile).
+//!
 //! If the driver goes away, or stops answering, frames go into all of its
 //! pictures and into the firmware's framebuffer, in place: whichever of
 //! them the screen shows, it shows the frames.
@@ -96,6 +101,9 @@ struct Flips {
     target: usize,
     /// The flip asked for: the picture, the request's number, and when.
     pending: Option<(usize, u32, u64)>,
+    /// A frame the GPU is drawing: its picture, the fence that signals
+    /// once it is there, and when it was started. Asked for then.
+    drawing: Option<(usize, u64, u64)>,
     seq: u32,
     /// The last frame was asked for (one that changed nothing was not).
     flipped: bool,
@@ -106,6 +114,19 @@ struct Flips {
     first_frames: Option<u32>,
     /// Gone, or stopped answering: frames go everywhere, in place.
     lost: bool,
+}
+
+impl Flips {
+    /// Asks for `picture` (at `now`).
+    fn queue(&mut self, picture: usize, now: u64) {
+        // What was written reaches memory, out of the processor's
+        // write-combining buffers, before the driver shows it.
+        fence(Ordering::SeqCst);
+        self.seq = self.seq.wrapping_add(1).max(1);
+        self.state.queue(picture as u32, self.seq);
+        let _ = self.request.signal();
+        self.pending = Some((picture, self.seq, now));
+    }
 }
 
 /// The surfaces a frame goes into.
@@ -153,6 +174,11 @@ impl Screen {
 
     pub(crate) fn rect(&self) -> Rect {
         self.back.rect()
+    }
+
+    /// Whether pixels hold red in their low byte.
+    pub(crate) fn rgb(&self) -> bool {
+        self.rgb
     }
 
     // ---- frames ------------------------------------------------------------
@@ -248,6 +274,17 @@ impl Screen {
     /// (if the frame changed something, or the screen still shows the
     /// firmware's picture).
     pub(crate) fn end_frame(&mut self, now: u64) {
+        self.finish_frame(now, None);
+    }
+
+    /// Ends a frame the GPU draws (see [`Screen::gpu_frame`]): as
+    /// [`Screen::end_frame`], but its picture is asked for once `gpu`
+    /// (the GPU's fence after the frame) has signaled ([`Screen::drawn`]).
+    pub(crate) fn end_gpu_frame(&mut self, now: u64, gpu: u64) {
+        self.finish_frame(now, Some(gpu));
+    }
+
+    fn finish_frame(&mut self, now: u64, gpu: Option<u64>) {
         let Screen { flips, written, .. } = self;
         let Some(f) = flips.as_mut().filter(|f| !f.lost) else { return };
         for (i, p) in f.pictures.iter_mut().enumerate() {
@@ -259,13 +296,111 @@ impl Screen {
         }
         f.flipped = !written.is_empty() || f.shown.is_none();
         if f.flipped {
-            // What was written reaches memory, out of the processor's
-            // write-combining buffers, before the driver shows it.
+            match gpu {
+                Some(fence) => f.drawing = Some((f.target, fence, now)),
+                None => f.queue(f.target, now),
+            }
+        }
+    }
+
+    // ---- frames the GPU draws ------------------------------------------------
+
+    /// The fence the frame the GPU draws waits for, and since when.
+    pub(crate) fn drawing(&self) -> Option<(u64, u64)> {
+        self.flips.as_ref().filter(|f| !f.lost).and_then(|f| f.drawing).map(|(_, fence, since)| (fence, since))
+    }
+
+    /// The GPU has drawn the frame: its picture is asked for.
+    pub(crate) fn drawn(&mut self, now: u64) {
+        let Some(f) = self.flips.as_mut().filter(|f| !f.lost) else { return };
+        if let Some((picture, _, _)) = f.drawing.take() {
+            f.queue(picture, now);
+        }
+    }
+
+    /// The GPU did not draw the frame (it stopped answering): its picture
+    /// is stale everywhere, and the screen keeps what it shows.
+    pub(crate) fn not_drawn(&mut self) {
+        let all = self.rect();
+        let Some(f) = self.flips.as_mut() else { return };
+        if let Some((picture, _, _)) = f.drawing.take() {
+            f.pictures[picture].stale.add(all);
+        }
+    }
+
+    /// Whether frames go into a driver's pictures, which it flips.
+    pub(crate) fn flipping(&self) -> bool {
+        self.flips.as_ref().is_some_and(|f| !f.lost)
+    }
+
+    /// The connection of the driver whose pictures frames go into.
+    pub(crate) fn driver(&self) -> Option<u64> {
+        self.flips.as_ref().filter(|f| !f.lost).map(|f| f.key)
+    }
+
+    /// The driver's pictures, for the GPU to draw into (`None` unless
+    /// frames go into them).
+    pub(crate) fn pictures(&self) -> Option<crate::gpu::Pictures> {
+        let f = self.flips.as_ref().filter(|f| !f.lost)?;
+        let memory = f
+            .pictures
+            .iter()
+            .map(|p| p.map.vmo().0.duplicate(None).map(vrt::object::Vmo::from_handle).ok())
+            .collect::<Option<Vec<_>>>()?;
+        let stride = f.pictures.first()?.pitch as u32;
+        Some(crate::gpu::Pictures { memory, width: self.back.width, height: self.back.height, stride, rgb: self.rgb })
+    }
+
+    /// The picture the next frame goes into, while the screen waits for
+    /// nothing (no flip asked for, no frame being drawn): the GPU's check
+    /// uses it (see `gpu`).
+    pub(crate) fn idle_picture(&self) -> Option<usize> {
+        let f = self.flips.as_ref().filter(|f| !f.lost && f.pending.is_none() && f.drawing.is_none())?;
+        Some(f.shown.map_or(0, |s| (s + 1) % f.pictures.len()))
+    }
+
+    /// Writes pixel `x` of picture `p`'s first row.
+    pub(crate) fn poke(&mut self, p: usize, x: i32, value: u32) {
+        if let Some(f) = self.flips.as_mut()
+            && let Some(s) = f.pictures.get_mut(p)
+        {
+            s.row(0, Rect::new(x, 0, 1, 1))[0] = value;
             fence(Ordering::SeqCst);
-            f.seq = f.seq.wrapping_add(1).max(1);
-            f.state.queue(f.target as u32, f.seq);
-            let _ = f.request.signal();
-            f.pending = Some((f.target, f.seq, now));
+        }
+    }
+
+    /// Reads pixel `x` of picture `p`'s first row.
+    pub(crate) fn peek(&mut self, p: usize, x: i32) -> u32 {
+        match self.flips.as_mut().and_then(|f| f.pictures.get_mut(p)) {
+            // SAFETY: a pixel of the mapping (the GPU may have written it).
+            Some(s) => unsafe { core::ptr::read_volatile(s.row(0, Rect::new(x, 0, 1, 1)).as_ptr()) },
+            None => 0,
+        }
+    }
+
+    /// Makes `r` of picture `p` stale (what is there is not the screen's).
+    pub(crate) fn spoil(&mut self, p: usize, r: Rect) {
+        if let Some(s) = self.flips.as_mut().and_then(|f| f.pictures.get_mut(p)) {
+            s.stale.add(r);
+        }
+    }
+
+    /// Starts a frame the GPU draws: the picture it goes into, the one on
+    /// the screen (if one of the driver's is), and what of the first is
+    /// stale (to be copied from the second, or drawn).
+    pub(crate) fn gpu_frame(&mut self) -> Option<(usize, Option<usize>, Vec<Rect>)> {
+        self.written.clear();
+        let f = self.flips.as_mut().filter(|f| !f.lost)?;
+        f.target = f.shown.map_or(0, |s| (s + 1) % f.pictures.len());
+        let stale = f.pictures[f.target].stale.take();
+        Some((f.target, f.shown, stale))
+    }
+
+    /// The GPU drew `r` of the frame.
+    pub(crate) fn gpu_wrote(&mut self, r: Rect) {
+        let r = r.intersect(&self.rect());
+        if !r.is_empty() {
+            self.written.add(r);
         }
     }
 
@@ -276,16 +411,17 @@ impl Screen {
         match &self.flips {
             None => false,
             Some(f) if f.lost => !self.firmware.stale.is_empty() || f.pictures.iter().any(|p| !p.stale.is_empty()),
-            Some(f) => f.shown.is_none() && f.pending.is_none(),
+            Some(f) => f.shown.is_none() && f.pending.is_none() && f.drawing.is_none(),
         }
     }
 
     /// When the next frame may be composed, the last at `last`: while a
-    /// flip waits, once it is carried out; right away after a flip; a frame
-    /// after the last otherwise.
+    /// flip waits (or the GPU draws the frame it is for), once it is
+    /// carried out; right away after a flip; a frame after the last
+    /// otherwise.
     pub(crate) fn next_frame(&self, last: u64) -> u64 {
         match &self.flips {
-            Some(f) if !f.lost && f.pending.is_some() => vabi::DEADLINE_INFINITE,
+            Some(f) if !f.lost && (f.pending.is_some() || f.drawing.is_some()) => vabi::DEADLINE_INFINITE,
             Some(f) if !f.lost && f.flipped => last,
             _ => last + FRAME_NS,
         }
@@ -357,6 +493,7 @@ impl Screen {
             shown: None,
             target: 0,
             pending: None,
+            drawing: None,
             seq: 0,
             flipped: false,
             last: Shown { period_ns: screen.period_ns, ..Shown::default() },
@@ -422,6 +559,7 @@ impl Screen {
         if let Some(f) = &mut self.flips {
             f.lost = true;
             f.pending = None;
+            f.drawing = None;
             for p in &mut f.pictures {
                 p.stale.add(all);
             }

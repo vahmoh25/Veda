@@ -12,6 +12,7 @@
 
 #include "internal.h"
 
+#include "frontend/winsys_handle.h"
 #include "util/format/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_math.h"
@@ -253,6 +254,36 @@ new_resource_id(struct vr_context *ctx)
    return ctx->res_next++;
 }
 
+/* Gives `pres` (the reference) an id, as virgl's `a` describes it. */
+static int
+add_resource(struct vr_context *ctx, struct pipe_resource *pres, const struct vr_resource_args *a,
+             uint64_t backing_offset, uint64_t backing_len, uint32_t *id)
+{
+   uint32_t n = new_resource_id(ctx);
+   if (!n) {
+      pipe_resource_reference(&pres, NULL);
+      vr_fail(ctx, "too many resources");
+      return VR_NO_MEMORY;
+   }
+   struct vr_resource *r = &ctx->res[n];
+   memset(r, 0, sizeof(*r));
+   r->used = true;
+   r->pres = pres;
+   r->backing_offset = backing_offset;
+   r->backing_len = backing_len;
+   r->target = a->target;
+   r->format = a->format;
+   r->bind = a->bind;
+   r->width = a->width;
+   r->height = a->height;
+   r->depth = a->depth;
+   r->array_size = a->array_size;
+   r->last_level = a->last_level;
+   r->nr_samples = a->nr_samples;
+   *id = n;
+   return VR_OK;
+}
+
 VR_API int
 vr_resource_create(struct vr_context *ctx, const struct vr_resource_args *a, uint64_t backing_offset,
                    uint64_t backing_len, uint32_t *id)
@@ -312,29 +343,70 @@ vr_resource_create(struct vr_context *ctx, const struct vr_resource_args *a, uin
          return VR_NO_MEMORY;
       }
    }
-   uint32_t n = new_resource_id(ctx);
-   if (!n) {
-      pipe_resource_reference(&pres, NULL);
-      vr_fail(ctx, "too many resources");
+   return add_resource(ctx, pres, a, backing_offset, backing_len, id);
+}
+
+VR_API int
+vr_resource_import(struct vr_context *ctx, const struct vr_resource_args *a, int fd, void *memory, uint32_t stride,
+                   uint32_t *id)
+{
+   *id = 0;
+   struct pipe_screen *s = ctx->dev->screen;
+   enum pipe_format format = vr_format(ctx->dev, a->format);
+   if (a->target != PIPE_TEXTURE_2D || a->depth != 1 || a->array_size != 1 || a->last_level || a->nr_samples > 1 ||
+       !a->width || !a->height || a->width > 16384 || a->height > 16384) {
+      vr_fail(ctx, "memory from outside as a %ux%u texture of target %u", a->width, a->height, a->target);
+      return VR_INVALID;
+   }
+   if (format == PIPE_FORMAT_NONE || util_format_get_blocksize(format) != 4 || stride / 4 < a->width) {
+      vr_fail(ctx, "memory from outside in format %u, rows %u bytes apart", a->format, stride);
+      return VR_INVALID;
+   }
+   struct pipe_resource t = {0};
+   t.target = PIPE_TEXTURE_2D;
+   t.format = format;
+   t.width0 = a->width;
+   t.height0 = a->height;
+   t.depth0 = t.array_size = 1;
+   t.usage = PIPE_USAGE_DEFAULT;
+   /* A picture a display shows: drawn into, and read from in copies. */
+   t.bind = PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_SCANOUT | PIPE_BIND_SHARED;
+   if (!s->is_format_supported(s, format, PIPE_TEXTURE_2D, 0, 0, PIPE_BIND_RENDER_TARGET)) {
+      vr_fail(ctx, "format %s cannot be drawn into", util_format_name(format));
+      return VR_INVALID;
+   }
+   struct winsys_handle h;
+   memset(&h, 0, sizeof(h));
+   h.stride = stride;
+   h.format = format;
+   /* DRM_FORMAT_MOD_LINEAR: rows one after the other, as displays scan
+    * them out. */
+   h.modifier = 0;
+   switch (ctx->dev->import) {
+#ifdef VR_IRIS
+   case VR_IMPORT_FD:
+      if (fd < 0)
+         return VR_INVALID;
+      h.type = WINSYS_HANDLE_TYPE_FD;
+      h.handle = fd;
+      break;
+#endif
+   case VR_IMPORT_MEMORY:
+      if (!memory)
+         return VR_INVALID;
+      h.type = VR_HANDLE_MEMORY;
+      h.com_obj = memory;
+      break;
+   default:
+      vr_fail(ctx, "the device cannot render into memory it is given");
+      return VR_INVALID;
+   }
+   struct pipe_resource *pres = s->resource_from_handle(s, &t, &h, PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE);
+   if (!pres) {
+      vr_fail(ctx, "the driver could not render into the memory");
       return VR_NO_MEMORY;
    }
-   struct vr_resource *r = &ctx->res[n];
-   memset(r, 0, sizeof(*r));
-   r->used = true;
-   r->pres = pres;
-   r->backing_offset = backing_offset;
-   r->backing_len = backing_len;
-   r->target = a->target;
-   r->format = a->format;
-   r->bind = a->bind;
-   r->width = a->width;
-   r->height = a->height;
-   r->depth = a->depth;
-   r->array_size = a->array_size;
-   r->last_level = a->last_level;
-   r->nr_samples = a->nr_samples;
-   *id = n;
-   return VR_OK;
+   return add_resource(ctx, pres, a, 0, 0, id);
 }
 
 VR_API void
