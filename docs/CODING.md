@@ -31,7 +31,7 @@ These rules apply to every crate in the repository.
 | Component | Target | Notes |
 |-----------|--------|-------|
 | `boot/` (UEFI loader), `kernel/` | `x86_64-unknown-uefi` | freestanding, soft-float, PE |
-| user space (`lib/`, `services/`, `drivers/`, `apps/`) | `x86_64-pc-windows-msvc`, `#![no_std]` | hard-float SSE2, PE `.exe` |
+| user space (`lib/`, `services/`, `drivers/`, `apps/`) | `x86_64-pc-windows-msvc`, `#![no_std]` | hard-float SSE2, PE `.exe`; linked by `link.exe` on Windows, `rust-lld` on Linux |
 | `lib/posix` (in the C library) | `x86_64-unknown-none` | the System V ABI of C programs; linked into musl's `libc.a` |
 | C programs | `x86_64-veda` (GCC) | static ELF executables on musl |
 | `xtask/`, host tools | host (`std`) | |

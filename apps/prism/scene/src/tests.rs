@@ -1,5 +1,6 @@
-//! The scene renders on the host: with the software renderer, and on the
-//! host's GPU through virglrenderer where QEMU (with it) is installed.
+//! The scene renders on the host: with the software renderer, and on
+//! Windows on the host's GPU through virglrenderer where QEMU (with it) is
+//! installed.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -77,6 +78,7 @@ fn renders_the_scene() {
 /// The same frame on the GPU looks the same: the shaders, translated to
 /// TGSI, compute what the software renderer computes, to within the GPU's
 /// precision (and its slightly different rasterization of edges).
+#[cfg(windows)]
 #[test]
 fn renders_the_same_on_the_gpu() {
     let (w, h) = size();
@@ -92,6 +94,7 @@ fn renders_the_same_on_the_gpu() {
 
 /// And through Veda's renderer, on softpipe (`vgallium.dll`), as Veda
 /// renders without virtio-gpu.
+#[cfg(windows)]
 #[test]
 fn renders_the_same_through_the_renderer() {
     let (w, h) = size();
@@ -106,6 +109,7 @@ fn renders_the_same_through_the_renderer() {
 }
 
 /// A frame looks like the scene, and like the software renderer's.
+#[cfg(windows)]
 fn same_as_software(px: &[u32], w: u32, h: u32) {
     looks_like_the_scene(px, w, h);
     let config = Config { width: w, height: h, ..Config::default() };

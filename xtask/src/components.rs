@@ -4,8 +4,11 @@
 //!   (freestanding, soft-float, PE/COFF output).
 //! * User-space programs are `no_std` PE executables built for
 //!   `x86_64-pc-windows-msvc`, which gives us hard-float SSE code on stable
-//!   Rust, linked by the Microsoft linker. Each program's `build.rs` (via
-//!   the `vbuild` helper crate) supplies the Veda-specific linker options.
+//!   Rust. On Windows the Microsoft linker links them, as the target does by
+//!   default; elsewhere LLVM's linker in the Microsoft linker's flavour,
+//!   which Rust ships (`rust-lld`, the UEFI target's linker). Each program's
+//!   `build.rs` (via the `vbuild` helper crate) supplies the Veda-specific
+//!   linker options, which both linkers take.
 
 use std::path::PathBuf;
 
@@ -13,6 +16,13 @@ use crate::util::{self, Result};
 
 pub const UEFI_TARGET: &str = "x86_64-unknown-uefi";
 pub const USER_TARGET: &str = "x86_64-pc-windows-msvc";
+
+/// Cargo's setting of the linker for [`USER_TARGET`].
+const USER_LINKER_VAR: &str = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER";
+
+/// The linker of user-space programs where the target's own, the Microsoft
+/// linker, is not: on hosts other than Windows.
+pub const USER_LINKER: &str = "rust-lld";
 
 /// A user-space program and where it is installed in the initrd.
 #[derive(Debug, Clone, Copy)]
@@ -117,6 +127,10 @@ fn build_programs(profile: Profile, skip: &[String]) -> Result<Vec<(Program, Pat
     util::status("Building", format!("{} user-space programs ({USER_TARGET})", programs.len()));
     let mut cmd = util::cargo();
     cmd.args(["build", "--target", USER_TARGET]).args(profile.cargo_flag());
+    // Unless the environment names a linker of its own.
+    if !cfg!(windows) && std::env::var_os(USER_LINKER_VAR).is_none() {
+        cmd.env(USER_LINKER_VAR, USER_LINKER);
+    }
     for p in &programs {
         cmd.args(["--package", p.package]);
     }

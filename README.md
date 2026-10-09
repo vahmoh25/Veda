@@ -184,21 +184,29 @@ Veda also runs in VirtualBox (see below).
 
 ### Requirements
 
-* Windows 10 or 11, x64. (User-space programs are PE executables linked by
-  the Microsoft linker.)
+Veda is built on an x64 PC with Windows 10 or 11, or with Linux.
+
 * [Rust](https://rustup.rs) (stable). `rust-toolchain.toml` makes rustup
-  install the extra `x86_64-unknown-uefi` target on first use.
-* The Microsoft linker that Rust uses on Windows: Visual Studio 2022 or the
-  Visual Studio Build Tools with the MSVC build tools (`link.exe`). The
-  Rust installer offers to set these up.
-* [QEMU](https://www.qemu.org/download/#windows) for Windows, which includes
-  the OVMF UEFI firmware, and/or [VirtualBox](https://www.virtualbox.org/)
-  7.1 or newer (no Extension Pack needed).
+  install the extra targets on first use.
+* A linker for the user-space programs, which are PE executables. On
+  Windows, the Microsoft linker: Visual Studio 2022 or the Visual Studio
+  Build Tools with the MSVC build tools (`link.exe`), which the Rust
+  installer offers to set up. On Linux, LLVM's linker, which comes with
+  Rust (`rust-lld`).
+* [QEMU](https://www.qemu.org/download/) and the OVMF UEFI firmware, which
+  QEMU for Windows includes. On Linux, the distribution's packages (on
+  Debian and Ubuntu `qemu-system-x86`, `qemu-system-gui`,
+  `qemu-system-modules-opengl` and `ovmf`), and access to `/dev/kvm`
+  (members of the `kvm` group have it), with which QEMU runs Veda on the
+  processor's hardware virtualization. And/or
+  [VirtualBox](https://www.virtualbox.org/) 7.1 or newer (no Extension
+  Pack needed).
 * For the agent: a [Deepgram](https://deepgram.com) API key, entered in
   Veda's Settings.
-* For C and GCC in the image (optional): [MSYS2](https://www.msys2.org)
-  with a few packages, to build the toolchain once with
-  `cargo xtask toolchain` (see [C on Veda](docs/C.md#the-toolchain)).
+* For C and GCC in the image (optional): build tools for the toolchain,
+  which `cargo xtask toolchain` builds once: on Windows
+  [MSYS2](https://www.msys2.org) with a few packages, on Linux the
+  distribution's (see [C on Veda](docs/C.md#the-toolchain)).
 
 Check the environment:
 
@@ -246,18 +254,18 @@ cargo xtask run --vm virtualbox
 xtask creates (and on every run updates) a VirtualBox machine named
 "Veda" whose disks are the same images QEMU uses, so builds need no
 conversion and the home directory is shared between the two. VirtualBox
-uses the CPU's hardware virtualization (QEMU on Windows emulates the CPU
-in software). The machine is closer to a real PC: SATA disks, an Intel
-PRO/1000 network card, PS/2 keyboard and mouse, AC'97 sound with the
-host's speakers and microphone (Windows must allow VirtualBox to use the
-microphone, in Settings → Privacy). Click into the window to use the mouse; the right
-**Ctrl** key releases it.
+uses the CPU's hardware virtualization (as QEMU does on Linux, with KVM;
+on Windows QEMU emulates the CPU in software). The machine is closer to a
+real PC: SATA disks, an Intel PRO/1000 network card, PS/2 keyboard and
+mouse, AC'97 sound with the host's speakers and microphone (Windows must
+allow VirtualBox to use the microphone, in Settings → Privacy). Click into
+the window to use the mouse; the right **Ctrl** key releases it.
 
-On a high-DPI display the window enlarges the screen as QEMU's does, by the
-whole part of the display scaling (2x at 250%), or less if the window
-would not fit on the screen. `--scale` sets the factor (`--scale 2.5`
-matches other programs at 250%; whole numbers look sharpest) and
-`--resolution` gives Veda a larger desktop:
+On a high-DPI display under Windows the window enlarges the screen as
+QEMU's does, by the whole part of the display scaling (2x at 250%), or
+less if the window would not fit on the screen. `--scale` sets the factor
+(`--scale 2.5` matches other programs at 250%; whole numbers look
+sharpest) and `--resolution` gives Veda a larger desktop:
 
 ```bash
 cargo xtask run --vm virtualbox --resolution 1600x1000 --scale 2
@@ -271,7 +279,8 @@ cargo xtask run --vm virtualbox --net bridged
 ```
 
 `shot`, `script` and `test` work with `--vm virtualbox` too; scripts that
-need QEMU (the simulated Wi-Fi) are skipped.
+need QEMU (the simulated Wi-Fi, and on Linux the mouse, which xtask moves
+in VirtualBox on Windows only) are skipped.
 
 ### A real PC, from a USB stick
 

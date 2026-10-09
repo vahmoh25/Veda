@@ -5,6 +5,7 @@
 # target. The compositor then checks that what the GPU draws reaches the
 # pictures' memory; on gemsim it never does, so frames stay with the
 # processor, and the desktop comes all the same.
+requires renderer
 gpu off
 boot-cmdline "flipsim"
 boot-cmdline "run=gemsim"

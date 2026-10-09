@@ -34,10 +34,12 @@ pub fn root() -> PathBuf {
     }
 }
 
-/// Whether the `cross toolchain` or the `native toolchain` has been built.
+/// Whether the `cross toolchain` or the `native toolchain` has been built,
+/// or Mesa configured for the `renderer`.
 pub fn built(what: &str) -> bool {
     match what {
         "cross toolchain" => cross_gcc().is_some(),
+        "renderer" => mesa_build().join("build.ninja").is_file(),
         _ => root().join("native").join("system").join("bin").join("gcc").is_file(),
     }
 }
@@ -50,7 +52,7 @@ pub fn status() -> std::result::Result<String, String> {
     }
     let how = match shell() {
         Ok(_) => "`cargo xtask toolchain` builds it".to_string(),
-        Err(e) => format!("`cargo xtask toolchain` builds it, with MSYS2: {e}"),
+        Err(e) => format!("`cargo xtask toolchain` builds it, but {e}"),
     };
     Err(format!("not built (optional: C and GCC in the image); {how}"))
 }
@@ -361,9 +363,10 @@ impl Port {
     }
 }
 
-/// The ports the toolchain is built from.
+/// The ports the toolchain is built from, and Mesa, which `ports/build.sh`
+/// configures for the renderer.
 fn ports() -> Result<Vec<Port>> {
-    ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl"]
+    ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl", "mesa"]
         .iter()
         .map(|p| Port::load(&util::workspace_root().join("ports").join(p)))
         .collect()
@@ -399,10 +402,23 @@ fn fetch(port: &Port) -> Result {
     std::fs::rename(&partial, &archive).map_err(|e| format!("{e}"))
 }
 
+/// The programs the build needs from the system where MSYS2 does not
+/// provide them: compilers and GNU tools, meson and ninja for Mesa, and
+/// curl for the downloads (`docs/C.md` names the packages).
+const BUILD_TOOLS: [&str; 10] = ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "meson", "ninja", "curl"];
+
 /// The Unix shell that runs `ports/build.sh`: MSYS2's on Windows.
 fn shell() -> Result<Command> {
     if !cfg!(windows) {
-        return Ok(Command::new("bash"));
+        let missing: Vec<&str> = BUILD_TOOLS.into_iter().filter(|t| util::find_on_path(t).is_none()).collect();
+        return match missing.as_slice() {
+            [] => Ok(Command::new("bash")),
+            [tool] => Err(format!("{tool} is missing: install it from the distribution's packages (see docs/C.md)")),
+            [tools @ .., last] => Err(format!(
+                "{} and {last} are missing: install them from the distribution's packages (see docs/C.md)",
+                tools.join(", ")
+            )),
+        };
     }
     let msys = std::env::var_os("VEDA_MSYS2").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\msys64"));
     let bash = msys.join("usr").join("bin").join("bash.exe");
@@ -437,6 +453,8 @@ pub fn command(args: &[String]) -> Result {
         }
     }
     let started = std::time::Instant::now();
+    // The tools first: the downloads are large.
+    let mut sh = shell()?;
     for port in ports()? {
         fetch(&port)?;
     }
@@ -444,7 +462,6 @@ pub fn command(args: &[String]) -> Result {
     // cross linker exists.
     let library = posix_library()?;
     let script = util::workspace_root().join("ports").join("build.sh");
-    let mut sh = shell()?;
     sh.arg(mixed(&script))
         .env("VEDA_PORTS", mixed(&util::workspace_root().join("ports")))
         .env("VEDA_TOOLCHAIN", mixed(&root()))

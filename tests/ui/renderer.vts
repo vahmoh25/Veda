@@ -2,6 +2,7 @@
 # renderer service on Mesa's softpipe, as on a PC without virtio-gpu's 3D
 # (plain VGA here). The service serves the `gpu` protocol, so Prism takes it
 # for a GPU, and its frames keep coming.
+requires renderer
 gpu off
 boot-cmdline "run=renderer run=prism"
 fail-on "PANIC"

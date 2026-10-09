@@ -1,9 +1,12 @@
 //! Helpers for the `build.rs` scripts of Veda user-space crates.
 //!
 //! * [`user_program`] emits the linker options that turn a `no_std` binary
-//!   into a Veda PE executable (fixed base, custom entry point, no CRT).
+//!   into a Veda PE executable (fixed base, custom entry point, no CRT), in
+//!   the Microsoft linker's syntax, which LLVM's linker (`rust-lld`, which
+//!   links the programs on other hosts than Windows) takes too.
 //! * [`find_msvc`] locates the Microsoft linker, which Rust's
-//!   `x86_64-pc-windows-msvc` target links with (`cargo xtask doctor`).
+//!   `x86_64-pc-windows-msvc` target links with on Windows (`cargo xtask
+//!   doctor`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

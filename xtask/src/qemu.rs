@@ -14,7 +14,8 @@ pub struct QemuInstall {
 
 impl QemuInstall {
     /// Finds QEMU via `$QEMU`, `PATH` or well-known install locations, and the
-    /// OVMF firmware via `$OVMF_CODE`/`$OVMF_VARS` or QEMU's data directory.
+    /// OVMF firmware via `$OVMF_CODE`/`$OVMF_VARS`, QEMU's data directory or
+    /// where Linux distributions install it.
     pub fn locate() -> Result<Self> {
         let binary = std::env::var_os("QEMU")
             .map(PathBuf::from)
@@ -32,24 +33,35 @@ impl QemuInstall {
             .ok_or("QEMU not found: install it or set the QEMU environment variable")?;
 
         let qemu_dir = binary.parent().unwrap_or(Path::new("."));
-        let candidates = |names: &[&str]| -> Option<PathBuf> {
-            let dirs = [
-                qemu_dir.join("share"),
-                qemu_dir.join("../share/qemu"),
-                PathBuf::from("/usr/share/qemu"),
-                PathBuf::from("/usr/share/OVMF"),
-                PathBuf::from("/usr/share/edk2/x64"),
-            ];
-            dirs.iter().flat_map(|d| names.iter().map(move |n| d.join(n))).find(|p| p.is_file())
-        };
+        let dirs = [
+            qemu_dir.join("share"),
+            qemu_dir.join("../share/qemu"),
+            PathBuf::from("/usr/share/qemu"),
+            PathBuf::from("/usr/share/OVMF"),
+            PathBuf::from("/usr/share/edk2/ovmf"),
+            PathBuf::from("/usr/share/edk2/x64"),
+        ];
+        // The firmware and its variable store, as QEMU's own builds name
+        // them and as Linux distributions do (Debian and Ubuntu, Fedora,
+        // Arch): both from one place, as their sizes must match.
+        let pairs = [
+            ("edk2-x86_64-code.fd", "edk2-i386-vars.fd"),
+            ("OVMF_CODE.fd", "OVMF_VARS.fd"),
+            ("OVMF_CODE_4M.fd", "OVMF_VARS_4M.fd"),
+            ("OVMF_CODE.4m.fd", "OVMF_VARS.4m.fd"),
+        ];
+        let found = dirs
+            .iter()
+            .flat_map(|d| pairs.iter().map(move |(code, vars)| (d.join(code), d.join(vars))))
+            .find(|(code, vars)| code.is_file() && vars.is_file());
+        let missing = "the OVMF firmware was not found: install it (QEMU for Windows includes it; on Linux \
+                       it is the ovmf or edk2-ovmf package) or set OVMF_CODE and OVMF_VARS";
         let ovmf_code = std::env::var_os("OVMF_CODE")
             .map(PathBuf::from)
-            .or_else(|| candidates(&["edk2-x86_64-code.fd", "OVMF_CODE.fd", "OVMF_CODE_4M.fd"]))
-            .ok_or("OVMF firmware (edk2-x86_64-code.fd) not found; set OVMF_CODE")?;
-        let ovmf_vars_template = std::env::var_os("OVMF_VARS")
-            .map(PathBuf::from)
-            .or_else(|| candidates(&["edk2-i386-vars.fd", "OVMF_VARS.fd", "OVMF_VARS_4M.fd"]))
-            .ok_or("OVMF variable store (edk2-i386-vars.fd) not found; set OVMF_VARS")?;
+            .or_else(|| found.as_ref().map(|(code, _)| code.clone()))
+            .ok_or(missing)?;
+        let ovmf_vars_template =
+            std::env::var_os("OVMF_VARS").map(PathBuf::from).or_else(|| found.map(|(_, vars)| vars)).ok_or(missing)?;
         Ok(QemuInstall { binary, ovmf_code, ovmf_vars_template })
     }
 

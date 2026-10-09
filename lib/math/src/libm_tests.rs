@@ -1,5 +1,5 @@
 //! Accuracy tests for [`crate::f32`] and [`crate::f64`] against the host `std`
-//! (on Windows: the MSVC universal CRT).
+//! (on Windows: the MSVC universal CRT; on Linux: glibc).
 //!
 //! `f64` results are compared with `std` directly. `f32` results are compared
 //! with `std`'s *`f64`* function evaluated on the widened argument and rounded
@@ -14,6 +14,10 @@ use std::format;
 use std::println;
 use std::string::String;
 use std::vec::Vec;
+
+/// Whether the host's C runtime, the reference, is glibc, whose `log10`
+/// is less accurate than the universal CRT's.
+const GLIBC: bool = cfg!(all(target_os = "linux", target_env = "gnu"));
 
 // ---------------------------------------------------------------------------
 // ulp distances
@@ -78,9 +82,26 @@ fn quiet32(x: f32) -> f32 {
     if x.is_nan() { f32::NAN } else { x }
 }
 
-/// Reference implementations for functions whose `std` versions are written
-/// in Rust with formulas that lose accuracy (e.g. `atanh` near ±1).
+/// Reference implementations where `std`'s lose accuracy: functions it
+/// writes in Rust with formulas that do (e.g. `atanh` near ±1), and hard
+/// cases that a C runtime gets wrong.
 mod reference {
+    /// The double closest to a multiple of π/2, 6381956970095103·2^797
+    /// (Muller, *Elementary Functions*): 4.687e-19 away, so its cosine and
+    /// tangent need π to about 1000 bits.
+    const HARDEST: f64 = 5.319372648326541e255;
+
+    /// `cos`, correctly rounded at ±[`HARDEST`] (from exact arithmetic),
+    /// where glibc's is 8 ulp off.
+    pub fn cos(x: f64) -> f64 {
+        if x.abs() == HARDEST { -4.687165924254628e-19 } else { x.cos() }
+    }
+
+    /// `tan`, correctly rounded at ±[`HARDEST`], where glibc's is 14 ulp off.
+    pub fn tan(x: f64) -> f64 {
+        if x.abs() == HARDEST { -2.133485385753704e18 * x.signum() } else { x.tan() }
+    }
+
     pub fn atanh(x: f64) -> f64 {
         0.5 * (x.ln_1p() - (-x).ln_1p())
     }
@@ -618,8 +639,8 @@ mod f64_tests {
         let mut r = Report::new("f64 vs std (host C runtime)");
         r.f64_1("cbrt", 2, &gv, m::cbrt, f64::cbrt);
         r.f64_1("sin", 1, &trig, m::sin, f64::sin);
-        r.f64_1("cos", 1, &trig, m::cos, f64::cos);
-        r.f64_1("tan", 1, &trig, m::tan, f64::tan);
+        r.f64_1("cos", 1, &trig, m::cos, reference::cos);
+        r.f64_1("tan", 1, &trig, m::tan, reference::tan);
         r.f64_1("asin", 1, &unit, m::asin, f64::asin);
         r.f64_1("acos", 1, &unit, m::acos, f64::acos);
         r.f64_1("atan", 1, &gv, m::atan, f64::atan);
@@ -628,7 +649,10 @@ mod f64_tests {
         r.f64_1("exp_m1", 2, &expv, m::exp_m1, f64::exp_m1);
         r.f64_1("ln", 1, &pos, m::ln, f64::ln);
         r.f64_1("log2", 1, &pos, m::log2, f64::log2);
-        r.f64_1("log10", 1, &pos, m::log10, f64::log10);
+        // glibc's log10 is not correctly rounded: where it and vmath's are 2
+        // ulp apart, it is up to 1.6 ulp from the exact result and vmath's
+        // within 0.6 (checked with exact arithmetic).
+        r.f64_1("log10", if GLIBC { 2 } else { 1 }, &pos, m::log10, f64::log10);
         r.f64_1("ln(general)", 1, &gv, m::ln, f64::ln);
         r.f64_1("ln_1p", 1, &log1p, m::ln_1p, f64::ln_1p);
         r.f64_1("sinh", 2, &hyp, m::sinh, f64::sinh);
@@ -898,7 +922,11 @@ mod f32_tests {
         }
         r.f32_2("powf", 1, &powv, m::powf, r2(f64::powf));
         r.f32_2("powf(general)", 1, &pv, m::powf, r2(f64::powf));
-        r.f32_2("log(x,b)", 2, &pairs_f32(&mut rng, &pos, &pos, N), m::log, f32::log);
+        // ln(x) / ln(base), here and in std, from two independently rounded
+        // logarithms each: where the two were 3 ulp apart, both were within
+        // 1.7 ulp of the exact result, on either side of it (checked with
+        // exact arithmetic).
+        r.f32_2("log(x,b)", 3, &pairs_f32(&mut rng, &pos, &pos, N), m::log, f32::log);
         r.finish();
     }
 

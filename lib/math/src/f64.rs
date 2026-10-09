@@ -20,12 +20,16 @@
 //! The transcendental functions are ports of the FreeBSD/musl versions of Sun's
 //! `fdlibm` (same polynomials, splitting tricks and special-case handling;
 //! `powf` additionally fixes fdlibm's inexact `log2` split for |y| > 2^31).
-//! Measured against the host C library on ~200k-600k inputs per function,
-//! `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `exp`, `exp2`, `ln`,
-//! `log2`, `log10`, `ln_1p`, `hypot` and `powf` stay within 1 ulp; `cbrt` and
-//! `exp_m1` within 2 ulp of the C library, whose own results were off in the
-//! worst cases (vmath's are within 0.61 ulp and correctly rounded there);
-//! `sinh`, `cosh`, `tanh` and the inverse hyperbolic functions within 2 ulp.
+//! Measured against Windows' C library (the universal CRT) on ~200k-600k
+//! inputs per function, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
+//! `exp`, `exp2`, `ln`, `log2`, `log10`, `ln_1p`, `hypot` and `powf` stay
+//! within 1 ulp; `cbrt` and `exp_m1` within 2 ulp of the C library, whose own
+//! results were off in the worst cases (vmath's are within 0.61 ulp and
+//! correctly rounded there); `sinh`, `cosh`, `tanh` and the inverse
+//! hyperbolic functions within 2 ulp. glibc is further off in places: its
+//! `log10` by up to 1.6 ulp (vmath's stays within 0.6), its `cos` and `tan`
+//! of the argument hardest to reduce by 8 and 14 ulp (vmath's are correctly
+//! rounded).
 //! `sqrt`, the rounding functions, `fmod`, `rem_euclid`, `div_euclid`, `abs`,
 //! `copysign` and `signum` are exact.
 //!

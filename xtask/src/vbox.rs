@@ -559,11 +559,31 @@ pub mod ctrl_c {
         1
     }
 
+    /// Ctrl+C is the terminal's SIGINT.
+    #[cfg(unix)]
+    const SIGINT: i32 = 2;
+
+    #[cfg(unix)]
+    unsafe extern "C" {
+        fn signal(signal: i32, handler: extern "C" fn(i32)) -> usize;
+    }
+
+    #[cfg(unix)]
+    extern "C" fn handler(_signal: i32) {
+        PRESSED.store(true, Ordering::SeqCst);
+    }
+
     pub fn install() {
         #[cfg(windows)]
         // SAFETY: registers a handler that only stores to an atomic.
         unsafe {
             SetConsoleCtrlHandler(Some(handler), 1);
+        }
+        #[cfg(unix)]
+        // SAFETY: the handler only stores to an atomic, which a signal
+        // handler may do.
+        unsafe {
+            signal(SIGINT, handler);
         }
     }
 
@@ -718,5 +738,17 @@ mod tests {
         let left = HostDisplay { scale: 1.0, left: 100, top: 0, width: 1820, height: 1080 };
         assert_eq!(window_geometry(left, 1280, 800, 1.0), "370,128,1280,854");
         assert_eq!(window_geometry(display(1.0, 1920, 1032), 1920, 1200, 1.0), "0,29,1920,1254");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ctrl_c_is_noticed() {
+        unsafe extern "C" {
+            fn raise(signal: i32) -> i32;
+        }
+        ctrl_c::install();
+        // SAFETY: SIGINT now runs the handler, which only sets a flag.
+        assert_eq!(unsafe { raise(2) }, 0);
+        assert!(ctrl_c::pressed());
     }
 }

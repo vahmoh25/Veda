@@ -101,20 +101,36 @@ fn test_launcher() -> TestResult {
     check(tasks.iter().any(|t| t.name == "vfs"), "vfs is running")
 }
 
-/// The supervisor in `init` restarts crashed system services: kill the
-/// compositor, then wait for a new one to answer display requests and for the
-/// desktop shell (which loses its windows with it) to come back.
+/// The supervisor in `init` restarts crashed system services: once the
+/// desktop is up, kill the compositor, then wait for a new one to answer
+/// display requests and for the desktop shell (which loses its windows with
+/// it) to come back.
 fn test_service_restart() -> TestResult {
     use vproto::display::display;
     let l = launcher::Client::new(vproto::connect(launcher::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let koid_of = |l: &launcher::Client, name: &str| -> Result<Option<u64>, String> {
         Ok(l.tasks().map_err(|e| e.to_string())?.iter().find(|t| t.name == name).map(|t| t.koid))
     };
+    // A shell registers its service after creating its windows.
+    let shell_up = || {
+        let names = vproto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
+        names.iter().any(|n| n == "shell")
+    };
+    let wait = || vrt::time::sleep(vrt::time::Duration::from_millis(200));
+    // The compositor goes with the desktop on the screen, as in use. (With
+    // hardware virtualisation, systest gets here before the shell has made
+    // its windows.)
+    let start = vrt::time::Instant::now();
+    while !shell_up() {
+        if start.elapsed().as_millis() > 40_000 {
+            return Err("the desktop shell did not start".into());
+        }
+        wait();
+    }
     let shell_before = koid_of(&l, "shell")?;
     let old = koid_of(&l, "compositor")?.ok_or("the compositor is not running")?;
     l.kill(old).map_err(|e| e.to_string())?.map_err(|e| alloc::format!("kill: {e:?}"))?;
     let start = vrt::time::Instant::now();
-    let wait = || vrt::time::sleep(vrt::time::Duration::from_millis(200));
     loop {
         if start.elapsed().as_millis() > 20_000 {
             return Err("the compositor was not restarted".into());
@@ -129,14 +145,12 @@ fn test_service_restart() -> TestResult {
     let d = display::Client::new(vproto::connect(display::NAME).map_err(|e| alloc::format!("{e:?}"))?);
     let info = d.screen_info().map_err(|e| e.to_string())?;
     check(info.width > 0 && info.height > 0, "restarted compositor reports the screen")?;
-    // A shell registers its service after creating its windows.
     loop {
         if start.elapsed().as_millis() > 40_000 {
             return Err("the desktop shell did not come back".into());
         }
         let shell = koid_of(&l, "shell")?;
-        let names = vproto::with_registry(|r| r.list()).ok().and_then(|r| r.ok()).unwrap_or_default();
-        if shell.is_some() && shell != shell_before && names.iter().any(|n| n == "shell") {
+        if shell.is_some() && shell != shell_before && shell_up() {
             return Ok(());
         }
         wait();

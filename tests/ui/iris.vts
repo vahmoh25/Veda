@@ -4,6 +4,7 @@
 # submits its frames, which complete at once. What it draws is never
 # drawn: this checks the way to the GPU (on real hardware, intel-gpu serves
 # the same protocol), not pictures.
+requires renderer
 gpu off
 boot-cmdline "run=gemsim run=renderer:iris run=prism"
 fail-on "PANIC"

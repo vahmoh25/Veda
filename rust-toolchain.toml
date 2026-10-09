@@ -1,6 +1,8 @@
 # Veda builds on stable Rust (tested with 1.99). rustup installs the extra
-# bare-metal target automatically on first use.
+# targets automatically on first use: the bare-metal ones of the loader and
+# kernel and of the POSIX layer in the C library, and on Linux the one of
+# user-space programs (on Windows it is the host's own).
 [toolchain]
 channel = "stable"
-targets = ["x86_64-unknown-uefi"]
+targets = ["x86_64-unknown-uefi", "x86_64-unknown-none", "x86_64-pc-windows-msvc"]
 components = ["rustfmt", "clippy"]

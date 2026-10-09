@@ -3,9 +3,10 @@
 //!
 //! `VBoxManage` has no mouse command, so a helper PowerShell process holds
 //! a session on the machine through VirtualBox's COM API and forwards mouse
-//! events. The guest has a PS/2 mouse, which only moves relatively and by at
-//! most 255 counts per event: positions are reached by first pushing the
-//! pointer into the top-left corner, then stepping towards the target (the
+//! events (on Windows: elsewhere, scripts that use the mouse need QEMU).
+//! The guest has a PS/2 mouse, which only moves relatively and by at most
+//! 255 counts per event: positions are reached by first pushing the pointer
+//! into the top-left corner, then stepping towards the target (the
 //! compositor moves the pointer one pixel per count, without acceleration).
 
 use std::io::{BufRead, BufReader, Write};

@@ -41,7 +41,7 @@ COMMANDS:
                 and the agent's in tests/agent)
     toolchain   Build the C toolchain (GCC, binutils, musl) from ports/: a cross
                 compiler for this machine and the native one the image installs in
-                /system (needs MSYS2 on Windows; see docs/C.md; --jobs N)
+                /system (needs build tools: MSYS2 on Windows; see docs/C.md; --jobs N)
     clean       Remove build outputs
     doctor      Check that the required tools are installed
     help        Show this message
@@ -57,8 +57,8 @@ BUILD OPTIONS:
 RUN OPTIONS:
     --vm HYPERVISOR     qemu (default) or virtualbox (run, shot, script, test)
     --scale FACTOR      VirtualBox: how much the window enlarges the screen, such as 2 or
-                        250% (default: the whole part of the Windows display scaling, as
-                        QEMU's window has it, lowered if the window would not fit)
+                        250% (default on Windows: the whole part of the display scaling, as
+                        QEMU's window has it, lowered if the window would not fit; else 1)
     --smp N             Number of virtual CPUs (default 4)
     --memory MiB        Guest RAM in MiB (default 1024)
     --headless          No display window (serial console only)
@@ -775,18 +775,24 @@ fn doctor() -> Result {
     let rustc = std::process::Command::new("rustc").arg("--version").output();
     check("rustc", rustc.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).map_err(|e| e.to_string()));
     let targets = std::process::Command::new("rustup").args(["target", "list", "--installed"]).output();
-    check(
-        "uefi target",
-        targets.map_err(|e| e.to_string()).and_then(|o| {
-            let s = String::from_utf8_lossy(&o.stdout).to_string();
-            if s.contains(components::UEFI_TARGET) {
-                Ok("installed".into())
-            } else {
-                Err(format!("run `rustup target add {}`", components::UEFI_TARGET))
-            }
-        }),
-    );
-    check("msvc linker", vbuild::find_msvc().map(|m| m.link.display().to_string()));
+    let targets = targets.map(|o| String::from_utf8_lossy(&o.stdout).to_string()).map_err(|e| e.to_string());
+    for (name, target) in [("uefi target", components::UEFI_TARGET), ("user target", components::USER_TARGET)] {
+        check(
+            name,
+            targets.clone().and_then(|s| {
+                if s.contains(target) {
+                    Ok("installed".into())
+                } else {
+                    Err(format!("run `rustup target add {target}`"))
+                }
+            }),
+        );
+    }
+    if cfg!(windows) {
+        check("msvc linker", vbuild::find_msvc().map(|m| m.link.display().to_string()));
+    } else {
+        check("linker", rust_lld().map(|p| p.display().to_string()));
+    }
     match qemu::QemuInstall::locate() {
         Ok(q) => {
             check("qemu", Ok(q.binary.display().to_string()));
@@ -794,11 +800,38 @@ fn doctor() -> Result {
         }
         Err(e) => check("qemu", Err(e)),
     }
+    // QEMU emulates the processor where it cannot use KVM, which works but
+    // is several times slower.
+    if cfg!(target_os = "linux") {
+        match std::fs::OpenOptions::new().read(true).write(true).open("/dev/kvm") {
+            Ok(_) => println!("  [ok]   kvm: /dev/kvm"),
+            Err(e) => println!(
+                "  [--]   kvm: /dev/kvm: {e} (QEMU emulates the processor instead, several times slower; \
+                 members of the kvm group can use it)"
+            ),
+        }
+    }
     match toolchain::status() {
         Ok(v) => println!("  [ok]   c toolchain: {v}"),
         Err(e) => println!("  [--]   c toolchain: {e}"),
     }
     if ok { Ok(()) } else { Err("some checks failed".into()) }
+}
+
+/// The linker of user-space programs off Windows (`components::USER_LINKER`):
+/// LLVM's, which comes with Rust's toolchain, beside the host's libraries.
+fn rust_lld() -> Result<PathBuf> {
+    let out = std::process::Command::new("rustc")
+        .args(["--print", "target-libdir"])
+        .output()
+        .map_err(|e| format!("running rustc: {e}"))?;
+    let libdir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let lld = libdir.parent().unwrap_or(&libdir).join("bin").join(components::USER_LINKER);
+    if lld.is_file() {
+        Ok(lld)
+    } else {
+        Err(format!("{} not found (it comes with Rust's toolchains from rustup)", lld.display()))
+    }
 }
 
 fn main() -> ExitCode {

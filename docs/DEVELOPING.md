@@ -52,19 +52,21 @@ cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile an
   to `target/veda/serial.log` by `shot`/`script`/`test`.
 * QEMU's display is also a 3D GPU (`virtio-vga-gl`: VGA plus virtio-gpu
   with virgl) when its build has one, as QEMU's Windows build does (with
-  ANGLE): the window then uses `-display gtk,gl=on` (the host's desktop
-  OpenGL), and headless runs `-display egl-headless` (ANGLE). `--no-gpu`
-  makes it plain VGA and `--gpu` insists on the GPU.
+  ANGLE) and Linux distributions' do (on Debian and Ubuntu with
+  `qemu-system-modules-opengl`): the window then uses `-display gtk,gl=on`
+  (the host's desktop OpenGL), and headless runs `-display egl-headless`
+  (ANGLE on Windows, the host's EGL on Linux). `--no-gpu` makes it plain
+  VGA and `--gpu` insists on the GPU.
   OpenGL ES programs render on it through the `virtio-gpu` driver, on a
   PC with Intel's Iris Xe (Tiger Lake to Raptor Lake) through the
   renderer on iris and `intel-gpu`, and in software elsewhere
   (VirtualBox).
-* `cargo xtask test` also runs the OpenGL ES tests on the host's GPU,
-  through the virglrenderer that QEMU ships, on ANGLE and on the host's
-  desktop OpenGL, as headless QEMU and its window render (`VEDA_QEMU_DIR`
-  says where, if not with the QEMU xtask finds). `PRISM_SIZE=960x600
-  PRISM_SHOT=soft.png PRISM_GPU_SHOT=gpu.png cargo test -p prism-scene`
-  saves Prism's frame as both renderers draw it.
+* On Windows, `cargo xtask test` also runs the OpenGL ES tests on the
+  host's GPU, through the virglrenderer that QEMU ships, on ANGLE and on
+  the host's desktop OpenGL, as headless QEMU and its window render
+  (`VEDA_QEMU_DIR` says where, if not with the QEMU xtask finds).
+  `PRISM_SIZE=960x600 PRISM_SHOT=soft.png PRISM_GPU_SHOT=gpu.png cargo test
+  -p prism-scene` saves Prism's frame as both renderers draw it.
 * QEMU's window (GTK) takes the pointer as absolute from power-on: the
   tablet is bound to the display, so a click never grabs the mouse. On
   Windows, QEMU deadlocks if it holds a grab (Ctrl+Alt+G takes one) when
@@ -183,7 +185,8 @@ cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile an
   that xtask starts on the host, and feed the agent's microphone from the
   host (`testmic`). The scripts in `tests/real/` talk to the real Deepgram
   with the key in `DEEPGRAM_API_KEY` (in PowerShell
-  `$env:DEEPGRAM_API_KEY = "..."`); they type it into Settings with
+  `$env:DEEPGRAM_API_KEY = "..."`, in a Unix shell
+  `export DEEPGRAM_API_KEY=...`); they type it into Settings with
   `type-env`, so it is in neither the script nor the logs. See
   [The agent](AGENT.md#testing).
 * With `--vm virtualbox`, xtask creates the VirtualBox machine "Veda"
@@ -192,17 +195,18 @@ cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile an
   `home.vmdk`) that point at the raw images, so VirtualBox and QEMU use the
   same files (not at the same time). The serial console goes to
   `target/veda/serial-vbox.log` and the terminal; Ctrl+C powers the
-  machine off. The window enlarges the screen by the whole part of the
-  host's display scaling, as QEMU's window (GTK) does, lowered until the
-  window fits on the screen, and opens in the middle of the screen when the
-  resolution or the scale changes; `--scale 2` or `--scale 250%` chooses
+  machine off. On Windows the window enlarges the screen by the whole part
+  of the host's display scaling, as QEMU's window (GTK) does, lowered until
+  the window fits on the screen, and opens in the middle of the screen when
+  the resolution or the scale changes; `--scale 2` or `--scale 250%` chooses
   the factor and `--scale 1` shows the screen pixel for pixel. Resolutions
   missing from the firmware's list become a custom video mode. Inside the
   window, View > Virtual Screen changes the scale, Host+F switches to full
   screen and Host+C to scaled mode, whose window can be resized freely.
   Scripts drive VirtualBox through `VBoxManage` (keys as PS/2 scan codes,
   screenshots) and its COM API (the mouse, through a helper PowerShell
-  process); `test` skips scripts that need QEMU's simulated Wi-Fi.
+  process, so on Windows only); `test` skips scripts that need QEMU's
+  simulated Wi-Fi, and on Linux those that use the mouse.
 * With `--net wifi`, xtask builds and starts `airsim` (the simulated Wi-Fi
   environment) next to QEMU; it logs to `target/veda/airsim.log` and
   prints its control port, which takes commands such as `ap home off`,
@@ -221,7 +225,8 @@ cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile an
 * Several builds can run concurrently if each uses its own directories:
   set `CARGO_TARGET_DIR` (cargo output) and `VEDA_OUT` (disk image, serial
   log, screenshots) to private paths, e.g. in PowerShell
-  `$env:CARGO_TARGET_DIR="target/agent-x"; $env:VEDA_OUT="target/agent-x/veda"`.
+  `$env:CARGO_TARGET_DIR="target/agent-x"; $env:VEDA_OUT="target/agent-x/veda"`,
+  in a Unix shell `export CARGO_TARGET_DIR=target/agent-x VEDA_OUT=target/agent-x/veda`.
   With `--vm virtualbox`, each output directory also gets its own machine
   (here "Veda-target-agent-x-veda").
   Paths in automation scripts (`shot FILE`) are relative to the repository.

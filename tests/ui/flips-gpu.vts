@@ -7,6 +7,7 @@
 # from the other: the desktop shows the same from either. softpipe is slow
 # under emulation (seconds for a frame of the whole screen), so the script
 # waits long, and leaves windows to flips.vts.
+requires renderer
 gpu off
 boot-cmdline "flipsim"
 boot-cmdline "run=renderer"
