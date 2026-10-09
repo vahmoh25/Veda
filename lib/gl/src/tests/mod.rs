@@ -74,14 +74,14 @@ pub fn multisampling(c: &mut Context) -> bool {
 /// `VGL_TEST_BACKEND=gallium`, otherwise through virglrenderer on the
 /// host's GPU, if it is installed.
 pub fn virgl_context(config: Config) -> Option<Context> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         if std::env::var("VGL_TEST_BACKEND").is_ok_and(|v| v == "gallium") {
             return crate::virgl::gallium::context(config);
         }
         crate::virgl::host::context(config)
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = config;
         None

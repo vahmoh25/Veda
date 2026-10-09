@@ -657,17 +657,21 @@ Gfx12 graphics). Under QEMU the difference is large: Prism runs at about
 1 frame a second in software, and at 55 at its full resolution on the
 GPU.
 
-The virgl renderer is tested on the host: `vgl::virgl::host` loads the
-virglrenderer and ANGLE that QEMU's Windows build ships and runs the
-whole `vgl` test suite on the host's GPU (`VGL_TEST_BACKEND=virgl`), on
-ANGLE and on the host's desktop OpenGL (`VGL_TEST_HOST=desktop`, through
-WGL, as QEMU's window uses it), and Prism's scene, rendered both ways,
-must look the same to within the GPU's rounding. The suite also runs
-through the renderer's decoder on softpipe (`VGL_TEST_BACKEND=gallium`,
-`vgl::virgl::gallium`, which loads the decoder built with Mesa as
-`vgallium.dll`); where softpipe falls short of a GPU (no multisampling,
-points an eighth of a pixel off, depth filtered before it is compared)
-the tests say so.
+The virgl renderer is tested on the host: `vgl::virgl::host` calls
+virglrenderer as QEMU does, on OpenGL contexts made as QEMU makes them,
+and runs the whole `vgl` test suite on the host's GPU
+(`VGL_TEST_BACKEND=virgl`). On Windows it loads the virglrenderer and
+ANGLE that QEMU's Windows build ships, and renders on ANGLE and on the
+host's desktop OpenGL (`VGL_TEST_HOST=desktop`, through WGL, as QEMU's
+window uses it); on Linux it loads the system's virglrenderer and renders
+through EGL on a GPU's render node (GBM), on desktop OpenGL as QEMU does
+and on OpenGL ES (`VGL_TEST_HOST=gles`). Prism's scene, rendered both
+ways, must look the same to within the GPU's rounding. The suite also
+runs through the renderer's decoder on softpipe
+(`VGL_TEST_BACKEND=gallium`, `vgl::virgl::gallium`, which loads the
+decoder built with Mesa as `vgallium.dll`, on Linux `vgallium.so`);
+where softpipe falls short of a GPU (no multisampling, points an eighth
+of a pixel off, depth filtered before it is compared) the tests say so.
 
 ## Audio
 

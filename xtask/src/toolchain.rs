@@ -175,8 +175,8 @@ pub fn refresh_posix_layer() -> Result {
 }
 
 /// Mesa's build directories, which `ports/build.sh` configures: for Veda,
-/// and for this machine (Windows only: the renderer as a library, for the
-/// OpenGL ES tests).
+/// and for this machine (the renderer as a library, for the OpenGL ES
+/// tests).
 fn mesa_build() -> PathBuf {
     root().join("build").join("mesa")
 }
@@ -227,16 +227,17 @@ pub fn renderer() -> Result<Option<Vec<u8>>> {
 }
 
 /// The renderer as a library on softpipe for this machine
-/// (`vgallium.dll`), up to date; None if Mesa has not been configured for
-/// it (Windows only).
+/// (`vgallium.dll`, on Linux `vgallium.so`), up to date; None if Mesa has
+/// not been configured for it.
 pub fn vgallium() -> Result<Option<PathBuf>> {
     let dir = mesa_host_build();
     if !dir.join("build.ninja").is_file() {
         return Ok(None);
     }
+    let name = if cfg!(windows) { "vgallium.dll" } else { "vgallium.so" };
     util::status("Building", "the renderer on softpipe for the host (Mesa)");
-    ninja(&dir, "src/gallium/targets/veda/vgallium.dll")?;
-    Ok(Some(dir.join("src").join("gallium").join("targets").join("veda").join("vgallium.dll")))
+    ninja(&dir, &format!("src/gallium/targets/veda/{name}"))?;
+    Ok(Some(dir.join("src").join("gallium").join("targets").join("veda").join(name)))
 }
 
 /// How each C test program is linked: once at a fixed address, as GCC links

@@ -669,16 +669,20 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
 
 fn test(o: &Options) -> Result {
     util::status("Testing", "library unit tests on the host");
-    // Tests of OpenGL ES on the host's GPU use the virglrenderer QEMU ships
-    // (Windows), where there is one.
-    let virgl = qemu::QemuInstall::locate().ok().and_then(|q| q.virglrenderer_dir());
+    // Tests of OpenGL ES on the host's GPU drive the virglrenderer QEMU
+    // runs, where it has one: on Windows the one QEMU's builds ship, which
+    // they load from QEMU's directory; on Linux the system's, which QEMU's
+    // 3D GPU is built on.
+    let qemu = qemu::QemuInstall::locate().ok();
+    let virgl_dir = qemu.as_ref().and_then(|q| q.virglrenderer_dir());
+    let virgl = virgl_dir.is_some() || (cfg!(target_os = "linux") && qemu.as_ref().is_some_and(|q| q.has_gl_gpu()));
     for (package, features) in HOST_TESTED {
         let mut cmd = util::cargo();
         cmd.args(["test", "--quiet", "--package", package]);
         if !features.is_empty() {
             cmd.args(["--features", &features.join(",")]);
         }
-        if let Some(dir) = &virgl {
+        if let Some(dir) = &virgl_dir {
             cmd.env("VEDA_QEMU_DIR", dir);
         }
         util::run(&mut cmd)?;
@@ -696,16 +700,24 @@ fn test(o: &Options) -> Result {
             util::run(&mut cmd)?;
         }
     }
-    if let Some(dir) = &virgl {
-        // On ANGLE, as headless QEMU renders, and on the host's desktop
-        // OpenGL, as QEMU's window does.
-        for (host, what) in [("angle", "ANGLE"), ("desktop", "desktop OpenGL")] {
+    if virgl {
+        // On Windows on ANGLE, as headless QEMU renders, and on the host's
+        // desktop OpenGL, as QEMU's window does. On Linux QEMU renders on
+        // desktop OpenGL either way, and on OpenGL ES with `gl=es`.
+        let hosts: &[(&str, &str)] = if cfg!(windows) {
+            &[("angle", "ANGLE"), ("desktop", "desktop OpenGL")]
+        } else {
+            &[("desktop", "desktop OpenGL"), ("gles", "OpenGL ES")]
+        };
+        for (host, what) in hosts {
             util::status("Testing", format!("OpenGL ES on the host's GPU (QEMU's virglrenderer on {what})"));
             let mut cmd = util::cargo();
             cmd.args(["test", "--quiet", "--package", "vgl"])
                 .env("VGL_TEST_BACKEND", "virgl")
-                .env("VGL_TEST_HOST", host)
-                .env("VEDA_QEMU_DIR", dir);
+                .env("VGL_TEST_HOST", host);
+            if let Some(dir) = &virgl_dir {
+                cmd.env("VEDA_QEMU_DIR", dir);
+            }
             util::run(&mut cmd)?;
         }
     }

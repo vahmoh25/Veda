@@ -55,7 +55,7 @@ fn uniform_blocks_use_std140() {
     c.bind_buffer_base(gl::UNIFORM_BUFFER, 3, ub);
     c.draw_arrays(gl::TRIANGLES, 0, 6);
     no_error(&mut c);
-    assert_eq!(px(&read_rgba(&mut c, 1, 1), 1, 0, 0), [128, 64, 32, 96]);
+    assert_close(&px(&read_rgba(&mut c, 1, 1), 1, 0, 0), &[128, 64, 32, 96]);
     // A range that is not aligned is refused.
     c.bind_buffer_range(gl::UNIFORM_BUFFER, 0, ub, 4, 16);
     assert_eq!(c.get_error(), gl::INVALID_VALUE);

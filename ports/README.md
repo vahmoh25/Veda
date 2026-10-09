@@ -50,15 +50,16 @@ up; `posix_spawn` asks the layer to start the program.
 OpenGL ES command streams of applications on Mesa's Gallium drivers, is a
 target of Mesa's build: `src/gallium/targets/veda`, compiling the sources
 the `veda-renderer` option names, makes the renderer service for Veda and,
-on Windows, `vgallium.dll` (the renderer on softpipe) for the OpenGL ES
-tests. Gallium's own state handling is built without any OpenGL API
-(`with_gfx_compute`), and `src/util/detect_os.h` counts Veda as Linux: its
-POSIX layer carries out Linux's system calls. iris, Intel's driver, is
-built with the renderer's small libdrm (`services/renderer/drm`) and
-without what needs Mesa's OpenCL compiler (LLVM): generating indirect
-draws on the GPU, and blorp's indirect copies (its bounds check is
-written in NIR instead). `build.sh` configures Mesa (meson); `cargo xtask`
-builds the renderer (ninja) with the system.
+for the machine that builds it, `vgallium.dll` (on Linux `vgallium.so`:
+the renderer on softpipe) for the OpenGL ES tests. Gallium's own state
+handling is built without any OpenGL API (`with_gfx_compute`), and
+`src/util/detect_os.h` counts Veda as Linux: its POSIX layer carries out
+Linux's system calls. iris, Intel's driver, is built with the renderer's
+small libdrm (`services/renderer/drm`) and without what needs Mesa's
+OpenCL compiler (LLVM): generating indirect draws on the GPU, and blorp's
+indirect copies (its bounds check is written in NIR instead). `build.sh`
+configures Mesa (meson); `cargo xtask` builds the renderer (ninja) with
+the system.
 
 ## Updating a port
 

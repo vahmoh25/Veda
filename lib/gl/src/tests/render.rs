@@ -52,8 +52,8 @@ fn clears_the_framebuffer() {
     c.clear(gl::COLOR_BUFFER_BIT);
     no_error(&mut c);
     let img = read_rgba(&mut c, 8, 8);
-    assert_eq!(px(&img, 8, 3, 3), [0, 128, 255, 255]);
-    assert_eq!(px(&img, 8, 7, 7), [0, 128, 255, 255]);
+    assert_close(&px(&img, 8, 3, 3), &[0, 128, 255, 255]);
+    assert_close(&px(&img, 8, 7, 7), &[0, 128, 255, 255]);
 }
 
 #[test]
@@ -385,7 +385,7 @@ fn instancing_with_divisors() {
     no_error(&mut c);
     let img = read_rgba(&mut c, 8, 2);
     assert_eq!(px(&img, 8, 0, 0), [255, 0, 0, 255]);
-    assert_eq!(px(&img, 8, 2, 1), [128, 0, 0, 128]);
+    assert_close(&px(&img, 8, 2, 1), &[128, 0, 0, 128]);
     assert_eq!(px(&img, 8, 5, 0), [0, 64, 0, 64]);
     assert_eq!(px(&img, 8, 7, 1), [0, 0, 0, 0]);
 }
@@ -460,7 +460,7 @@ fn presents_top_down_argb() {
         // Premultiplied: blue at half alpha.
         let mut dst = Present { pixels: &mut out, stride: 4, width: 3, height: 2, opaque: false };
         c.present_to(&mut dst);
-        assert_eq!(out[4], 0x8000_0080);
+        assert_close(&out[4].to_be_bytes(), &0x8000_0080u32.to_be_bytes());
         // Scaled to a window twice as high: the top half red, the bottom
         // blue, a blend between.
         let mut tall = vec![0u32; 3 * 4];

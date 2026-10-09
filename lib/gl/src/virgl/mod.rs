@@ -30,9 +30,9 @@ pub mod caps;
 mod draw;
 mod feedback;
 pub mod formats;
-#[cfg(all(windows, any(test, feature = "host-virgl")))]
+#[cfg(all(any(windows, target_os = "linux"), any(test, feature = "host-virgl")))]
 pub mod gallium;
-#[cfg(all(windows, any(test, feature = "host-virgl")))]
+#[cfg(all(any(windows, target_os = "linux"), any(test, feature = "host-virgl")))]
 pub mod host;
 mod ops;
 mod protocol;
@@ -822,14 +822,19 @@ impl VirglBackend {
             self.stop_query();
             self.active_query = None;
         }
+        self.request_results(id);
+    }
+
+    /// Asks the host for the results of a query's parts it has not written
+    /// yet, then fences: it writes them to the parts' slots when it has
+    /// them, which it looks at as fences signal.
+    fn request_results(&mut self, id: QueryId) {
         let Some(q) = self.queries.get(&id) else { return };
-        let objects: Vec<u32> = q.parts.iter().map(|p| p.object).collect();
-        if objects.is_empty() {
+        let pending: Vec<u32> = q.parts.iter().filter(|p| !self.part_done(p)).map(|p| p.object).collect();
+        if pending.is_empty() {
             return;
         }
-        // Ask for the results now: the host writes them to the parts'
-        // slots when it has them, which it looks at as fences signal.
-        for o in objects {
+        for o in pending {
             self.emit(CMD_GET_QUERY_RESULT, 0, &[o, 0]);
         }
         let f = self.fence_now();
@@ -886,7 +891,13 @@ impl VirglBackend {
             // The host could not produce them (the device failed): report
             // that samples passed, the safe answer.
             None if wait => Some(1),
-            None => None,
+            None => {
+                // The host looked when the fence signaled, before it had
+                // them (zink has them a moment after), and looks again only
+                // as fences signal: ask again, behind a fence of its own.
+                self.request_results(id);
+                None
+            }
         }
     }
 

@@ -23,6 +23,8 @@
 
 #if defined(_WIN32) && defined(VR_EXPORTS)
 #define VR_API __declspec(dllexport)
+#elif defined(VR_EXPORTS)
+#define VR_API __attribute__((visibility("default")))
 #else
 #define VR_API
 #endif

@@ -352,10 +352,11 @@ stage native binutils_native gcc_native posix_layer
 
 # Veda's renderer (services/renderer) carries out OpenGL ES command streams
 # on Mesa's Gallium drivers. The stage configures Mesa's build (meson) for
-# Veda and, on Windows, for this machine too: the renderer as a library on
-# softpipe (vgallium.dll), which the OpenGL ES tests use. `cargo xtask`
-# builds them (ninja) when it needs them. meson is MSYS2's own (not
-# UCRT64's), and says so unless MSYSTEM agrees.
+# Veda and for this machine: the renderer as a library on softpipe
+# (vgallium.dll, on Linux vgallium.so), which the OpenGL ES tests use.
+# `cargo xtask` builds them (ninja) when it needs them. On Windows meson is
+# MSYS2's own (not UCRT64's), and says so unless MSYSTEM agrees; a cross
+# file has it build for Windows itself rather than for MSYS2.
 eval "stage_src_mesa() { unpack mesa; }"
 stage src_mesa "$PORTS/mesa/port.toml" "$PORTS/mesa/veda.patch"
 
@@ -388,6 +389,7 @@ stage_mesa() {
 	MSYSTEM=MSYS quiet "$BUILD/mesa-setup.log" meson setup "$BUILD/mesa" "$SRC/mesa" \
 		--cross-file "$BUILD/mesa-veda.cross" "${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" \
 		-Dgallium-drivers=softpipe,iris -Dintel-elk=false
+	local host=()
 	case "$(uname -s)" in
 	MINGW*|MSYS*|UCRT*|CLANG*)
 		cat > "$BUILD/mesa-host.cross" <<-EOF
@@ -403,11 +405,11 @@ stage_mesa() {
 		cpu = 'x86_64'
 		endian = 'little'
 		EOF
-		MSYSTEM=MSYS quiet "$BUILD/mesa-host-setup.log" meson setup "$BUILD/mesa-host" "$SRC/mesa" \
-			--cross-file "$BUILD/mesa-host.cross" "${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" \
-			-Dgallium-drivers=softpipe
+		host=(--cross-file "$BUILD/mesa-host.cross")
 		;;
 	esac
+	MSYSTEM=MSYS quiet "$BUILD/mesa-host-setup.log" meson setup "$BUILD/mesa-host" "$SRC/mesa" \
+		"${host[@]}" "${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" -Dgallium-drivers=softpipe
 }
 stage mesa src_mesa gcc_cross musl @MESA_OPTIONS
 

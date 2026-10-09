@@ -38,9 +38,11 @@ cargo xtask script tests/ui/flips.vts      # the window system's flips, on a sta
 cargo xtask script tests/ui/flips-gpu.vts  # ... its frames drawn by a GPU (the renderer on softpipe; slow)
 cargo xtask script tests/ui/flips-iris.vts # ... the pictures offered to iris on a stand-in GPU that runs nothing
 cargo xtask script tests/ui/prism.vts      # OpenGL ES: Prism renders (on the GPU if QEMU has one)
-VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (Windows; ANGLE)
-VGL_TEST_HOST=desktop VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on its desktop OpenGL
-VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mesa's softpipe (vgallium.dll)
+VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (Windows: ANGLE; Linux: desktop OpenGL)
+VGL_TEST_HOST=desktop VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on Windows on its desktop OpenGL
+VGL_TEST_HOST=gles VGL_TEST_BACKEND=virgl cargo test -p vgl      # ... on Linux on OpenGL ES
+VGL_TEST_RENDERNODE=/dev/dri/renderD129 VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on Linux on another GPU
+VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mesa's softpipe (vgallium.dll, .so on Linux)
 VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl   # ... with depth kept as on iris (lower 24 bits)
 cargo xtask script tests/ui/renderer.vts   # Prism through the renderer service (softpipe) in Veda
 cargo xtask script tests/ui/iris.vts       # ... on iris (Intel's driver), with a stand-in Intel GPU that runs nothing
@@ -61,10 +63,16 @@ cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile an
   PC with Intel's Iris Xe (Tiger Lake to Raptor Lake) through the
   renderer on iris and `intel-gpu`, and in software elsewhere
   (VirtualBox).
-* On Windows, `cargo xtask test` also runs the OpenGL ES tests on the
-  host's GPU, through the virglrenderer that QEMU ships, on ANGLE and on
-  the host's desktop OpenGL, as headless QEMU and its window render
-  (`VEDA_QEMU_DIR` says where, if not with the QEMU xtask finds).
+* Where QEMU has the 3D GPU, `cargo xtask test` also runs the OpenGL ES
+  tests on the host's GPU, through the virglrenderer QEMU runs. On
+  Windows that is the one QEMU ships, on ANGLE and on the host's desktop
+  OpenGL, as headless QEMU and its window render (`VEDA_QEMU_DIR` says
+  where, if not with the QEMU xtask finds). On Linux it is the system's
+  (`libvirglrenderer1` on Debian and Ubuntu), on desktop OpenGL, as QEMU
+  renders, and on OpenGL ES, through EGL on the GPU of the first render
+  node, as headless QEMU takes it (`VGL_TEST_RENDERNODE` names another).
+  Once the C toolchain is built, the tests also run through Veda's
+  renderer on softpipe.
   `PRISM_SIZE=960x600 PRISM_SHOT=soft.png PRISM_GPU_SHOT=gpu.png cargo test
   -p prism-scene` saves Prism's frame as both renderers draw it.
 * QEMU's window (GTK) takes the pointer as absolute from power-on: the

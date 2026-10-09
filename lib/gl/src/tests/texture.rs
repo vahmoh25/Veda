@@ -338,7 +338,7 @@ fn samples_depth_stencil_textures() {
     no_error(&mut c);
     let img = read_rgba(&mut c, 4, 1);
     // The depths, a quarter, three quarters, a half and one, as red.
-    assert_eq!((0..4).map(|x| px(&img, 4, x, 0)[0]).collect::<Vec<_>>(), [64, 191, 128, 255]);
+    assert_close(&(0..4).map(|x| px(&img, 4, x, 0)[0]).collect::<Vec<_>>(), &[64, 191, 128, 255]);
 }
 
 #[test]
@@ -384,7 +384,7 @@ fn swizzles_and_integer_and_srgb_textures() {
     c.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
     c.draw_arrays(gl::TRIANGLES, 0, 6);
     no_error(&mut c);
-    assert_eq!(px(&read_rgba(&mut c, 1, 1), 1, 0, 0), [128, 255, 64, 0]);
+    assert_close(&px(&read_rgba(&mut c, 1, 1), 1, 0, 0), &[128, 255, 64, 0]);
 }
 
 #[test]

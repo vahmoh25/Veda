@@ -23,8 +23,12 @@ fn clears_and_reads_back() {
     c.clear_color(0.25, 0.5, 0.75, 1.0);
     c.clear(gl::COLOR_BUFFER_BIT);
     let img = read_rgba(&mut c, 8, 4);
-    assert_eq!(px(&img, 8, 0, 0), [64, 128, 191, 255]);
-    assert_eq!(px(&img, 8, 7, 3), [64, 128, 191, 255]);
+    // Half of 255 is as far from 127 as from 128: GPUs round it either way
+    // (NVIDIA's down).
+    for (x, y) in [(0, 0), (7, 3)] {
+        let [r, g, b, a] = px(&img, 8, x, y);
+        assert!([r, b, a] == [64, 191, 255] && (g == 127 || g == 128), "({x}, {y}): {:?}", [r, g, b, a]);
+    }
     no_error(&mut c);
 }
 
@@ -92,6 +96,7 @@ fn presents_translucent_windows_premultiplied() {
     let mut pixels = vec![0u32; 4];
     let mut dst = Present { pixels: &mut pixels, stride: 2, width: 2, height: 2, opaque: false };
     c.present_to(&mut dst);
-    // Alpha 128 (0.5 rounded); red 255 times 128/255.
-    assert!(pixels.iter().all(|&p| p == 0x8080_0000), "{pixels:08x?}");
+    // Alpha 128 or 127 (0.5, rounded either way); red 255 times that over
+    // 255.
+    assert!(pixels.iter().all(|&p| p == 0x8080_0000 || p == 0x7F7F_0000), "{pixels:08x?}");
 }

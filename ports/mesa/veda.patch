@@ -52,7 +52,7 @@
  
  with_gallium_drisw_kms = false
 -if system_has_kms_drm
-+if system_has_kms_drm and get_option('veda-renderer') != ''
++if system_has_kms_drm and cc.get_define('__veda__') != ''
 +  # Veda: its own libdrm, of what Mesa uses (the renderer's drm/), over
 +  # Veda's DRM device. The renderer's program compiles it in.
 +  dep_libdrm = declare_dependency(
@@ -174,7 +174,7 @@
 +endif
 --- a/src/gallium/targets/veda/meson.build
 +++ b/src/gallium/targets/veda/meson.build
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,53 @@
 +# Copyright © 2026 Vahid Mohammadi
 +# SPDX-License-Identifier: MIT
 +#
@@ -194,14 +194,16 @@
 +  inc_gallium_winsys, inc_gallium_winsys_sw, inc_virtio_gpu,
 +]
 +
-+if host_machine.system() == 'windows'
-+  # For the host tests of Veda's OpenGL ES: softpipe, which vgl's tests
-+  # call through vgallium.dll.
++if cc.get_define('__veda__') == ''
++  # For the host tests of Veda's OpenGL ES, a build for this machine:
++  # softpipe, which vgl's tests call through vgallium.dll (vgallium.so
++  # on Linux).
 +  shared_library(
 +    'vgallium',
 +    veda_sources,
 +    include_directories : veda_includes,
 +    c_args : ['-DVR_EXPORTS', '-DVR_SOFTPIPE'],
++    gnu_symbol_visibility : 'hidden',
 +    link_with : [libgallium, libws_null],
 +    dependencies : [idep_nir, idep_mesautil, driver_softpipe],
 +    name_prefix : '',

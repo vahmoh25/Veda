@@ -1,18 +1,27 @@
 //! The virgl renderer on the host's GPU, for tests (with the `host-virgl`
 //! feature): virglrenderer, the library QEMU runs for a virtio-gpu device,
-//! called directly.
+//! called directly, on OpenGL contexts made as QEMU makes them.
 //!
 //! QEMU's Windows build ships it with ANGLE (OpenGL ES on Direct3D 11);
 //! the tests load both from QEMU's directory (`VEDA_QEMU_DIR`, by default
 //! `C:\Program Files\qemu`). Headless QEMU renders on ANGLE, and so do the
 //! tests; QEMU's window renders on the host's desktop OpenGL instead
-//! (WGL), as the tests do with `VGL_TEST_HOST=desktop`. virglrenderer and
-//! its contexts belong to one thread, so a thread of their own runs every
-//! call, and the transport sends it jobs.
+//! (WGL), as the tests do with `VGL_TEST_HOST=desktop`.
+//!
+//! On Linux QEMU runs the system's virglrenderer on desktop OpenGL,
+//! through EGL; headless, on the GPU of the first render node, through
+//! GBM. So do the tests (`VGL_TEST_RENDERNODE` names another node, such as
+//! `/dev/dri/renderD129`), and on OpenGL ES with `VGL_TEST_HOST=gles`, as
+//! QEMU renders with `gl=es`.
+//!
+//! virglrenderer and its contexts belong to one thread, so a thread of
+//! their own runs every call, and the transport sends it jobs.
 
 use std::boxed::Box;
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
+#[cfg(windows)]
+use std::format;
 use std::ops::Range;
 use std::ptr::null_mut;
 use std::string::String;
@@ -20,23 +29,50 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Mutex, OnceLock};
 use std::vec::Vec;
-use std::{format, println, vec};
+use std::{println, vec};
 
 use crate::backend::OutOfMemory;
 use crate::virgl::{Lost, ResourceArgs, Transport};
 
+/// A library loaded into the process.
 pub(super) type Module = *mut c_void;
 
+#[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
-    pub(super) fn LoadLibraryW(name: *const u16) -> Module;
+    fn LoadLibraryW(name: *const u16) -> Module;
     fn GetProcAddress(m: Module, name: *const c_char) -> *mut c_void;
     fn SetDllDirectoryW(path: *const u16) -> i32;
     fn GetModuleHandleW(name: *const u16) -> Module;
 }
 
-pub(super) fn wide(s: &str) -> Vec<u16> {
+// The C library's dynamic linking.
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    fn dlopen(name: *const c_char, flags: c_int) -> Module;
+    fn dlsym(m: Module, name: *const c_char) -> *mut c_void;
+}
+
+#[cfg(windows)]
+fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
+}
+
+/// Loads a library: a path, or on Linux a name the dynamic linker looks up
+/// (`libEGL.so.1`). Null if it is not there.
+pub(super) unsafe fn load(name: &str) -> Module {
+    #[cfg(windows)]
+    // SAFETY: a NUL-terminated name; the caller trusts the library.
+    unsafe {
+        LoadLibraryW(wide(name).as_ptr())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let c = CString::new(name).unwrap();
+        // SAFETY: as above. RTLD_NOW binds every function the library
+        // calls at once: one missing fails here, not at its first call.
+        unsafe { dlopen(c.as_ptr(), 2) }
+    }
 }
 
 /// A function of a loaded library.
@@ -44,7 +80,10 @@ pub(super) unsafe fn sym<T: Copy>(m: Module, name: &str) -> T {
     let c = CString::new(name).unwrap();
     // SAFETY: the caller gives the symbol's real type.
     unsafe {
+        #[cfg(windows)]
         let p = GetProcAddress(m, c.as_ptr());
+        #[cfg(target_os = "linux")]
+        let p = dlsym(m, c.as_ptr());
         assert!(!p.is_null(), "{name} is missing");
         core::mem::transmute_copy(&p)
     }
@@ -87,10 +126,14 @@ struct Iovec {
     len: usize,
 }
 
-/// EGL on ANGLE, as the callbacks use it (from the GPU thread only).
+/// EGL, on ANGLE or on Linux, as the callbacks use it (from the GPU thread
+/// only).
 struct Egl {
     dpy: Dpy,
     config: *mut c_void,
+    /// Whether its contexts are OpenGL ES (ANGLE's are), not desktop
+    /// OpenGL.
+    es: bool,
     create_context: unsafe extern "C" fn(Dpy, *mut c_void, *mut c_void, *const i32) -> *mut c_void,
     destroy_context: unsafe extern "C" fn(Dpy, *mut c_void) -> u32,
     make_current: unsafe extern "C" fn(Dpy, *mut c_void, *mut c_void, *mut c_void) -> u32,
@@ -99,6 +142,7 @@ struct Egl {
 
 /// WGL: the host's desktop OpenGL, with the device context of a hidden
 /// window (from the GPU thread only).
+#[cfg(windows)]
 struct Wgl {
     dc: *mut c_void,
     create_context: unsafe extern "system" fn(*mut c_void, *mut c_void, *const i32) -> *mut c_void,
@@ -110,6 +154,7 @@ struct Wgl {
 /// Where virglrenderer's OpenGL contexts come from.
 enum Platform {
     Egl(Egl),
+    #[cfg(windows)]
     Wgl(Wgl),
 }
 
@@ -129,19 +174,25 @@ unsafe extern "C" fn write_fence(_: *mut c_void, fence: u32) {
 unsafe extern "C" fn create_gl_context(_: *mut c_void, _: c_int, p: *mut GlCtxParam) -> *mut c_void {
     // SAFETY: virglrenderer passes a valid parameter block.
     let p = unsafe { &*p };
+    // The profile of desktop OpenGL: compatibility or core.
+    let profile = if p.compat_ctx != 0 { 2 } else { 1 };
     // SAFETY: calls with the display, configuration or device context set
     // up at start.
     unsafe {
         match platform() {
             Platform::Egl(e) => {
-                let att = [0x3098, p.major_ver, 0x30FB, p.minor_ver, 0x3038];
+                // EGL_CONTEXT_{MAJOR,MINOR}_VERSION, and for desktop OpenGL
+                // the profile (EGL_CONTEXT_OPENGL_PROFILE_MASK).
+                let mut att = [0x3098, p.major_ver, 0x30FB, p.minor_ver, 0x3038, 0x3038, 0x3038];
+                if !e.es {
+                    att[4..6].copy_from_slice(&[0x30FD, profile]);
+                }
                 let share = if p.shared { (e.get_current_context)() } else { null_mut() };
                 (e.create_context)(e.dpy, e.config, share, att.as_ptr())
             }
+            #[cfg(windows)]
             Platform::Wgl(w) => {
-                // WGL_CONTEXT_{MAJOR,MINOR}_VERSION_ARB, and the profile:
-                // compatibility or core.
-                let profile = if p.compat_ctx != 0 { 2 } else { 1 };
+                // WGL_CONTEXT_{MAJOR,MINOR}_VERSION_ARB, and the profile.
                 let att = [0x2091, p.major_ver, 0x2092, p.minor_ver, 0x9126, profile, 0];
                 let share = if p.shared { (w.get_current_context)() } else { null_mut() };
                 (w.create_context)(w.dc, share, att.as_ptr())
@@ -157,6 +208,7 @@ unsafe extern "C" fn destroy_gl_context(_: *mut c_void, ctx: *mut c_void) {
             Platform::Egl(e) => {
                 (e.destroy_context)(e.dpy, ctx);
             }
+            #[cfg(windows)]
             Platform::Wgl(w) => {
                 (w.delete_context)(ctx);
             }
@@ -165,11 +217,12 @@ unsafe extern "C" fn destroy_gl_context(_: *mut c_void, ctx: *mut c_void) {
 }
 
 unsafe extern "C" fn make_current(_: *mut c_void, _: c_int, ctx: *mut c_void) -> c_int {
-    // SAFETY: surfaceless with EGL, as ANGLE allows; on the hidden window's
-    // device context with WGL.
+    // SAFETY: surfaceless with EGL, as ANGLE and Mesa allow; on the hidden
+    // window's device context with WGL.
     let ok = unsafe {
         match platform() {
             Platform::Egl(e) => (e.make_current)(e.dpy, null_mut(), null_mut(), ctx) != 0,
+            #[cfg(windows)]
             Platform::Wgl(w) => (w.make_current)(w.dc, ctx) != 0,
         }
     };
@@ -179,6 +232,7 @@ unsafe extern "C" fn make_current(_: *mut c_void, _: c_int, ctx: *mut c_void) ->
 unsafe extern "C" fn get_egl_display(_: *mut c_void) -> *mut c_void {
     match platform() {
         Platform::Egl(e) => e.dpy,
+        #[cfg(windows)]
         Platform::Wgl(_) => null_mut(),
     }
 }
@@ -210,6 +264,7 @@ struct Virgl {
     submit: unsafe extern "C" fn(*mut c_void, c_int, c_int) -> c_int,
     create_fence: unsafe extern "C" fn(c_int, u32) -> c_int,
     poll: unsafe extern "C" fn(),
+    force_ctx_0: unsafe extern "C" fn(),
 }
 
 /// What the GPU thread owns.
@@ -229,6 +284,7 @@ type Job = Box<dyn FnOnce(&mut Gpu) + Send>;
 static GPU: OnceLock<Option<Mutex<Sender<Job>>>> = OnceLock::new();
 
 /// The directory QEMU (and its renderer) is installed in.
+#[cfg(windows)]
 fn qemu_dir() -> String {
     std::env::var("VEDA_QEMU_DIR").unwrap_or_else(|_| String::from(r"C:\Program Files\qemu"))
 }
@@ -250,6 +306,14 @@ fn gpu() -> Option<&'static Mutex<Sender<Job>>> {
                 };
                 let _ = ready_tx.send(true);
                 while let Ok(job) = rx.recv() {
+                    // As QEMU does before each command: virglrenderer goes
+                    // back to its own context, and to a client's only for
+                    // the client's commands. It loses track otherwise:
+                    // creating a context leaves the new one's OpenGL
+                    // context current, while it takes the one before for
+                    // current still.
+                    // SAFETY: on virglrenderer's thread.
+                    unsafe { (gpu.v.force_ctx_0)() };
                     job(&mut gpu);
                 }
             })
@@ -269,28 +333,24 @@ fn call<R: Send + 'static>(f: impl FnOnce(&mut Gpu) -> R + Send + 'static) -> R 
     rx.recv().expect("the GPU thread")
 }
 
-/// Sets up EGL on ANGLE, with a current context.
-unsafe fn start_egl(dir: &str) -> Option<Egl> {
+/// Sets up EGL on the display `dpy` of the library `lib`, with a current
+/// context, as QEMU does: for OpenGL ES if `es`, otherwise for desktop
+/// OpenGL.
+unsafe fn start_egl_on(lib: Module, dpy: Dpy, es: bool) -> Option<Egl> {
     unsafe {
-        let egl_lib = LoadLibraryW(wide(&format!(r"{dir}\libEGL.dll")).as_ptr());
-        if egl_lib.is_null() {
-            return None;
-        }
-        let get_display: unsafe extern "C" fn(u32, *mut c_void, *const i32) -> Dpy =
-            sym(egl_lib, "eglGetPlatformDisplayEXT");
-        let initialize: unsafe extern "C" fn(Dpy, *mut i32, *mut i32) -> u32 = sym(egl_lib, "eglInitialize");
-        let bind_api: unsafe extern "C" fn(u32) -> u32 = sym(egl_lib, "eglBindAPI");
+        let initialize: unsafe extern "C" fn(Dpy, *mut i32, *mut i32) -> u32 = sym(lib, "eglInitialize");
+        let bind_api: unsafe extern "C" fn(u32) -> u32 = sym(lib, "eglBindAPI");
         let choose: unsafe extern "C" fn(Dpy, *const i32, *mut *mut c_void, i32, *mut i32) -> u32 =
-            sym(egl_lib, "eglChooseConfig");
-        // EGL_PLATFORM_ANGLE_ANGLE, the default (Direct3D 11) device.
-        let dpy = get_display(0x3202, null_mut(), core::ptr::null());
+            sym(lib, "eglChooseConfig");
         let (mut major, mut minor) = (0, 0);
         if dpy.is_null() || initialize(dpy, &mut major, &mut minor) == 0 {
             return None;
         }
-        bind_api(0x30A0);
-        // A window-capable ES 2 config, as QEMU chooses.
-        let attribs = [0x3033, 0x4, 0x3040, 0x4, 0x3024, 5, 0x3023, 5, 0x3022, 5, 0x3021, 0, 0x3038];
+        // EGL_OPENGL_ES_API or EGL_OPENGL_API, and a window-capable config
+        // of it (EGL_OPENGL_ES2_BIT or EGL_OPENGL_BIT), as QEMU chooses.
+        bind_api(if es { 0x30A0 } else { 0x30A2 });
+        let renderable = if es { 0x4 } else { 0x8 };
+        let attribs = [0x3033, 0x4, 0x3040, renderable, 0x3024, 5, 0x3023, 5, 0x3022, 5, 0x3021, 0, 0x3038];
         let mut config = null_mut();
         let mut n = 0;
         if choose(dpy, attribs.as_ptr(), &mut config, 1, &mut n) == 0 || n != 1 {
@@ -299,13 +359,15 @@ unsafe fn start_egl(dir: &str) -> Option<Egl> {
         let e = Egl {
             dpy,
             config,
-            create_context: sym(egl_lib, "eglCreateContext"),
-            destroy_context: sym(egl_lib, "eglDestroyContext"),
-            make_current: sym(egl_lib, "eglMakeCurrent"),
-            get_current_context: sym(egl_lib, "eglGetCurrentContext"),
+            es,
+            create_context: sym(lib, "eglCreateContext"),
+            destroy_context: sym(lib, "eglDestroyContext"),
+            make_current: sym(lib, "eglMakeCurrent"),
+            get_current_context: sym(lib, "eglGetCurrentContext"),
         };
-        // virglrenderer shares its contexts with the current one.
-        let att = [0x3098, 2, 0x3038];
+        // virglrenderer shares its contexts with the current one: OpenGL
+        // ES 2, or desktop OpenGL in the core profile.
+        let att = if es { [0x3098, 2, 0x3038] } else { [0x30FD, 1, 0x3038] };
         let ctx0 = (e.create_context)(dpy, config, null_mut(), att.as_ptr());
         if ctx0.is_null() || (e.make_current)(dpy, null_mut(), null_mut(), ctx0) == 0 {
             return None;
@@ -314,7 +376,73 @@ unsafe fn start_egl(dir: &str) -> Option<Egl> {
     }
 }
 
+/// Sets up EGL on ANGLE, with a current context.
+#[cfg(windows)]
+unsafe fn start_egl(dir: &str) -> Option<Egl> {
+    unsafe {
+        let egl_lib = load(&format!(r"{dir}\libEGL.dll"));
+        if egl_lib.is_null() {
+            return None;
+        }
+        let get_display: unsafe extern "C" fn(u32, *mut c_void, *const i32) -> Dpy =
+            sym(egl_lib, "eglGetPlatformDisplayEXT");
+        // EGL_PLATFORM_ANGLE_ANGLE, the default (Direct3D 11) device.
+        let dpy = get_display(0x3202, null_mut(), core::ptr::null());
+        start_egl_on(egl_lib, dpy, true)
+    }
+}
+
+/// Opens the render node of the GPU to render on: `VGL_TEST_RENDERNODE`,
+/// or the first that opens, as QEMU's headless display chooses.
+#[cfg(target_os = "linux")]
+fn render_node() -> Option<std::fs::File> {
+    let open = |path: &std::path::Path| std::fs::File::options().read(true).write(true).open(path);
+    if let Some(path) = std::env::var_os("VGL_TEST_RENDERNODE") {
+        return open(path.as_ref()).map_err(|e| println!("{}: {e}", path.display())).ok();
+    }
+    let mut nodes: Vec<_> = std::fs::read_dir("/dev/dri")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().is_some_and(|n| n.as_encoded_bytes().starts_with(b"renderD")))
+        .collect();
+    nodes.sort();
+    let node = nodes.iter().find_map(|p| open(p).ok());
+    if node.is_none() {
+        println!("no GPU: no render node in /dev/dri can be opened");
+    }
+    node
+}
+
+/// Sets up EGL on a GPU, with a current context, as QEMU's headless
+/// display does: on its render node, through GBM.
+#[cfg(target_os = "linux")]
+unsafe fn start_egl(es: bool) -> Option<Egl> {
+    use std::os::fd::IntoRawFd;
+    let node = render_node()?;
+    unsafe {
+        let gbm_lib = load("libgbm.so.1");
+        let egl_lib = load("libEGL.so.1");
+        if gbm_lib.is_null() || egl_lib.is_null() {
+            println!("EGL (libEGL.so.1) or GBM (libgbm.so.1) is not installed");
+            return None;
+        }
+        let create_device: unsafe extern "C" fn(c_int) -> *mut c_void = sym(gbm_lib, "gbm_create_device");
+        let get_display: unsafe extern "C" fn(u32, *mut c_void, *const isize) -> Dpy =
+            sym(egl_lib, "eglGetPlatformDisplay");
+        // The device keeps the node, for as long as the process runs.
+        let gbm = create_device(node.into_raw_fd());
+        if gbm.is_null() {
+            return None;
+        }
+        // EGL_PLATFORM_GBM_KHR.
+        start_egl_on(egl_lib, get_display(0x31D7, gbm, core::ptr::null()), es)
+    }
+}
+
 /// `WNDCLASSW`.
+#[cfg(windows)]
 #[repr(C)]
 struct WndClass {
     style: u32,
@@ -330,6 +458,7 @@ struct WndClass {
 }
 
 /// `PIXELFORMATDESCRIPTOR`, the fields the tests set.
+#[cfg(windows)]
 #[repr(C)]
 #[derive(Default)]
 struct PixelFormat {
@@ -350,11 +479,12 @@ struct PixelFormat {
 
 /// Sets up WGL on a hidden window, with a current context, as QEMU's
 /// window (GTK) has.
+#[cfg(windows)]
 unsafe fn start_wgl() -> Option<Wgl> {
     unsafe {
-        let user = LoadLibraryW(wide("user32.dll").as_ptr());
-        let gdi = LoadLibraryW(wide("gdi32.dll").as_ptr());
-        let gl = LoadLibraryW(wide("opengl32.dll").as_ptr());
+        let user = load("user32.dll");
+        let gdi = load("gdi32.dll");
+        let gl = load("opengl32.dll");
         if user.is_null() || gdi.is_null() || gl.is_null() {
             return None;
         }
@@ -455,21 +585,51 @@ unsafe fn start_wgl() -> Option<Wgl> {
 }
 
 /// Whether the tests run on the host's desktop OpenGL rather than ANGLE.
+#[cfg(windows)]
 fn desktop_gl() -> bool {
     std::env::var("VGL_TEST_HOST").is_ok_and(|v| v == "desktop")
 }
 
-unsafe fn start() -> Option<Gpu> {
+/// Loads virglrenderer and sets up the OpenGL it renders on, with the
+/// flags QEMU starts it with there.
+#[cfg(windows)]
+unsafe fn open_renderer() -> Option<(Module, Platform, c_int)> {
     let dir = qemu_dir();
     unsafe {
         SetDllDirectoryW(wide(&dir).as_ptr());
-        let vr = LoadLibraryW(wide(&format!(r"{dir}\libvirglrenderer-1.dll")).as_ptr());
+        let vr = load(&format!(r"{dir}\libvirglrenderer-1.dll"));
         if vr.is_null() {
             println!("virglrenderer not found in {dir}");
             return None;
         }
-        let desktop = desktop_gl();
-        let p = if desktop { Platform::Wgl(start_wgl()?) } else { Platform::Egl(start_egl(&dir)?) };
+        if desktop_gl() {
+            Some((vr, Platform::Wgl(start_wgl()?), 0))
+        } else {
+            // VIRGL_RENDERER_D3D11_SHARE_TEXTURE, as QEMU passes with ANGLE.
+            Some((vr, Platform::Egl(start_egl(&dir)?), 1 << 12))
+        }
+    }
+}
+
+/// Loads virglrenderer and sets up the OpenGL it renders on, with the
+/// flags QEMU starts it with there.
+#[cfg(target_os = "linux")]
+unsafe fn open_renderer() -> Option<(Module, Platform, c_int)> {
+    unsafe {
+        let vr = load("libvirglrenderer.so.1");
+        if vr.is_null() {
+            println!("virglrenderer (libvirglrenderer.so.1) is not installed");
+            return None;
+        }
+        let es = std::env::var("VGL_TEST_HOST").is_ok_and(|v| v == "gles");
+        Some((vr, Platform::Egl(start_egl(es)?), 0))
+    }
+}
+
+unsafe fn start() -> Option<Gpu> {
+    unsafe {
+        let (vr, p, flags) = open_renderer()?;
+        let egl = matches!(p, Platform::Egl(_));
         PLATFORM = Some(p);
         let set_log: unsafe extern "C" fn(
             unsafe extern "C" fn(c_int, *const c_char, *mut c_void),
@@ -487,11 +647,9 @@ unsafe fn start() -> Option<Gpu> {
             get_drm_fd: None,
             write_context_fence: None,
             get_server_fd: None,
-            get_egl_display: (!desktop).then_some(get_egl_display as unsafe extern "C" fn(*mut c_void) -> *mut c_void),
+            get_egl_display: egl.then_some(get_egl_display as unsafe extern "C" fn(*mut c_void) -> *mut c_void),
         }));
         static mut COOKIE: u32 = 0;
-        // VIRGL_RENDERER_D3D11_SHARE_TEXTURE, as QEMU passes with ANGLE.
-        let flags = if desktop { 0 } else { 1 << 12 };
         if init(core::ptr::addr_of_mut!(COOKIE) as *mut c_void, flags, cbs) != 0 {
             return None;
         }
@@ -509,6 +667,7 @@ unsafe fn start() -> Option<Gpu> {
             submit: sym(vr, "virgl_renderer_submit_cmd"),
             create_fence: sym(vr, "virgl_renderer_create_fence"),
             poll: sym(vr, "virgl_renderer_poll"),
+            force_ctx_0: sym(vr, "virgl_renderer_force_ctx_0"),
         };
         let (mut ver, mut size) = (0, 0);
         (v.get_cap_set)(2, &mut ver, &mut size);
@@ -638,8 +797,15 @@ impl Transport for HostTransport {
         Ok(call(move |g| {
             g.next_fence += 1;
             let f = g.next_fence;
+            // An empty fenced submission, as Veda's driver makes and QEMU
+            // carries out: the fence follows the context's commands in its
+            // own OpenGL context, which the submission switches to.
+            let mut none = [0u32];
             // SAFETY: a fence after everything submitted so far.
-            unsafe { (g.v.create_fence)(f as c_int, ctx) };
+            unsafe {
+                (g.v.submit)(none.as_mut_ptr() as *mut c_void, ctx as c_int, 0);
+                (g.v.create_fence)(f as c_int, ctx);
+            }
             u64::from(f)
         }))
     }
@@ -668,10 +834,13 @@ fn unref(g: &mut Gpu, ctx: u32, handle: u32) {
     // SAFETY: a resource of this context.
     unsafe {
         (g.v.ctx_detach)(ctx as c_int, handle as c_int);
-        if g.iovs.remove(&handle).is_some() {
+        if let Some(array) = g.iovs.remove(&handle) {
             let mut iov = null_mut();
             let mut n = 0;
             (g.v.detach_iov)(handle as c_int, &mut iov, &mut n);
+            // Detaching reads the array (resources kept in host memory
+            // copy their contents out of the backing): freed only now.
+            drop(array);
         }
         (g.v.resource_unref)(handle);
     }
