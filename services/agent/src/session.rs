@@ -2,11 +2,12 @@
 //!
 //! [`Connector`] opens the WebSocket on a helper thread (name lookup, TCP,
 //! TLS and the upgrade take a while, and the agent must keep serving its
-//! interface meanwhile). [`Session`] then carries the conversation: the
-//! `Settings` message goes out first; microphone audio recorded before
-//! Deepgram confirms the settings is held and sent right after, so the
-//! first words are not lost; messages and voice come back through
-//! [`Session::poll`], which never blocks.
+//! interface meanwhile), and tries again while the network is coming up.
+//! [`Session`] then carries the conversation: the `Settings` message goes
+//! out first; microphone audio recorded before Deepgram confirms the
+//! settings is held and sent right after, so the first words are not lost;
+//! messages and voice come back through [`Session::poll`], which never
+//! blocks.
 
 use alloc::collections::{BTreeSet, VecDeque};
 use alloc::string::{String, ToString};
@@ -16,6 +17,7 @@ use alloc::vec::Vec;
 use vabi::RawHandle;
 use vagent::deepgram::{self, ServerMessage};
 use vjson::Value;
+use vnet::NetError;
 use vrt::object::Event;
 use vrt::sync::Mutex;
 use vrt::time::Duration;
@@ -28,6 +30,13 @@ const MAX_PENDING_MIC: usize = 4 * crate::voice::MIC_RATE as usize;
 /// seconds; a keep-alive goes out after this long without audio.
 const KEEP_ALIVE_NS: u64 = 5_000_000_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// A connection that fails for want of a network is tried again after this
+/// long ...
+const NETWORK_RETRY: Duration = Duration::from_millis(250);
+/// ... while the network changed less than this long ago, as it may still
+/// be coming up (at boot, the agent can wake before DHCP has given the
+/// machine an address), and for this long at most.
+const NETWORK_SETTLE_NS: u64 = 10_000_000_000;
 
 /// Something Deepgram sent.
 pub enum Incoming {
@@ -60,7 +69,23 @@ impl Connector {
             .name("connect")
             .spawn(move || {
                 let auth = alloc::format!("Token {key}");
-                let r = WebSocket::connect(&url, &[("Authorization", &auth)], CONNECT_TIMEOUT);
+                let first = vrt::time::now_ns();
+                let mut waited = false;
+                let r = loop {
+                    let r = WebSocket::connect(&url, &[("Authorization", &auth)], CONNECT_TIMEOUT);
+                    // Nobody takes the result once the conversation ended.
+                    let wanted = Arc::strong_count(&slot) > 1;
+                    match &r {
+                        Err(e) if wanted && coming_up(e, first) => {
+                            if !waited {
+                                vrt::println!("cannot reach Deepgram yet ({e}): the network is still coming up");
+                                waited = true;
+                            }
+                            vrt::time::sleep(NETWORK_RETRY);
+                        }
+                        _ => break r,
+                    }
+                };
                 *slot.lock() = Some(r);
                 let _ = signal.signal();
             })
@@ -76,6 +101,31 @@ impl Connector {
     pub fn take(&self) -> Option<Result<WebSocket<Conn>, WebError>> {
         let _ = self.event.clear();
         self.result.lock().take()
+    }
+}
+
+/// Whether a connection that failed with `e` may succeed in a moment: it
+/// found no route, no network, no name server or no network service, the
+/// network changed a moment ago (or its service is not running yet), and
+/// the first attempt, at `first`, was not long ago either.
+fn coming_up(e: &WebError, first: u64) -> bool {
+    let early = matches!(
+        e,
+        WebError::Net(
+            NetError::NoRoute
+                | NetError::NetworkDown
+                | NetError::HostUnreachable
+                | NetError::DnsFailure
+                | NetError::Unavailable
+        )
+    );
+    let now = vrt::time::now_ns();
+    if !early || now - first >= NETWORK_SETTLE_NS {
+        return false;
+    }
+    match vnet::status() {
+        Ok(s) => now.saturating_sub(u64::from(s.changed_s) * 1_000_000_000) < NETWORK_SETTLE_NS,
+        Err(_) => true,
     }
 }
 

@@ -97,7 +97,13 @@ is closed.
   `mip_opt_out` keeps the audio out of Deepgram's model improvement.
   While a conversation is on, the agent asks the audio service to duck
   every other sound (music plays 20 dB quieter), so that it hears
-  you over it; it comes back up when the agent goes to sleep.
+  you over it; it comes back up when the agent goes to sleep. While the
+  network is coming up (it changed in the last ten seconds: at boot, the
+  agent can wake before DHCP has given the machine an address), a
+  connection that finds no route, no network or no name server is tried
+  again four times a second, for ten seconds at most; a network that has
+  been down for longer is reported at once
+  (`tests/agent/network-late.vts`).
 * **Listening and speaking.** The microphone streams in 20 ms packets.
   Deepgram's voice arrives in bursts and queues behind what is playing; when you start talking (`UserStartedSpeaking`) the queue and the
   stream are flushed at once. An answer starts playing once some of it has

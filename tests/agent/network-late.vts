@@ -1,0 +1,25 @@
+# The agent wakes as Veda starts while the network is not there yet (the
+# cable is out): it keeps trying, and the conversation opens once the
+# cable is in. A network that has been down for a while is reported at
+# once, as before.
+link wired off
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+wait-serial "the network is still coming up" 30
+wait 2
+link wired on
+agent-connected 30
+wait-serial "state: Listening" 30
+reject-serial "state: Error"
+# Asleep again, and the cable out for longer than the network takes to
+# settle: woken (by opening its window), the agent says at once that
+# Deepgram cannot be reached.
+agent-call end_conversation '{}' 30
+agent-speak 2
+wait-serial "conversation ended" 30
+link wired off
+wait 11
+checkpoint
+key meta_l-spc
+wait-serial "state: Error (Deepgram cannot be reached" 5
+reject-serial "the network is still coming up"
