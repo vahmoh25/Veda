@@ -1,0 +1,9 @@
+[package]
+name = "viommu"
+description = "Intel VT-d for Veda's kernel, without the hardware: the DMAR table, the registers, and the structures the IOMMU reads (context entries, page tables, interrupt remapping entries, invalidation descriptors)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "vhv"
+description = "The hypervisor's logic that touches no hardware: the virtual local APIC, the guests' CPUID, and the paravirtual platform that Linux guests run on"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vabi = { workspace = true }
+
+[lints]
+workspace = true

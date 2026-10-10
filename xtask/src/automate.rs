@@ -34,10 +34,13 @@
 //! audio host                       # the host's loudspeakers and microphone instead of a WAV file (echo on real hardware)
 //! expect-audio                     # fail unless the recorded sound output holds more than silence
 //! expect-audio-gapless [20]        # fail if it drops out (digital silence over 20 ms between its first and last sound)
+//! iommu                            # QEMU's IOMMU (interrupt remapping too), applied before boot
 //! requires qemu                    # only for QEMU (or `virtualbox`); `test` skips it elsewhere
 //! requires c-toolchain             # only with the C test programs (`cargo xtask toolchain`); `test` skips it otherwise
 //! requires native-toolchain        # only with GCC in the image (the same)
 //! requires renderer                # only with Veda's renderer in the image (Mesa, the same)
+//! requires drivervm                # only with the driver VM's Linux in the image (`cargo xtask linux`), under QEMU
+//!                                  # with nested virtualization (KVM's kvm_intel nested=1)
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
 //! air-expect "list" "1 joined"     # fail unless the simulator's answer contains the text
 //! air-wait "list" "1 joined" 60    # wait until it does (timeout in s)
@@ -444,7 +447,9 @@ pub fn needs_qemu(script: &str) -> Option<&'static str> {
             ["live", ..] => return Some("the live system's USB stick"),
             ["qmp", ..] => return Some("QMP commands"),
             ["gpu", ..] => return Some("the choice of QEMU's display"),
+            ["iommu", ..] => return Some("QEMU's IOMMU"),
             ["requires", "qemu", ..] => return Some("marked as QEMU only"),
+            ["requires", "drivervm", ..] => return Some("the driver VM (nested virtualization)"),
             // VirtualBox's mouse is moved through its COM API, from
             // PowerShell (see `vboxctl`).
             ["move" | "click" | "double-click" | "drag" | "mouse-down" | "mouse-up", ..] if !cfg!(windows) => {
@@ -492,6 +497,16 @@ pub fn needs_toolchain(script: &str) -> Option<&'static str> {
         ["requires", "renderer", ..] => Some("renderer"),
         _ => None,
     })
+}
+
+/// Whether a script asks for an IOMMU (`iommu`).
+pub fn iommu(script: &str) -> bool {
+    script.lines().map(words).any(|w| w.first().is_some_and(|c| c == "iommu"))
+}
+
+/// Whether a script runs the driver VM (`requires drivervm`).
+pub fn needs_drivervm(script: &str) -> bool {
+    script.lines().map(words).any(|w| w.len() >= 2 && w[0] == "requires" && w[1] == "drivervm")
 }
 
 /// Whether a script says `requires virtualbox`.
@@ -611,7 +626,8 @@ pub fn run_script(
                     s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "sound" | "audio" | "requires" | "live" | "input" | "gpu" => {}
+                "boot-cmdline" | "net" | "nic" | "sound" | "audio" | "requires" | "live" | "input" | "gpu"
+                | "iommu" => {}
                 "qmp" => {
                     let command = w.get(1).ok_or("missing command")?;
                     let arguments = w.get(2).map_or("{}", String::as_str);

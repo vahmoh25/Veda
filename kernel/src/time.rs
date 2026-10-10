@@ -33,6 +33,26 @@ pub fn now_ns() -> u64 {
     ((ticks as u128 * mult as u128) >> 32) as u64
 }
 
+/// How the clocks follow the TSC.
+pub fn info() -> vabi::ClockInfo {
+    let realtime = (BOOT_EPOCH_SECS.load(Ordering::Relaxed).max(0) as u64) * 1_000_000_000;
+    let offset = UTC_OFFSET_S.load(Ordering::Relaxed) * 1_000_000_000;
+    vabi::ClockInfo {
+        tsc_at_zero: TSC_BOOT.load(Ordering::Relaxed),
+        ns_per_tick: NS_PER_TICK_FP.load(Ordering::Relaxed),
+        tsc_hz: TSC_HZ.load(Ordering::Relaxed),
+        realtime_at_zero: realtime,
+        utc_at_zero: (realtime as i64).saturating_sub(offset).max(0) as u64,
+    }
+}
+
+/// The monotonic time (ns) at which the TSC reads `tsc` (0 before the
+/// clock started).
+pub fn tsc_to_ns(tsc: u64) -> u64 {
+    let ticks = tsc.saturating_sub(TSC_BOOT.load(Ordering::Relaxed));
+    ((ticks as u128 * NS_PER_TICK_FP.load(Ordering::Relaxed) as u128) >> 32) as u64
+}
+
 /// Converts a monotonic nanosecond timestamp into a TSC value.
 pub fn ns_to_tsc(ns: u64) -> u64 {
     let hz = TSC_HZ.load(Ordering::Relaxed);

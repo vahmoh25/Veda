@@ -154,6 +154,15 @@ wrapper!(
     /// A hardware resource capability.
     Resource
 );
+wrapper!(
+    /// A virtual machine: a guest-physical address space and its virtual
+    /// processors.
+    Guest
+);
+wrapper!(
+    /// A virtual processor of a [`Guest`].
+    Vcpu
+);
 
 /// A message read from a channel.
 #[derive(Debug, Default)]
@@ -430,11 +439,12 @@ impl Interrupt {
         call(nr::IRQ_CREATE, [res.raw() as usize, irq, flags, 0, 0, 0]).map(|h| Interrupt(Handle(h as RawHandle)))
     }
 
-    /// Allocates an MSI vector; returns the interrupt and the address/data
-    /// pair to program into the device.
-    pub fn create_msi(res: &Resource) -> Result<(Interrupt, vabi::MsiInfo), Error> {
+    /// Allocates an MSI vector for PCI function `device` (its requester
+    /// id, which the PCI resource names); returns the interrupt and the
+    /// address/data pair to program into the device.
+    pub fn create_msi(res: &Resource, device: u16) -> Result<(Interrupt, vabi::MsiInfo), Error> {
         let mut info = vabi::MsiInfo::default();
-        let h = call(nr::MSI_CREATE, [res.raw() as usize, &mut info as *mut _ as usize, 0, 0, 0, 0])?;
+        let h = call(nr::MSI_CREATE, [res.raw() as usize, device as usize, &mut info as *mut _ as usize, 0, 0, 0])?;
         Ok((Interrupt(Handle(h as RawHandle)), info))
     }
 
@@ -489,6 +499,65 @@ impl Resource {
 
     pub fn duplicate(&self) -> Result<Resource, Error> {
         self.0.duplicate(None).map(Resource)
+    }
+}
+
+impl Guest {
+    /// A virtual machine that will have `cpus` processors (a hypervisor
+    /// resource allows it).
+    pub fn create(res: &Resource, cpus: u32) -> Result<Guest, Error> {
+        call(nr::GUEST_CREATE, [res.raw() as usize, cpus as usize, 0, 0, 0, 0]).map(|h| Guest(Handle(h as RawHandle)))
+    }
+
+    /// Makes `len` bytes of `vmo` from `offset` the guest's memory at
+    /// `gpa`, with the access `flags` give (`vabi::map_flags`).
+    pub fn map(&self, vmo: &Vmo, offset: usize, len: usize, gpa: u64, flags: usize) -> Result<(), Error> {
+        call(nr::GUEST_MAP, [self.raw() as usize, vmo.raw() as usize, offset, len, gpa as usize, flags]).map(|_| ())
+    }
+
+    /// Removes the guest's memory in `[gpa, gpa+len)` (whole mappings).
+    pub fn unmap(&self, gpa: u64, len: usize) -> Result<(), Error> {
+        call(nr::GUEST_UNMAP, [self.raw() as usize, gpa as usize, len, 0, 0, 0]).map(|_| ())
+    }
+
+    /// A virtual processor with local APIC id `id`, in `state`.
+    pub fn create_vcpu(&self, id: u32, state: &vabi::VcpuState) -> Result<Vcpu, Error> {
+        call(nr::VCPU_CREATE, [self.raw() as usize, id as usize, state as *const _ as usize, 0, 0, 0])
+            .map(|h| Vcpu(Handle(h as RawHandle)))
+    }
+
+    /// Gives the guest PCI function `device` (a requester id, which the
+    /// PCI resource names): its DMA reaches the guest's memory, and only
+    /// that, until the guest ends.
+    pub fn attach_device(&self, res: &Resource, device: u16) -> Result<(), Error> {
+        call(nr::GUEST_ATTACH_DEVICE, [self.raw() as usize, res.raw() as usize, device as usize, 0, 0, 0]).map(|_| ())
+    }
+}
+
+impl Vcpu {
+    /// Runs the virtual processor until it needs the monitor; `exit` brings
+    /// the answer to the last exit and takes the next (see
+    /// `vabi::VcpuExit`).
+    pub fn run(&self, exit: &mut vabi::VcpuExit) -> Result<(), Error> {
+        call(nr::VCPU_RUN, [self.raw() as usize, exit as *mut _ as usize, 0, 0, 0, 0]).map(|_| ())
+    }
+
+    /// Raises interrupt `vector` at the virtual processor's local APIC.
+    pub fn interrupt(&self, vector: u8) -> Result<(), Error> {
+        call(nr::VCPU_INTERRUPT, [self.raw() as usize, vector as usize, 0, 0, 0, 0]).map(|_| ())
+    }
+
+    /// Makes `irq` (an MSI) raise `vector` at the virtual processor's local
+    /// APIC, rather than signal, from now on.
+    pub fn bind_interrupt(&self, irq: &Interrupt, vector: u8) -> Result<(), Error> {
+        call(nr::VCPU_BIND_INTERRUPT, [self.raw() as usize, irq.raw() as usize, vector as usize, 0, 0, 0]).map(|_| ())
+    }
+
+    /// The registers, while no thread runs the virtual processor.
+    pub fn state(&self) -> Result<vabi::VcpuState, Error> {
+        let mut state = vabi::VcpuState::default();
+        call(nr::VCPU_READ_STATE, [self.raw() as usize, &mut state as *mut _ as usize, 0, 0, 0, 0])?;
+        Ok(state)
     }
 }
 

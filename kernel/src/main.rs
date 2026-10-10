@@ -16,6 +16,8 @@ extern crate alloc;
 mod acpi;
 mod arch;
 mod futex;
+mod hv;
+mod iommu;
 mod loader;
 mod log;
 mod mm;
@@ -138,7 +140,7 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
     // SAFETY: recording the BSP's APIC id before any IPI is sent.
     unsafe { percpu::set_apic_id(0, apic::id()) };
     for io in &acpi.ioapics {
-        apic::add_ioapic(io.phys, io.gsi_base);
+        apic::add_ioapic(io.id, io.phys, io.gsi_base);
     }
     if let Some(hpet) = acpi.hpet_phys {
         time::set_hpet(hpet);
@@ -182,6 +184,8 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
 
     let aps = smp::start_aps(opts.max_cpus);
     kinfo!("smp: {} CPU(s) online", aps + 1);
+    hv::report();
+    iommu::init();
 
     bkl::acquire();
     loader::spawn_init(boot);

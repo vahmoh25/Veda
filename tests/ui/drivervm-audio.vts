@@ -1,0 +1,31 @@
+# Sound through Linux's driver: QEMU's Intel HD Audio controller goes to
+# the driver VM, where Linux's snd-hda-intel drives it and Veda's ALSA
+# driver attaches it to Veda's audio service, as Veda's own drivers attach
+# theirs. The Music player's track plays through it: its position moves on
+# as the card plays, and it reaches the recording of the sound output
+# without dropping out.
+requires drivervm
+iommu
+sound hda
+# The recording holds the music alone (no startup sound before it).
+boot-cmdline "startup-sound=off"
+boot-cmdline "run=music"
+boot-cmdline "drivervm drivervm.devices=8086:293e"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+wait-serial "alsa: attached to the audio service" 90
+wait-serial "music: library: 7 track(s)" 90
+wait-serial "music: covers: 7 ready" 60
+wait 1
+click 0.6188 0.8125
+wait-serial "music: playing Neon Horizon" 30
+wait 4
+key spc
+wait-serial "music: paused at 0:0" 10
+reject-serial "music: paused at 0:00"
+reject-serial "alsa: underrun 10"
+reject-serial "alsa: the card ran dry"
+reject-serial "iommu: unit at"
+reject-serial "hda: controller at"
+expect-audio
+expect-audio-gapless

@@ -370,6 +370,12 @@ pub extern "sysv64" fn kernel_thread_start_hook() {
     finish_switch();
 }
 
+/// Whether this CPU should run the scheduler before it goes on with the
+/// current thread (a higher-priority thread woke, or the slice ended).
+pub fn need_resched() -> bool {
+    cpu_sched().need_resched
+}
+
 /// Requests a reschedule at the next opportunity (RESCHED IPI).
 pub fn request_resched() {
     cpu_sched().need_resched = true;

@@ -1,0 +1,15 @@
+[package]
+name = "guest-pcitest"
+description = "Checks, inside the driver VM's Linux, the PCI functions Veda gave it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pcitest"
+path = "src/main.rs"
+test = false
+bench = false
+
+[lints]
+workspace = true

@@ -21,6 +21,10 @@ pub mod roles {
     pub const MMIO_RESOURCE: u32 = USER + 3;
     /// DMA resource for a driver.
     pub const DMA_RESOURCE: u32 = USER + 4;
+    /// Hypervisor resource (virtual machines), for the driver VM.
+    pub const HYPERVISOR_RESOURCE: u32 = USER + 5;
+    /// PCI functions (their MSIs, and giving them to virtual machines).
+    pub const PCI_RESOURCE: u32 = USER + 6;
 }
 
 /// System services in start order. File systems come first (everything
@@ -60,6 +64,8 @@ fn handles_for(init: &Init, name: &str) -> Vec<(u32, Handle)> {
                 (roles::IRQ_RESOURCE, resource_kind::IRQ, 0, 256),
                 (roles::MMIO_RESOURCE, resource_kind::MMIO, 0, 1 << 46),
                 (roles::DMA_RESOURCE, resource_kind::DMA, 0, 0),
+                (roles::HYPERVISOR_RESOURCE, resource_kind::HYPERVISOR, 0, 0),
+                (roles::PCI_RESOURCE, resource_kind::PCI, 0, 0x1_0000),
             ] {
                 out.extend(init_resource(init, kind, base, size).map(|h| (r, h)));
             }
@@ -98,7 +104,8 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
     // kernel command line. A live system (`live`, booted from a USB stick)
     // tells the file system and the device manager to leave the computer's
     // disks alone; tests ask the device manager for a stand-in display that
-    // flips (`flipsim`, `flipsim=N`). At system start the window system
+    // flips (`flipsim`, `flipsim=N`), and for the driver VM (`drivervm`,
+    // with its options as `drivervm.NAME=VALUE`). At system start the window system
     // plays the startup sequence (`splash`) and the shell the startup sound
     // (`startup`, unless `startup-sound=off`); started again, they do
     // neither.
@@ -108,7 +115,13 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
         "agent" => cmdline.split_whitespace().filter(|a| a.starts_with("agent.")).map(Into::into).collect(),
         "devmgr" => cmdline
             .split_whitespace()
-            .filter(|a| *a == "live" || *a == "flipsim" || a.starts_with("flipsim="))
+            .filter(|a| {
+                *a == "live"
+                    || *a == "flipsim"
+                    || a.starts_with("flipsim=")
+                    || *a == "drivervm"
+                    || a.starts_with("drivervm.")
+            })
             .map(Into::into)
             .collect(),
         "vfs" if has("live") => alloc::vec!["live".into()],

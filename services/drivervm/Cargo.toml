@@ -1,0 +1,25 @@
+[package]
+name = "drivervm"
+description = "The driver VM: Linux in a virtual machine, for the drivers Veda takes from it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "drivervm"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true }
+vabi = { workspace = true }
+vhv = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+initrd = { workspace = true }
+
+[build-dependencies]
+vbuild = { workspace = true }
+
+[lints]
+workspace = true

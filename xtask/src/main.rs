@@ -7,6 +7,7 @@ mod airsim;
 mod automate;
 mod components;
 mod image;
+mod linux;
 mod mic;
 mod qemu;
 mod qmp;
@@ -42,6 +43,9 @@ COMMANDS:
     toolchain   Build the C toolchain (GCC, binutils, musl) from ports/: a cross
                 compiler for this machine and the native one the image installs in
                 /system (needs build tools: MSYS2 on Windows; see docs/C.md; --jobs N)
+    linux       Build the Linux kernel of the driver VM from ports/linux (on Linux; see
+                docs/DRIVERVM.md; --jobs N); later builds put it in the image, with the
+                guest's programs
     clean       Remove build outputs
     doctor      Check that the required tools are installed
     help        Show this message
@@ -62,6 +66,8 @@ RUN OPTIONS:
     --smp N             Number of virtual CPUs (default 4)
     --memory MiB        Guest RAM in MiB (default 1024)
     --headless          No display window (serial console only)
+    --iommu             Give QEMU's machine an IOMMU (intel-iommu, remapping interrupts), as
+                        the driver VM's devices need
     --gpu, --no-gpu     Give QEMU's machine a 3D GPU (virtio-gpu with virgl, rendering on the
                         host's GPU) or not (default: if this QEMU has one)
     --no-audio          Do not attach a sound device
@@ -163,6 +169,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--smp" => o.vm.cpus = value(arg)?.parse().map_err(|_| "--smp expects a number")?,
             "--memory" => o.vm.memory_mib = value(arg)?.parse().map_err(|_| "--memory expects MiB")?,
             "--headless" => o.vm.display = false,
+            "--iommu" => o.vm.iommu = true,
             "--gpu" => o.vm.gpu = Some(true),
             "--no-gpu" => o.vm.gpu = Some(false),
             "--no-audio" => o.vm.audio = false,
@@ -331,6 +338,14 @@ fn build_system(o: &Options) -> Result<System> {
     }
     for (path, data) in native {
         initrd.add(&path, data);
+    }
+    // The driver VM's Linux (`cargo xtask linux`) and its programs.
+    match linux::guest()? {
+        Some((kernel, initramfs)) => {
+            initrd.add("linux/bzImage", kernel);
+            initrd.add("linux/initramfs.cpio", initramfs);
+        }
+        None => util::status("Note", "no driver VM in the image (build its Linux with `cargo xtask linux`)"),
     }
     initrd.add("etc/version", format!("Veda {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
     // The licence, which About Veda refers to.
@@ -598,6 +613,9 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     if let Some(gpu) = automate::gpu(script)? {
         vm.gpu = Some(gpu);
     }
+    if automate::iommu(script) {
+        vm.iommu = true;
+    }
     if live {
         // A stick with the ISO on it, and no home disk.
         vm.usb_stick = true;
@@ -764,6 +782,12 @@ fn test(o: &Options) -> Result {
                 util::status("Skipping", format!("GUI script {name} (needs the {what}: `cargo xtask toolchain`)"));
                 continue;
             }
+            if automate::needs_drivervm(&text)
+                && let Err(why) = linux::runnable()
+            {
+                util::status("Skipping", format!("GUI script {name} (needs the driver VM: {why})"));
+                continue;
+            }
             util::status("Testing", format!("GUI script {name}"));
             let mut ui = o.clone();
             ui.cmdline.clear();
@@ -827,6 +851,10 @@ fn doctor() -> Result {
         Ok(v) => println!("  [ok]   c toolchain: {v}"),
         Err(e) => println!("  [--]   c toolchain: {e}"),
     }
+    match linux::status() {
+        Ok(v) => println!("  [ok]   driver vm: {v}"),
+        Err(e) => println!("  [--]   driver vm: {e}"),
+    }
     if ok { Ok(()) } else { Err("some checks failed".into()) }
 }
 
@@ -865,6 +893,7 @@ fn main() -> ExitCode {
             None => Err("usage: cargo xtask script FILE [options]".into()),
         },
         "toolchain" => toolchain::command(rest),
+        "linux" => linux::command(rest),
         "clean" => util::run(util::cargo().arg("clean")),
         "doctor" => doctor(),
         "help" | "--help" | "-h" => {

@@ -446,6 +446,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "drivervm"
+version = "0.1.0"
+dependencies = [
+ "initrd",
+ "vabi",
+ "vbuild",
+ "vhv",
+ "vipc",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
 name = "e1000"
 version = "0.1.0"
 dependencies = [
@@ -615,6 +628,42 @@ dependencies = [
  "rand_core",
  "subtle",
 ]
+
+[[package]]
+name = "guest-alsa"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+ "vabi",
+ "vipc",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
+name = "guest-bridgetest"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+ "vipc",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
+name = "guest-init"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+]
+
+[[package]]
+name = "guest-pcitest"
+version = "0.1.0"
+
+[[package]]
+name = "guest-sys"
+version = "0.1.0"
 
 [[package]]
 name = "hash2curve"
@@ -1506,11 +1555,22 @@ name = "vheap"
 version = "0.1.0"
 
 [[package]]
+name = "vhv"
+version = "0.1.0"
+dependencies = [
+ "vabi",
+]
+
+[[package]]
 name = "vigpu"
 version = "0.1.0"
 
 [[package]]
 name = "vimage"
+version = "0.1.0"
+
+[[package]]
+name = "viommu"
 version = "0.1.0"
 
 [[package]]
@@ -1593,6 +1653,8 @@ dependencies = [
  "initrd",
  "vabi",
  "ventropy",
+ "vhv",
+ "viommu",
  "vpe",
 ]
 
@@ -1660,6 +1722,7 @@ dependencies = [
  "vabi",
  "velf",
  "vheap",
+ "vhv",
  "vpe",
 ]
 

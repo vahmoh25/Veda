@@ -1,0 +1,18 @@
+[package]
+name = "guest-init"
+description = "The first program of Linux in Veda's driver VM"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "init"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+guest-sys = { workspace = true }
+
+[lints]
+workspace = true

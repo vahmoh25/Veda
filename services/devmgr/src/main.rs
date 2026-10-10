@@ -8,6 +8,11 @@
 //! It also reads the firmware's ACPI tables: a driver learns the devices
 //! they describe below its PCI function (and only those), and devmgr drives
 //! the GPIO pins those devices are wired to on the driver's behalf.
+//!
+//! Devices can go to the driver VM instead (`drivervm.devices=VID:DID,...`):
+//! then no driver of Veda's starts for them, and the driver VM gets their
+//! `pcidev` channels, through which it also gets the resource that lets it
+//! give them to its guest.
 
 #![no_std]
 #![no_main]
@@ -42,8 +47,15 @@ const IOPORT_RESOURCE: u32 = vabi::startup::role::USER + 1;
 const IRQ_RESOURCE: u32 = vabi::startup::role::USER + 2;
 const MMIO_RESOURCE: u32 = vabi::startup::role::USER + 3;
 const DMA_RESOURCE: u32 = vabi::startup::role::USER + 4;
+const HYPERVISOR_RESOURCE: u32 = vabi::startup::role::USER + 5;
+const PCI_RESOURCE: u32 = vabi::startup::role::USER + 6;
 /// Role of the `pcidev` channel handed to drivers.
 pub const PCIDEV_ROLE: u32 = vabi::startup::role::USER + 10;
+/// Role of the hypervisor resource handed to the driver VM.
+const DRIVERVM_HYPERVISOR_ROLE: u32 = vabi::startup::role::USER + 1;
+/// Role of the `pcidev` channels of the devices the driver VM gets (one
+/// each).
+const DRIVERVM_DEVICE_ROLE: u32 = vabi::startup::role::USER + 2;
 
 /// Which driver handles which device.
 struct DriverMatch {
@@ -170,6 +182,8 @@ struct Bound {
     channel: Channel,
     /// The devices the firmware describes below it.
     acpi: Vec<vacpi::device::Described>,
+    /// The driver VM has it.
+    guest: bool,
 }
 
 struct Manager {
@@ -177,6 +191,7 @@ struct Manager {
     io: Resource,
     mmio: Resource,
     dma: Resource,
+    pci: Resource,
     acpi: Option<Acpi>,
     gpio: RefCell<Gpio>,
 }
@@ -232,11 +247,13 @@ impl pcidev::Server for DeviceSession<'_> {
     }
 
     fn config_write(&mut self, offset: u16, width: u8, value: u32) -> Result<(), PciError> {
-        // BARs are owned by the firmware/devmgr; drivers may not move them.
+        // BARs (and the expansion ROM's) are owned by the firmware/devmgr;
+        // drivers may not move them.
         if offset >= 256
             || !matches!(width, 1 | 2 | 4)
             || !offset.is_multiple_of(width as u16)
             || (0x10..0x28).contains(&offset)
+            || (0x30..0x34).contains(&offset)
         {
             return Err(PciError::BadOffset);
         }
@@ -266,12 +283,21 @@ impl pcidev::Server for DeviceSession<'_> {
     }
 
     fn alloc_msi(&mut self) -> Result<(Interrupt, MsiAddress), PciError> {
-        let (irq, info) = Interrupt::create_msi(&self.mgr.dma).map_err(|_| PciError::NoResources)?;
+        let (irq, info) =
+            Interrupt::create_msi(&self.mgr.pci, self.dev.address.requester_id()).map_err(|_| PciError::NoResources)?;
         Ok((irq, MsiAddress { address: info.address, data: info.data }))
     }
 
     fn dma_resource(&mut self) -> Result<Resource, PciError> {
         self.mgr.dma.duplicate().map_err(|_| PciError::Denied)
+    }
+
+    fn device_resource(&mut self) -> Result<Resource, PciError> {
+        if !self.dev.guest {
+            return Err(PciError::Denied);
+        }
+        let sid = self.dev.address.requester_id() as u64;
+        self.mgr.pci.create(vabi::resource_kind::PCI, sid, 1).map_err(|_| PciError::Denied)
     }
 
     fn acpi_devices(&mut self) -> Vec<AcpiDevice> {
@@ -318,7 +344,7 @@ impl DeviceSession<'_> {
 /// system, which may itself be waiting for a disk driver).
 fn start_driver(boot: &initrd::Archive<'static>, driver: &str, args: &[String], info: &DeviceInfo) -> Option<Channel> {
     let (ours, theirs) = Channel::create().ok()?;
-    let started = start_program(boot, driver, args, Some(theirs))?;
+    let started = start_program(boot, driver, args, alloc::vec![(PCIDEV_ROLE, theirs.into_handle())])?;
     started.then(|| {
         println!(
             "started {} for {:04x}:{:04x} at {:02x}:{:02x}.{}",
@@ -332,16 +358,21 @@ fn start_driver(boot: &initrd::Archive<'static>, driver: &str, args: &[String], 
 fn start_companions(boot: &initrd::Archive<'static>, driver: &str) {
     for &(_, program, args) in COMPANIONS.iter().filter(|(d, ..)| *d == driver) {
         let args: Vec<String> = args.iter().map(|&a| a.into()).collect();
-        if start_program(boot, program, &args, None) == Some(true) {
+        if start_program(boot, program, &args, Vec::new()) == Some(true) {
             println!("started {} {} beside {}", program, args.join(" "), driver);
         }
     }
 }
 
-/// Starts `bin/NAME.exe` from the system image with the registry, and the
-/// channel for its device if it drives one: whether it started (`None` if
-/// it could not be tried).
-fn start_program(boot: &initrd::Archive<'static>, name: &str, args: &[String], pci: Option<Channel>) -> Option<bool> {
+/// Starts `bin/NAME.exe` from the system image with the registry and
+/// `handles` (by role): whether it started (`None` if it could not be
+/// tried).
+fn start_program(
+    boot: &initrd::Archive<'static>,
+    name: &str,
+    args: &[String],
+    handles: Vec<(u32, vrt::object::Handle)>,
+) -> Option<bool> {
     let path = alloc::format!("bin/{name}.exe");
     let Some(image) = boot.find(&path).map(|f| f.data) else {
         println!("{} is not installed", name);
@@ -349,8 +380,8 @@ fn start_program(boot: &initrd::Archive<'static>, name: &str, args: &[String], p
     };
     let registry = vproto::with_registry(|r| r.clone_registry()).ok()?.ok()?.ok()?;
     let mut spawn = vrt::process::Spawn::new(name).handle(vabi::startup::role::REGISTRY, registry.into_handle());
-    if let Some(pci) = pci {
-        spawn = spawn.handle(PCIDEV_ROLE, pci.into_handle());
+    for (role, h) in handles {
+        spawn = spawn.handle(role, h);
     }
     for a in args {
         spawn = spawn.arg(a);
@@ -388,20 +419,58 @@ fn described_below(acpi: Option<&Acpi>, a: Address) -> Vec<vacpi::device::Descri
     below
 }
 
-/// Maps the system image (the initrd) that `init` hands over.
-fn boot_image() -> Option<initrd::Archive<'static>> {
+/// Maps the system image (the initrd) that `init` hands over; also
+/// returns it, for the driver VM.
+fn boot_image() -> Option<(initrd::Archive<'static>, Vmo)> {
     let vmo = vrt::object::Vmo::from_handle(vrt::env::take_handle(vabi::startup::role::INITRD)?);
     let size = vmo.size().ok()?;
     let addr = vmo.map(0, size, vabi::map_flags::READ).ok()?;
     // SAFETY: a read-only mapping that lives as long as the process.
     let bytes: &'static [u8] = unsafe { core::slice::from_raw_parts(addr as *const u8, size) };
-    initrd::Archive::open(bytes).ok()
+    Some((initrd::Archive::open(bytes).ok()?, vmo))
+}
+
+/// Starts the driver VM (`drivervm`), with what it runs on: the hypervisor
+/// resource, the system image, which holds its Linux, and the channels of
+/// the devices it gets. Its options come as `drivervm.NAME=VALUE`
+/// (`drivervm.memory=512`); `drivervm.devices` is devmgr's.
+fn start_driver_vm(
+    boot: &initrd::Archive<'static>,
+    image: &Vmo,
+    hypervisor: &Resource,
+    options: &[String],
+    devices: Vec<Channel>,
+) {
+    let args: Vec<String> = options
+        .iter()
+        .filter_map(|a| a.strip_prefix("drivervm."))
+        .filter(|a| !a.starts_with("devices="))
+        .map(Into::into)
+        .collect();
+    let (Ok(h), Ok(i)) = (hypervisor.duplicate(), image.0.duplicate(None)) else { return };
+    let mut handles = alloc::vec![(DRIVERVM_HYPERVISOR_ROLE, h.into_handle()), (vabi::startup::role::INITRD, i)];
+    let count = devices.len();
+    handles.extend(devices.into_iter().map(|c| (DRIVERVM_DEVICE_ROLE, c.into_handle())));
+    if start_program(boot, "drivervm", &args, handles) == Some(true) {
+        println!("started drivervm {} with {} device(s)", args.join(" "), count);
+    }
+}
+
+/// The devices `drivervm.devices=VID:DID,...` gives the driver VM.
+fn guest_devices(options: &[String]) -> Vec<(u16, u16)> {
+    let id = |s: &str| u16::from_str_radix(s, 16).ok();
+    options
+        .iter()
+        .filter_map(|a| a.strip_prefix("drivervm.devices="))
+        .flat_map(|list| list.split(','))
+        .filter_map(|d| d.split_once(':').and_then(|(v, d)| Some((id(v)?, id(d)?))))
+        .collect()
 }
 
 fn main() -> i32 {
     let take = |role| vrt::env::take_handle(role).map(Resource::from_handle);
-    let (Some(io), Some(_irq), Some(mmio), Some(dma)) =
-        (take(IOPORT_RESOURCE), take(IRQ_RESOURCE), take(MMIO_RESOURCE), take(DMA_RESOURCE))
+    let (Some(io), Some(_irq), Some(mmio), Some(dma), Some(pci)) =
+        (take(IOPORT_RESOURCE), take(IRQ_RESOURCE), take(MMIO_RESOURCE), take(DMA_RESOURCE), take(PCI_RESOURCE))
     else {
         println!("missing hardware resources");
         return 1;
@@ -410,17 +479,23 @@ fn main() -> i32 {
         println!("cannot access PCI configuration ports");
         return 1;
     };
-    let Some(boot) = boot_image() else {
+    let Some((boot, image)) = boot_image() else {
         println!("no system image to load drivers from");
         return 1;
     };
     let acpi = boot_info().and_then(|boot| Acpi::load(&mmio, &boot));
-    let mgr = Manager { config: ConfigSpace::new(ports), io, mmio, dma, acpi, gpio: RefCell::new(Gpio::default()) };
+    let mgr =
+        Manager { config: ConfigSpace::new(ports), io, mmio, dma, pci, acpi, gpio: RefCell::new(Gpio::default()) };
     let args = vrt::env::args();
     let live = args.iter().any(|a| a == "live");
     // Tests: QEMU's standard VGA as a display that flips (`flipsim`, or
     // `flipsim=N` for one that goes away after N flips).
     let flipsim = args.iter().find(|a| *a == "flipsim" || a.starts_with("flipsim="));
+    // Tests: the driver VM (`drivervm`, `drivervm.NAME=VALUE`).
+    let drivervm: Vec<String> =
+        args.iter().filter(|a| *a == "drivervm" || a.starts_with("drivervm.")).cloned().collect();
+    let for_guest = guest_devices(&drivervm);
+    let mut guest_channels = Vec::new();
 
     let mut bound: BTreeMap<u64, Bound> = BTreeMap::new();
     let mut next = 1u64;
@@ -435,6 +510,24 @@ fn main() -> i32 {
             info.device,
             class_name(&info)
         );
+        if for_guest.contains(&(info.vendor, info.device)) {
+            if info.bars.iter().any(|b| b.io) || mgr.config.read(a, 0x0E, 1) & 0x7F != 0 {
+                println!(
+                    "{:04x}:{:04x} cannot go to the driver VM: not an endpoint with memory BARs only",
+                    info.vendor, info.device
+                );
+                continue;
+            }
+            let Ok((ours, theirs)) = Channel::create() else { continue };
+            println!(
+                "{:04x}:{:04x} at {:02x}:{:02x}.{} goes to the driver VM",
+                info.vendor, info.device, a.bus, a.slot, a.function
+            );
+            guest_channels.push(theirs);
+            bound.insert(next, Bound { address: a, info, channel: ours, acpi: Vec::new(), guest: true });
+            next += 1;
+            continue;
+        }
         let (driver, driver_args) = match flipsim {
             Some(option) if (info.vendor, info.device) == FLIPSIM_DEVICE => ("flipsim", alloc::vec![option.clone()]),
             _ => match driver_for(&info) {
@@ -451,9 +544,16 @@ fn main() -> i32 {
         }
         let below = described_below(mgr.acpi.as_ref(), a);
         if let Some(ch) = start_driver(&boot, driver, &driver_args, &info) {
-            bound.insert(next, Bound { address: a, info, channel: ch, acpi: below });
+            bound.insert(next, Bound { address: a, info, channel: ch, acpi: below, guest: false });
             next += 1;
             start_companions(&boot, driver);
+        }
+    }
+
+    if !drivervm.is_empty() {
+        match take(HYPERVISOR_RESOURCE) {
+            Some(hypervisor) => start_driver_vm(&boot, &image, &hypervisor, &drivervm, guest_channels),
+            None => println!("no hypervisor resource for the driver VM"),
         }
     }
 
@@ -483,7 +583,11 @@ fn main() -> i32 {
         }
         for k in closed {
             if let Some(b) = bound.remove(&k) {
-                println!("driver for {:04x}:{:04x} exited", b.info.vendor, b.info.device);
+                if b.guest {
+                    println!("the driver VM let go of {:04x}:{:04x}; it reaches nothing", b.info.vendor, b.info.device);
+                } else {
+                    println!("driver for {:04x}:{:04x} exited", b.info.vendor, b.info.device);
+                }
             }
         }
     }

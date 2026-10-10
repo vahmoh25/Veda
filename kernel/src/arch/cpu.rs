@@ -147,6 +147,16 @@ pub fn enable_interrupts_and_halt() {
     unsafe { asm!("sti", "hlt", "cli", options(nostack)) };
 }
 
+/// Takes the interrupts that are pending (enables interrupts for one
+/// instruction), then disables them again; their handlers change memory: a
+/// barrier to the compiler.
+#[inline]
+pub fn take_pending_interrupts() {
+    // SAFETY: STI's shadow covers the NOP; pending interrupts are taken at
+    // the NOP's boundary and their handlers return here.
+    unsafe { asm!("sti", "nop", "cli", options(nostack)) };
+}
+
 /// A barrier to the compiler: what follows stays where interrupts are off.
 #[inline]
 pub fn disable_interrupts() {

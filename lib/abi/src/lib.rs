@@ -18,8 +18,9 @@
 //! # Objects and handles
 //!
 //! Kernel objects (processes, threads, channels, sockets, events, memory
-//! objects, interrupts, I/O port ranges and resources) are only reachable through
-//! *handles*: per-process 32-bit names that carry a set of [`Rights`].
+//! objects, interrupts, I/O port ranges, resources, virtual machines and
+//! their processors) are only reachable through *handles*: per-process
+//! 32-bit names that carry a set of [`Rights`].
 //! Handles are capabilities — the only way to gain access to an object is to
 //! be given a handle to it (through a channel message or at process start).
 
@@ -70,6 +71,8 @@ pub mod nr {
     /// `random(buf, len)`: fill a buffer (at most 4096 bytes) with output of
     /// the kernel's cryptographically secure generator.
     pub const RANDOM: usize = 7;
+    /// `clock_info(out: *mut ClockInfo)`: how the clocks follow the TSC.
+    pub const CLOCK_INFO: usize = 8;
 
     // --- handles and objects ------------------------------------------
     /// `handle_close(h)`.
@@ -201,8 +204,52 @@ pub mod nr {
     pub const IRQ_CREATE: usize = 84;
     /// `irq_ack(h)`: re-arm an interrupt after handling it.
     pub const IRQ_ACK: usize = 85;
-    /// `msi_create(resource, out: *mut MsiInfo) -> h`.
+    /// `msi_create(resource, device, out: *mut MsiInfo) -> h`: an MSI of
+    /// PCI function `device` (its requester id: bus << 8 | device << 3 |
+    /// function, on segment 0), which the resource must name
+    /// ([`resource_kind::PCI`](crate::resource_kind::PCI)). When the IOMMU
+    /// remaps interrupts, only that function can raise it.
     pub const MSI_CREATE: usize = 86;
+
+    // --- virtual machines (requires a hypervisor resource) ------------
+    /// `guest_create(resource, cpus) -> h`: a virtual machine with an
+    /// empty guest-physical address space, which will have `cpus`
+    /// processors (with local APIC ids 0 to `cpus` - 1; what `cpuid` tells
+    /// the guest).
+    pub const GUEST_CREATE: usize = 90;
+    /// `guest_map(guest, vmo, vmo_offset, len, gpa, flags)`: makes `len`
+    /// bytes of a VMO the guest's memory at guest-physical address `gpa`
+    /// (page-aligned), with the access `flags` give (READ, WRITE,
+    /// EXECUTE of [`map_flags`](crate::map_flags)), cached as the VMO is.
+    /// Every page is committed and stays so while it is mapped.
+    pub const GUEST_MAP: usize = 91;
+    /// `guest_unmap(guest, gpa, len)`: removes the guest's memory in
+    /// `[gpa, gpa+len)`; no processor or device reaches it afterwards.
+    pub const GUEST_UNMAP: usize = 92;
+    /// `vcpu_create(guest, id, state: *const VcpuState) -> h`: a virtual
+    /// processor of the guest with local APIC id `id`, in `state`.
+    pub const VCPU_CREATE: usize = 93;
+    /// `vcpu_run(vcpu, exit: *mut VcpuExit)`: runs the virtual processor
+    /// until it needs its virtual machine monitor (see [`VcpuExit`]), on
+    /// the calling thread.
+    pub const VCPU_RUN: usize = 94;
+    /// `vcpu_interrupt(vcpu, vector)`: raises an interrupt at the virtual
+    /// processor's local APIC (from any thread).
+    pub const VCPU_INTERRUPT: usize = 95;
+    /// `vcpu_read_state(vcpu, out: *mut VcpuState)`: the virtual
+    /// processor's registers, while no thread runs it.
+    pub const VCPU_READ_STATE: usize = 96;
+    /// `guest_attach_device(guest, resource, device)`: gives the guest PCI
+    /// function `device` (a requester id, which the resource must name):
+    /// its DMA reaches the guest's memory from now on, translated as the
+    /// guest's processors' accesses are, and nothing else; when the guest
+    /// ends, it reaches nothing. Needs the IOMMU (`NotSupported`); `Busy`
+    /// if another guest has the function.
+    pub const GUEST_ATTACH_DEVICE: usize = 97;
+    /// `vcpu_bind_interrupt(vcpu, interrupt, vector)`: the interrupt (an
+    /// MSI) raises `vector` (32 to 255) at the virtual processor's local
+    /// APIC from now on, instead of signaling. Binding it again moves it.
+    pub const VCPU_BIND_INTERRUPT: usize = 98;
 }
 
 /// Error codes returned (negated) by system calls.
@@ -436,6 +483,22 @@ pub mod clock {
     pub const UTC: usize = 2;
 }
 
+/// How the clocks follow the TSC (`clock_info`), which every processor
+/// reads alike: the monotonic clock is `((tsc - tsc_at_zero) * ns_per_tick)
+/// >> 32` nanoseconds; the real-time clocks are it plus their offsets.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClockInfo {
+    /// The TSC when the monotonic clock read 0.
+    pub tsc_at_zero: u64,
+    /// Nanoseconds per TSC tick, in 32.32 fixed point.
+    pub ns_per_tick: u64,
+    pub tsc_hz: u64,
+    /// [`clock::REALTIME`] and [`clock::UTC`] at monotonic 0.
+    pub realtime_at_zero: u64,
+    pub utc_at_zero: u64,
+}
+
 /// Kernel object types (reported by `object_info`).
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -449,6 +512,8 @@ pub enum ObjectType {
     IoPorts = 7,
     Resource = 8,
     Socket = 9,
+    Guest = 10,
+    Vcpu = 11,
 }
 
 /// Topics for `object_info`.
@@ -629,12 +694,19 @@ pub mod resource_kind {
     pub const IRQ: usize = 2;
     /// A range of physical MMIO addresses.
     pub const MMIO: usize = 3;
-    /// Allocation of DMA-capable (contiguous) memory and MSI vectors.
+    /// Allocation of DMA-capable (contiguous) memory.
     pub const DMA: usize = 4;
     /// Power management (shutdown/reboot).
     pub const POWER: usize = 5;
     /// Enumerating and opening arbitrary processes.
     pub const PROCESS: usize = 6;
+    /// Creating virtual machines.
+    pub const HYPERVISOR: usize = 7;
+    /// PCI functions of segment 0, by requester id (bus << 8 | device << 3
+    /// | function): making their MSIs, and giving them to virtual machines.
+    pub const PCI: usize = 8;
+    /// The last kind.
+    pub const LAST: usize = PCI;
 }
 
 /// Flags for `irq_create`.
@@ -655,6 +727,87 @@ pub struct MsiInfo {
     pub address: u64,
     pub data: u32,
     pub vector: u32,
+}
+
+/// A segment register of a virtual processor.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VcpuSegment {
+    pub base: u64,
+    pub limit: u32,
+    /// The descriptor's attributes as Intel's VMX keeps them: type (bits
+    /// 0-3), S (4), DPL (5-6), P (7), AVL (12), L (13), D/B (14), G (15),
+    /// and bit 16 for a segment that cannot be used.
+    pub access: u32,
+    pub selector: u16,
+    pub _reserved: [u16; 3],
+}
+
+/// The registers of a virtual processor (`vcpu_create`,
+/// `vcpu_read_state`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VcpuState {
+    /// rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8 to r15: the order in
+    /// which instructions number them.
+    pub gprs: [u64; 16],
+    pub rip: u64,
+    pub rflags: u64,
+    pub cr0: u64,
+    pub cr2: u64,
+    pub cr3: u64,
+    pub cr4: u64,
+    pub efer: u64,
+    pub cs: VcpuSegment,
+    pub ds: VcpuSegment,
+    pub es: VcpuSegment,
+    pub fs: VcpuSegment,
+    pub gs: VcpuSegment,
+    pub ss: VcpuSegment,
+    pub tr: VcpuSegment,
+    pub ldtr: VcpuSegment,
+    pub gdt_base: u64,
+    pub idt_base: u64,
+    pub gdt_limit: u32,
+    pub idt_limit: u32,
+}
+
+/// Why `vcpu_run` returned, and what the monitor answers ([`vcpu_exit`]).
+///
+/// The structure goes both ways: `vcpu_run` fills it in when the virtual
+/// processor needs the monitor, and the next `vcpu_run` on that processor
+/// takes the monitor's answer from it (the result of a hypercall, or the
+/// value an I/O port read).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VcpuExit {
+    pub reason: u32,
+    pub _reserved: u32,
+    pub data: [u64; 7],
+}
+
+/// Reasons of a [`VcpuExit`].
+pub mod vcpu_exit {
+    /// The guest made a hypercall (`vmcall`): `data` holds its rax (the
+    /// call), rbx, rcx, rdx, rsi and rdi. The next `vcpu_run` gives the
+    /// guest `data[0]` in rax.
+    pub const HYPERCALL: u32 = 1;
+    /// The guest read or wrote an I/O port: `data[0]` is the port,
+    /// `data[1]` the size (1, 2 or 4), `data[2]` 1 for a write, `data[3]`
+    /// the value written. After a read, the next `vcpu_run` gives the
+    /// guest `data[3]`.
+    pub const IO: u32 = 2;
+    /// The guest reached guest-physical memory that is not mapped (or not
+    /// for that access): `data[0]` is the address, `data[1]` the access
+    /// (1 read, 2 write, 4 instruction fetch), `data[2]` the guest's rip.
+    pub const MEMORY: u32 = 3;
+    /// The guest shut its processor down (a triple fault).
+    pub const SHUTDOWN: u32 = 4;
+    /// The processor would not run the guest, or did something the kernel
+    /// does not handle: `data[0]` is the processor's exit reason,
+    /// `data[1]` its qualification (or the instruction error of a failed
+    /// entry), `data[2]` the guest's rip.
+    pub const FAILED: u32 = 5;
 }
 
 /// Actions for `system_power`.

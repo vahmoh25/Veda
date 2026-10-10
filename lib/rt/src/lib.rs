@@ -13,10 +13,16 @@
 //! point, allocator, panic handler, C symbols) are behind the default
 //! `runtime` feature. Libraries depend on `vrt` with
 //! `default-features = false`, which keeps them unit-testable on the host.
+//!
+//! Programs of the driver VM's Linux guest are built with `--cfg
+//! veda_guest` (the guest's target sets it): their system calls then go
+//! through the bridge (`guest`), and threads are Linux's (`std`'s).
 
 #![no_std]
 
 extern crate alloc;
+#[cfg(veda_guest)]
+extern crate std;
 
 pub use alloc::{boxed, format, rc, string, vec};
 pub use vabi;
@@ -24,6 +30,8 @@ pub use vabi;
 #[cfg(feature = "runtime")]
 mod crt;
 pub mod env;
+#[cfg(veda_guest)]
+mod guest;
 pub mod heap;
 pub mod io;
 pub mod object;
@@ -37,7 +45,7 @@ pub mod thread;
 pub mod time;
 pub mod vm;
 
-pub use object::{Channel, Event, Handle, Interrupt, IoPorts, Message, Process, Resource, Thread, Vmo};
+pub use object::{Channel, Event, Guest, Handle, Interrupt, IoPorts, Message, Process, Resource, Thread, Vcpu, Vmo};
 
 #[cfg(feature = "runtime")]
 #[global_allocator]

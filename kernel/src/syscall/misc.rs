@@ -31,6 +31,11 @@ pub fn clock_get(id: usize) -> SysResult {
     }
 }
 
+pub fn clock_info(out: usize) -> SysResult {
+    crate::mm::user::write(out as u64, &time::info())?;
+    ok(0)
+}
+
 pub fn sleep(d: usize) -> SysResult {
     match deadline(d as u64) {
         Some(d) => match sched::sleep_until(d) {

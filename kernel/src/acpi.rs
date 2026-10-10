@@ -1,5 +1,6 @@
 //! Minimal ACPI table parsing: CPUs and interrupt controllers (MADT), HPET,
-//! PCI Express configuration space (MCFG) and power control (FADT, `\_S5`).
+//! PCI Express configuration space (MCFG), power control (FADT, `\_S5`) and
+//! where the IOMMU's table is (DMAR, which `iommu` reads).
 //! There is no AML interpreter; `\_S5` is located with a byte-pattern scan,
 //! which is reliable for the firmware Veda targets.
 
@@ -15,6 +16,7 @@ pub struct CpuEntry {
 
 #[derive(Debug, Clone, Copy)]
 pub struct IoApicEntry {
+    pub id: u8,
     pub phys: u64,
     pub gsi_base: u32,
 }
@@ -61,6 +63,8 @@ pub struct AcpiInfo {
     pub hpet_phys: Option<u64>,
     pub mcfg: Vec<McfgEntry>,
     pub power: PowerInfo,
+    /// The DMAR table (its physical address).
+    pub dmar: Option<u64>,
 }
 
 pub static ACPI: Once<AcpiInfo> = Once::new();
@@ -131,7 +135,11 @@ fn parse_madt(addr: u64, info: &mut AcpiInfo) {
                     info.cpus.push(CpuEntry { apic_id: read_u8(e + 3) as u32 });
                 }
             }
-            1 => info.ioapics.push(IoApicEntry { phys: read_u32(e + 4) as u64, gsi_base: read_u32(e + 8) }),
+            1 => info.ioapics.push(IoApicEntry {
+                id: read_u8(e + 2),
+                phys: read_u32(e + 4) as u64,
+                gsi_base: read_u32(e + 8),
+            }),
             2 => {
                 let flags = read_u16(e + 8);
                 info.overrides.push(IrqOverride {
@@ -256,6 +264,7 @@ pub fn init(rsdp: u64) {
             b"HPET" => info.hpet_phys = Some(read_u64(addr + 44)),
             b"MCFG" => parse_mcfg(addr, &mut info),
             b"FACP" => parse_fadt(addr, &mut info),
+            b"DMAR" if checksum_ok(addr, read_u32(addr + 4)) => info.dmar = Some(addr),
             _ => {}
         }
     }
@@ -272,6 +281,12 @@ pub fn init(rsdp: u64) {
         crate::kdebug!("acpi: PCIe ECAM at {:#x} (segment {}, buses {}-{})", m.base, m.segment, m.bus_start, m.bus_end);
     }
     ACPI.set(info);
+}
+
+/// The bytes of the table at `addr`, its header included.
+pub fn table_bytes(addr: u64) -> &'static [u8] {
+    // SAFETY: as for the readers above; the firmware's tables stay.
+    unsafe { core::slice::from_raw_parts(phys_to_virt(addr) as *const u8, read_u32(addr + 4) as usize) }
 }
 
 /// Translates a legacy ISA IRQ into (GSI, level, active_low).

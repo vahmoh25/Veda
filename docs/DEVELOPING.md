@@ -48,6 +48,10 @@ cargo xtask script tests/ui/renderer.vts   # Prism through the renderer service 
 cargo xtask script tests/ui/iris.vts       # ... on iris (Intel's driver), with a stand-in Intel GPU that runs nothing
 cargo xtask toolchain          # build the C toolchain from ports/ (GCC, binutils, musl; Mesa configured) -> target/toolchain
 cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
+cargo xtask linux              # build the driver VM's Linux from ports/linux (on Linux) -> target/linux/bzImage
+cargo xtask run --cmdline "drivervm"        # ... and boot with it (needs KVM's nested virtualization)
+cargo xtask run --iommu        # QEMU with an Intel IOMMU (interrupt remapping too)
+cargo xtask script tests/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
 ```
 
 * The serial console (kernel log plus every program's `println!`) is saved
@@ -253,7 +257,10 @@ cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile an
 | the native C toolchain, `target/toolchain/native/system` | `/system/bin/gcc` ..., `/system/include`, `/system/lib`, `/system/libexec` |
 
 The last two need `cargo xtask toolchain` (see [C on Veda](C.md)); without
-it, the build says so and leaves them out. Files under `samples/` in the
+it, the build says so and leaves them out. With `cargo xtask linux` done,
+the image also holds the driver VM's Linux: `/system/linux/bzImage` and
+`/system/linux/initramfs.cpio`, made of the programs in `guest/` (see
+[the driver VM](DRIVERVM.md)). Files under `samples/` in the
 system image are also copied into the user's
 home directory at boot (`/system/samples/Pictures/x.png` →
 `/home/user/Pictures/x.png`).

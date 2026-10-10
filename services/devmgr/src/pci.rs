@@ -17,6 +17,13 @@ pub struct Address {
     pub function: u8,
 }
 
+impl Address {
+    /// The function's requester id: what its DMA and interrupts carry.
+    pub fn requester_id(&self) -> u16 {
+        (self.bus as u16) << 8 | (self.slot as u16 & 0x1F) << 3 | (self.function as u16 & 7)
+    }
+}
+
 impl ConfigSpace {
     pub fn new(ports: IoPorts) -> ConfigSpace {
         ConfigSpace { ports }

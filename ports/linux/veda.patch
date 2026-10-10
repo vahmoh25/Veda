@@ -1,0 +1,1563 @@
+--- a/arch/x86/include/asm/hypervisor.h
++++ b/arch/x86/include/asm/hypervisor.h
+@@ -31,6 +31,7 @@
+ 	X86_HYPER_JAILHOUSE,
+ 	X86_HYPER_ACRN,
+ 	X86_HYPER_BHYVE,
++	X86_HYPER_VEDA,
+ };
+ 
+ #ifdef CONFIG_HYPERVISOR_GUEST
+@@ -66,6 +67,7 @@
+ extern const struct hypervisor_x86 x86_hyper_jailhouse;
+ extern const struct hypervisor_x86 x86_hyper_acrn;
+ extern const struct hypervisor_x86 x86_hyper_bhyve;
++extern const struct hypervisor_x86 x86_hyper_veda;
+ extern struct hypervisor_x86 x86_hyper_xen_hvm;
+ 
+ extern bool nopv;
+--- a/arch/x86/include/asm/idtentry.h
++++ b/arch/x86/include/asm/idtentry.h
+@@ -745,6 +745,10 @@
+ DECLARE_IDTENTRY_SYSVEC(HYPERVISOR_CALLBACK_VECTOR,	sysvec_acrn_hv_callback);
+ #endif
+ 
++#ifdef CONFIG_VEDA_GUEST
++DECLARE_IDTENTRY_SYSVEC(HYPERVISOR_CALLBACK_VECTOR,	sysvec_veda_callback);
++#endif
++
+ #ifdef CONFIG_XEN_PVHVM
+ DECLARE_IDTENTRY_SYSVEC(HYPERVISOR_CALLBACK_VECTOR,	sysvec_xen_hvm_callback);
+ #endif
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -894,6 +894,19 @@
+ 	  when doing so. More details about Bhyve can be found at https://bhyve.org
+ 	  and https://wiki.freebsd.org/bhyve/.
+ 
++config VEDA_GUEST
++	bool "Veda driver VM support"
++	depends on X86_64 && SMP && X86_X2APIC
++	select X86_HV_CALLBACK_VECTOR
++	select IRQ_MSI_LIB if PCI_MSI
++	help
++	  This option allows Linux to run as the driver VM of the Veda
++	  operating system: on Veda's paravirtual platform, which has
++	  processors with an x2APIC and memory, and no emulated hardware.
++	  Processors start, the machine powers off, the console writes and
++	  the PCI functions Veda gives the guest are reached through
++	  hypercalls.
++
+ config INTEL_TDX_GUEST
+ 	bool "Intel TDX (Trust Domain Extensions) - Guest Support"
+ 	depends on X86_64 && CPU_SUP_INTEL
+--- a/arch/x86/kernel/cpu/hypervisor.c
++++ b/arch/x86/kernel/cpu/hypervisor.c
+@@ -48,6 +48,9 @@
+ #ifdef CONFIG_BHYVE_GUEST
+ 	&x86_hyper_bhyve,
+ #endif
++#ifdef CONFIG_VEDA_GUEST
++	&x86_hyper_veda,
++#endif
+ };
+ 
+ enum x86_hypervisor_type x86_hyper_type;
+--- a/arch/x86/kernel/cpu/Makefile
++++ b/arch/x86/kernel/cpu/Makefile
+@@ -59,6 +59,7 @@
+ 
+ obj-$(CONFIG_HYPERVISOR_GUEST)		+= vmware.o hypervisor.o mshyperv.o
+ obj-$(CONFIG_BHYVE_GUEST)		+= bhyve.o
++obj-$(CONFIG_VEDA_GUEST)		+= veda.o
+ obj-$(CONFIG_ACRN_GUEST)		+= acrn.o
+ 
+ obj-$(CONFIG_DEBUG_FS)			+= debugfs.o
+--- a/arch/x86/pci/early.c
++++ b/arch/x86/pci/early.c
+@@ -4,6 +4,7 @@
+ #include <asm/pci-direct.h>
+ #include <asm/io.h>
+ #include <asm/pci_x86.h>
++#include <asm/veda_para.h>
+ 
+ /* Direct PCI access. This is used for PCI accesses in early boot before
+    the PCI subsystem works. */
+@@ -53,6 +54,9 @@
+ 
+ int early_pci_allowed(void)
+ {
++	/* Veda's platform has none of the PC's configuration mechanisms. */
++	if (veda_platform())
++		return 0;
+ 	return (pci_probe & (PCI_PROBE_CONF1|PCI_PROBE_NOEARLY)) ==
+ 			PCI_PROBE_CONF1;
+ }
+--- a/arch/x86/pci/Makefile
++++ b/arch/x86/pci/Makefile
+@@ -6,6 +6,7 @@
+ obj-$(CONFIG_PCI_DIRECT)	+= direct.o
+ obj-$(CONFIG_PCI_OLPC)		+= olpc.o
+ obj-$(CONFIG_PCI_XEN)		+= xen.o
++obj-$(CONFIG_VEDA_GUEST)	+= veda.o
+ 
+ obj-y				+= fixup.o
+ obj-$(CONFIG_ACPI)		+= acpi.o
+--- a/Documentation/userspace-api/ioctl/ioctl-number.rst
++++ b/Documentation/userspace-api/ioctl/ioctl-number.rst
+@@ -382,6 +382,7 @@
+ 0xB8  01-02  uapi/misc/mrvl_cn10k_dpi.h                                Marvell CN10K DPI driver
+ 0xB8  all    uapi/linux/mshv.h                                         Microsoft Hyper-V /dev/mshv driver
+                                                                        <mailto:linux-hyperv@vger.kernel.org>
++0xB9  all    uapi/linux/veda.h                                         Veda's driver VM bridge
+ 0xBA  00-0F  uapi/linux/liveupdate.h                                   Pasha Tatashin
+                                                                        <mailto:pasha.tatashin@soleen.com>
+ 0xC0  00-0F  linux/usb/iowarrior.h
+--- a/drivers/tty/hvc/Kconfig
++++ b/drivers/tty/hvc/Kconfig
+@@ -77,6 +77,17 @@
+ 	  no other console mechanism exist but udbg, to get you a quick
+ 	  console for userspace. Do NOT enable in production kernels.
+ 
++config HVC_VEDA
++	bool "Veda hypercall console"
++	depends on VEDA_GUEST
++	select HVC_DRIVER
++	select SERIAL_CORE
++	select SERIAL_CORE_CONSOLE
++	select SERIAL_EARLYCON
++	help
++	  The console of Linux in Veda's driver VM, through the platform's
++	  hypercalls; also an early console (earlycon=veda).
++
+ config HVC_DCC
+ 	bool "ARM JTAG DCC console"
+ 	depends on (ARM && (CPU_V6 || CPU_V6K || CPU_V7)) || ARM64
+--- a/drivers/tty/hvc/Makefile
++++ b/drivers/tty/hvc/Makefile
+@@ -4,6 +4,7 @@
+ obj-$(CONFIG_HVC_OLD_HVSI)	+= hvsi.o
+ obj-$(CONFIG_HVC_RTAS)		+= hvc_rtas.o
+ obj-$(CONFIG_HVC_DCC)		+= hvc_dcc.o
++obj-$(CONFIG_HVC_VEDA)		+= hvc_veda.o
+ obj-$(CONFIG_HVC_DRIVER)	+= hvc_console.o
+ obj-$(CONFIG_HVC_IRQ)		+= hvc_irq.o
+ obj-$(CONFIG_HVC_XEN)		+= hvc_xen.o
+--- a/drivers/virt/Kconfig
++++ b/drivers/virt/Kconfig
+@@ -47,6 +47,8 @@
+ 
+ source "drivers/virt/acrn/Kconfig"
+ 
++source "drivers/virt/veda/Kconfig"
++
+ endif
+ 
+ source "drivers/virt/coco/Kconfig"
+--- a/drivers/virt/Makefile
++++ b/drivers/virt/Makefile
+@@ -9,4 +9,5 @@
+ 
+ obj-$(CONFIG_NITRO_ENCLAVES)	+= nitro_enclaves/
+ obj-$(CONFIG_ACRN_HSM)		+= acrn/
++obj-$(CONFIG_VEDA_BRIDGE)	+= veda/
+ obj-y				+= coco/
+--- /dev/null
++++ b/arch/x86/include/asm/veda_para.h
+@@ -0,0 +1,67 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Veda's paravirtual platform, on which Linux runs as Veda's driver VM:
++ * how Linux finds it, and its hypercalls. The definitions are Veda's own
++ * (lib/hv/src/platform.rs in Veda's tree).
++ *
++ * A hypercall is vmcall with the call in rax and its arguments in rbx, rcx,
++ * rdx, rsi and rdi; the result comes back in rax, negative for an error.
++ */
++#ifndef _ASM_X86_VEDA_PARA_H
++#define _ASM_X86_VEDA_PARA_H
++
++#include <linux/types.h>
++
++#define VEDA_SIGNATURE		"VedaVedaVeda"
++
++/* Leaves past the platform's base leaf. */
++#define VEDA_CPUID_PLATFORM	0x01	/* eax: features, ebx: processors */
++#define VEDA_CPUID_TIMING	0x10	/* eax: TSC kHz, ebx: APIC timer kHz */
++
++#define VEDA_HC_CONSOLE_WRITE	1	/* rbx: bytes (<= 32), rcx..rdi: them */
++#define VEDA_HC_START_CPU	2	/* rbx: APIC id, rcx: 64-bit entry */
++#define VEDA_HC_POWER		3	/* rbx: VEDA_POWER_* */
++#define VEDA_HC_WALLCLOCK	4	/* returns ns since 1970 (UTC) */
++#define VEDA_HC_BRIDGE		5	/* rbx: operation, rcx: its request */
++/* rbx: the function (bus << 8 | devfn), rcx: the offset, rdx: the width */
++#define VEDA_HC_PCI_CONFIG_READ	6	/* returns the value (all ones: none) */
++#define VEDA_HC_PCI_CONFIG_WRITE 7	/* rsi: the value */
++/*
++ * rbx: the function, rcx: the MSI's index, rdx: the processor's APIC id,
++ * rsi: the vector (0: the MSI reaches nothing any more). Returns the
++ * message: the address in the low half, the data in the high half.
++ */
++#define VEDA_HC_PCI_MSI		8
++
++#define VEDA_POWER_OFF		0
++#define VEDA_POWER_RESTART	1
++#define VEDA_POWER_CRASHED	2
++
++static inline long veda_hypercall(unsigned long nr, unsigned long a1,
++				  unsigned long a2, unsigned long a3,
++				  unsigned long a4, unsigned long a5)
++{
++	long ret;
++
++	asm volatile("vmcall"
++		     : "=a" (ret)
++		     : "a" (nr), "b" (a1), "c" (a2), "d" (a3), "S" (a4),
++		       "D" (a5)
++		     : "memory");
++	return ret;
++}
++
++#ifdef CONFIG_VEDA_GUEST
++bool veda_platform(void);
++/* What the hypervisor callback vector calls (the bridge's ring). */
++void veda_set_callback(void (*handler)(void));
++/* PCI through the platform (arch/x86/pci/veda.c). */
++void veda_pci_init_platform(void);
++#else
++static inline bool veda_platform(void)
++{
++	return false;
++}
++#endif
++
++#endif /* _ASM_X86_VEDA_PARA_H */
+--- /dev/null
++++ b/arch/x86/kernel/cpu/veda.c
+@@ -0,0 +1,190 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Veda's paravirtual platform: Linux as the driver VM of the Veda operating
++ * system.
++ *
++ * The platform has processors with an x2APIC whose timer runs on the TSC,
++ * and memory: no PIC, PIT, I/O APIC, RTC, legacy devices, firmware or ACPI.
++ * The number of processors and the clocks' frequencies come from the
++ * platform's CPUID leaves; processors start, the machine powers off and
++ * the time of day is read through hypercalls (asm/veda_para.h). The
++ * monitor announces what it has for the guest (the bridge's finished
++ * waits) with the hypervisor callback vector. The PCI functions Veda
++ * gives the guest are on the platform's PCI (arch/x86/pci/veda.c).
++ */
++
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/notifier.h>
++#include <linux/panic_notifier.h>
++#include <linux/pm.h>
++#include <linux/printk.h>
++#include <linux/time64.h>
++#include <asm/acpi.h>
++#include <asm/apic.h>
++#include <asm/cpuid/api.h>
++#include <asm/hypervisor.h>
++#include <asm/i8259.h>
++#include <asm/idtentry.h>
++#include <asm/irq_regs.h>
++#include <asm/mpspec.h>
++#include <asm/reboot.h>
++#include <asm/setup.h>
++#include <asm/x86_init.h>
++#include <asm/veda_para.h>
++
++static u32 veda_base;
++
++/* The platform's base leaf; also before Linux looks for its hypervisor. */
++static u32 veda_find(void)
++{
++	if (!veda_base && boot_cpu_has(X86_FEATURE_HYPERVISOR))
++		veda_base = cpuid_base_hypervisor(VEDA_SIGNATURE, 0);
++	return veda_base;
++}
++
++bool veda_platform(void)
++{
++	return veda_find() != 0;
++}
++
++static u32 __init veda_detect(void)
++{
++	return veda_find() ? cpuid_eax(veda_base) : 0;
++}
++
++static unsigned long veda_tsc_khz(void)
++{
++	return cpuid_eax(veda_base + VEDA_CPUID_TIMING);
++}
++
++static void __init veda_timer_init(void)
++{
++	lapic_timer_period = cpuid_ebx(veda_base + VEDA_CPUID_TIMING) * 1000 / HZ;
++}
++
++/* Processors have local APIC ids 0 to their number less one. */
++static void __init veda_parse_smp_config(void)
++{
++	u32 cpus = cpuid_ebx(veda_base + VEDA_CPUID_PLATFORM);
++	u32 id;
++
++	register_lapic_address(APIC_DEFAULT_PHYS_BASE);
++	for (id = 0; id < cpus; id++)
++		topology_register_apic(id, CPU_ACPIID_INVALID, true);
++	smp_found_config = 1;
++}
++
++/* A processor starts in 64-bit mode, on page tables that map it. */
++static int veda_wakeup_cpu(u32 apicid, unsigned long start_ip, unsigned int cpu)
++{
++	return veda_hypercall(VEDA_HC_START_CPU, apicid, start_ip, 0, 0, 0) ? -EIO : 0;
++}
++
++static void veda_get_wallclock(struct timespec64 *now)
++{
++	*now = ns_to_timespec64(veda_hypercall(VEDA_HC_WALLCLOCK, 0, 0, 0, 0, 0));
++}
++
++static void veda_power(unsigned long how)
++{
++	veda_hypercall(VEDA_HC_POWER, how, 0, 0, 0, 0);
++	for (;;)
++		native_halt();
++}
++
++static void veda_power_off(void)
++{
++	veda_power(VEDA_POWER_OFF);
++}
++
++static void veda_restart(char *cmd)
++{
++	veda_power(VEDA_POWER_RESTART);
++}
++
++static void veda_emergency_restart(void)
++{
++	veda_power(VEDA_POWER_RESTART);
++}
++
++static int veda_panic(struct notifier_block *nb, unsigned long code, void *msg)
++{
++	veda_power(VEDA_POWER_CRASHED);
++	return NOTIFY_DONE;
++}
++
++static void (*veda_callback)(void);
++
++DEFINE_IDTENTRY_SYSVEC(sysvec_veda_callback)
++{
++	struct pt_regs *old_regs = set_irq_regs(regs);
++
++	apic_eoi();
++	inc_irq_stat(HYPERVISOR_CALLBACK);
++	if (veda_callback)
++		veda_callback();
++	set_irq_regs(old_regs);
++}
++
++void veda_set_callback(void (*handler)(void))
++{
++	WRITE_ONCE(veda_callback, handler);
++}
++
++static struct notifier_block veda_panic_block = {
++	.notifier_call = veda_panic,
++	/* After everything else had its say. */
++	.priority = INT_MIN,
++};
++
++static void __init veda_init_platform(void)
++{
++	x86_init.irqs.pre_vector_init		= x86_init_noop;
++	x86_init.timers.timer_init		= veda_timer_init;
++	x86_init.mpparse.find_mptable		= x86_init_noop;
++	x86_init.mpparse.early_parse_smp_cfg	= x86_init_noop;
++	x86_init.mpparse.parse_smp_cfg		= veda_parse_smp_config;
++
++	x86_platform.calibrate_cpu		= veda_tsc_khz;
++	x86_platform.calibrate_tsc		= veda_tsc_khz;
++	x86_platform.get_wallclock		= veda_get_wallclock;
++	x86_platform.legacy.rtc			= 0;
++	x86_platform.legacy.warm_reset		= 0;
++	x86_platform.legacy.i8042		= X86_LEGACY_I8042_PLATFORM_ABSENT;
++
++	legacy_pic				= &null_legacy_pic;
++
++	machine_ops.restart			= veda_restart;
++	machine_ops.halt			= veda_power_off;
++	machine_ops.power_off			= veda_power_off;
++	machine_ops.emergency_restart		= veda_emergency_restart;
++	pm_power_off				= veda_power_off;
++
++	/* The TSC is the host's: invariant, and the same on every processor. */
++	setup_force_cpu_cap(X86_FEATURE_TSC_KNOWN_FREQ);
++	setup_force_cpu_cap(X86_FEATURE_TSC_RELIABLE);
++
++	apic_update_callback(wakeup_secondary_cpu_64, veda_wakeup_cpu);
++	sysvec_install(HYPERVISOR_CALLBACK_VECTOR, sysvec_veda_callback);
++	atomic_notifier_chain_register(&panic_notifier_list, &veda_panic_block);
++	disable_acpi();
++#ifdef CONFIG_PCI
++	veda_pci_init_platform();
++#endif
++}
++
++/* Without interrupt remapping, in physical destination mode. */
++static bool __init veda_x2apic_available(void)
++{
++	return true;
++}
++
++const struct hypervisor_x86 x86_hyper_veda __refconst = {
++	.name			= "Veda",
++	.detect			= veda_detect,
++	.type			= X86_HYPER_VEDA,
++	.init.init_platform	= veda_init_platform,
++	.init.x2apic_available	= veda_x2apic_available,
++	.ignore_nopv		= true,
++};
+--- /dev/null
++++ b/drivers/tty/hvc/hvc_veda.c
+@@ -0,0 +1,76 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * The console of Linux in Veda's driver VM: bytes go to Veda's log through
++ * the platform's console hypercall, up to 32 at a time in registers (so it
++ * works however early, and whatever state the kernel is in). The console
++ * takes no input.
++ */
++
++#include <linux/console.h>
++#include <linux/init.h>
++#include <linux/serial_core.h>
++#include <linux/string.h>
++#include <asm/veda_para.h>
++
++#include "hvc_console.h"
++
++static void veda_console_write(const u8 *buf, size_t count)
++{
++	unsigned long r[4];
++
++	while (count) {
++		size_t n = min_t(size_t, count, sizeof(r));
++
++		memset(r, 0, sizeof(r));
++		memcpy(r, buf, n);
++		veda_hypercall(VEDA_HC_CONSOLE_WRITE, n, r[0], r[1], r[2], r[3]);
++		buf += n;
++		count -= n;
++	}
++}
++
++static void veda_early_write(struct console *con, const char *s, unsigned int n)
++{
++	veda_console_write(s, n);
++}
++
++static int __init veda_early_setup(struct earlycon_device *device, const char *opt)
++{
++	if (!veda_platform())
++		return -ENODEV;
++	device->con->write = veda_early_write;
++	return 0;
++}
++EARLYCON_DECLARE(veda, veda_early_setup);
++
++static ssize_t veda_put_chars(uint32_t vt, const u8 *buf, size_t count)
++{
++	veda_console_write(buf, count);
++	return count;
++}
++
++static ssize_t veda_get_chars(uint32_t vt, u8 *buf, size_t count)
++{
++	return 0;
++}
++
++static const struct hv_ops veda_hvc_ops = {
++	.get_chars = veda_get_chars,
++	.put_chars = veda_put_chars,
++};
++
++static int __init veda_console_init(void)
++{
++	if (!veda_platform())
++		return -ENODEV;
++	return hvc_instantiate(0, 0, &veda_hvc_ops) < 0 ? -ENODEV : 0;
++}
++console_initcall(veda_console_init);
++
++static int __init veda_hvc_init(void)
++{
++	if (!veda_platform())
++		return -ENODEV;
++	return PTR_ERR_OR_ZERO(hvc_alloc(0, 0, &veda_hvc_ops, 128));
++}
++device_initcall(veda_hvc_init);
+--- /dev/null
++++ b/include/uapi/linux/veda.h
+@@ -0,0 +1,172 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
++/*
++ * The bridge of Veda's driver VM: Veda's IPC for the programs of Linux in
++ * it, through /dev/veda.
++ *
++ * Each ioctl stands for the Veda system call of its name, on Veda objects
++ * the guest holds through handles of its own (32-bit numbers). Its
++ * request starts with the status of the operation: 0, or a Veda error
++ * code; the ioctl itself fails only when the request cannot be carried to
++ * Veda (EFAULT, ENOMEM, EINTR...). Buffers are the program's.
++ *
++ * A VMO is mapped with VEDA_IOC_VMO_MAP, which gives the offset to mmap
++ * /dev/veda at (MAP_SHARED, the length asked for); it is unmapped with
++ * munmap.
++ *
++ * These are the definitions of Veda's own lib/hv/src/bridge.rs.
++ */
++#ifndef _UAPI_LINUX_VEDA_H
++#define _UAPI_LINUX_VEDA_H
++
++#include <linux/ioctl.h>
++#include <linux/types.h>
++
++struct veda_close {
++	__u32 status;
++	__u32 handle;
++};
++
++/* rights 0: the handle's own. */
++struct veda_duplicate {
++	__u32 status;
++	__u32 handle;
++	__u32 rights;
++	__u32 out;
++};
++
++struct veda_object_info {
++	__u32 status;
++	__u32 handle;
++	__u64 koid;
++	__u32 object_type;
++	__u32 rights;
++};
++
++struct veda_signal {
++	__u32 status;
++	__u32 handle;
++	__u32 clear;
++	__u32 set;
++};
++
++struct veda_wait_item {
++	__u32 handle;
++	__u32 signals;
++	__u32 observed;
++	__u32 reserved;
++};
++
++/* Until a signal of an item is active, or the deadline (Veda's monotonic
++ * time, ns; ~0 for none) passes. */
++struct veda_wait {
++	__u32 status;
++	__u32 count;
++	__u64 items;
++	__u64 deadline;
++	__u64 key;
++	__u32 satisfied;
++	__u32 reserved;
++};
++
++struct veda_channel_create {
++	__u32 status;
++	__u32 reserved;
++	__u32 out[2];
++};
++
++/* The handles go with the message (consumed: they are gone, even if the
++ * write failed). */
++struct veda_channel_write {
++	__u32 status;
++	__u32 handle;
++	__u64 bytes;
++	__u64 handles;
++	__u32 bytes_len;
++	__u32 handles_len;
++	__u32 consumed;
++	__u32 reserved;
++};
++
++/* The lengths say what the message held, also when the buffers were too
++ * small (it then stays queued). */
++struct veda_channel_read {
++	__u32 status;
++	__u32 handle;
++	__u64 bytes;
++	__u64 handles;
++	__u32 bytes_capacity;
++	__u32 handles_capacity;
++	__u32 bytes_len;
++	__u32 handles_len;
++};
++
++struct veda_event_create {
++	__u32 status;
++	__u32 out;
++};
++
++/* VMO_CREATE (out: handle) and VMO_SIZE. */
++struct veda_vmo {
++	__u32 status;
++	__u32 handle;
++	__u64 size;
++	__u32 flags;
++	__u32 reserved;
++};
++
++struct veda_vmo_copy {
++	__u32 status;
++	__u32 handle;
++	__u64 offset;
++	__u64 buffer;
++	__u64 len;
++};
++
++/* flags: 1 read, 2 write. gpa: where to mmap /dev/veda. */
++struct veda_vmo_map {
++	__u32 status;
++	__u32 handle;
++	__u64 offset;
++	__u64 len;
++	__u64 gpa;
++	__u32 flags;
++	__u32 reserved;
++};
++
++struct veda_bootstrap {
++	__u32 status;
++	__u32 role;
++	__u32 out;
++	__u32 reserved;
++};
++
++/* Veda's clocks: monotonic ns = ((tsc - tsc_at_zero) * ns_per_tick) >> 32. */
++struct veda_clock {
++	__u32 status;
++	__u32 reserved;
++	__u64 tsc_at_zero;
++	__u64 ns_per_tick;
++	__u64 tsc_hz;
++	__u64 realtime_at_zero;
++	__u64 utc_at_zero;
++};
++
++#define VEDA_IOCTL		0xB9
++#define VEDA_IOC_CLOSE		_IOWR(VEDA_IOCTL, 2, struct veda_close)
++#define VEDA_IOC_DUPLICATE	_IOWR(VEDA_IOCTL, 3, struct veda_duplicate)
++#define VEDA_IOC_OBJECT_INFO	_IOWR(VEDA_IOCTL, 4, struct veda_object_info)
++#define VEDA_IOC_SIGNAL		_IOWR(VEDA_IOCTL, 5, struct veda_signal)
++#define VEDA_IOC_WAIT		_IOWR(VEDA_IOCTL, 6, struct veda_wait)
++#define VEDA_IOC_CHANNEL_CREATE	_IOWR(VEDA_IOCTL, 8, struct veda_channel_create)
++#define VEDA_IOC_CHANNEL_WRITE	_IOWR(VEDA_IOCTL, 9, struct veda_channel_write)
++#define VEDA_IOC_CHANNEL_READ	_IOWR(VEDA_IOCTL, 10, struct veda_channel_read)
++#define VEDA_IOC_EVENT_CREATE	_IOWR(VEDA_IOCTL, 11, struct veda_event_create)
++#define VEDA_IOC_VMO_CREATE	_IOWR(VEDA_IOCTL, 12, struct veda_vmo)
++#define VEDA_IOC_VMO_SIZE	_IOWR(VEDA_IOCTL, 13, struct veda_vmo)
++#define VEDA_IOC_VMO_READ	_IOWR(VEDA_IOCTL, 14, struct veda_vmo_copy)
++#define VEDA_IOC_VMO_WRITE	_IOWR(VEDA_IOCTL, 15, struct veda_vmo_copy)
++#define VEDA_IOC_VMO_MAP	_IOWR(VEDA_IOCTL, 16, struct veda_vmo_map)
++#define VEDA_IOC_BOOTSTRAP	_IOWR(VEDA_IOCTL, 18, struct veda_bootstrap)
++#define VEDA_IOC_CLOCK		_IOWR(VEDA_IOCTL, 19, struct veda_clock)
++
++#endif /* _UAPI_LINUX_VEDA_H */
+--- /dev/null
++++ b/drivers/virt/veda/Kconfig
+@@ -0,0 +1,8 @@
++# SPDX-License-Identifier: GPL-2.0
++config VEDA_BRIDGE
++	bool "Veda driver VM bridge"
++	depends on VEDA_GUEST
++	help
++	  /dev/veda, through which the programs of Linux in Veda's driver VM
++	  use Veda's IPC: channels, events, memory objects and waits on
++	  them, on objects that live in Veda.
+--- /dev/null
++++ b/drivers/virt/veda/Makefile
+@@ -0,0 +1,2 @@
++# SPDX-License-Identifier: GPL-2.0
++obj-$(CONFIG_VEDA_BRIDGE)	+= bridge.o
+--- /dev/null
++++ b/drivers/virt/veda/bridge.c
+@@ -0,0 +1,686 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * /dev/veda: the bridge of Veda's driver VM, through which the programs of
++ * Linux in it use Veda's IPC (include/uapi/linux/veda.h).
++ *
++ * Each ioctl becomes the bridge's hypercall with the same request, copied
++ * into the kernel once (and used from that copy only), its buffers named by
++ * their guest-physical addresses. A file keeps the handles it made or was
++ * given, uses no others, and closes those it still holds when it is
++ * released: a program that dies leaves nothing behind in Veda. A wait the
++ * monitor cannot finish at once finishes through the notification ring,
++ * which the monitor announces with the hypervisor callback vector.
++ *
++ * A VMO is mapped by the monitor into guest-physical memory beyond RAM;
++ * the program maps those pages (mmap at the offset VEDA_IOC_VMO_MAP gives).
++ */
++
++#include <linux/atomic.h>
++#include <linux/fs.h>
++#include <linux/init.h>
++#include <linux/list.h>
++#include <linux/miscdevice.h>
++#include <linux/mm.h>
++#include <linux/mutex.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/uaccess.h>
++#include <linux/wait.h>
++#include <linux/xarray.h>
++#include <asm/irq_vectors.h>
++#include <asm/veda_para.h>
++#include <uapi/linux/veda.h>
++
++/* Operations (lib/hv/src/bridge.rs: op): the ioctls' numbers, and the
++ * driver's own. */
++#define OP_SETUP	1
++#define OP_CANCEL	7
++#define OP_VMO_UNMAP	17
++
++#define VEDA_PENDING	0xFFFFFFFFu
++/* The Veda error the driver answers with itself (vabi::Error). */
++#define VEDA_BAD_HANDLE	2
++
++#define MAX_BYTES	(64 * 1024)
++#define MAX_HANDLES	64
++#define MAX_WAIT_ITEMS	1024
++#define MAX_COPY	(64 * 1024)
++
++/* The notification ring: one page (lib/hv/src/bridge.rs: ring). */
++#define RING_HEAD	0
++#define RING_TAIL	64
++#define RING_ENTRIES	128
++
++struct setup {
++	u32 status;
++	u32 vector;
++	u64 ring;
++};
++
++struct cancel {
++	u32 status;
++	u32 reserved;
++	u64 key;
++};
++
++struct ring_entry {
++	u64 key;
++	u32 status;
++	u32 satisfied;
++};
++
++#define RING_CAPACITY	((PAGE_SIZE - RING_ENTRIES) / sizeof(struct ring_entry))
++
++/* A wait the monitor finishes later. */
++struct waiter {
++	struct list_head node;
++	u64 key;
++	bool done;
++	u32 status;
++	u32 satisfied;
++};
++
++/* A VMO the monitor mapped for a file. */
++struct mapping {
++	struct list_head node;
++	struct bridge_file *file;
++	u64 gpa;
++	u64 len;
++	u32 flags;
++	bool mapped;
++};
++
++struct bridge_file {
++	/* The handles the file holds. */
++	struct xarray handles;
++	/* Its mappings; taken within mmap_lock (by mmap and munmap), so never
++	 * held while touching the program's memory. */
++	struct mutex mappings_lock;
++	struct list_head mappings;
++};
++
++static void *ring;
++static u32 ring_tail;
++static DEFINE_SPINLOCK(waiters_lock);
++static LIST_HEAD(waiters);
++static DECLARE_WAIT_QUEUE_HEAD(waiters_queue);
++static atomic64_t next_key;
++
++/* Carries out operation op with the request at req (kernel memory). */
++static int bridge_call(u32 op, void *req)
++{
++	return veda_hypercall(VEDA_HC_BRIDGE, op, __pa(req), 0, 0, 0) ? -EIO : 0;
++}
++
++/* The monitor finished waits: their completions are in the ring. */
++static void bridge_callback(void)
++{
++	u32 head = READ_ONCE(*(u32 *)(ring + RING_HEAD));
++	unsigned long flags;
++
++	spin_lock_irqsave(&waiters_lock, flags);
++	while (ring_tail != head) {
++		struct ring_entry e;
++		struct waiter *w;
++
++		memcpy(&e, ring + RING_ENTRIES + (ring_tail % RING_CAPACITY) * sizeof(e), sizeof(e));
++		ring_tail++;
++		list_for_each_entry(w, &waiters, node) {
++			if (w->key == e.key) {
++				w->status = e.status;
++				w->satisfied = e.satisfied;
++				WRITE_ONCE(w->done, true);
++				break;
++			}
++		}
++	}
++	WRITE_ONCE(*(u32 *)(ring + RING_TAIL), ring_tail);
++	spin_unlock_irqrestore(&waiters_lock, flags);
++	wake_up_all(&waiters_queue);
++}
++
++static bool holds(struct bridge_file *f, u32 handle)
++{
++	return handle && xa_load(&f->handles, handle);
++}
++
++static void keep(struct bridge_file *f, u32 handle)
++{
++	if (handle)
++		xa_store(&f->handles, handle, xa_mk_value(1), GFP_KERNEL);
++}
++
++static void forget(struct bridge_file *f, u32 handle)
++{
++	xa_erase(&f->handles, handle);
++}
++
++/* The status and handle that start most requests. */
++struct head {
++	u32 status;
++	u32 handle;
++};
++
++/*
++ * An operation whose request (size bytes at arg) holds no buffers: the
++ * handle it acts on (if acts_on) must be the file's; the handle it makes
++ * (at out, if not 0) becomes the file's; a handle it closes (closes) stops
++ * being the file's.
++ */
++static long plain(struct bridge_file *f, u32 op, void __user *arg, size_t size, bool acts_on, size_t out,
++		  bool closes)
++{
++	struct head *req;
++	long ret;
++
++	req = kmalloc(size, GFP_KERNEL);
++	if (!req)
++		return -ENOMEM;
++	ret = -EFAULT;
++	if (copy_from_user(req, arg, size))
++		goto out;
++	if (acts_on && !holds(f, req->handle)) {
++		req->status = VEDA_BAD_HANDLE;
++	} else {
++		ret = bridge_call(op, req);
++		if (ret)
++			goto out;
++		if (req->status == 0 && out)
++			keep(f, *(u32 *)((void *)req + out));
++		if (req->status == 0 && closes)
++			forget(f, req->handle);
++	}
++	ret = copy_to_user(arg, req, size) ? -EFAULT : 0;
++out:
++	kfree(req);
++	return ret;
++}
++
++static long do_channel_create(struct bridge_file *f, void __user *arg)
++{
++	struct veda_channel_create *c;
++	long ret;
++
++	c = kzalloc(sizeof(*c), GFP_KERNEL);
++	if (!c)
++		return -ENOMEM;
++	ret = bridge_call(8, c);
++	if (!ret && c->status == 0) {
++		keep(f, c->out[0]);
++		keep(f, c->out[1]);
++	}
++	if (!ret && copy_to_user(arg, c, sizeof(*c)))
++		ret = -EFAULT;
++	kfree(c);
++	return ret;
++}
++
++static long do_channel_write(struct bridge_file *f, void __user *arg)
++{
++	struct veda_channel_write *w;
++	u64 ubytes, uhandles;
++	void *bytes = NULL;
++	u32 *handles = NULL;
++	long ret;
++	u32 i;
++
++	w = kmalloc(sizeof(*w), GFP_KERNEL);
++	if (!w)
++		return -ENOMEM;
++	ret = -EFAULT;
++	if (copy_from_user(w, arg, sizeof(*w)))
++		goto out;
++	ret = -EINVAL;
++	if (w->bytes_len > MAX_BYTES || w->handles_len > MAX_HANDLES)
++		goto out;
++	ubytes = w->bytes;
++	uhandles = w->handles;
++	ret = -ENOMEM;
++	bytes = kmalloc(max(w->bytes_len, 1u), GFP_KERNEL);
++	handles = kmalloc_array(max(w->handles_len, 1u), sizeof(u32), GFP_KERNEL);
++	if (!bytes || !handles)
++		goto out;
++	ret = -EFAULT;
++	if (copy_from_user(bytes, u64_to_user_ptr(ubytes), w->bytes_len) ||
++	    copy_from_user(handles, u64_to_user_ptr(uhandles), w->handles_len * sizeof(u32)))
++		goto out;
++	w->consumed = 0;
++	w->status = VEDA_BAD_HANDLE;
++	if (!holds(f, w->handle))
++		goto reply;
++	for (i = 0; i < w->handles_len; i++)
++		if (!holds(f, handles[i]))
++			goto reply;
++	w->bytes = __pa(bytes);
++	w->handles = __pa(handles);
++	ret = bridge_call(9, w);
++	if (ret)
++		goto out;
++	if (w->consumed)
++		for (i = 0; i < w->handles_len; i++)
++			forget(f, handles[i]);
++	w->bytes = ubytes;
++	w->handles = uhandles;
++reply:
++	ret = copy_to_user(arg, w, sizeof(*w)) ? -EFAULT : 0;
++out:
++	kfree(handles);
++	kfree(bytes);
++	kfree(w);
++	return ret;
++}
++
++static long do_channel_read(struct bridge_file *f, void __user *arg)
++{
++	struct veda_channel_read *r;
++	u64 ubytes, uhandles;
++	void *bytes = NULL;
++	u32 *handles = NULL;
++	long ret;
++	u32 i;
++
++	r = kmalloc(sizeof(*r), GFP_KERNEL);
++	if (!r)
++		return -ENOMEM;
++	ret = -EFAULT;
++	if (copy_from_user(r, arg, sizeof(*r)))
++		goto out;
++	r->bytes_capacity = min_t(u32, r->bytes_capacity, MAX_BYTES);
++	r->handles_capacity = min_t(u32, r->handles_capacity, MAX_HANDLES);
++	ubytes = r->bytes;
++	uhandles = r->handles;
++	if (!holds(f, r->handle)) {
++		r->status = VEDA_BAD_HANDLE;
++		goto reply;
++	}
++	ret = -ENOMEM;
++	bytes = kmalloc(max(r->bytes_capacity, 1u), GFP_KERNEL);
++	handles = kmalloc_array(max(r->handles_capacity, 1u), sizeof(u32), GFP_KERNEL);
++	if (!bytes || !handles)
++		goto out;
++	r->bytes = __pa(bytes);
++	r->handles = __pa(handles);
++	ret = bridge_call(10, r);
++	if (ret)
++		goto out;
++	if (r->status == 0) {
++		for (i = 0; i < r->handles_len; i++)
++			keep(f, handles[i]);
++		ret = -EFAULT;
++		if (copy_to_user(u64_to_user_ptr(ubytes), bytes, r->bytes_len) ||
++		    copy_to_user(u64_to_user_ptr(uhandles), handles, r->handles_len * sizeof(u32)))
++			goto out;
++	}
++	r->bytes = ubytes;
++	r->handles = uhandles;
++reply:
++	ret = copy_to_user(arg, r, sizeof(*r)) ? -EFAULT : 0;
++out:
++	kfree(handles);
++	kfree(bytes);
++	kfree(r);
++	return ret;
++}
++
++static long do_vmo_copy(struct bridge_file *f, u32 op, void __user *arg)
++{
++	struct veda_vmo_copy *c;
++	void *buffer = NULL;
++	u64 ubuffer;
++	long ret;
++
++	c = kmalloc(sizeof(*c), GFP_KERNEL);
++	if (!c)
++		return -ENOMEM;
++	ret = -EFAULT;
++	if (copy_from_user(c, arg, sizeof(*c)))
++		goto out;
++	ret = -EINVAL;
++	if (c->len > MAX_COPY)
++		goto out;
++	ubuffer = c->buffer;
++	if (!holds(f, c->handle)) {
++		c->status = VEDA_BAD_HANDLE;
++		goto reply;
++	}
++	ret = -ENOMEM;
++	buffer = kmalloc(max_t(u64, c->len, 1), GFP_KERNEL);
++	if (!buffer)
++		goto out;
++	ret = -EFAULT;
++	if (op == 15 && copy_from_user(buffer, u64_to_user_ptr(ubuffer), c->len))
++		goto out;
++	c->buffer = __pa(buffer);
++	ret = bridge_call(op, c);
++	if (ret)
++		goto out;
++	ret = -EFAULT;
++	if (op == 14 && c->status == 0 && copy_to_user(u64_to_user_ptr(ubuffer), buffer, c->len))
++		goto out;
++	c->buffer = ubuffer;
++reply:
++	ret = copy_to_user(arg, c, sizeof(*c)) ? -EFAULT : 0;
++out:
++	kfree(buffer);
++	kfree(c);
++	return ret;
++}
++
++static long do_wait(struct bridge_file *f, void __user *arg)
++{
++	struct veda_wait *w;
++	struct veda_wait_item *items = NULL;
++	struct waiter waiter = {};
++	unsigned long flags;
++	u64 uitems;
++	size_t size;
++	long ret;
++	u32 i;
++
++	w = kmalloc(sizeof(*w), GFP_KERNEL);
++	if (!w)
++		return -ENOMEM;
++	ret = -EFAULT;
++	if (copy_from_user(w, arg, sizeof(*w)))
++		goto out;
++	ret = -EINVAL;
++	if (!w->count || w->count > MAX_WAIT_ITEMS)
++		goto out;
++	uitems = w->items;
++	size = w->count * sizeof(*items);
++	ret = -ENOMEM;
++	items = kmalloc(size, GFP_KERNEL);
++	if (!items)
++		goto out;
++	ret = -EFAULT;
++	if (copy_from_user(items, u64_to_user_ptr(uitems), size))
++		goto out;
++	for (i = 0; i < w->count; i++) {
++		if (!holds(f, items[i].handle)) {
++			w->status = VEDA_BAD_HANDLE;
++			goto reply;
++		}
++	}
++	w->items = __pa(items);
++	w->key = atomic64_inc_return(&next_key);
++	waiter.key = w->key;
++	/* Listed before the monitor may finish it. */
++	spin_lock_irqsave(&waiters_lock, flags);
++	list_add(&waiter.node, &waiters);
++	spin_unlock_irqrestore(&waiters_lock, flags);
++	ret = bridge_call(6, w);
++	if (!ret && w->status == VEDA_PENDING) {
++		if (wait_event_interruptible(waiters_queue, READ_ONCE(waiter.done))) {
++			struct cancel *c = kzalloc(sizeof(*c), GFP_KERNEL);
++
++			/* Given up, unless the monitor finished it meanwhile:
++			 * its completion is then on its way. */
++			if (c) {
++				c->key = waiter.key;
++				ret = bridge_call(OP_CANCEL, c);
++				if (!ret && c->status == 0)
++					ret = -EINTR;
++				else
++					wait_event(waiters_queue, READ_ONCE(waiter.done));
++				kfree(c);
++			} else {
++				wait_event(waiters_queue, READ_ONCE(waiter.done));
++			}
++		}
++		w->status = waiter.status;
++		w->satisfied = waiter.satisfied;
++	}
++	spin_lock_irqsave(&waiters_lock, flags);
++	list_del(&waiter.node);
++	spin_unlock_irqrestore(&waiters_lock, flags);
++	if (ret)
++		goto out;
++	/* What was observed, into the program's items. */
++	ret = -EFAULT;
++	if (copy_to_user(u64_to_user_ptr(uitems), items, size))
++		goto out;
++	w->items = uitems;
++reply:
++	ret = copy_to_user(arg, w, sizeof(*w)) ? -EFAULT : 0;
++out:
++	kfree(items);
++	kfree(w);
++	return ret;
++}
++
++static long do_vmo_map(struct bridge_file *f, void __user *arg)
++{
++	struct veda_vmo_map *m;
++	struct mapping *mapping;
++	long ret;
++
++	m = kmalloc(sizeof(*m), GFP_KERNEL);
++	mapping = kzalloc(sizeof(*mapping), GFP_KERNEL);
++	ret = -ENOMEM;
++	if (!m || !mapping)
++		goto out;
++	ret = -EFAULT;
++	if (copy_from_user(m, arg, sizeof(*m)))
++		goto out;
++	if (!holds(f, m->handle)) {
++		m->status = VEDA_BAD_HANDLE;
++	} else {
++		ret = bridge_call(16, m);
++		if (ret)
++			goto out;
++		if (m->status == 0) {
++			mapping->file = f;
++			mapping->gpa = m->gpa;
++			mapping->len = m->len;
++			mapping->flags = m->flags;
++			mutex_lock(&f->mappings_lock);
++			list_add(&mapping->node, &f->mappings);
++			mutex_unlock(&f->mappings_lock);
++			mapping = NULL;
++		}
++	}
++	ret = copy_to_user(arg, m, sizeof(*m)) ? -EFAULT : 0;
++out:
++	kfree(mapping);
++	kfree(m);
++	return ret;
++}
++
++/* The monitor unmaps the VMO's pages from the guest (mappings_lock held). */
++static void unmap(struct mapping *mapping)
++{
++	struct veda_vmo_map *m = kzalloc(sizeof(*m), GFP_KERNEL);
++
++	if (m) {
++		m->gpa = mapping->gpa;
++		m->len = mapping->len;
++		bridge_call(OP_VMO_UNMAP, m);
++		kfree(m);
++	}
++	list_del(&mapping->node);
++	kfree(mapping);
++}
++
++static long bridge_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
++{
++	struct bridge_file *f = file->private_data;
++	void __user *uarg = (void __user *)arg;
++
++	switch (cmd) {
++	case VEDA_IOC_CLOSE:
++		return plain(f, 2, uarg, sizeof(struct veda_close), true, 0, true);
++	case VEDA_IOC_DUPLICATE:
++		return plain(f, 3, uarg, sizeof(struct veda_duplicate), true, offsetof(struct veda_duplicate, out),
++			     false);
++	case VEDA_IOC_OBJECT_INFO:
++		return plain(f, 4, uarg, sizeof(struct veda_object_info), true, 0, false);
++	case VEDA_IOC_SIGNAL:
++		return plain(f, 5, uarg, sizeof(struct veda_signal), true, 0, false);
++	case VEDA_IOC_WAIT:
++		return do_wait(f, uarg);
++	case VEDA_IOC_CHANNEL_CREATE:
++		return do_channel_create(f, uarg);
++	case VEDA_IOC_CHANNEL_WRITE:
++		return do_channel_write(f, uarg);
++	case VEDA_IOC_CHANNEL_READ:
++		return do_channel_read(f, uarg);
++	case VEDA_IOC_EVENT_CREATE:
++		return plain(f, 11, uarg, sizeof(struct veda_event_create), false,
++			     offsetof(struct veda_event_create, out), false);
++	case VEDA_IOC_VMO_CREATE:
++		return plain(f, 12, uarg, sizeof(struct veda_vmo), false, offsetof(struct veda_vmo, handle), false);
++	case VEDA_IOC_VMO_SIZE:
++		return plain(f, 13, uarg, sizeof(struct veda_vmo), true, 0, false);
++	case VEDA_IOC_VMO_READ:
++		return do_vmo_copy(f, 14, uarg);
++	case VEDA_IOC_VMO_WRITE:
++		return do_vmo_copy(f, 15, uarg);
++	case VEDA_IOC_VMO_MAP:
++		return do_vmo_map(f, uarg);
++	case VEDA_IOC_BOOTSTRAP:
++		return plain(f, 18, uarg, sizeof(struct veda_bootstrap), false, offsetof(struct veda_bootstrap, out),
++			     false);
++	case VEDA_IOC_CLOCK:
++		return plain(f, 19, uarg, sizeof(struct veda_clock), false, 0, false);
++	default:
++		return -ENOTTY;
++	}
++}
++
++static void mapping_close(struct vm_area_struct *vma)
++{
++	struct mapping *mapping = vma->vm_private_data;
++	struct bridge_file *f = mapping->file;
++
++	mutex_lock(&f->mappings_lock);
++	unmap(mapping);
++	mutex_unlock(&f->mappings_lock);
++}
++
++/* A mapping is one piece: it goes whole. */
++static int mapping_may_split(struct vm_area_struct *vma, unsigned long addr)
++{
++	return -EINVAL;
++}
++
++static const struct vm_operations_struct mapping_ops = {
++	.close = mapping_close,
++	.may_split = mapping_may_split,
++};
++
++static int bridge_mmap(struct file *file, struct vm_area_struct *vma)
++{
++	struct bridge_file *f = file->private_data;
++	u64 gpa = (u64)vma->vm_pgoff << PAGE_SHIFT;
++	u64 len = vma->vm_end - vma->vm_start;
++	struct mapping *mapping, *found = NULL;
++	int ret = -EINVAL;
++
++	mutex_lock(&f->mappings_lock);
++	list_for_each_entry(mapping, &f->mappings, node) {
++		if (mapping->gpa == gpa && mapping->len == len && !mapping->mapped) {
++			found = mapping;
++			break;
++		}
++	}
++	if (!found)
++		goto out;
++	ret = -EACCES;
++	if ((vma->vm_flags & VM_WRITE) && !(found->flags & 2))
++		goto out;
++	if (!(found->flags & 2))
++		vm_flags_clear(vma, VM_MAYWRITE);
++	vm_flags_set(vma, VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP | VM_DONTCOPY);
++	vma->vm_ops = &mapping_ops;
++	vma->vm_private_data = found;
++	ret = remap_pfn_range(vma, vma->vm_start, gpa >> PAGE_SHIFT, len, vma->vm_page_prot);
++	if (!ret)
++		found->mapped = true;
++out:
++	mutex_unlock(&f->mappings_lock);
++	return ret;
++}
++
++static int bridge_open(struct inode *inode, struct file *file)
++{
++	struct bridge_file *f = kzalloc(sizeof(*f), GFP_KERNEL);
++
++	if (!f)
++		return -ENOMEM;
++	xa_init(&f->handles);
++	mutex_init(&f->mappings_lock);
++	INIT_LIST_HEAD(&f->mappings);
++	file->private_data = f;
++	return 0;
++}
++
++static int bridge_release(struct inode *inode, struct file *file)
++{
++	struct bridge_file *f = file->private_data;
++	struct mapping *mapping, *next;
++	struct veda_close *c;
++	unsigned long handle;
++	void *entry;
++
++	c = kzalloc(sizeof(*c), GFP_KERNEL);
++	xa_for_each(&f->handles, handle, entry) {
++		if (c) {
++			c->handle = handle;
++			bridge_call(2, c);
++		}
++	}
++	kfree(c);
++	xa_destroy(&f->handles);
++	/* Mappings no program mapped (those mapped went with their VMAs). */
++	mutex_lock(&f->mappings_lock);
++	list_for_each_entry_safe(mapping, next, &f->mappings, node)
++		unmap(mapping);
++	mutex_unlock(&f->mappings_lock);
++	kfree(f);
++	return 0;
++}
++
++static const struct file_operations bridge_fops = {
++	.owner = THIS_MODULE,
++	.open = bridge_open,
++	.release = bridge_release,
++	.unlocked_ioctl = bridge_ioctl,
++	.mmap = bridge_mmap,
++};
++
++static struct miscdevice bridge_device = {
++	.minor = MISC_DYNAMIC_MINOR,
++	.name = "veda",
++	.fops = &bridge_fops,
++	.mode = 0600,
++};
++
++static int __init bridge_init(void)
++{
++	struct setup *s;
++	int ret;
++
++	if (!veda_platform())
++		return -ENODEV;
++	ring = (void *)get_zeroed_page(GFP_KERNEL);
++	s = kzalloc(sizeof(*s), GFP_KERNEL);
++	ret = -ENOMEM;
++	if (!ring || !s)
++		goto fail;
++	veda_set_callback(bridge_callback);
++	s->vector = HYPERVISOR_CALLBACK_VECTOR;
++	s->ring = __pa(ring);
++	ret = bridge_call(OP_SETUP, s);
++	if (!ret && s->status)
++		ret = -ENODEV;
++	if (ret)
++		goto fail;
++	kfree(s);
++	return misc_register(&bridge_device);
++fail:
++	veda_set_callback(NULL);
++	kfree(s);
++	free_page((unsigned long)ring);
++	return ret;
++}
++device_initcall(bridge_init);
+--- /dev/null
++++ b/arch/x86/pci/veda.c
+@@ -0,0 +1,174 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * PCI on Veda's paravirtual platform: the PCI functions Veda gives its
++ * driver VM, on bus 0 of segment 0.
++ *
++ * Their configuration space is read and written through hypercalls (there
++ * is none of the PC's mechanisms), and is the functions' own but for what
++ * the platform owns: the memory BARs hold the addresses Veda mapped them
++ * at, which stay; there is no expansion ROM, I/O BAR or INTx. x86's own PCI
++ * code scans the bus and claims the BARs where they are.
++ *
++ * MSIs and MSI-X go through the platform's MSI parent domain, above x86's
++ * vector domain, which picks a processor and a vector as it does on a PC.
++ * The message a function sends is the platform's: a hypercall routes the
++ * function's interrupt to the processor and vector, and returns it (Veda's
++ * IOMMU remaps it). A move to another processor routes it again, and the
++ * message stays the same.
++ */
++
++#include <linux/init.h>
++#include <linux/irq.h>
++#include <linux/irqchip/irq-msi-lib.h>
++#include <linux/msi.h>
++#include <linux/pci.h>
++#include <asm/hw_irq.h>
++#include <asm/irqdomain.h>
++#include <asm/msi.h>
++#include <asm/pci_x86.h>
++#include <asm/x86_init.h>
++#include <asm/veda_para.h>
++
++static unsigned long veda_pci_function(unsigned int bus, unsigned int devfn)
++{
++	return bus << 8 | devfn;
++}
++
++static int veda_pci_read(unsigned int domain, unsigned int bus, unsigned int devfn, int reg, int len, u32 *val)
++{
++	if (domain || bus > 0xff || devfn > 0xff) {
++		*val = ~0;
++		return -EINVAL;
++	}
++	*val = veda_hypercall(VEDA_HC_PCI_CONFIG_READ, veda_pci_function(bus, devfn), reg, len, 0, 0);
++	return 0;
++}
++
++static int veda_pci_write(unsigned int domain, unsigned int bus, unsigned int devfn, int reg, int len, u32 val)
++{
++	if (domain || bus > 0xff || devfn > 0xff)
++		return -EINVAL;
++	return veda_hypercall(VEDA_HC_PCI_CONFIG_WRITE, veda_pci_function(bus, devfn), reg, len, val, 0) ? -EIO : 0;
++}
++
++static const struct pci_raw_ops veda_pci_raw_ops = {
++	.read	= veda_pci_read,
++	.write	= veda_pci_write,
++};
++
++static int __init veda_pci_arch_init(void)
++{
++	raw_pci_ops = &veda_pci_raw_ops;
++	return 0;
++}
++
++#ifdef CONFIG_PCI_MSI
++static unsigned long veda_msi_function(struct msi_desc *desc)
++{
++	struct pci_dev *dev = msi_desc_to_pci_dev(desc);
++
++	return veda_pci_function(dev->bus->number, dev->devfn);
++}
++
++static void veda_msi_compose(struct irq_data *data, struct msi_msg *msg)
++{
++	struct msi_desc *desc = irq_data_get_msi_desc(data);
++	struct irq_cfg *cfg = irqd_cfg(data);
++	long m;
++
++	m = veda_hypercall(VEDA_HC_PCI_MSI, veda_msi_function(desc), desc->msi_index, cfg->dest_apicid,
++			   cfg->vector, 0);
++	if (m < 0) {
++		pr_err_ratelimited("veda: %s: MSI %u cannot be routed\n", pci_name(msi_desc_to_pci_dev(desc)),
++				   desc->msi_index);
++		/* An interrupt in the format Veda's IOMMU blocks: it goes nowhere. */
++		m = 0xfee00000;
++	}
++	msg->address_hi = 0;
++	msg->address_lo = lower_32_bits(m);
++	msg->data = upper_32_bits(m);
++}
++
++static struct irq_chip veda_msi_chip = {
++	.name			= "Veda-MSI",
++	.irq_ack		= irq_chip_ack_parent,
++	.irq_compose_msi_msg	= veda_msi_compose,
++	.irq_set_affinity	= irq_chip_set_affinity_parent,
++};
++
++static bool veda_init_dev_msi_info(struct device *dev, struct irq_domain *domain,
++				   struct irq_domain *real_parent, struct msi_domain_info *info)
++{
++	if (!msi_lib_init_dev_msi_info(dev, domain, real_parent, info))
++		return false;
++	info->chip->flags |= IRQCHIP_SKIP_SET_WAKE;
++	info->ops->msi_prepare = pci_msi_prepare;
++	return true;
++}
++
++#define VEDA_MSI_FLAGS_SUPPORTED	(MSI_GENERIC_FLAGS_MASK | MSI_FLAG_PCI_MSIX | MSI_FLAG_PCI_MSIX_ALLOC_DYN)
++#define VEDA_MSI_FLAGS_REQUIRED		(MSI_FLAG_USE_DEF_DOM_OPS | MSI_FLAG_USE_DEF_CHIP_OPS)
++
++static const struct msi_parent_ops veda_msi_parent_ops = {
++	.supported_flags	= VEDA_MSI_FLAGS_SUPPORTED,
++	.required_flags		= VEDA_MSI_FLAGS_REQUIRED,
++	.bus_select_token	= DOMAIN_BUS_NEXUS,
++	.bus_select_mask	= MATCH_PCI_MSI,
++	.chip_flags		= MSI_CHIP_FLAG_SET_ACK,
++	.prefix			= "Veda-",
++	.init_dev_msi_info	= veda_init_dev_msi_info,
++};
++
++static int veda_msi_alloc(struct irq_domain *d, unsigned int virq, unsigned int nr_irqs, void *arg)
++{
++	int ret = irq_domain_alloc_irqs_parent(d, virq, nr_irqs, arg);
++
++	if (ret)
++		return ret;
++	for (unsigned int i = 0; i < nr_irqs; i++)
++		irq_domain_set_info(d, virq + i, 0, &veda_msi_chip, NULL, handle_edge_irq, NULL, "edge");
++	return 0;
++}
++
++/* The function's message for the MSI reaches nothing from now on. */
++static void veda_msi_free(struct irq_domain *d, unsigned int virq, unsigned int nr_irqs)
++{
++	for (unsigned int i = 0; i < nr_irqs; i++) {
++		struct msi_desc *desc = irq_data_get_msi_desc(irq_domain_get_irq_data(d, virq + i));
++
++		if (desc && dev_is_pci(desc->dev))
++			veda_hypercall(VEDA_HC_PCI_MSI, veda_msi_function(desc), desc->msi_index, 0, 0, 0);
++	}
++	irq_domain_free_irqs_top(d, virq, nr_irqs);
++}
++
++static const struct irq_domain_ops veda_msi_domain_ops = {
++	.select	= msi_lib_irq_domain_select,
++	.alloc	= veda_msi_alloc,
++	.free	= veda_msi_free,
++};
++
++static struct irq_domain * __init veda_create_pci_msi_domain(void)
++{
++	struct irq_domain_info info = {
++		.fwnode	= irq_domain_alloc_named_fwnode("Veda-MSI"),
++		.ops	= &veda_msi_domain_ops,
++		.parent	= x86_vector_domain,
++	};
++
++	if (!info.fwnode)
++		return NULL;
++	return msi_create_parent_irq_domain(&info, &veda_msi_parent_ops);
++}
++#endif
++
++void __init veda_pci_init_platform(void)
++{
++	/* None of the PC's configuration mechanisms, BIOS or IRQ routing. */
++	pci_probe = 0;
++	x86_init.pci.arch_init = veda_pci_arch_init;
++	x86_init.pci.init_irq = x86_init_noop;
++#ifdef CONFIG_PCI_MSI
++	x86_init.irqs.create_pci_msi_domain = veda_create_pci_msi_domain;
++#endif
++}

@@ -1,6 +1,7 @@
 //! System call dispatch. See `vabi` for the calling convention and the
 //! meaning of each call.
 
+mod hv;
 mod hw;
 mod ipc;
 mod misc;
@@ -55,6 +56,7 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::SYSTEM_INFO => misc::system_info(a[0]),
         nr::SYSTEM_POWER => misc::system_power(a[0] as RawHandle, a[1]),
         nr::RANDOM => misc::random(a[0], a[1]),
+        nr::CLOCK_INFO => misc::clock_info(a[0]),
 
         nr::HANDLE_CLOSE => ipc::handle_close(a[0] as RawHandle),
         nr::HANDLE_DUPLICATE => ipc::handle_duplicate(a[0] as RawHandle, a[1] as u32),
@@ -113,7 +115,17 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::IOPORT_WRITE => hw::ioport_write(a[0] as RawHandle, a[1], a[2], a[3]),
         nr::IRQ_CREATE => hw::irq_create(a[0] as RawHandle, a[1], a[2]),
         nr::IRQ_ACK => hw::irq_ack(a[0] as RawHandle),
-        nr::MSI_CREATE => hw::msi_create(a[0] as RawHandle, a[1]),
+        nr::MSI_CREATE => hw::msi_create(a[0] as RawHandle, a[1], a[2]),
+
+        nr::GUEST_CREATE => hv::guest_create(a[0] as RawHandle, a[1]),
+        nr::GUEST_MAP => hv::guest_map(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4], a[5]),
+        nr::GUEST_UNMAP => hv::guest_unmap(a[0] as RawHandle, a[1], a[2]),
+        nr::VCPU_CREATE => hv::vcpu_create(a[0] as RawHandle, a[1], a[2]),
+        nr::VCPU_RUN => hv::vcpu_run(a[0] as RawHandle, a[1]),
+        nr::VCPU_INTERRUPT => hv::vcpu_interrupt(a[0] as RawHandle, a[1]),
+        nr::VCPU_READ_STATE => hv::vcpu_read_state(a[0] as RawHandle, a[1]),
+        nr::GUEST_ATTACH_DEVICE => hv::guest_attach_device(a[0] as RawHandle, a[1] as RawHandle, a[2]),
+        nr::VCPU_BIND_INTERRUPT => hv::vcpu_bind_interrupt(a[0] as RawHandle, a[1] as RawHandle, a[2]),
         _ => Err(Error::UnknownSyscall),
     }
 }

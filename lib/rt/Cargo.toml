@@ -10,6 +10,7 @@ vabi = { workspace = true }
 vheap = { workspace = true }
 vpe = { workspace = true }
 velf = { workspace = true }
+vhv = { workspace = true }
 
 [features]
 default = ["runtime"]

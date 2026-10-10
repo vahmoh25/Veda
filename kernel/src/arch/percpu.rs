@@ -39,6 +39,11 @@ pub struct PerCpu {
     /// This idle CPU was sent a reschedule IPI and has not run the
     /// scheduler since: further wake-ups pick another CPU.
     pub resched_pending: AtomicBool,
+    /// Set by another CPU that wants this one to forget the guests'
+    /// physical address translations it caches (EPT).
+    pub ept_flush_pending: AtomicBool,
+    /// This CPU is in VMX operation (it can run virtual processors).
+    pub vmx_on: AtomicBool,
 }
 
 // SAFETY: each PerCpu is mutated only by its own CPU (or under the BKL);
@@ -60,6 +65,8 @@ const fn new_percpu(id: u32) -> PerCpu {
         online: AtomicBool::new(false),
         idle_ns: AtomicU64::new(0),
         resched_pending: AtomicBool::new(false),
+        ept_flush_pending: AtomicBool::new(false),
+        vmx_on: AtomicBool::new(false),
     }
 }
 

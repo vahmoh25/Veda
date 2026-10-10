@@ -1,24 +1,37 @@
 //! Threads.
+//!
+//! In a guest of the driver VM, threads are Linux's (`std`'s): the
+//! program's runtime is Linux's there.
 
+#[cfg(not(veda_guest))]
 use alloc::boxed::Box;
+#[cfg(not(veda_guest))]
 use alloc::sync::Arc;
 
-use vabi::{Error, nr, signals};
+#[cfg(not(veda_guest))]
+use vabi::signals;
+use vabi::{Error, nr};
 
-use crate::object::{Handle, Thread};
+#[cfg(not(veda_guest))]
+use crate::object::Handle;
+use crate::object::Thread;
+#[cfg(not(veda_guest))]
 use crate::sync::Mutex;
 use crate::sys::call;
+#[cfg(not(veda_guest))]
 use crate::vm::Mapping;
 
 /// Default stack size for spawned threads.
 pub const DEFAULT_STACK: usize = 256 * 1024;
 
+#[cfg(not(veda_guest))]
 pub struct JoinHandle<T> {
     thread: Thread,
     result: Arc<Mutex<Option<T>>>,
     stack: Option<Mapping>,
 }
 
+#[cfg(not(veda_guest))]
 impl<T> JoinHandle<T> {
     /// Waits for the thread to finish and returns its result.
     pub fn join(mut self) -> Result<T, Error> {
@@ -33,6 +46,7 @@ impl<T> JoinHandle<T> {
     }
 }
 
+#[cfg(not(veda_guest))]
 impl<T> Drop for JoinHandle<T> {
     fn drop(&mut self) {
         // A detached thread may still be running on its stack: leak it (it is
@@ -43,6 +57,19 @@ impl<T> Drop for JoinHandle<T> {
     }
 }
 
+/// A thread of the guest (Linux's).
+#[cfg(veda_guest)]
+pub struct JoinHandle<T>(std::thread::JoinHandle<T>);
+
+#[cfg(veda_guest)]
+impl<T> JoinHandle<T> {
+    /// Waits for the thread to finish and returns its result.
+    pub fn join(self) -> Result<T, Error> {
+        self.0.join().map_err(|_| Error::Canceled)
+    }
+}
+
+#[cfg(not(veda_guest))]
 extern "sysv64" fn thread_entry(arg: usize, _unused: usize) -> ! {
     // SAFETY: `arg` is the box leaked by `Builder::spawn`.
     let f = unsafe { Box::from_raw(arg as *mut Box<dyn FnOnce() + Send>) };
@@ -83,6 +110,7 @@ impl Builder {
         self
     }
 
+    #[cfg(not(veda_guest))]
     pub fn spawn<F, T>(self, f: F) -> Result<JoinHandle<T>, Error>
     where
         F: FnOnce() -> T + Send + 'static,
@@ -111,6 +139,22 @@ impl Builder {
             return Err(e);
         }
         Ok(JoinHandle { thread, result, stack: Some(stack) })
+    }
+
+    #[cfg(veda_guest)]
+    pub fn spawn<F, T>(self, f: F) -> Result<JoinHandle<T>, Error>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        // Priorities are Linux's business in the guest.
+        let _ = self.priority;
+        std::thread::Builder::new()
+            .name(self.name.into())
+            .stack_size(self.stack_size)
+            .spawn(f)
+            .map(JoinHandle)
+            .map_err(|_| Error::NoMemory)
     }
 }
 

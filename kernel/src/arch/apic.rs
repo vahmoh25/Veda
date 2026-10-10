@@ -1,4 +1,8 @@
 //! Local APIC (x2APIC or memory-mapped xAPIC), I/O APIC and legacy PIC.
+//!
+//! Devices' interrupts go to the boot processor. With the IOMMU remapping
+//! interrupts, their messages and I/O APIC entries are in the remappable
+//! format (see `crate::iommu`); otherwise they name the processor.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -170,6 +174,7 @@ pub fn send_ipi(dest_apic: u32, low: u32) {
 
 /// An I/O APIC.
 struct IoApic {
+    id: u8,
     base: u64,
     gsi_base: u32,
     count: u32,
@@ -216,9 +221,9 @@ mod heapless_vec {
 }
 
 /// Registers an I/O APIC from the MADT and masks all of its inputs.
-pub fn add_ioapic(phys: u64, gsi_base: u32) {
+pub fn add_ioapic(id: u8, phys: u64, gsi_base: u32) {
     let base = crate::mm::kvirt::map_mmio(phys, 4096, crate::mm::paging::Cache::Uncached);
-    let mut io = IoApic { base, gsi_base, count: 0 };
+    let mut io = IoApic { id, base, gsi_base, count: 0 };
     io.count = ((io.read(1) >> 16) & 0xFF) + 1;
     for i in 0..io.count {
         io.write(0x10 + 2 * i, 1 << 16);
@@ -235,19 +240,13 @@ pub fn route_gsi(gsi: u32, level: bool, active_low: bool, masked: bool) -> bool 
         return false;
     };
     let pin = gsi - io.gsi_base;
-    let mut low = (IOAPIC_VECTOR_BASE as u32 + gsi) & 0xFF;
-    if active_low {
-        low |= 1 << 13;
-    }
-    if level {
-        low |= 1 << 15;
-    }
-    if masked {
-        low |= 1 << 16;
-    }
-    let dest = super::percpu::get(0).apic_id;
-    io.write(0x11 + 2 * pin, dest << 24);
-    io.write(0x10 + 2 * pin, low);
+    let vector = (IOAPIC_VECTOR_BASE as u32 + gsi) as u8;
+    let entry = crate::iommu::ioapic_entry(io.id, vector, level, active_low, masked).unwrap_or_else(|| {
+        let dest = super::percpu::get(0).apic_id as u64;
+        vector as u64 | (active_low as u64) << 13 | (level as u64) << 15 | (masked as u64) << 16 | dest << 56
+    });
+    io.write(0x11 + 2 * pin, (entry >> 32) as u32);
+    io.write(0x10 + 2 * pin, entry as u32);
     true
 }
 
@@ -261,8 +260,16 @@ pub fn set_gsi_masked(gsi: u32, masked: bool) {
     }
 }
 
-/// Address/data pair that makes a PCI device's MSI target `vector` on the BSP.
-pub fn msi_message(vector: u8) -> (u64, u32) {
-    let dest = super::percpu::get(0).apic_id;
-    (0xFEE0_0000 | ((dest as u64 & 0xFF) << 12), vector as u32)
+/// The address and data that make an MSI of PCI function `source` (its
+/// requester id) raise `vector` on the BSP.
+pub fn msi_message(vector: u8, source: u16) -> (u64, u32) {
+    crate::iommu::msi_message(vector, source).unwrap_or_else(|| {
+        let dest = super::percpu::get(0).apic_id;
+        (0xFEE0_0000 | ((dest as u64 & 0xFF) << 12), vector as u32)
+    })
+}
+
+/// No device's interrupt reaches `vector` any more.
+pub fn release_vector(vector: u8) {
+    crate::iommu::release(vector);
 }

@@ -17,3 +17,10 @@ rustflags = [
     "--cfg", "sha2_backend=\"soft\"",
     "--cfg", "curve25519_dalek_backend=\"serial\"",
 ]
+
+# Programs of the driver VM's Linux guest (guest/): their Veda runtime makes
+# its system calls through the bridge (see lib/rt/src/guest.rs), and they
+# link statically with Rust's own linker on any host.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["--cfg", "veda_guest"]

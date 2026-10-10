@@ -1,0 +1,21 @@
+[package]
+name = "guest-bridgetest"
+description = "Checks the driver VM's bridge from inside the Linux guest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bridgetest"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+
+[lints]
+workspace = true

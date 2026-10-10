@@ -1,6 +1,7 @@
 //! Raw system calls. Prefer the safe wrappers in [`crate::object`] and the
 //! other modules; these exist for completeness and for low-level code.
 
+#[cfg(not(veda_guest))]
 use core::arch::asm;
 
 pub use vabi::nr;
@@ -9,11 +10,13 @@ use vabi::{Error, RawHandle};
 /// Result of a raw system call.
 pub type SysResult = Result<usize, Error>;
 
+#[cfg(not(veda_guest))]
 #[inline(always)]
 fn decode(ret: isize) -> SysResult {
     Error::from_return(ret)
 }
 
+#[cfg(not(veda_guest))]
 #[inline(always)]
 pub unsafe fn syscall6(n: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize) -> (isize, usize) {
     let ret: isize;
@@ -38,6 +41,7 @@ pub unsafe fn syscall6(n: usize, a0: usize, a1: usize, a2: usize, a3: usize, a4:
     (ret, rdx)
 }
 
+#[cfg(not(veda_guest))]
 #[inline(always)]
 pub fn call(n: usize, a: [usize; 6]) -> SysResult {
     // SAFETY: system calls validate all of their arguments; memory passed by
@@ -45,11 +49,23 @@ pub fn call(n: usize, a: [usize; 6]) -> SysResult {
     decode(unsafe { syscall6(n, a[0], a[1], a[2], a[3], a[4], a[5]) }.0)
 }
 
+#[cfg(not(veda_guest))]
 #[inline(always)]
 pub fn call2(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
     // SAFETY: as in `call`.
     let (ret, rdx) = unsafe { syscall6(n, a[0], a[1], a[2], a[3], a[4], a[5]) };
     decode(ret).map(|v| (v, rdx))
+}
+
+/// In a guest of the driver VM, through the bridge (see `crate::guest`).
+#[cfg(veda_guest)]
+pub fn call(n: usize, a: [usize; 6]) -> SysResult {
+    crate::guest::call(n, a).map(|(v, _)| v)
+}
+
+#[cfg(veda_guest)]
+pub fn call2(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
+    crate::guest::call(n, a)
 }
 
 pub fn debug_write(text: &[u8]) {

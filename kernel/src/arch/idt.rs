@@ -17,6 +17,11 @@ pub const TIMER_VECTOR: u8 = 0xF0;
 pub const RESCHED_VECTOR: u8 = 0xF1;
 pub const TLB_VECTOR: u8 = 0xF2;
 pub const HALT_VECTOR: u8 = 0xF3;
+/// Makes a CPU that runs a guest leave it (to see an interrupt for the
+/// guest, or a request to its scheduler); it does nothing else.
+pub const KICK_VECTOR: u8 = 0xF4;
+/// The IOMMU's fault events.
+pub const IOMMU_VECTOR: u8 = 0xF5;
 pub const SPURIOUS_VECTOR: u8 = 0xFF;
 
 #[repr(C)]
@@ -129,6 +134,10 @@ pub extern "sysv64" fn trap_dispatch(frame: &mut TrapFrame) {
             return;
         }
         HALT_VECTOR => super::cpu::halt_forever(),
+        KICK_VECTOR => {
+            super::apic::eoi();
+            return;
+        }
         SPURIOUS_VECTOR | 0x20..=0x2F => return,
         2 => crate::panic::nmi(frame),
         _ => {}
@@ -149,6 +158,10 @@ pub extern "sysv64" fn trap_dispatch(frame: &mut TrapFrame) {
         RESCHED_VECTOR => {
             super::apic::eoi();
             crate::sched::request_resched();
+        }
+        IOMMU_VECTOR => {
+            crate::iommu::fault_interrupt();
+            super::apic::eoi();
         }
         v if (IOAPIC_VECTOR_BASE..IOAPIC_VECTOR_BASE + IOAPIC_VECTORS).contains(&v)
             || (MSI_VECTOR_FIRST..=MSI_VECTOR_LAST).contains(&v) =>

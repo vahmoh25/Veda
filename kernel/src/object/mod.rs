@@ -123,6 +123,8 @@ pub enum KObject {
     Interrupt(Arc<interrupt::Interrupt>),
     IoPorts(Arc<ioport::IoPorts>),
     Resource(Arc<resource::Resource>),
+    Guest(Arc<crate::hv::Guest>),
+    Vcpu(Arc<crate::hv::Vcpu>),
 }
 
 impl KObject {
@@ -137,6 +139,8 @@ impl KObject {
             KObject::Interrupt(_) => ObjectType::Interrupt,
             KObject::IoPorts(_) => ObjectType::IoPorts,
             KObject::Resource(_) => ObjectType::Resource,
+            KObject::Guest(_) => ObjectType::Guest,
+            KObject::Vcpu(_) => ObjectType::Vcpu,
         }
     }
 
@@ -151,6 +155,8 @@ impl KObject {
             KObject::Interrupt(o) => o.koid,
             KObject::IoPorts(o) => o.koid,
             KObject::Resource(o) => o.koid,
+            KObject::Guest(o) => o.koid,
+            KObject::Vcpu(o) => o.koid,
         }
     }
 
@@ -163,7 +169,7 @@ impl KObject {
             KObject::Socket(o) => Some(o.signals()),
             KObject::Event(o) => Some(&o.signals),
             KObject::Interrupt(o) => Some(&o.signals),
-            KObject::Vmo(_) | KObject::IoPorts(_) | KObject::Resource(_) => None,
+            KObject::Vmo(_) | KObject::IoPorts(_) | KObject::Resource(_) | KObject::Guest(_) | KObject::Vcpu(_) => None,
         }
     }
 }

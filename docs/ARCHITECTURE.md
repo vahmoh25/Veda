@@ -84,6 +84,8 @@ are never read or written.
 | `sched` | threads, priority round-robin scheduling, blocking with timeouts, idle loop |
 | `object` | handles, signals, processes, channels, sockets, events, interrupts, I/O ports, resources |
 | `syscall` | the system call layer (see `lib/abi`) |
+| `hv` | the hypervisor: VMX and EPT, guests and their virtual processors (see [the driver VM](DRIVERVM.md)) |
+| `iommu` | Intel VT-d: every device's interrupts remapped, devices' DMA passed through or confined to a guest's memory |
 | `acpi`, `time`, `futex`, `loader`, `log`, `panic` | supporting subsystems |
 
 **Concurrency.** The kernel runs with interrupts disabled and holds a big
@@ -207,6 +209,17 @@ has ended and left its stack, which is how thread libraries join threads.
   laptop this was written for, all of a 480 KiB DSDT and fifteen SSDTs
   load (`cargo test -p vacpi -- --ignored` loads a machine's dumped
   tables).
+* **The IOMMU.** Where the firmware describes one (VT-d), the kernel
+  remaps every interrupt: a device's MSI raises an entry that names the
+  device, so no other can raise it, and the compatibility format is
+  blocked. Devices reach memory untranslated, as without an IOMMU, until
+  one is given to a guest. MSIs are therefore made for a PCI function
+  (`msi_create` takes a resource naming it, `resource_kind::PCI`), which
+  `devmgr` holds for all of them.
+* **The driver VM.** Devices that the boot options name go to Linux in a
+  virtual machine instead of a driver of Veda's ([the driver VM](DRIVERVM.md)):
+  `devmgr` hands their `pcidev` channels to `drivervm`, which gives them to
+  its guest whole, their DMA confined to the guest's memory by the IOMMU.
 * A driver asks for the devices the firmware describes below its PCI
   function (its ACPI companion, found by `_ADR` under the PCI root bridge):
   their ids (`_HID`, `_UID`, `_SUB`), status and resources (`_CRS`:
@@ -888,6 +901,8 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/hda`, `lib/usb`, `lib/cs35l41`, `lib/spi` | what the HD Audio, USB, speaker amplifier and SPI drivers know that touches no hardware |
 | `lib/igpu` | Intel's integrated graphics for the display driver: registers, device ids, takeover, address table, flips, interrupts, the flip loop |
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
+| `lib/hv`, `lib/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the virtual APIC, `cpuid`, the guests' platform and boot protocol, the bridge's ABI; VT-d's tables and structures |
+| `guest/` | the driver VM's Linux programs: its `init`, and its tests |
 | `lib/boardsim` | simulated machines for host tests: firmware descriptions and models of chips no emulator has |
 | `lib/splash` | the boot splash's picture, which the boot loader and the window system draw alike |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
@@ -897,7 +912,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `lib/wlan`, `lib/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
 | `third_party/` | vendored crates with documented patches (smoltcp) |
-| `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl |
+| `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Linux for the driver VM (with zlib and elfutils for its build) |
 | `services/`, `drivers/`, `apps/` | system services, drivers and applications (the games included) |
 | `tests/` | in-system tests, C and C++ test programs (`tests/c`) and GUI automation scripts |
 | `tools/` | host programs: media generators, `airsim` (the simulated Wi-Fi environment) |

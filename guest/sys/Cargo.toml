@@ -1,0 +1,13 @@
+[package]
+name = "guest-sys"
+description = "The Linux system calls the driver VM's programs make that Rust's std does not"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+test = false
+bench = false
+
+[lints]
+workspace = true

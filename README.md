@@ -136,6 +136,14 @@ the voice pipeline, consent, memory and how the agent is tested.
   points bridged to the Internet. See [Networking](docs/NETWORKING.md).
 * **Audio.** A mixing audio service with echo-cancelled capture and
   ducking, built for the agent's conversations as much as for music.
+* **Linux's drivers, in a virtual machine.** For the devices Veda has no
+  driver of its own for, Veda runs a minimal Linux in a virtual machine,
+  the *driver VM*, on a hypervisor of its own (VMX with EPT, a
+  paravirtual platform with no emulated hardware). Devices go to it whole,
+  their DMA confined to its memory and their interrupts remapped by
+  Veda's IOMMU driver, and its programs reach Veda's services through
+  Veda's own system calls, carried across. See
+  [the driver VM](docs/DRIVERVM.md).
 * **Storage.** virtio-blk and AHCI (SATA) drivers and a file system
   service that keeps the home directory on its own disk with crash-safe
   snapshots, so your files survive restarts. The agent's memory and key
@@ -207,6 +215,10 @@ Veda is built on an x64 PC with Windows 10 or 11, or with Linux.
   which `cargo xtask toolchain` builds once: on Windows
   [MSYS2](https://www.msys2.org) with a few packages, on Linux the
   distribution's (see [C on Veda](docs/C.md#the-toolchain)).
+* For the driver VM (optional, on Linux): the Linux kernel's build tools,
+  for `cargo xtask linux`, and KVM's nested virtualization
+  (`kvm_intel nested=1`), on which QEMU gives Veda the processor's VMX (see
+  [the driver VM](docs/DRIVERVM.md#testing)).
 
 Check the environment:
 
@@ -510,11 +522,12 @@ The serial console (kernel log plus every program's output) is saved to
 | `lib/agent/` | the agent's logic: Deepgram protocol, functions, instructions, wake word, echo gate, memory, configuration |
 | `boot/` | `vboot`, the UEFI bootloader |
 | `kernel/` | `vkernel`, the microkernel |
-| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `posix` (the POSIX layer under the C library), `elf` (ELF executables), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `hda` (HD Audio codecs and their routes), `igpu` (Intel's display engine), `text`, `math`, ... |
-| `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi) |
+| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `posix` (the POSIX layer under the C library), `elf` (ELF executables), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `hda` (HD Audio codecs and their routes), `igpu` (Intel's display engine), `hv` and `iommu` (the hypervisor's and the IOMMU's logic), `text`, `math`, ... |
+| `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor) |
 | `drivers/` | `ps2`, `virtio-input`, `xhci` (USB 3 controllers: hubs, keyboards, mice), `virtio-blk`, `ahci` (SATA), `hda` (Intel HD Audio), `virtio-snd`, `ac97` (AC'97 sound), `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio), `virtio-gpu` (3D on the host's GPU), `intel-gpu` (Intel's integrated graphics: frames flipped at the vertical blank, and the GPU's engines for OpenGL ES), `flipsim` (a display that flips, for tests), `gemsim` (an Intel GPU that runs nothing, for tests) |
 | `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `racer` (*Velocity*) and `starfall` |
-| `ports/` | the C toolchain built from source: GCC, binutils, GMP, MPFR, MPC and musl, each an upstream release and Veda's patch |
+| `ports/` | the C toolchain built from source: GCC, binutils, GMP, MPFR, MPC and musl, each an upstream release and Veda's patch; and Linux for the driver VM |
+| `guest/` | the driver VM's Linux programs: its `init`, and its tests |
 | `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), C and C++ test programs (`c/`), GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
 | `third_party/` | vendored crates with Veda patches (smoltcp) |
@@ -531,6 +544,8 @@ The serial console (kernel log plus every program's output) is saved to
   simulated Wi-Fi environment, security and tests.
 * [C on Veda](docs/C.md): writing, compiling and running C programs, the
   POSIX layer, and how the toolchain is built.
+* [The driver VM](docs/DRIVERVM.md): Linux's drivers in a virtual machine:
+  the hypervisor, the platform, the bridge, the IOMMU and the devices.
 * [Developing](docs/DEVELOPING.md): build commands, the system image,
   writing applications, performance notes.
 * [Coding conventions](docs/CODING.md).

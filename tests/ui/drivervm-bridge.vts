@@ -1,0 +1,13 @@
+# The driver VM's bridge: a Linux program in the guest uses Veda's IPC
+# through vrt, as a Veda program does (guest/bridgetest). It sees Veda's
+# registry narrowed to the services drivers attach to, sends a VMO and an
+# event over a channel, maps the VMO, and waits on events and channels
+# (with deadlines, and woken by another thread).
+requires drivervm
+boot-cmdline "drivervm drivervm.run=bridgetest drivervm.poweroff"
+fail-on "PANIC"
+fail-on "bridgetest: FAIL"
+fail-on "drivervm: processor"
+wait-serial "drivervm: starting Linux" 60
+wait-serial "bridgetest: PASS" 60
+wait-serial "drivervm: Linux powered the machine off" 30

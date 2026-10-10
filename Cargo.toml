@@ -47,6 +47,8 @@ members = [
     "lib/gem",
     "lib/glsl",
     "lib/gl",
+    "lib/hv",
+    "lib/iommu",
     "services/init",
     "services/vfs",
     "services/devmgr",
@@ -54,6 +56,7 @@ members = [
     "services/netd",
     "services/wlan",
     "services/agent",
+    "services/drivervm",
     "apps/about",
     "apps/shell",
     "apps/editor",
@@ -92,6 +95,11 @@ members = [
     "tests/testmic",
     "tests/audiotest",
     "tests/speakertest",
+    "guest/init",
+    "guest/bridgetest",
+    "guest/pcitest",
+    "guest/sys",
+    "guest/alsa",
 ]
 # Vendored third-party crates are path dependencies, not members (their own
 # tests and dev-dependencies stay out of this workspace). See third_party/.
@@ -151,6 +159,9 @@ vspi = { path = "lib/spi" }
 vsplash = { path = "lib/splash" }
 vglsl = { path = "lib/glsl" }
 vgl = { path = "lib/gl" }
+vhv = { path = "lib/hv" }
+viommu = { path = "lib/iommu" }
+guest-sys = { path = "guest/sys" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
 sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }
@@ -206,6 +217,8 @@ smoltcp = { path = "third_party/smoltcp", default-features = false, features = [
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+# Set for the programs of the driver VM's Linux guest (.cargo/config.toml).
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(veda_guest)"] }
 missing_debug_implementations = "allow"
 
 [workspace.lints.clippy]

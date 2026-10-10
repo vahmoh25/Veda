@@ -339,13 +339,18 @@ pub fn native_files() -> Result<Vec<(String, Vec<u8>)>> {
 }
 
 /// A source package of `ports/` (its `port.toml`).
-struct Port {
+pub struct Port {
     name: String,
     url: String,
     sha256: String,
 }
 
 impl Port {
+    /// The port in `ports/NAME`.
+    pub fn named(name: &str) -> Result<Port> {
+        Port::load(&util::workspace_root().join("ports").join(name))
+    }
+
     fn load(dir: &Path) -> Result<Port> {
         let file = dir.join("port.toml");
         let text = std::fs::read_to_string(&file).map_err(|e| format!("reading {}: {e}", file.display()))?;
@@ -359,18 +364,16 @@ impl Port {
         Ok(Port { name: value("name")?, url: value("url")?, sha256: value("sha256")? })
     }
 
-    fn archive(&self) -> PathBuf {
-        root().join("downloads").join(self.url.rsplit('/').next().unwrap_or(&self.name))
+    /// Where its archive is downloaded to, in `downloads`.
+    fn archive(&self, downloads: &Path) -> PathBuf {
+        downloads.join(self.url.rsplit('/').next().unwrap_or(&self.name))
     }
 }
 
 /// The ports the toolchain is built from, and Mesa, which `ports/build.sh`
 /// configures for the renderer.
 fn ports() -> Result<Vec<Port>> {
-    ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl", "mesa"]
-        .iter()
-        .map(|p| Port::load(&util::workspace_root().join("ports").join(p)))
-        .collect()
+    ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl", "mesa"].iter().map(|p| Port::named(p)).collect()
 }
 
 fn sha256_of(path: &Path) -> Result<String> {
@@ -379,10 +382,10 @@ fn sha256_of(path: &Path) -> Result<String> {
     Ok(Sha256::digest(&data).iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Downloads a port's source archive unless it is there, and checks it
-/// against the SHA-256 the port pins.
-fn fetch(port: &Port) -> Result {
-    let archive = port.archive();
+/// Downloads a port's source archive into `downloads` unless it is there,
+/// and checks it against the SHA-256 the port pins.
+pub fn fetch(port: &Port, downloads: &Path) -> Result {
+    let archive = port.archive(downloads);
     if archive.is_file() && sha256_of(&archive)? == port.sha256 {
         return Ok(());
     }
@@ -437,7 +440,7 @@ fn shell() -> Result<Command> {
 }
 
 /// A path as both Windows and MSYS2 programs read it (`C:/x/y`).
-fn mixed(p: &Path) -> String {
+pub fn mixed(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
 
@@ -457,7 +460,7 @@ pub fn command(args: &[String]) -> Result {
     // The tools first: the downloads are large.
     let mut sh = shell()?;
     for port in ports()? {
-        fetch(&port)?;
+        fetch(&port, &root().join("downloads"))?;
     }
     // The script makes the C library's object of the POSIX layer once its
     // cross linker exists.

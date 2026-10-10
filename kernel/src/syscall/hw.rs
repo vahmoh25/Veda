@@ -12,7 +12,7 @@ use crate::object::resource::Resource;
 
 pub fn resource_create(parent: RawHandle, kind: usize, base: u64, size: u64) -> SysResult {
     let p = get_resource(parent, Rights::DUPLICATE)?;
-    if kind > resource_kind::PROCESS || !p.permits(kind, base, size) {
+    if kind > resource_kind::LAST || !p.permits(kind, base, size) {
         return Err(Error::AccessDenied);
     }
     let rights = Rights(Rights::BASIC.0 | Rights::DUPLICATE.0);
@@ -62,13 +62,13 @@ pub fn irq_ack(raw: RawHandle) -> SysResult {
     ok(0)
 }
 
-pub fn msi_create(res: RawHandle, out: usize) -> SysResult {
+pub fn msi_create(res: RawHandle, device: usize, out: usize) -> SysResult {
     let r = get_resource(res, Rights::NONE)?;
-    if !r.permits(resource_kind::DMA, r.base, 0) && !r.permits(resource_kind::DMA, 0, 0) {
+    let device = u16::try_from(device).map_err(|_| Error::InvalidArgs)?;
+    if !r.permits(resource_kind::PCI, device as u64, 1) {
         return Err(Error::AccessDenied);
     }
-    let i = Interrupt::new_msi().ok_or(Error::LimitReached)?;
-    let (address, data) = crate::arch::apic::msi_message(i.vector);
+    let (i, (address, data)) = Interrupt::new_msi(device).ok_or(Error::LimitReached)?;
     let info = MsiInfo { address, data, vector: i.vector as u32 };
     let rights = Rights(Rights::BASIC.0 | Rights::WRITE.0);
     let h = insert(KObject::Interrupt(i), rights)?;

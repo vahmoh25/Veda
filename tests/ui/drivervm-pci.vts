@@ -1,0 +1,24 @@
+# The driver VM gets a PCI function: QEMU's Intel HD Audio controller goes
+# to Linux instead of Veda's driver. Veda's IOMMU confines its DMA to the
+# guest's memory and remaps its interrupts to the guest's processors;
+# Linux's snd-hda-intel finds it on the platform's PCI, and its codec
+# answers, which takes DMA both ways and interrupts.
+requires drivervm
+iommu
+sound hda
+boot-cmdline "drivervm drivervm.devices=8086:293e drivervm.run=pcitest drivervm.poweroff"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+fail-on "pcitest: FAIL"
+wait-serial "goes to the driver VM" 60
+wait-serial "is the guest's 00:06.0" 30
+wait-serial "iommu: 00:06.0 is in domain" 30
+wait-serial "pcitest: PASS" 60
+wait-serial "drivervm: Linux powered the machine off" 30
+wait-serial "left domain" 10
+reject-serial "iommu: unit at"
+reject-serial "hda: controller at"
+reject-serial "Linux touched I/O port"
+reject-serial "unchecked MSR access"
+reject-serial "WARNING:"
+reject-serial "azx_get_response timeout"

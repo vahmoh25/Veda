@@ -143,6 +143,10 @@ protocol! {
         /// Drives GPIO connection `index` of ACPI device `device` high or
         /// low, making the pin an output if it is not one.
         11 => fn gpio_write(device: u32, index: u32, high: bool) -> Result<(), PciError>;
+        /// The resource that names this function (a PCI resource of its
+        /// requester id), for giving it to a virtual machine: only the
+        /// driver VM's devices have one (`Denied`).
+        12 => fn device_resource() -> Result<Resource, PciError>;
     }
 }
 

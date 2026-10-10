@@ -20,8 +20,15 @@ pub(crate) struct Startup {
 pub(crate) static STARTUP: SpinLock<Option<Startup>> = SpinLock::new(None);
 
 /// Command-line arguments; `args()[0]` is the program name.
+#[cfg(not(veda_guest))]
 pub fn args() -> Vec<String> {
     STARTUP.lock().as_ref().map(|s| s.args.clone()).unwrap_or_default()
+}
+
+/// Command-line arguments; `args()[0]` is the program name.
+#[cfg(veda_guest)]
+pub fn args() -> Vec<String> {
+    std::env::args().collect()
 }
 
 /// The program name (first argument).
@@ -45,7 +52,17 @@ pub fn vars() -> Vec<(String, String)> {
 }
 
 /// Takes the first startup handle with the given role
+/// (see `vabi::startup::role`). In a guest of the driver VM, the guest's
+/// own (a new one each time).
+#[cfg(veda_guest)]
+pub fn take_handle(role: u32) -> Option<Handle> {
+    // SAFETY: the bridge just gave us this handle.
+    crate::guest::bootstrap(role).map(|h| unsafe { Handle::from_raw(h) })
+}
+
+/// Takes the first startup handle with the given role
 /// (see `vabi::startup::role`).
+#[cfg(not(veda_guest))]
 pub fn take_handle(role: u32) -> Option<Handle> {
     let mut guard = STARTUP.lock();
     let s = guard.as_mut()?;

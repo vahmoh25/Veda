@@ -45,14 +45,15 @@ pub struct SchedData {
     pub cpu: u32,
 }
 
-/// FPU/SSE/AVX register save area (64-byte aligned for XSAVE).
-struct FpuArea {
+/// FPU/SSE/AVX register save area (64-byte aligned for XSAVE): a thread's,
+/// or a virtual processor's.
+pub struct FpuArea {
     ptr: *mut u8,
     layout: Layout,
 }
 
 impl FpuArea {
-    fn new() -> Option<FpuArea> {
+    pub fn new() -> Option<FpuArea> {
         let size = cpu::features().xsave_size.max(512) as usize;
         let layout = Layout::from_size_align(size, 64).ok()?;
         // SAFETY: non-zero size.
@@ -70,7 +71,8 @@ impl FpuArea {
         Some(FpuArea { ptr, layout })
     }
 
-    fn save(&self) {
+    /// Saves the processor's registers here.
+    pub fn save(&self) {
         let f = cpu::features();
         // SAFETY: the area is large enough and 64-byte aligned.
         unsafe {
@@ -82,7 +84,8 @@ impl FpuArea {
         }
     }
 
-    fn restore(&self) {
+    /// Loads the processor's registers from here.
+    pub fn restore(&self) {
         let f = cpu::features();
         // SAFETY: the area holds a valid saved (or initial) state.
         unsafe {

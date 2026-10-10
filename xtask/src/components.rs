@@ -44,6 +44,7 @@ pub const PROGRAMS: &[Program] = &[
     Program { package: "audiotest", binary: "audiotest" },
     Program { package: "speakertest", binary: "speakertest" },
     Program { package: "devmgr", binary: "devmgr" },
+    Program { package: "drivervm", binary: "drivervm" },
     Program { package: "virtio-input", binary: "virtio-input" },
     Program { package: "virtio-blk", binary: "virtio-blk" },
     Program { package: "virtio-gpu", binary: "virtio-gpu" },

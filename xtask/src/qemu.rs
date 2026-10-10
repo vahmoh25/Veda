@@ -228,6 +228,9 @@ pub struct VmConfig {
     /// A display that is also a 3D GPU (virtio-gpu with virgl): `None` uses
     /// one if QEMU has it.
     pub gpu: Option<bool>,
+    /// An IOMMU (QEMU's intel-iommu, remapping interrupts), for the
+    /// driver VM's devices.
+    pub iommu: bool,
     /// Extra raw QEMU arguments.
     pub extra: Vec<String>,
 }
@@ -255,6 +258,7 @@ impl Default for VmConfig {
             bridge_adapter: None,
             wifi: None,
             gpu: None,
+            iommu: false,
             extra: Vec::new(),
         }
     }
@@ -296,7 +300,19 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-name", "Veda"]);
     // With USB input there is no PS/2 controller, as on many PCs: keys can
     // only come through USB.
-    cmd.args(["-machine", if cfg.input == InputDevices::Usb { "q35,i8042=off" } else { "q35" }]);
+    let mut machine = String::from("q35");
+    if cfg.input == InputDevices::Usb {
+        machine.push_str(",i8042=off");
+    }
+    // Interrupt remapping needs the I/O APIC in QEMU, not in KVM.
+    if cfg.iommu {
+        machine.push_str(",kernel-irqchip=split");
+    }
+    cmd.args(["-machine", &machine]);
+    // The IOMMU comes before the devices it translates.
+    if cfg.iommu {
+        cmd.args(["-device", "intel-iommu,intremap=on,eim=on"]);
+    }
     // Prefer hardware virtualisation when the host offers it; fall back to
     // the TCG emulator (multi-threaded, one host thread per vCPU) otherwise.
     if cfg!(windows) {

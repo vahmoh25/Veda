@@ -1,0 +1,243 @@
+//! The Linux guest of the driver VM (see `docs/DRIVERVM.md`).
+//!
+//! * `cargo xtask linux` builds its kernel from `ports/linux` (first zlib
+//!   and elfutils' libelf, from `ports/zlib` and `ports/elfutils`, for the
+//!   kernel's build tool objtool): `target/linux/bzImage`. The kernel is
+//!   built on Linux (on Windows, in WSL): its build needs a case-sensitive
+//!   file system and Linux's own tools.
+//! * Once it is built, every image build also builds the guest's programs
+//!   (`guest/`: Rust for Linux on musl, static) and packs them into the
+//!   initial RAM file system the kernel starts with. Both go into the
+//!   system image (`linux/bzImage`, `linux/initramfs.cpio`), where
+//!   `drivervm` finds them.
+
+use std::path::PathBuf;
+use std::process::Command;
+
+use crate::toolchain::{self, Port};
+use crate::util::{self, Result};
+
+/// The target of the guest's programs (`.cargo/config.toml` sets its
+/// linker and `veda_guest`).
+pub const GUEST_TARGET: &str = "x86_64-unknown-linux-musl";
+
+/// The guest's programs: the package, its binary, and where it goes in the
+/// initial RAM file system.
+const GUEST_PROGRAMS: &[(&str, &str, &str)] = &[
+    ("guest-init", "init", "init"),
+    ("guest-bridgetest", "bridgetest", "bin/bridgetest"),
+    ("guest-pcitest", "pcitest", "bin/pcitest"),
+    ("guest-alsa", "alsa", "bin/alsa"),
+];
+
+/// Tools the kernel's build runs, beyond a C compiler.
+const BUILD_TOOLS: [&str; 10] = ["gcc", "make", "flex", "bison", "bc", "perl", "tar", "xz", "patch", "curl"];
+
+/// Where the guest's kernel is built (`$VEDA_LINUX` overrides it).
+pub fn root() -> PathBuf {
+    match std::env::var_os("VEDA_LINUX") {
+        Some(p) => {
+            let p = PathBuf::from(p);
+            if p.is_absolute() { p } else { util::workspace_root().join(p) }
+        }
+        None => util::workspace_root().join("target").join("linux"),
+    }
+}
+
+/// Whether the guest's kernel has been built.
+pub fn built() -> bool {
+    root().join("bzImage").is_file()
+}
+
+/// Whether the driver VM can run in this machine's QEMU: its Linux is
+/// built, and KVM gives guests VMX of their own (nested virtualization,
+/// on Intel's processors: Veda's hypervisor uses VMX).
+pub fn runnable() -> Result {
+    if !built() {
+        return Err("its Linux is not built (`cargo xtask linux`)".into());
+    }
+    let nested = std::fs::read_to_string("/sys/module/kvm_intel/parameters/nested").unwrap_or_default();
+    if !matches!(nested.trim(), "Y" | "1") {
+        return Err("KVM gives guests no VMX here (kvm_intel nested=1)".into());
+    }
+    Ok(())
+}
+
+/// For `cargo xtask doctor`: whether the guest, which is optional, has been
+/// built (`Ok`), and if not, whether it can be (`Err`).
+pub fn status() -> std::result::Result<String, String> {
+    if built() {
+        return Ok(format!("built ({})", root().join("bzImage").display()));
+    }
+    let how = match tools() {
+        Ok(()) => "`cargo xtask linux` builds it".to_string(),
+        Err(e) => format!("`cargo xtask linux` builds it, but {e}"),
+    };
+    Err(format!("not built (optional: the driver VM); {how}"))
+}
+
+fn tools() -> Result {
+    if !cfg!(target_os = "linux") {
+        return Err("the driver VM's Linux builds on Linux (on Windows, in WSL)".into());
+    }
+    let missing: Vec<&str> = BUILD_TOOLS.into_iter().filter(|t| util::find_on_path(t).is_none()).collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} missing: install from the distribution's packages", missing.join(", ")))
+    }
+}
+
+/// `cargo xtask linux [--jobs N]`.
+pub fn command(args: &[String]) -> Result {
+    let mut jobs = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--jobs" | "-j" => {
+                jobs = it.next().and_then(|v| v.parse().ok()).ok_or("--jobs takes a number")?;
+            }
+            other => return Err(format!("unknown option '{other}' (linux takes --jobs N)")),
+        }
+    }
+    tools()?;
+    let started = std::time::Instant::now();
+    let downloads = root().join("downloads");
+    for name in ["zlib", "elfutils", "linux"] {
+        toolchain::fetch(&Port::named(name)?, &downloads)?;
+    }
+    let ports = util::workspace_root().join("ports");
+    util::run(
+        Command::new("bash")
+            .arg(ports.join("linux").join("build.sh"))
+            .env("VEDA_PORTS", &ports)
+            .env("VEDA_LINUX", root())
+            .env("JOBS", jobs.to_string()),
+    )?;
+    util::status("Finished", format!("the driver VM's Linux in {:.0} s", started.elapsed().as_secs_f32()));
+    Ok(())
+}
+
+/// The guest's kernel and initial RAM file system, for the system image,
+/// if the kernel has been built.
+pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+    if !built() {
+        return Ok(None);
+    }
+    util::status("Building", format!("the driver VM's programs ({GUEST_TARGET})"));
+    let mut cmd = util::cargo();
+    cmd.args(["build", "--release", "--target", GUEST_TARGET]);
+    for (package, ..) in GUEST_PROGRAMS {
+        cmd.args(["--package", package]);
+    }
+    util::run(&mut cmd)?;
+    let bin = util::target_dir().join(GUEST_TARGET).join("release");
+    let mut archive = cpio::Archive::new();
+    archive.directory("dev");
+    archive.directory("bin");
+    // The console the kernel opens for the first program, before /dev is
+    // mounted.
+    archive.device("dev/console", 5, 1);
+    for (_, binary, path) in GUEST_PROGRAMS {
+        archive.file(path, 0o755, &util::read(&bin.join(binary))?);
+    }
+    Ok(Some((util::read(&root().join("bzImage"))?, archive.finish())))
+}
+
+/// Archives in the `newc` format of cpio, as Linux unpacks its initial RAM
+/// file system.
+pub mod cpio {
+    /// An archive being written.
+    pub struct Archive {
+        bytes: Vec<u8>,
+        inode: u32,
+    }
+
+    const DIRECTORY: u32 = 0o040_000;
+    const FILE: u32 = 0o100_000;
+    const CHARACTER_DEVICE: u32 = 0o020_000;
+
+    impl Archive {
+        pub fn new() -> Archive {
+            Archive { bytes: Vec::new(), inode: 1 }
+        }
+
+        pub fn directory(&mut self, path: &str) {
+            self.entry(path, DIRECTORY | 0o755, &[], (0, 0));
+        }
+
+        pub fn file(&mut self, path: &str, permissions: u32, data: &[u8]) {
+            self.entry(path, FILE | permissions, data, (0, 0));
+        }
+
+        pub fn device(&mut self, path: &str, major: u32, minor: u32) {
+            self.entry(path, CHARACTER_DEVICE | 0o600, &[], (major, minor));
+        }
+
+        fn entry(&mut self, path: &str, mode: u32, data: &[u8], (major, minor): (u32, u32)) {
+            let fields = [
+                self.inode,
+                mode,
+                0, // uid
+                0, // gid
+                1, // links
+                0, // mtime
+                data.len() as u32,
+                0, // the device it is on
+                0,
+                major,
+                minor,
+                path.len() as u32 + 1,
+                0, // checksum
+            ];
+            self.inode += 1;
+            self.bytes.extend_from_slice(b"070701");
+            for f in fields {
+                self.bytes.extend_from_slice(format!("{f:08X}").as_bytes());
+            }
+            self.bytes.extend_from_slice(path.as_bytes());
+            self.bytes.push(0);
+            self.pad();
+            self.bytes.extend_from_slice(data);
+            self.pad();
+        }
+
+        fn pad(&mut self) {
+            while !self.bytes.len().is_multiple_of(4) {
+                self.bytes.push(0);
+            }
+        }
+
+        /// The archive, with its trailer.
+        pub fn finish(mut self) -> Vec<u8> {
+            self.entry("TRAILER!!!", 0, &[], (0, 0));
+            self.bytes
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn entries_are_aligned() {
+            let mut a = Archive::new();
+            a.directory("dev");
+            a.device("dev/console", 5, 1);
+            a.file("init", 0o755, b"#!/bin/sh\n");
+            let bytes = a.finish();
+            assert!(bytes.len().is_multiple_of(4));
+            // The first header, and the directory's name after it.
+            assert_eq!(&bytes[..6], b"070701");
+            assert_eq!(&bytes[14..22], b"000041ED");
+            assert_eq!(&bytes[110..114], b"dev\0");
+            // The console's header, after the directory's (110 bytes and
+            // its name, to a multiple of four), with its device numbers.
+            let header = &bytes[116..];
+            assert_eq!(&header[..6], b"070701");
+            assert_eq!(&header[78..86], b"00000005");
+            assert_eq!(&header[86..94], b"00000001");
+            assert!(bytes.windows(10).any(|w| w == b"TRAILER!!!"));
+        }
+    }
+}
