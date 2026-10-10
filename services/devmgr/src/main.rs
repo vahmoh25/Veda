@@ -6,8 +6,10 @@
 //! devices' configuration space or memory.
 //!
 //! It also reads the firmware's ACPI tables: a driver learns the devices
-//! they describe below its PCI function (and only those), and devmgr drives
-//! the GPIO pins those devices are wired to on the driver's behalf.
+//! they describe below its PCI function (and only those), and the tables
+//! that describe its function's hardware (an Intel audio controller's
+//! NHLT), and devmgr drives the GPIO pins those devices are wired to on the
+//! driver's behalf.
 //!
 //! Every other device goes to the driver VM, whose Linux drives it: all
 //! but the disks Veda starts from, the platform's own functions, and the
@@ -370,6 +372,10 @@ impl pcidev::Server for DeviceSession<'_> {
         }
         let sid = self.dev.address.requester_id() as u64;
         self.mgr.pci.create(vabi::resource_kind::PCI, sid, 1).map_err(|_| PciError::Denied)
+    }
+
+    fn acpi_tables(&mut self) -> Vec<Vec<u8>> {
+        self.mgr.acpi.as_ref().map(|a| a.device_tables(&self.dev.info)).unwrap_or_default()
     }
 
     fn acpi_devices(&mut self) -> Vec<AcpiDevice> {

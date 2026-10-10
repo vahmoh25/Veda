@@ -16,6 +16,7 @@ use vacpi::name::Path;
 use vacpi::resource::Resource as AcpiResource;
 use vacpi::tables;
 use vacpi::{Memory, PciFunction};
+use vproto::pci::DeviceInfo;
 use vrt::object::{Resource, Vmo};
 use vrt::println;
 
@@ -134,11 +135,29 @@ impl Memory for Tables<'_> {
     }
 }
 
+/// A table that describes a device's hardware rather than the machine's,
+/// which goes with the device to its driver (`pcidev::acpi_tables`): its
+/// signature, and the devices it describes.
+struct DeviceTable {
+    signature: &'static [u8; 4],
+    describes: fn(&DeviceInfo) -> bool,
+}
+
+/// An Intel audio controller's NHLT: the links of its DSP, and the
+/// microphones and ports on them.
+const DEVICE_TABLES: [DeviceTable; 1] = [DeviceTable { signature: b"NHLT", describes: intel_audio }];
+
+fn intel_audio(info: &DeviceInfo) -> bool {
+    info.vendor == 0x8086 && info.class == 0x04 && matches!(info.subclass, 0x01 | 0x03)
+}
+
 pub struct Acpi {
     pub ns: Namespace,
     pub memory: FirmwareMemory,
     /// PCI root bridges: their bus number and path.
     roots: Vec<(u8, Path)>,
+    /// The firmware's [`DEVICE_TABLES`].
+    device_tables: Vec<tables::Table>,
 }
 
 impl Acpi {
@@ -185,7 +204,18 @@ impl Acpi {
                 String::new()
             }
         );
-        Some(Acpi { ns, memory, roots })
+        let device_tables = tables.into_iter().filter(|t| DEVICE_TABLES.iter().any(|d| t.is(d.signature))).collect();
+        Some(Acpi { ns, memory, roots, device_tables })
+    }
+
+    /// The firmware's tables that describe the hardware of the function
+    /// `info` is ([`DEVICE_TABLES`]), whole.
+    pub fn device_tables(&self, info: &DeviceInfo) -> Vec<Vec<u8>> {
+        let described = DEVICE_TABLES.iter().filter(|d| (d.describes)(info));
+        described
+            .filter_map(|d| self.device_tables.iter().find(|t| t.is(d.signature)))
+            .map(|t| t.data.clone())
+            .collect()
     }
 
     /// The ACPI device that describes PCI function `bus:slot.function`

@@ -2,8 +2,9 @@
 # file system carries (/lib/firmware). Each file by the name the kernel
 # asks for, where it comes from (a source below, and the file's path in
 # it), and its SHA-256: from a release of linux-firmware, whose WHENCE says
-# whose each file is and that anyone may redistribute it, or of
-# wireless-regdb. `cargo xtask linux` fetches them (into
+# whose each file is and that anyone may redistribute it, of
+# wireless-regdb, or of sof-bin, Sound Open Firmware's (Intel's signed
+# builds, which anyone may redistribute under its LICENCE.Intel). `cargo xtask linux` fetches them (into
 # target/linux/firmware); image builds check and pack them.
 #
 # A device of Linux's whose firmware is not here does not work in the
@@ -11,6 +12,7 @@
 
 source linux-firmware https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/{}?h=20260916
 source wireless-regdb https://git.kernel.org/pub/scm/linux/kernel/git/wens/wireless-regdb.git/plain/{}?h=master-2026-09-03
+source sof-bin https://raw.githubusercontent.com/thesofproject/sof-bin/v2026.09.2/{}
 
 # cfg80211's regulatory database: what radios may do in each country.
 regulatory.db  wireless-regdb  regulatory.db  7e236caecd939c8ec98be4870bf30422f28ffef2565a38aaaa2d9ddabd0c2641
@@ -34,3 +36,19 @@ cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-l0.bin  linux-firmware  cirrus/cs35
 cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-r0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-r0.bin  73596c413e3ace2e44706771af9188dd866ed3a6f188814123e73a24eb82fdb6
 cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-l0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-l0.bin  f23e2b8a99a51858b47d13e804b656de2540e5ce961a088721988402f05c7e77
 cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-r0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-r0.bin  73596c413e3ace2e44706771af9188dd866ed3a6f188814123e73a24eb82fdb6
+
+# Intel's audio DSP from Tiger Lake to Raptor Lake (SOF, IPC3; Raptor
+# Lake's are Alder Lake's builds): Linux drives one with SOF where the
+# firmware's NHLT has digital microphones, so every part its driver takes
+# has its firmware here. Then the topologies for a codec on the HD Audio
+# link and two or four digital microphones.
+intel/sof/sof-tgl.ri  sof-bin  v2.2.x/sof-v2.2/intel-signed/sof-tgl.ri  97c8d8dea6048329bfbb1dbbd56609934d388b7e3a9acffe20df0b7daf14d7d3
+intel/sof/sof-tgl-h.ri  sof-bin  v2.2.x/sof-v2.2/intel-signed/sof-tgl-h.ri  b9be9b8c542cb042b777438410aa169ed9b39bdc30c70edbfec41cd23ee80528
+intel/sof/sof-ehl.ri  sof-bin  v2.2.x/sof-v2.2/intel-signed/sof-ehl.ri  2f5d777ace33497bf0cd1ed097318eec08ba1c1aaef09e9354a8cdf7279062f2
+intel/sof/sof-adl.ri  sof-bin  v2.2.x/sof-v2.2/intel-signed/sof-adl.ri  294e5a51b1d3fc4ceda57780927c2a2ec95bb5d23477f879a9fb648c6c01cb30
+intel/sof/sof-adl-n.ri  sof-bin  v2.2.x/sof-v2.2/intel-signed/sof-adl-n.ri  8433390e4abfe40b251ff3dec41604e7b817501d1097d51aa2f51c11444d3bf0
+intel/sof/sof-adl-s.ri  sof-bin  v2.2.x/sof-v2.2/intel-signed/sof-adl-s.ri  1bddc1c6e26de3ae37f914305a0d619fa51e1b2fa3ebc5a64550b3464cf13188
+intel/sof/sof-rpl.ri  sof-bin  v2.2.x/sof-v2.2/intel-signed/sof-adl.ri  294e5a51b1d3fc4ceda57780927c2a2ec95bb5d23477f879a9fb648c6c01cb30
+intel/sof/sof-rpl-s.ri  sof-bin  v2.2.x/sof-v2.2/intel-signed/sof-adl-s.ri  1bddc1c6e26de3ae37f914305a0d619fa51e1b2fa3ebc5a64550b3464cf13188
+intel/sof-tplg/sof-hda-generic-2ch.tplg  sof-bin  v2.2.x/sof-tplg-v2.2.1/sof-hda-generic-2ch.tplg  7896ab52853e64d063f5e897011d200c2944732d75a96787667454fe2f443c53
+intel/sof-tplg/sof-hda-generic-4ch.tplg  sof-bin  v2.2.x/sof-tplg-v2.2.1/sof-hda-generic-4ch.tplg  7b1b185b35f1034ca1957f41e75c184f79ea1cae7b38bcef995acf7481145d20

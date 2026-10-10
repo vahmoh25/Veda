@@ -10,7 +10,9 @@
 //! place on it (I2C or SPI), their interrupt lines (a touchpad's on an I2C
 //! controller, whose line the guest gets too), the GPIO pins they are wired
 //! to (`gpio`: a laptop's amplifiers on an SPI controller have some), and
-//! the function's and their constant data.
+//! the function's and their constant data; the firmware's tables that
+//! describe a function's hardware go there whole (an Intel audio
+//! controller's NHLT: the links of its DSP, and the microphones on them).
 //!
 //! A function reports no errors to the host, which a PC may make NMIs of:
 //! its error reporting is turned off before the guest runs, and stays off.
@@ -71,6 +73,8 @@ pub struct Devices {
     list: Vec<Device>,
     /// The GPIO pins their devices are wired to.
     pins: Pins,
+    /// The firmware's tables that came with them (one of each).
+    firmware_tables: Vec<Vec<u8>>,
 }
 
 /// Where in the guest's memory BARs go: below 4 GiB the ones that must
@@ -98,7 +102,7 @@ impl Windows {
 impl Devices {
     /// No functions.
     pub fn none() -> Devices {
-        Devices { list: Vec::new(), pins: Pins::default() }
+        Devices { list: Vec::new(), pins: Pins::default(), firmware_tables: Vec::new() }
     }
 
     /// Gives the guest the functions of `channels` it can have: their DMA,
@@ -116,6 +120,7 @@ impl Devices {
         let places = places(&given.iter().map(|(_, i)| (i.bus, i.slot, i.function)).collect::<Vec<_>>());
         let mut list = Vec::new();
         let mut pins = Pins::default();
+        let mut firmware_tables: Vec<Vec<u8>> = Vec::new();
         for ((pci, info), place) in given.into_iter().zip(places) {
             let name = format!(
                 "{:04x}:{:04x} at {:02x}:{:02x}.{}",
@@ -146,11 +151,20 @@ impl Devices {
             println!("{} is the guest's 00:{:02x}.{}: {}", name, devfn >> 3, devfn & 7, at.join(", "));
             let mut given = Given { pci: &pci, name: &name, function: list.len(), lines, pins: &mut pins };
             let description = describe(&mut given, devfn, intx);
+            for table in pci.acpi_tables().unwrap_or_default() {
+                let signature = String::from_utf8_lossy(table.get(..4).unwrap_or_default()).into_owned();
+                if !acpi::is_table(&table) {
+                    println!("{name}: the firmware's {signature} is not a whole table: the guest does not get it");
+                } else if !firmware_tables.iter().any(|t| t[..4] == table[..4]) {
+                    println!("{name} comes with the firmware's {signature} ({} bytes)", table.len());
+                    firmware_tables.push(table);
+                }
+            }
             let config = ConfigSpace::new(bars, multifunction, pci_express, intx.map(|l| (l.pin, l.gsi as u8)));
             let state = Mutex::new(State { pci, config, msis: BTreeMap::new() });
             list.push(Device { devfn, info, description, state });
         }
-        Devices { list, pins }
+        Devices { list, pins, firmware_tables }
     }
 
     /// The kernel command line's options that say where the functions'
@@ -177,6 +191,11 @@ impl Devices {
     /// describe them.
     pub fn gpio_controllers(&self) -> Vec<GpioController> {
         self.pins.controllers()
+    }
+
+    /// The firmware's tables that describe their hardware.
+    pub fn firmware_tables(&self) -> &[Vec<u8>] {
+        &self.firmware_tables
     }
 
     /// Operation `op` ([`gpio`]) on pin `pin` of GPIO controller

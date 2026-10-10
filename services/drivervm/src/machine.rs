@@ -157,6 +157,7 @@ impl Machine {
             i8042: i8042.is_some(),
             pci_low: PCI_LOW,
             pci_high: PCI_HIGH,
+            firmware_tables: devices.firmware_tables(),
         };
         let acpi_tables = acpi::tables(&description);
         if acpi_tables.len() > acpi::ROOM {

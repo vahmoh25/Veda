@@ -1,6 +1,7 @@
-//! `alsa` — Veda's sound driver for Linux: the guest's sound card (Linux's
-//! first playback device and its card's capture device, through ALSA's
-//! kernel interface) as Veda's output and input devices.
+//! `alsa` — Veda's sound driver for Linux: the guest's sound card (the PC's
+//! own: its first playback device that is not a display's, and its card's
+//! microphones, through ALSA's kernel interface) as Veda's output and input
+//! devices.
 //!
 //! It attaches to Veda's audio service (`audiodev`) over the bridge, as
 //! Veda's own sound drivers do, and plays the service's mixed output from
@@ -15,7 +16,11 @@
 //!
 //! The card records, on a thread of its own, while the audio service wants
 //! audio (the input ring's `CAPTURE` flag): what it read goes into the
-//! ring, with the moment it was recorded, and the service hears of it.
+//! ring, with the moment it was recorded, and the service hears of it. Its
+//! microphones are the built-in ones: an audio DSP's digital microphones
+//! (SOF's `DMIC` device), if the card has them, beside its codec's input;
+//! else its first capture device. A device that records other than stereo
+//! (an array of four microphones) is made stereo.
 
 mod ctl;
 mod pcm;
@@ -24,7 +29,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use vabi::{WaitItem, signals};
 use vproto::audio::{DeviceFormat, Ring, Role, audiodev, ring::flags};
@@ -35,6 +40,8 @@ use pcm::{Pcm, Stream};
 
 const RATE: u32 = 48_000;
 const CHANNELS: u32 = 2;
+/// The most channels a capture device may record.
+const MAX_CAPTURE_CHANNELS: u32 = 8;
 /// A period: 10 ms.
 const PERIOD: u32 = RATE / 100;
 /// The card's buffer, in periods.
@@ -48,6 +55,9 @@ const MIN_QUEUED: u32 = 2;
 const PREFILL: u32 = 2;
 /// Stop the card after this long without audio.
 const IDLE_STOP_NS: u64 = 1_500_000_000;
+/// How long a display's sound (HDMI, DisplayPort) waits for the PC's own:
+/// a laptop's speakers' card may come after its GPU's.
+const DISPLAYS_WAIT: Duration = Duration::from_secs(10);
 
 /// A sound card: its number and name, and its devices.
 struct Card {
@@ -57,42 +67,86 @@ struct Card {
     capture: Option<String>,
 }
 
-/// The card of the first playback device, once there is one, and that
-/// card's first capture device. Linux lists a card (`/proc/asound/cards`)
-/// once it has made all of its devices, the mixer last (devtmpfs makes
-/// their nodes as it does): a card is taken once it is listed, and the list
-/// is read first.
+/// A PCM device, as `/proc/asound/pcm` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Device {
+    card: u32,
+    device: u32,
+    /// Its id (SOF's digital microphones' is `DMIC (*)`).
+    id: String,
+    playback: bool,
+    capture: bool,
+}
+
+/// The devices `/proc/asound/pcm` lists:
+/// `CC-DD: id : name : playback 1 : capture 1`.
+fn devices(list: &str) -> Vec<Device> {
+    list.lines()
+        .filter_map(|l| {
+            let (at, rest) = l.split_once(": ")?;
+            let (card, device) = at.split_once('-')?;
+            let fields: Vec<&str> = rest.split(" : ").collect();
+            let has = |stream: &str| fields.iter().skip(2).any(|f| f.trim().starts_with(stream));
+            Some(Device {
+                card: card.trim().parse().ok()?,
+                device: device.trim().parse().ok()?,
+                id: fields.first()?.trim().to_string(),
+                playback: has("playback"),
+                capture: has("capture"),
+            })
+        })
+        .collect()
+}
+
+impl Device {
+    /// Whether it plays to a display (HDMI, DisplayPort), not the PC's own
+    /// speakers or headphones.
+    fn is_display(&self) -> bool {
+        ["HDMI", "DisplayPort"].iter().any(|d| self.id.starts_with(d))
+    }
+}
+
+/// The device to play: the first of the cards `listed` that is not a
+/// display's, or else, with `displays`, a display's.
+fn output<'a>(devices: &'a [Device], listed: &[u32], displays: bool) -> Option<&'a Device> {
+    let playing = || devices.iter().filter(|d| d.playback && listed.contains(&d.card));
+    playing().find(|d| !d.is_display()).or_else(|| playing().find(|_| displays))
+}
+
+/// The device of card `card` that records its built-in microphones: an
+/// audio DSP's digital microphones (SOF's `DMIC`), if it has them (its
+/// other capture devices are then its codec's, a headset's microphone on
+/// the jack, and the same microphones at 16 kHz); else its first.
+fn microphones(devices: &[Device], card: u32) -> Option<&Device> {
+    let captures = || devices.iter().filter(move |d| d.card == card && d.capture);
+    captures().find(|d| d.id.split_whitespace().next() == Some("DMIC")).or_else(|| captures().next())
+}
+
+/// The card to play ([`output`]), once there is one, and its microphones.
+/// Linux lists a card (`/proc/asound/cards`) once it has made all of its
+/// devices, the mixer last (devtmpfs makes their nodes as it does): a card
+/// is taken once it is listed, and the list is read first.
 fn find_card() -> Card {
+    let started = Instant::now();
     let mut said = false;
     loop {
-        let cards = std::fs::read_to_string("/proc/asound/cards").unwrap_or_default();
-        let pcms = std::fs::read_to_string("/proc/asound/pcm").unwrap_or_default();
-        // `CC-DD: id : name : playback 1 : capture 1`
-        let devices: Vec<(u32, u32, bool, bool)> = pcms
+        // ` 0 [Intel          ]: HDA-Intel - HDA Intel`
+        let cards: Vec<(u32, String)> = std::fs::read_to_string("/proc/asound/cards")
+            .unwrap_or_default()
             .lines()
             .filter_map(|l| {
-                let (at, rest) = l.split_once(':')?;
-                let (card, device) = at.split_once('-')?;
-                Some((
-                    card.trim().parse().ok()?,
-                    device.trim().parse().ok()?,
-                    rest.contains("playback"),
-                    rest.contains("capture"),
-                ))
+                let (number, rest) = l.trim_start().split_once(" [")?;
+                Some((number.parse().ok()?, rest.split_once(" - ")?.1.trim().to_string()))
             })
             .collect();
-        for &(number, device, ..) in devices.iter().filter(|d| d.2) {
-            // ` 0 [Intel          ]: HDA-Intel - HDA Intel`
-            let listed = cards.lines().find(|l| l.trim_start().starts_with(&format!("{number} [")));
-            let Some((_, name)) = listed.and_then(|l| l.split_once(" - ")) else {
-                continue;
-            };
-            let capture =
-                devices.iter().find(|d| d.0 == number && d.3).map(|d| format!("/dev/snd/pcmC{number}D{}c", d.1));
+        let devices = devices(&std::fs::read_to_string("/proc/asound/pcm").unwrap_or_default());
+        let listed: Vec<u32> = cards.iter().map(|c| c.0).collect();
+        if let Some(d) = output(&devices, &listed, started.elapsed() >= DISPLAYS_WAIT) {
+            let capture = microphones(&devices, d.card).map(|m| format!("/dev/snd/pcmC{}D{}c", m.card, m.device));
             return Card {
-                number: number.to_string(),
-                name: name.trim().to_string(),
-                playback: format!("/dev/snd/pcmC{number}D{device}p"),
+                number: d.card.to_string(),
+                name: cards.iter().find(|c| c.0 == d.card).map(|c| c.1.clone()).unwrap_or_default(),
+                playback: format!("/dev/snd/pcmC{}D{}p", d.card, d.device),
                 capture,
             };
         }
@@ -311,7 +365,9 @@ struct Recorder {
     pcm: Pcm,
     running: bool,
     overruns: u32,
+    /// What it read, in its channels; made stereo, if it records otherwise.
     scratch: Vec<i16>,
+    stereo: Vec<i16>,
 }
 
 /// The input link: the ring the recorder fills, the event that tells the
@@ -324,8 +380,8 @@ struct Input {
 
 impl Recorder {
     fn new(pcm: Pcm) -> Recorder {
-        let samples = (pcm.period * CHANNELS) as usize;
-        Recorder { pcm, running: false, overruns: 0, scratch: vec![0; samples] }
+        let samples = (pcm.period * pcm.channels) as usize;
+        Recorder { pcm, running: false, overruns: 0, scratch: vec![0; samples], stereo: Vec::new() }
     }
 
     /// Records while the service wants audio.
@@ -380,7 +436,14 @@ impl Recorder {
                     break;
                 }
             };
-            let written = ring.write(&self.scratch[..n * CHANNELS as usize]);
+            let read = &self.scratch[..n * self.pcm.channels as usize];
+            let frames = if self.pcm.channels == CHANNELS {
+                read
+            } else {
+                stereo(read, self.pcm.channels as usize, &mut self.stereo);
+                &self.stereo
+            };
+            let written = ring.write(frames);
             if written < n {
                 ring.set_overruns(ring.overruns().saturating_add((n - written) as u32));
             }
@@ -410,6 +473,22 @@ impl Recorder {
             }
         }
         self.stop();
+    }
+}
+
+/// Frames of `channels` interleaved samples made stereo, into `out`: one
+/// channel on both sides; more, the mean of the even ones on the left and
+/// of the odd ones on the right (an array's microphones in pairs, the left
+/// one first, as digital microphones are wired).
+fn stereo(samples: &[i16], channels: usize, out: &mut Vec<i16>) {
+    out.clear();
+    for frame in samples.chunks_exact(channels) {
+        let mean = |side: usize| {
+            let (sum, n) =
+                frame.iter().skip(side).step_by(2).fold((0i32, 0i32), |(sum, n), &s| (sum + i32::from(s), n + 1));
+            if n == 0 { i32::from(frame[0]) } else { sum / n }
+        };
+        out.extend([mean(0) as i16, mean(1) as i16]);
     }
 }
 
@@ -502,7 +581,7 @@ fn main() {
         Ok(set) => println!("alsa: outputs on, at unity gain: {}", set.join(", ")),
         Err(e) => println!("alsa: the mixer of card {}: {e}", card.number),
     }
-    let pcm = match Pcm::open(&card.playback, Stream::Playback, RATE, CHANNELS, PERIOD, PERIODS) {
+    let pcm = match Pcm::open(&card.playback, Stream::Playback, RATE, CHANNELS..=CHANNELS, PERIOD, PERIODS) {
         Ok(p) => p,
         Err(e) => {
             println!("alsa: {} cannot play {RATE} Hz, 16-bit stereo: {e}", card.playback);
@@ -513,14 +592,24 @@ fn main() {
         "alsa: {name} ({}): {} Hz, periods of {} frames, a buffer of {}",
         card.playback, pcm.rate, pcm.period, pcm.buffer
     );
+    match ctl::open_inputs(&card.number) {
+        Ok(set) if !set.is_empty() => println!("alsa: inputs on, at unity gain: {}", set.join(", ")),
+        Ok(_) => {}
+        Err(e) => println!("alsa: the mixer of card {}: {e}", card.number),
+    }
     let mut recorder = card.capture.as_ref().and_then(|path| {
-        match Pcm::open(path, Stream::Capture, RATE, CHANNELS, PERIOD, PERIODS) {
+        // Stereo, or as few channels as the device records.
+        let open = |channels| Pcm::open(path, Stream::Capture, RATE, channels, PERIOD, PERIODS);
+        match open(CHANNELS..=CHANNELS).or_else(|_| open(1..=MAX_CAPTURE_CHANNELS)) {
             Ok(p) => {
-                println!("alsa: {name} records ({path}): periods of {} frames, a buffer of {}", p.period, p.buffer);
+                println!(
+                    "alsa: {name} records ({path}, {} channels): periods of {} frames, a buffer of {}",
+                    p.channels, p.period, p.buffer
+                );
                 Some(Recorder::new(p))
             }
             Err(e) => {
-                println!("alsa: {path} cannot record {RATE} Hz, 16-bit stereo: {e}");
+                println!("alsa: {path} cannot record {RATE} Hz, 16-bit: {e}");
                 None
             }
         }
@@ -569,5 +658,66 @@ fn main() {
                 std::thread::sleep(Duration::from_secs(2));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// As Linux lists a card with an audio DSP (SOF's, on an Alder Lake
+    /// laptop), after a GPU's HDMI audio.
+    const SOF: &str = "\
+00-03: HDMI 0 : HDMI 0 : playback 1
+01-00: HDA Analog (*) :  : playback 1 : capture 1
+01-03: HDMI1 (*) : HDMI 1 : playback 1
+01-06: DMIC (*) :  : capture 1
+01-07: DMIC16kHz (*) :  : capture 1
+01-31: HDA Analog Deep Buffer (*) :  : playback 1
+";
+
+    #[test]
+    fn devices_are_read_as_listed() {
+        let d = devices(SOF);
+        assert_eq!(d.len(), 6);
+        assert_eq!(d[1], Device { card: 1, device: 0, id: "HDA Analog (*)".into(), playback: true, capture: true });
+        assert_eq!(d[3], Device { card: 1, device: 6, id: "DMIC (*)".into(), playback: false, capture: true });
+        assert!(!d[5].capture && d[5].playback);
+    }
+
+    #[test]
+    fn the_pcs_own_sound_comes_before_a_displays() {
+        let d = devices(SOF);
+        // The GPU's HDMI card 0, the DSP's card 1: the DSP's codec plays.
+        assert_eq!(output(&d, &[0, 1], false).map(|o| (o.card, o.device)), Some((1, 0)));
+        // The GPU's alone: only once displays may play.
+        assert_eq!(output(&d, &[0], false), None);
+        assert_eq!(output(&d, &[0], true).map(|o| (o.card, o.device)), Some((0, 3)));
+        // A card is taken once it is listed.
+        assert_eq!(output(&d, &[], true), None);
+    }
+
+    #[test]
+    fn the_microphones_are_the_dsps_digital_ones() {
+        let d = devices(SOF);
+        assert_eq!(microphones(&d, 1).map(|m| m.device), Some(6));
+        // A card without them: its first capture device; none, without.
+        let hda = devices("00-00: ALC294 Analog : ALC294 Analog : playback 1 : capture 1\n");
+        assert_eq!(microphones(&hda, 0).map(|m| m.device), Some(0));
+        assert_eq!(microphones(&d, 0), None);
+    }
+
+    #[test]
+    fn frames_are_made_stereo() {
+        let mut out = Vec::new();
+        // Four microphones: the even ones' mean on the left, the odd ones'.
+        stereo(&[100, -100, 300, -300, 0, 8, 4, 0], 4, &mut out);
+        assert_eq!(out, [200, -200, 2, 4]);
+        // One: on both sides.
+        stereo(&[7, -9], 1, &mut out);
+        assert_eq!(out, [7, 7, -9, -9]);
+        // Three: the first and third left, the second right.
+        stereo(&[i16::MAX, 5, i16::MAX], 3, &mut out);
+        assert_eq!(out, [i16::MAX, 5]);
     }
 }

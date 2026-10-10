@@ -1,0 +1,15 @@
+# The firmware's NHLT for the driver VM: an Intel audio controller's table
+# of its DSP's links (the digital microphones and ports on them), without
+# which Linux's SOF does not find the microphones. It goes to the guest
+# with the controller: QEMU's Intel HD Audio controller, and a test's NHLT
+# (with no links) added to QEMU's tables. The guest's tables have it as the
+# firmware does, after the FADT, and Linux finds it there.
+acpi-table nhlt
+sound hda
+boot-cmdline "drivervm.poweroff"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+wait-serial "comes with the firmware's NHLT (37 bytes)" 60
+wait-serial "000025 (v00 VEDA   TESTNHLT 00000001 VEDA 00000001)" 60
+wait-serial "drivervm: Linux powered the machine off" 60
+reject-serial "is not a whole table"

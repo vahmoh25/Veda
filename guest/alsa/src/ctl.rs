@@ -5,7 +5,9 @@
 //!
 //! Only output controls are touched (`Master`, `PCM`, the outputs' own):
 //! the loopbacks a mixer may have (a microphone or a line input played
-//! back) stay as they are.
+//! back) stay as they are. Of the inputs, an audio DSP's digital
+//! microphones are unmuted at unity gain (SOF's `Dmic0`, whose switch
+//! starts off); a codec's input is as its driver sets it.
 
 use std::fs::OpenOptions;
 use std::io;
@@ -16,6 +18,9 @@ use guest_sys::{ioc, ioctl};
 /// The controls of the output path, by the first word(s) of their names.
 const OUTPUTS: [&str; 10] =
     ["Master", "PCM", "Front", "Surround", "Center", "LFE", "Side", "Speaker", "Headphone", "Line Out"];
+/// The controls of the inputs set, likewise: SOF's digital microphones'
+/// (its `DMIC` device's).
+const INPUTS: [&str; 1] = ["Dmic0"];
 
 const IFACE_MIXER: i32 = 2;
 const TYPE_BOOLEAN: i32 = 1;
@@ -135,6 +140,18 @@ fn unity(fd: RawFd, info: &ElemInfo) -> i64 {
 /// Sets the card's output controls (`/dev/snd/controlC{card}`): switches
 /// on, volumes at 0 dB. Returns the names of the controls it set.
 pub fn open_outputs(card: &str) -> io::Result<Vec<String>> {
+    open(card, &OUTPUTS, "Playback")
+}
+
+/// Sets the card's input controls of [`INPUTS`] so too.
+pub fn open_inputs(card: &str) -> io::Result<Vec<String>> {
+    open(card, &INPUTS, "Capture")
+}
+
+/// Sets the controls of card `card` named `PATH STREAM Switch` and
+/// `PATH STREAM Volume`, a path one of `paths` (its first word(s)):
+/// switches on, volumes at 0 dB.
+fn open(card: &str, paths: &[&str], stream: &str) -> io::Result<Vec<String>> {
     let file = OpenOptions::new().read(true).write(true).open(format!("/dev/snd/controlC{card}"))?;
     let fd = file.as_raw_fd();
     let mut list: ElemList = zeroed();
@@ -150,9 +167,9 @@ pub fn open_outputs(card: &str) -> io::Result<Vec<String>> {
     let mut set = Vec::new();
     for id in ids {
         let n = name(&id);
-        let output = OUTPUTS.iter().any(|o| n.starts_with(o) && n[o.len()..].starts_with(' '));
-        let (switch, volume) = (n.ends_with("Playback Switch"), n.ends_with("Playback Volume"));
-        if id.iface != IFACE_MIXER || !output || !(switch || volume) {
+        let on_path = paths.iter().any(|p| n.starts_with(p) && n[p.len()..].starts_with(' '));
+        let (switch, volume) = (n.ends_with(&format!("{stream} Switch")), n.ends_with(&format!("{stream} Volume")));
+        if id.iface != IFACE_MIXER || !on_path || !(switch || volume) {
             continue;
         }
         let mut info: ElemInfo = zeroed();

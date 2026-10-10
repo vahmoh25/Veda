@@ -52,6 +52,7 @@ cargo xtask script tests/ui/drivervm-pci.vts   # the driver VM's Linux drives QE
 cargo xtask script tests/ui/drivervm-unplaced.vts   # ... and its xHCI, their BARs left unplaced for devmgr to place
 cargo xtask script tests/ui/drivervm-gpio.vts   # GPIO pins for Linux: a simulated controller's, their interrupts
 cargo xtask script tests/ui/drivervm-variables.vts   # the firmware's variables for Linux, read-only, through efivarfs
+cargo xtask script tests/ui/drivervm-nhlt.vts   # an Intel audio controller's NHLT goes to Linux with it
 cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo cp -r /sys/firmware/acpi/tables target/acpi)
 cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 stack, against airsim's networks
 ```
@@ -162,7 +163,11 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   The loader says how many of the firmware's variables it took (`[vboot]
   variables: ...`, on the serial port only), the monitor how many the
   guest has and which it read (`drivervm: the guest read the firmware
-  variable ...`).
+  variable ...`), and which of the firmware's tables come with a function
+  (`... comes with the firmware's NHLT (7054 bytes)`). Linux's SOF says
+  what it found (`DMICs detected in NHLT tables: 4`, the topology it
+  loads), and `alsa` which device it records (`records
+  (/dev/snd/pcmC0D6c, 4 channels)`).
   Before booting a machine, `cargo xtask acpi
   DIR` shows what devmgr makes of its ACPI tables, on the host, with the
   interpreter devmgr runs: copy them first (`sudo cp -r

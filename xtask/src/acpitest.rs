@@ -10,12 +10,17 @@ use vacpi::resource::Gpio;
 /// HID over I2C's `_DSM`.
 const HID_OVER_I2C: &str = "3cdff6f7-4267-4555-ad05-b30a3d8938de";
 
-/// The SSDT `name` stands for: `touchpad`, a HID-over-I2C device (as a
-/// laptop's touchpad is described, on GSI 10, active high, since nothing
-/// drives that input of QEMU's I/O APIC) below QEMU's virtio GPU at 00:10.0
-/// (the firmware's `\_SB.PCI0.S80`), on its "bus"; `gpio`, a device there
-/// wired to pins of a simulated GPIO controller of devmgr's.
+/// The table `name` stands for: `touchpad`, an SSDT with a HID-over-I2C
+/// device (as a laptop's touchpad is described, on GSI 10, active high,
+/// since nothing drives that input of QEMU's I/O APIC) below QEMU's virtio
+/// GPU at 00:10.0 (the firmware's `\_SB.PCI0.S80`), on its "bus"; `gpio`,
+/// an SSDT with a device there wired to pins of a simulated GPIO
+/// controller of devmgr's; `nhlt`, an NHLT (an Intel audio DSP's links),
+/// with none.
 pub fn table(name_of: &str) -> Option<Vec<u8>> {
+    if name_of == "nhlt" {
+        return Some(whole(b"NHLT", 0, b"TESTNHLT", &[0]));
+    }
     let aml = match name_of {
         "touchpad" => {
             let controller = "\\_SB.PCI0.S80";
@@ -62,15 +67,21 @@ pub fn table(name_of: &str) -> Option<Vec<u8>> {
         }
         _ => return None,
     };
+    Some(whole(b"SSDT", 2, b"TESTSSDT", &aml))
+}
+
+/// A table: its header (with the checksum), then `body`.
+fn whole(signature: &[u8; 4], revision: u8, oem_table_id: &[u8; 8], body: &[u8]) -> Vec<u8> {
     let mut t = Vec::new();
-    t.extend_from_slice(b"SSDT");
-    t.extend_from_slice(&((36 + aml.len()) as u32).to_le_bytes());
-    t.extend_from_slice(&[2, 0]);
-    t.extend_from_slice(b"VEDA  TESTSSDT");
+    t.extend_from_slice(signature);
+    t.extend_from_slice(&((36 + body.len()) as u32).to_le_bytes());
+    t.extend_from_slice(&[revision, 0]);
+    t.extend_from_slice(b"VEDA  ");
+    t.extend_from_slice(oem_table_id);
     t.extend_from_slice(&1u32.to_le_bytes());
     t.extend_from_slice(b"VEDA");
     t.extend_from_slice(&1u32.to_le_bytes());
-    t.extend_from_slice(&aml);
+    t.extend_from_slice(body);
     t[9] = 0u8.wrapping_sub(t.iter().fold(0u8, |a, &b| a.wrapping_add(b)));
-    Some(t)
+    t
 }

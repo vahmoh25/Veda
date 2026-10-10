@@ -16,7 +16,9 @@
 //! (`veda,pins` in its `_DSD`), and the lines the ones that interrupt are
 //! on (its `_CRS`, in the order of `veda,interrupt-pins`). The FADT says
 //! whether there is a keyboard controller, and that there is no VGA and no
-//! CMOS clock.
+//! CMOS clock. Tables of the PC's firmware that describe a function's
+//! hardware come with it, as the firmware has them (an Intel audio
+//! controller's NHLT: the links of its DSP).
 //!
 //! The tables go in the PC's firmware area below 1 MiB, which the memory
 //! map reserves; the boot parameters say where the RSDP is.
@@ -138,6 +140,9 @@ pub struct Machine<'a> {
     /// Where the functions' BARs are, below and above 4 GiB.
     pub pci_low: Range<u64>,
     pub pci_high: Range<u64>,
+    /// Tables of the PC's firmware that describe the functions' hardware,
+    /// whole ([`is_table`]).
+    pub firmware_tables: &'a [Vec<u8>],
 }
 
 const OEM_ID: &[u8; 6] = b"VEDA  ";
@@ -153,21 +158,47 @@ const BOOT_8042: u16 = 1 << 1;
 const BOOT_VGA_NOT_PRESENT: u16 = 1 << 2;
 const BOOT_CMOS_RTC_NOT_PRESENT: u16 = 1 << 5;
 
-/// The tables, to be written at [`AT`]: the RSDP, the XSDT, the FADT and
-/// the DSDT, one after the other, each at a multiple of 16.
+/// The tables, to be written at [`AT`]: the RSDP, the XSDT, the FADT, the
+/// DSDT and the firmware's, one after the other, each at a multiple of 16.
 pub fn tables(m: &Machine) -> Vec<u8> {
     let xsdt_at = AT + 48;
-    let fadt_at = xsdt_at + 48;
+    let xsdt_length = HEADER + 8 * (1 + m.firmware_tables.len());
+    let fadt_at = (xsdt_at + xsdt_length as u64).next_multiple_of(16);
     let dsdt_at = (fadt_at + FADT_LENGTH as u64).next_multiple_of(16);
+    let dsdt = table(b"DSDT", 2, &dsdt(m));
+    let mut end = dsdt_at + dsdt.len() as u64;
+    let firmware_at: Vec<u64> = m
+        .firmware_tables
+        .iter()
+        .map(|t| {
+            let at = end.next_multiple_of(16);
+            end = at + t.len() as u64;
+            at
+        })
+        .collect();
+    let listed: Vec<u8> =
+        core::iter::once(fadt_at).chain(firmware_at.iter().copied()).flat_map(u64::to_le_bytes).collect();
     let mut out = Vec::new();
     out.extend_from_slice(&rsdp(xsdt_at));
     out.resize((xsdt_at - AT) as usize, 0);
-    out.extend_from_slice(&table(b"XSDT", 1, &fadt_at.to_le_bytes()));
+    out.extend_from_slice(&table(b"XSDT", 1, &listed));
     out.resize((fadt_at - AT) as usize, 0);
     out.extend_from_slice(&table(b"FACP", 6, &fadt(m, dsdt_at)));
     out.resize((dsdt_at - AT) as usize, 0);
-    out.extend_from_slice(&table(b"DSDT", 2, &dsdt(m)));
+    out.extend_from_slice(&dsdt);
+    for (t, at) in m.firmware_tables.iter().zip(firmware_at) {
+        out.resize((at - AT) as usize, 0);
+        out.extend_from_slice(t);
+    }
     out
+}
+
+/// Whether `bytes` are a whole table, as one of the firmware's must be to
+/// go in the guest's: the length its header gives, and adding up to zero.
+pub fn is_table(bytes: &[u8]) -> bool {
+    bytes.len() >= HEADER
+        && u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize == bytes.len()
+        && checksum(bytes) == 0
 }
 
 /// A table: its header (with the checksum), then `body`.
@@ -391,6 +422,7 @@ mod tests {
             i8042: true,
             pci_low: 0xC000_0000..0xFEC0_0000,
             pci_high: 0..1,
+            firmware_tables: &[],
         };
         let t = tables(&m);
         assert!(t.len() <= ROOM);
@@ -453,6 +485,7 @@ mod tests {
             i8042: false,
             pci_low: 0xC000_0000..0xFEC0_0000,
             pci_high: 0..1,
+            firmware_tables: &[],
         };
         let t = tables(&m);
         let dsdt = (u64::from_le_bytes(t[96 + 140..96 + 148].try_into().unwrap()) - AT) as usize;
@@ -540,6 +573,7 @@ mod tests {
             i8042: false,
             pci_low: 0xC000_0000..0xFEC0_0000,
             pci_high: 0..1,
+            firmware_tables: &[],
         };
         let t = tables(&m);
         let dsdt = (u64::from_le_bytes(t[96 + 140..96 + 148].try_into().unwrap()) - AT) as usize;
@@ -570,5 +604,42 @@ mod tests {
                 Value::Package(alloc::vec![Value::String("veda,interrupt-pins".into()), numbers(&[303])]),
             ])
         );
+    }
+
+    #[test]
+    fn the_firmwares_tables_come_whole() {
+        let nhlt = table(b"NHLT", 0, &[1, 2, 3, 4, 5]);
+        assert!(is_table(&nhlt));
+        let (mut cut, mut wrong) = (nhlt.clone(), nhlt.clone());
+        cut.pop();
+        wrong[40] ^= 1;
+        assert!(!is_table(&cut) && !is_table(&wrong) && !is_table(&nhlt[..20]));
+
+        let functions = [function(0xF8, None)];
+        let firmware_tables = [nhlt.clone()];
+        let m = Machine {
+            functions: &functions,
+            gpio: &[],
+            i8042: false,
+            pci_low: 0xC000_0000..0xFEC0_0000,
+            pci_high: 0..1,
+            firmware_tables: &firmware_tables,
+        };
+        let t = tables(&m);
+        let u64_at = |at: usize| u64::from_le_bytes(t[at..at + 8].try_into().unwrap());
+        // The XSDT lists the FADT, then the firmware's table, which is as
+        // it was; every table adds up.
+        let xsdt = &t[48..];
+        assert_eq!(&xsdt[..4], b"XSDT");
+        assert_eq!(u32::from_le_bytes(xsdt[4..8].try_into().unwrap()) as usize, HEADER + 16);
+        let (fadt, listed) = ((u64_at(48 + HEADER) - AT) as usize, (u64_at(48 + HEADER + 8) - AT) as usize);
+        assert_eq!(&t[fadt..fadt + 4], b"FACP");
+        assert_eq!(&t[listed..listed + nhlt.len()], &nhlt[..]);
+        assert!(listed % 16 == 0 && t.len() == listed + nhlt.len());
+        let dsdt = (u64::from_le_bytes(t[fadt + 140..fadt + 148].try_into().unwrap()) - AT) as usize;
+        for at in [48, fadt, dsdt, listed] {
+            let len = u32::from_le_bytes(t[at + 4..at + 8].try_into().unwrap()) as usize;
+            assert!(is_table(&t[at..at + len]), "the table at {at:#x}");
+        }
     }
 }

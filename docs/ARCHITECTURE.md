@@ -642,7 +642,10 @@ renders under QEMU.
   virtio's sound devices, and a laptop's speaker amplifiers on its SPI
   controller (Cirrus Logic's CS35L41, which the codec's driver plays
   through; the guest gets the GPIO pins they are wired to, and the
-  firmware's variables their calibration is in). Linux's
+  firmware's variables their calibration is in), and the digital
+  microphones of an Intel audio DSP (Linux's Sound Open Firmware on it,
+  from Tiger Lake to Raptor Lake: the guest gets the firmware's NHLT,
+  which describes them, with the controller). Linux's
   drivers drive them, and `alsa`, Veda's driver for Linux, attaches the
   card to the audio service's private `audiodev` protocol, as a native
   driver would; the service also runs without sound hardware (a null

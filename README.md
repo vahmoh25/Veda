@@ -290,9 +290,11 @@ the calibration the firmware keeps for them), or
 the headphones when they are plugged in, and the line outputs, with the
 microphone on the codec (built in, or on a jack) for the agent.
 Built-in microphones wired to an audio DSP rather than to the codec, as
-in many recent laptops, stay silent for now; HDMI and DisplayPort audio
-come with Intel's graphics, which are still Veda's. To try USB input or
-HD Audio in QEMU:
+in many recent laptops, are recorded through Linux's Sound Open Firmware on
+Intel's PCs from Tiger Lake to Raptor Lake (11th to 13th generation Core);
+later ones' stay silent for now. HDMI and DisplayPort audio come with
+Intel's graphics, which are still Veda's. To try USB input or HD Audio in
+QEMU:
 
 ```bash
 cargo xtask run --input usb
@@ -527,8 +529,10 @@ The bundled fonts (Inter, Lato, JetBrains Mono) are under the SIL Open
 Font License 1.1; see `assets/fonts/`. The firmware the driver VM's Linux
 loads into devices (`ports/linux/firmware.txt`) comes unmodified from the
 Linux firmware collection, under the terms its `WHENCE` gives each file's
-maker (who allow its redistribution); it runs on the devices, not in
-Veda. Vendored third-party code keeps
+maker (who allow its redistribution), and from Sound Open Firmware's
+releases (sof-bin: Intel's signed builds of the audio DSP's firmware,
+under the BSD licence and Intel's patent licence of its `LICENCE.Intel`);
+it runs on the devices, not in Veda. Vendored third-party code keeps
 its own license; see `third_party/`. The C toolchain an image may contain
 keeps its own licences too: GCC and binutils GPL version 3 or later (the
 GCC runtime library with its Runtime Library Exception, so programs GCC

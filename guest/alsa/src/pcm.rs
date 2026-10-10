@@ -6,6 +6,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::ops::RangeInclusive;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 
@@ -140,11 +141,18 @@ pub struct Pcm {
 }
 
 impl Pcm {
-    /// Opens the device at `path` for `channels` interleaved 16-bit
-    /// channels at `rate`, with periods of `period` frames and a buffer of
-    /// `periods` of them; failing that, the periods and buffer nearest that
-    /// the card can do.
-    pub fn open(path: &str, stream: Stream, rate: u32, channels: u32, period: u32, periods: u32) -> io::Result<Pcm> {
+    /// Opens the device at `path` for interleaved 16-bit frames at `rate`,
+    /// of as few of `channels` as it takes, with periods of `period` frames
+    /// and a buffer of `periods` of them; failing that, the periods and
+    /// buffer nearest that the card can do.
+    pub fn open(
+        path: &str,
+        stream: Stream,
+        rate: u32,
+        channels: RangeInclusive<u32>,
+        period: u32,
+        periods: u32,
+    ) -> io::Result<Pcm> {
         let mut options = OpenOptions::new();
         match stream {
             Stream::Playback => options.write(true),
@@ -157,7 +165,7 @@ impl Pcm {
             p.only(param::ACCESS, ACCESS_RW_INTERLEAVED);
             p.only(param::FORMAT, FORMAT_S16_LE);
             p.only(param::SUBFORMAT, SUBFORMAT_STD);
-            p.within(param::CHANNELS, channels, channels);
+            p.within(param::CHANNELS, *channels.start(), *channels.end());
             p.within(param::RATE, rate, rate);
             if exact {
                 p.within(param::PERIOD_SIZE, period, period);
@@ -171,7 +179,14 @@ impl Pcm {
             Ok(p)
         };
         let p = configure(true).or_else(|_| configure(false))?;
-        Ok(Pcm { file, stream, rate, channels, period: p.get(param::PERIOD_SIZE), buffer: p.get(param::BUFFER_SIZE) })
+        Ok(Pcm {
+            file,
+            stream,
+            rate,
+            channels: p.get(param::CHANNELS),
+            period: p.get(param::PERIOD_SIZE),
+            buffer: p.get(param::BUFFER_SIZE),
+        })
     }
 
     fn fd(&self) -> RawFd {

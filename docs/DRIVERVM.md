@@ -338,6 +338,22 @@ variable the guest reads (`the guest read the firmware variable
 CirrusSmartAmpCalibrationData-...`), and the first few it asks for that
 the PC does not have.
 
+**An audio DSP's links.** Intel's audio controllers have a DSP, to which a
+laptop's built-in microphones are often wired (digital microphones, not on
+the codec): Linux records them through Sound Open Firmware (SOF) on the
+DSP, which it chooses for a controller where the firmware's NHLT table
+(its links: the microphones, I2S ports) says it has digital microphones,
+and which loads the DSP's firmware and the topology for them. The NHLT
+describes the controller's hardware, not the machine's, and goes to the
+guest with it (`pcidev`'s `acpi_tables`), listed in its XSDT as the
+firmware has it. The guest's Linux has SOF for the parts from Tiger Lake
+to Raptor Lake, which one of its drivers takes, with their firmware (from
+Sound Open Firmware's releases); `alsa` records the DSP's microphones
+(SOF's `DMIC` device, four of them made stereo) rather than the codec's
+input, and unmutes them (SOF's switch starts off). A card that plays to a
+display only (a GPU's HDMI) waits for one that plays to the PC's
+speakers.
+
 **Power states.** The guest puts its functions to sleep and wakes them as
 Linux does on a PC (runtime power management), and a firmware may leave
 some asleep (D3hot), as a laptop's does its serial bus controllers. A
@@ -656,7 +672,7 @@ where Veda stands:
 | GPIO pins for the guest: the platform's GPIO controllers, the PC's pins that described devices are wired to, their interrupts (lines `devmgr` raises); devices on SPI controllers | done under QEMU (`tests/ui/drivervm-gpio.vts`, a simulated controller) |
 | Sound: HD Audio controllers and their codecs, a laptop's speaker amplifiers on SPI (with their pins); Veda's own HD Audio, SPI and amplifier drivers gone | done under QEMU (`tests/ui/drivervm-audio.vts`, `drivervm-mic.vts`, `drivervm-pci.vts`, `startup.vts`); the amplifiers not yet tried on a PC |
 | The PC's firmware variables for the guest, read-only (the amplifiers' calibration) | done under QEMU (`tests/ui/drivervm-variables.vts`, variables added to OVMF's); not yet tried on a PC |
-| The audio DSP the built-in microphones are on (SOF, the NHLT table) | next |
+| The audio DSP the built-in microphones are on: SOF from Tiger Lake to Raptor Lake, with the firmware's NHLT | done under QEMU (`tests/ui/drivervm-nhlt.vts`: the NHLT; QEMU has no DSP); not yet tried on a PC |
 
 **GPUs.** Linux's driver and Mesa's drive a GPU whole in the guest (lesson
 1): the guest's Linux has i915 and virtio-gpu, and its Mesa iris, virgl

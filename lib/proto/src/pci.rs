@@ -225,6 +225,11 @@ protocol! {
         /// pin masked) until it is ended (acknowledged, or the guest's
         /// end-of-interrupt). `Busy` if the firmware keeps the pin.
         19 => fn gpio_interrupt(device: u32, index: u32) -> Result<Interrupt, PciError>;
+        /// The firmware's tables that describe the function's hardware
+        /// rather than the machine's, whole, as the firmware has them: an
+        /// Intel audio controller's NHLT (the links of its DSP, and the
+        /// microphones and ports on them). None if there are none.
+        20 => fn acpi_tables() -> Vec<Vec<u8>>;
     }
 }
 
