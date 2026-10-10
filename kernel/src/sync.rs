@@ -59,6 +59,14 @@ impl<T: ?Sized> SpinLock<T> {
             core::hint::spin_loop();
         }
     }
+
+    /// The lock, if it is free now: for a panic's path, where its holder
+    /// (a processor that stopped) may never let it go.
+    pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
+        self.locked.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).ok()?;
+        self.owner.store(percpu::cpu_id_or_boot() + 1, Ordering::Relaxed);
+        Some(SpinLockGuard { lock: self })
+    }
 }
 
 pub struct SpinLockGuard<'a, T: ?Sized> {

@@ -26,6 +26,10 @@ use crate::time;
 pub const TIME_SLICE_NS: u64 = 10_000_000;
 /// Longest an idle CPU sleeps without a timer event.
 const IDLE_MAX_NS: u64 = 500_000_000;
+/// While the serial port has not all of the log, the boot processor's
+/// timer comes this soon, to give it more: its transmitter empties its
+/// FIFO in a millisecond or two (16 bytes at 115200 baud).
+const SERIAL_NS: u64 = 1_000_000;
 
 /// Per-CPU scheduler state (lives in `PerCpu`).
 pub struct CpuSched {
@@ -231,6 +235,9 @@ fn arm_timer(running_idle: bool) {
     if let Some(t) = earliest_timeout() {
         deadline = deadline.min(t);
     }
+    if percpu::cpu_id_or_boot() == 0 && crate::log::serial_pending() {
+        deadline = deadline.min(now + SERIAL_NS);
+    }
     let deadline = deadline.max(now + 50_000);
     apic::arm_timer(time::ns_to_tsc(deadline), deadline - now);
 }
@@ -385,6 +392,9 @@ pub fn request_resched() {
 pub fn timer_interrupt() {
     let now = time::now_ns();
     expire_timeouts(now);
+    if percpu::cpu_id_or_boot() == 0 {
+        crate::log::pump_serial();
+    }
     let cs = cpu_sched();
     let cur_idle = cs.current.as_ref().is_some_and(|t| t.is_idle);
     if !cur_idle && now >= cs.slice_end {
