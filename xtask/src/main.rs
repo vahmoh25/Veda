@@ -62,7 +62,8 @@ COMMANDS:
 BUILD OPTIONS:
     --debug             Build without optimisations (slow under emulation)
     --resolution WxH    Preferred screen resolution (default 1280x800; iso: 1920x1080, or
-                        the largest the screen offers below it)
+                        the largest the screen offers below it; of the display's own shape,
+                        if the firmware gives its EDID and has such a mode about as wide)
     --cmdline \"...\"     Extra kernel command line arguments
     --no-generate       Reuse the media in target/generated instead of regenerating it
     --skip PROGRAM      Leave a program out of the image (repeatable)

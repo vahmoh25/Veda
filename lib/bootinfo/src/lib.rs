@@ -30,7 +30,7 @@ pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VEDABOOT");
 
 /// Version of this protocol. Bump on any layout change.
-pub const BOOTINFO_VERSION: u32 = 4;
+pub const BOOTINFO_VERSION: u32 = 5;
 
 /// Maximum length of the kernel command line, in bytes.
 pub const CMDLINE_MAX: usize = 256;
@@ -79,6 +79,8 @@ pub struct BootInfo {
     pub entropy: [u8; ENTROPY_MAX],
     /// How the loader painted the boot splash, for the kernel's log.
     pub splash: SplashReport,
+    /// The screen's modes and the display's own size, for the kernel's log.
+    pub screen: ScreenReport,
     /// The firmware's variables that an operating system may read, as the
     /// loader read them ([`variables`]); empty if it found none.
     pub firmware_variables: PhysRegion,
@@ -102,6 +104,27 @@ pub struct SplashReport {
     /// How it was made write-combining ([`made_wc`]).
     pub made_wc: u8,
     pub _pad: [u8; 5],
+}
+
+/// How many of the firmware's graphics modes [`ScreenReport`] holds.
+pub const SCREEN_MODES: usize = 32;
+
+/// The graphics modes the firmware offers (of 32-bit pixels: those the
+/// loader can use), which one the loader chose and which one the firmware
+/// had on, and the display's own size as its EDID gives it (the panel's
+/// native resolution), for the kernel's log.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScreenReport {
+    /// Width and height of each, in the firmware's order.
+    pub modes: [[u16; 2]; SCREEN_MODES],
+    pub count: u8,
+    /// Indices into `modes` (`u8::MAX`: none of them).
+    pub chosen: u8,
+    pub entered: u8,
+    pub _pad: u8,
+    /// Width and height (0: the firmware gave no EDID).
+    pub own: [u16; 2],
 }
 
 /// The processor's memory types (the MTRRs' and PAT's encodings).

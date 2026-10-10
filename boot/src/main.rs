@@ -4,7 +4,8 @@
 //!
 //! 1. read `\VEDA\BOOT.CFG`, `VKERNEL.EXE`, `INITRD.IMG` (and the optional
 //!    `VKERNEL.SYM`) from the boot volume,
-//! 2. pick and set a graphics mode and paint the boot splash,
+//! 2. pick and set a graphics mode (of the display's own shape, where the
+//!    firmware gives its EDID) and paint the boot splash,
 //! 3. load the kernel's PE sections into fresh physical pages,
 //! 4. build the initial page tables (identity map, direct map, kernel image),
 //! 5. read the firmware's variables that an operating system may read
@@ -28,7 +29,7 @@ use core::ptr;
 
 use bootinfo::{
     BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, BootTime, Framebuffer, HHDM_BASE, KernelImage, MemoryKind, MemoryMap,
-    MemoryRegion, PhysRegion, PixelFormat, SplashReport, made_wc, memory_type, variables,
+    MemoryRegion, PhysRegion, PixelFormat, SCREEN_MODES, ScreenReport, SplashReport, made_wc, memory_type, variables,
 };
 use uefi::{memory_type as mt, *};
 
@@ -179,6 +180,44 @@ impl Firmware {
         // SAFETY: as above.
         let s = unsafe { (self.bs.locate_protocol)(guid, ptr::null_mut(), &mut iface) };
         if is_error(s) || iface.is_null() { Err("protocol not found") } else { Ok(iface.cast()) }
+    }
+
+    /// The own size of the display on graphics output `gop`, as its EDID
+    /// gives it (the firmware's active one, else the one it discovered), if
+    /// the firmware gives one there.
+    fn display_size(&self, gop: *mut GraphicsOutput) -> Option<(u32, u32)> {
+        let (mut count, mut handles) = (0usize, ptr::null_mut::<Handle>());
+        // SAFETY: the firmware allocates the list of handles.
+        let s = unsafe {
+            (self.bs.locate_handle_buffer)(
+                BY_PROTOCOL,
+                &GRAPHICS_OUTPUT_PROTOCOL,
+                ptr::null_mut(),
+                &mut count,
+                &mut handles,
+            )
+        };
+        if is_error(s) || handles.is_null() {
+            return None;
+        }
+        // SAFETY: `count` handles at `handles`.
+        let list = unsafe { core::slice::from_raw_parts(handles, count) };
+        let output = list.iter().find(|&&h| self.protocol::<GraphicsOutput>(h, &GRAPHICS_OUTPUT_PROTOCOL) == Ok(gop));
+        let size = output.and_then(|&h| {
+            [EDID_ACTIVE_PROTOCOL, EDID_DISCOVERED_PROTOCOL].iter().find_map(|guid| {
+                let edid: *mut Edid = self.protocol(h, guid).ok()?;
+                // SAFETY: the firmware's EDID protocol: `size_of_edid` bytes at
+                // `edid`.
+                let (size, at) = unsafe { ((*edid).size_of_edid as usize, (*edid).edid) };
+                if at.is_null() {
+                    return None;
+                }
+                preferred_timing(unsafe { core::slice::from_raw_parts(at, size) })
+            })
+        });
+        // SAFETY: the list the firmware allocated, no longer used.
+        unsafe { (self.bs.free_pool)(handles.cast()) };
+        size
     }
 
     /// Opens the root directory of the volume this loader was started from.
@@ -350,15 +389,23 @@ impl Firmware {
     }
 }
 
-/// Selects and activates the graphics mode closest to the preferred one.
-fn setup_graphics(fw: &Firmware, preferred: Option<(u32, u32)>) -> Result<Framebuffer> {
+/// Selects and activates a graphics mode ([`choose_mode`]): the
+/// framebuffer, and the modes there were, for the kernel's log.
+fn setup_graphics(fw: &Firmware, preferred: Option<(u32, u32)>) -> Result<(Framebuffer, ScreenReport)> {
     let gop: *mut GraphicsOutput = fw.locate(&GRAPHICS_OUTPUT_PROTOCOL)?;
     // SAFETY: valid GOP instance from the firmware.
     let gop_ref = unsafe { &mut *gop };
-    let max_mode = unsafe { (*gop_ref.mode).max_mode };
-    let (pw, ph) = preferred.unwrap_or((1280, 800));
-    let mut best: Option<(u32, u64)> = None;
+    // SAFETY: the mode structure of a valid GOP.
+    let (max_mode, entered) = unsafe { ((*gop_ref.mode).max_mode, (*gop_ref.mode).mode) };
+    let mut report = ScreenReport { chosen: u8::MAX, entered: u8::MAX, ..ScreenReport::default() };
+    // The modes of 32-bit pixels: their numbers and sizes.
+    let mut numbers = [0u32; SCREEN_MODES];
+    let mut sizes = [(0u32, 0u32); SCREEN_MODES];
+    let mut count = 0;
     for m in 0..max_mode {
+        if count == SCREEN_MODES {
+            break;
+        }
         let mut size = 0usize;
         let mut info: *mut GraphicsModeInfo = ptr::null_mut();
         // SAFETY: querying a mode index below max_mode.
@@ -370,6 +417,59 @@ fn setup_graphics(fw: &Firmware, preferred: Option<(u32, u32)>) -> Result<Frameb
             continue;
         }
         let (w, h) = (info.horizontal_resolution, info.vertical_resolution);
+        if m == entered {
+            report.entered = count as u8;
+        }
+        (numbers[count], sizes[count]) = (m, (w, h));
+        report.modes[count] = [w.min(u16::MAX as u32) as u16, h.min(u16::MAX as u32) as u16];
+        count += 1;
+    }
+    report.count = count as u8;
+    let own = fw.display_size(gop);
+    if let Some((w, h)) = own {
+        report.own = [w.min(u16::MAX as u32) as u16, h.min(u16::MAX as u32) as u16];
+    }
+    if let Some(i) = choose_mode(&sizes[..count], preferred.unwrap_or((1280, 800)), own) {
+        report.chosen = i as u8;
+        // SAFETY: valid mode number.
+        unsafe { (gop_ref.set_mode)(gop, numbers[i]) };
+    }
+    // SAFETY: the mode structure is valid after SetMode.
+    let mode = unsafe { &*gop_ref.mode };
+    let info = unsafe { &*mode.info };
+    let framebuffer = Framebuffer {
+        phys_base: mode.frame_buffer_base,
+        size: mode.frame_buffer_size as u64,
+        width: info.horizontal_resolution,
+        height: info.vertical_resolution,
+        stride: info.pixels_per_scan_line,
+        format: if info.pixel_format == PIXEL_RGB_RESERVED_8BIT { PixelFormat::Rgbx } else { PixelFormat::Bgrx },
+    };
+    Ok((framebuffer, report))
+}
+
+/// The mode to set of `modes` (their widths and heights) for a screen of
+/// about the `preferred` size: of the display's own shape (its own size
+/// `own`, if the firmware gives it), as wide as the preferred size or up
+/// to an eighth narrower, the widest such (1920x1200 for 1920x1080 on a
+/// 16:10 panel). The firmware then scales the picture evenly over the
+/// whole panel, as the display's driver does the window system's later:
+/// the screen keeps its shape when the driver takes over, and has no bars.
+/// Else the preferred size itself; else the largest within it; else the
+/// smallest beyond it.
+fn choose_mode(modes: &[(u32, u32)], (pw, ph): (u32, u32), own: Option<(u32, u32)>) -> Option<usize> {
+    let shape = |(w, h): (u32, u32), (ow, oh): (u32, u32)| w as u64 * oh as u64 == h as u64 * ow as u64;
+    if let Some((ow, oh)) = own
+        && !shape((pw, ph), (ow, oh))
+    {
+        let fits = |&(w, h): &(u32, u32)| shape((w, h), (ow, oh)) && w <= pw && w * 8 >= pw * 7 && w <= ow && h <= oh;
+        let widest = modes.iter().enumerate().filter(|(_, m)| fits(m)).max_by_key(|(_, (w, _))| *w);
+        if let Some((i, _)) = widest {
+            return Some(i);
+        }
+    }
+    let mut best: Option<(usize, u64)> = None;
+    for (i, &(w, h)) in modes.iter().enumerate() {
         // Exact match wins; otherwise prefer the closest size not exceeding
         // the preferred one.
         let score = if (w, h) == (pw, ph) {
@@ -380,24 +480,27 @@ fn setup_graphics(fw: &Firmware, preferred: Option<(u32, u32)>) -> Result<Frameb
             u64::MAX / 2 + (w as u64 * h as u64)
         };
         if best.is_none_or(|(_, s)| score < s) {
-            best = Some((m, score));
+            best = Some((i, score));
         }
     }
-    if let Some((mode, _)) = best {
-        // SAFETY: valid mode number.
-        unsafe { (gop_ref.set_mode)(gop, mode) };
+    best.map(|(i, _)| i)
+}
+
+/// The size of an EDID's preferred timing (its first detailed timing
+/// descriptor): the display's own resolution.
+fn preferred_timing(edid: &[u8]) -> Option<(u32, u32)> {
+    const HEADER: [u8; 8] = [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00];
+    if edid.len() < 128 || edid[..8] != HEADER {
+        return None;
     }
-    // SAFETY: the mode structure is valid after SetMode.
-    let mode = unsafe { &*gop_ref.mode };
-    let info = unsafe { &*mode.info };
-    Ok(Framebuffer {
-        phys_base: mode.frame_buffer_base,
-        size: mode.frame_buffer_size as u64,
-        width: info.horizontal_resolution,
-        height: info.vertical_resolution,
-        stride: info.pixels_per_scan_line,
-        format: if info.pixel_format == PIXEL_RGB_RESERVED_8BIT { PixelFormat::Rgbx } else { PixelFormat::Bgrx },
-    })
+    let d = &edid[54..72];
+    // A timing has a pixel clock; a descriptor of another kind has none.
+    if d[0] == 0 && d[1] == 0 {
+        return None;
+    }
+    let w = d[2] as u32 | (d[4] as u32 & 0xF0) << 4;
+    let h = d[5] as u32 | (d[7] as u32 & 0xF0) << 4;
+    (w > 0 && h > 0).then_some((w, h))
 }
 
 fn rdtsc() -> u64 {
@@ -620,7 +723,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
         None => config::Config::default(),
     };
 
-    let framebuffer = setup_graphics(fw, cfg.resolution)?;
+    let (framebuffer, screen) = setup_graphics(fw, cfg.resolution)?;
     log!(
         "framebuffer {}x{} stride {} at {:#x}",
         framebuffer.width,
@@ -786,6 +889,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
             entropy_len: entropy_len as u32,
             entropy,
             splash,
+            screen,
             firmware_variables,
         });
     }

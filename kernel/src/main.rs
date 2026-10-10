@@ -59,6 +59,33 @@ fn parse_cmdline(cmdline: &str) -> Options {
     o
 }
 
+/// Logs the firmware's screen modes, the one the loader chose, and the
+/// display's own size (a panel's that the firmware stretches a mode of
+/// another shape over, the window system's screen keeps that shape).
+fn log_screen(s: &bootinfo::ScreenReport) {
+    use core::fmt::Write;
+    let mut modes = alloc::string::String::new();
+    for (i, [w, h]) in s.modes.iter().take(s.count as usize).enumerate() {
+        let sep = if i > 0 { ", " } else { "" };
+        let _ = write!(modes, "{sep}{w}x{h}");
+        modes.push_str(match (i as u8 == s.chosen, i as u8 == s.entered) {
+            (true, true) => " (chosen, the firmware's)",
+            (true, false) => " (chosen)",
+            (false, true) => " (the firmware's)",
+            (false, false) => "",
+        });
+    }
+    if modes.is_empty() {
+        return;
+    }
+    match s.own {
+        [0, _] | [_, 0] => {
+            kinfo!("boot: the firmware's screen modes: {}; the display's own size is not known (no EDID)", modes)
+        }
+        [w, h] => kinfo!("boot: the firmware's screen modes: {}; the display's own: {}x{}", modes, w, h),
+    }
+}
+
 /// Logs how the loader painted its splash: a real PC's framebuffer is often
 /// uncached, which shows as the picture being painted from the top down,
 /// until something makes it write-combining.
@@ -151,6 +178,7 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
     if let Some(adjust) = firmware_adjust {
         kinfo!("time: the firmware's adjustment of CPU 0's TSC ({} ns) set to 0", time::ticks_to_ns(adjust));
     }
+    log_screen(&boot.screen);
     log_splash(&boot.splash);
     time::set_boot_time(&boot.boot_time, opts.tz);
     if features.tsc_deadline {

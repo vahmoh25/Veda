@@ -46,6 +46,13 @@ pub const FILE_INFO: Guid = Guid(0x09576e92, 0x6d3f, 0x11d2, [0x8e, 0x39, 0x00, 
 pub const ACPI_20_TABLE: Guid = Guid(0x8868e871, 0xe4f1, 0x11d3, [0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81]);
 pub const RNG_PROTOCOL: Guid = Guid(0x3152bca5, 0xeade, 0x433d, [0x86, 0x2e, 0xc0, 0x1c, 0xdc, 0x29, 0x1f, 0x44]);
 pub const ACPI_10_TABLE: Guid = Guid(0xeb9d2d30, 0x2d88, 0x11d3, [0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d]);
+pub const EDID_ACTIVE_PROTOCOL: Guid =
+    Guid(0xbd8c1056, 0x9f36, 0x44ec, [0x92, 0xa8, 0xa6, 0x33, 0x7f, 0x81, 0x79, 0x86]);
+pub const EDID_DISCOVERED_PROTOCOL: Guid =
+    Guid(0x1c0c34f6, 0xd380, 0x41fa, [0xa0, 0x49, 0x8a, 0xd0, 0x6c, 0x1a, 0x66, 0xaa]);
+
+/// `LocateHandleBuffer`'s search for the handles with a protocol.
+pub const BY_PROTOCOL: u32 = 2;
 
 #[repr(C)]
 pub struct TableHeader {
@@ -157,7 +164,8 @@ pub struct BootServices {
     pub close_protocol: usize,
     pub open_protocol_information: usize,
     pub protocols_per_handle: usize,
-    pub locate_handle_buffer: usize,
+    pub locate_handle_buffer:
+        unsafe extern "efiapi" fn(u32, *const Guid, *mut c_void, *mut usize, *mut *mut Handle) -> Status,
     pub locate_protocol: unsafe extern "efiapi" fn(*const Guid, *mut c_void, *mut *mut c_void) -> Status,
 }
 
@@ -208,6 +216,14 @@ pub struct GraphicsOutput {
     pub set_mode: unsafe extern "efiapi" fn(*mut GraphicsOutput, u32) -> Status,
     pub blt: usize,
     pub mode: *mut GraphicsMode,
+}
+
+/// `EFI_EDID_ACTIVE_PROTOCOL` and `EFI_EDID_DISCOVERED_PROTOCOL`: the EDID
+/// of the display on a graphics output.
+#[repr(C)]
+pub struct Edid {
+    pub size_of_edid: u32,
+    pub edid: *const u8,
 }
 
 #[repr(C)]

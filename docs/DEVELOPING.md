@@ -136,7 +136,10 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   why it did not; a frame the GPU took long over is logged too. The boot
   loader's splash is reported by the kernel (`boot: the loader painted its
   splash in N ms; ...`, with the framebuffer's memory type: firmware
-  leaves it uncached, and the loader paints it write-combining).
+  leaves it uncached, and the loader paints it write-combining), and so
+  is its mode (`boot: the firmware's screen modes: ..., 1920x1200
+  (chosen), ...; the display's own: 3840x2400`: a mode of the display's
+  shape, where the firmware gives the display's EDID and has one).
   `shell: startup sound: playing` says
   the sound started (as the desktop appeared), or why not.
   `tests/ui/startup.vts` checks both, and that the sound reaches the

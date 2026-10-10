@@ -30,7 +30,12 @@ that communicate over kernel channels.
 1. OVMF loads `\EFI\BOOT\BOOTX64.EFI` (`boot/`, the `vboot` loader) from the
    FAT32 EFI system partition built by `cargo xtask build`.
 2. `vboot` reads `\VEDA\BOOT.CFG`, `VKERNEL.EXE` and `INITRD.IMG`, picks a
-   GOP graphics mode, paints the splash screen (`vsplash`), loads the
+   GOP graphics mode (about `BOOT.CFG`'s size, and of the display's own
+   shape where the firmware gives the display's EDID: 1920x1200 rather
+   than 1920x1080 on a 16:10 panel, which the firmware and later the
+   display's driver then scale evenly, without bars; the kernel logs the
+   modes there were, `boot: the firmware's screen modes: ...`), paints the
+   splash screen (`vsplash`), loads the
    kernel's PE sections, builds page tables (identity map, direct map at
    `0xFFFF800000000000`, kernel at `0xFFFFFFFF80000000`), reads the
    firmware's variables that an operating system may read (for the driver
