@@ -146,6 +146,7 @@ impl VirglBackend {
             position: None,
             point_size: None,
             varyings: Vec::new(),
+            attributes: Vec::new(),
             samplers: Vec::new(),
             blocks: Vec::new(),
         };

@@ -70,6 +70,12 @@ pub struct Shader {
     pub point_size: Option<u32>,
     /// Vertex shaders: the output register of each varying slot.
     pub varyings: Vec<u32>,
+    /// Vertex shaders: the attribute locations they read, in the order of
+    /// their input registers (the first location's is IN[0]). The inputs
+    /// are packed, as Gallium's drivers take them (one compiles only the
+    /// inputs a shader reads, the first into its first slot): a vertex
+    /// element for each, in this order.
+    pub attributes: Vec<u32>,
     /// The samplers (program sampler indices) the shader reads.
     pub samplers: Vec<u32>,
     /// The uniform blocks (program block indices) it reads; block `b` is
@@ -429,7 +435,7 @@ impl<'a> Translator<'a> {
                         self.loc[results[0].0 as usize] = Some(Src::Ubo(*block, offset / 16, ((offset / 4) % 4) as u8));
                     }
                     InstOp::LoadInput { slot, comp } => {
-                        let r = if self.vertex() { *slot } else { self.input_regs[slot] };
+                        let r = if self.vertex() { self.attribute_reg(*slot) } else { self.input_regs[slot] };
                         self.loc[results[0].0 as usize] = Some(Src::Input(r, *comp));
                     }
                     InstOp::LoadBuiltin(bi) => {
@@ -1346,8 +1352,8 @@ impl<'a> Translator<'a> {
         }
         // Inputs.
         if self.vertex() {
-            for &a in &self.attributes {
-                let _ = writeln!(t, "DCL IN[{a}]");
+            for r in 0..self.attributes.len() {
+                let _ = writeln!(t, "DCL IN[{r}]");
             }
         } else {
             for &s in &self.varyings_in {
@@ -1430,9 +1436,16 @@ impl<'a> Translator<'a> {
             position,
             point_size,
             varyings: if self.vertex() { varyings } else { Vec::new() },
+            attributes: if self.vertex() { self.attributes } else { Vec::new() },
             samplers: self.samplers.keys().copied().collect(),
             blocks: self.blocks,
         }
+    }
+
+    /// The input register of attribute location `slot` (one the shader
+    /// reads): its place among them.
+    fn attribute_reg(&self, slot: u32) -> u32 {
+        self.attributes.binary_search(&slot).map_or(0, |r| r as u32)
     }
 }
 

@@ -130,3 +130,45 @@ fn same_as_software(px: &[u32], w: u32, h: u32) {
     assert!(mean < 3.0, "mean difference {mean}");
     assert!(far * 100 < px.len(), "{far} pixels far apart");
 }
+
+/// The pixels a frame's sparks change: the frame after `frames` frames,
+/// drawn again from the same state without them.
+#[cfg(target_os = "linux")]
+fn spark_pixels(make: &mut dyn FnMut() -> Context, w: u32, h: u32, frames: u32) -> usize {
+    let mut draw = |sparks: bool| {
+        let mut c = make();
+        let mut scene = Scene::new(&mut c).unwrap();
+        for _ in 0..frames {
+            scene.update(1.0 / 30.0, Controls::default());
+            scene.render(&mut c, w as i32, h as i32, 1.0 / 30.0);
+        }
+        scene.options.particles = sparks;
+        scene.options.paused = true;
+        scene.render(&mut c, w as i32, h as i32, 1.0 / 30.0);
+        let mut px = vec![0u32; (w * h) as usize];
+        c.present_to(&mut Present { pixels: &mut px, stride: w as usize, width: w, height: h, opaque: true });
+        px
+    };
+    let (with, without) = (draw(true), draw(false));
+    with.iter().zip(&without).filter(|(a, b)| a != b).count()
+}
+
+/// The sparks (simulated by transform feedback, drawn as point sprites)
+/// show through Veda's renderer as in software: they change about as many
+/// pixels of a frame.
+#[cfg(target_os = "linux")]
+#[test]
+fn sparks_show_through_the_renderer() {
+    let (w, h) = size();
+    let config = Config { width: w, height: h, ..Config::default() };
+    if vgl::virgl::gallium::context(config).is_none() {
+        std::println!("skipped: the renderer on softpipe (vgallium) is not built");
+        return;
+    }
+    let frames = 60;
+    let gpu = spark_pixels(&mut || vgl::virgl::gallium::context(config).unwrap(), w, h, frames);
+    let soft = spark_pixels(&mut || Context::new(Box::new(SoftBackend::new(Box::new(Serial))), config), w, h, frames);
+    std::println!("sparks change {gpu} pixels through the renderer, {soft} in software");
+    assert!(soft > 50, "the sparks change {soft} pixels in software");
+    assert!(gpu * 5 >= soft * 4 && gpu * 4 <= soft * 5, "{gpu} pixels through the renderer, {soft} in software");
+}

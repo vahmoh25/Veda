@@ -24,7 +24,8 @@ enum AttribKind {
 pub(super) struct Program {
     pub vs: u32,
     pub fs: u32,
-    /// The attribute locations the vertex shader reads, by kind.
+    /// The attribute locations the vertex shader reads, by kind, in the
+    /// order of its inputs (each draw's vertex elements).
     attribs: Vec<(u32, AttribKind)>,
     /// Default-block slots.
     slots: u32,
@@ -320,23 +321,26 @@ impl VirglBackend {
         }
         let fh = self.new_handle();
         self.create_shader(fh, SHADER_FRAGMENT, &fs, &[0]);
-        let mut attribs = Vec::new();
-        for a in &p.linked.attributes {
-            let (kind, n) = match a.ty.as_basic() {
-                Some(Basic::Matrix(c, _)) => (AttribKind::Float, u32::from(c)),
+        // The locations the vertex shader reads, in its inputs' order, each
+        // with its attribute's kind.
+        let kind_at = |location: u32| {
+            let a = p.linked.attributes.iter().find(|a| {
+                let n = match a.ty.as_basic() {
+                    Some(Basic::Matrix(c, _)) => u32::from(c),
+                    _ => 1,
+                };
+                (a.location..a.location + n).contains(&location)
+            });
+            match a.and_then(|a| a.ty.as_basic()) {
+                Some(Basic::Matrix(..)) | None => AttribKind::Float,
                 Some(b) => match b.scalar() {
-                    Some(Scalar::Int) => (AttribKind::Int, 1),
-                    Some(Scalar::Uint) => (AttribKind::Uint, 1),
-                    _ => (AttribKind::Float, 1),
+                    Some(Scalar::Int) => AttribKind::Int,
+                    Some(Scalar::Uint) => AttribKind::Uint,
+                    _ => AttribKind::Float,
                 },
-                None => (AttribKind::Float, 1),
-            };
-            for k in 0..n {
-                attribs.push((a.location + k, kind));
             }
-        }
-        attribs.sort_unstable_by_key(|a| a.0);
-        attribs.dedup_by_key(|a| a.0);
+        };
+        let attribs = vs.attributes.iter().map(|&location| (location, kind_at(location))).collect();
         let id = self.next_program;
         self.next_program += 1;
         self.programs.insert(
@@ -808,14 +812,16 @@ impl VirglBackend {
     }
 
     /// Vertex elements and buffers for the attribute locations a program
-    /// reads. Attributes without an array read their current value from a
-    /// small buffer, as an instanced attribute that never advances.
+    /// reads (`used`, in the order of its vertex shader's inputs): an
+    /// element for each, in that order, and its buffer. Attributes without
+    /// an array read their current value from a small buffer (at their
+    /// location's place in it), as an instanced attribute that never
+    /// advances.
     fn vertex_inputs(&mut self, used: &[(u32, AttribKind)], attribs: &[Attrib]) {
-        let Some(&(last, _)) = used.last() else {
+        let Some(n) = used.iter().map(|&(loc, _)| loc as usize + 1).max() else {
             self.bind_elements(Vec::new());
             return;
         };
-        let n = last as usize + 1;
         let current = self.current_buffer();
         // Upload changed current values.
         let mut values = vec![[0u32; 4]; n];
@@ -831,25 +837,23 @@ impl VirglBackend {
             self.write_buffer(current, 0, &bytes);
             self.state.current = values;
         }
-        let mut elements = Vec::with_capacity(n * 4);
-        let mut buffers = Vec::with_capacity(n * 3);
-        for loc in 0..n {
-            let kind = used.iter().find(|u| u.0 as usize == loc).map(|u| u.1);
-            let a = attribs.get(loc).filter(|_| kind.is_some());
-            match a {
+        let mut elements = Vec::with_capacity(used.len() * 4);
+        let mut buffers = Vec::with_capacity(used.len() * 3);
+        for (i, &(loc, kind)) in used.iter().enumerate() {
+            match attribs.get(loc as usize) {
                 Some(a) if a.buffer.is_some() => {
                     let fmt = formats::vertex_format(a);
-                    elements.extend_from_slice(&[0, a.divisor, loc as u32, fmt]);
+                    elements.extend_from_slice(&[0, a.divisor, i as u32, fmt]);
                     buffers.extend_from_slice(&[a.stride, a.offset as u32, a.buffer.unwrap_or(0)]);
                 }
                 _ => {
                     let fmt = match kind {
-                        Some(AttribKind::Int) => format::R32G32B32A32_SINT,
-                        Some(AttribKind::Uint) => format::R32G32B32A32_UINT,
-                        _ => format::R32G32B32A32_FLOAT,
+                        AttribKind::Int => format::R32G32B32A32_SINT,
+                        AttribKind::Uint => format::R32G32B32A32_UINT,
+                        AttribKind::Float => format::R32G32B32A32_FLOAT,
                     };
-                    elements.extend_from_slice(&[0, !0, loc as u32, fmt]);
-                    buffers.extend_from_slice(&[16, (loc * 16) as u32, current]);
+                    elements.extend_from_slice(&[0, !0, i as u32, fmt]);
+                    buffers.extend_from_slice(&[16, loc * 16, current]);
                 }
             }
         }

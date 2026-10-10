@@ -457,3 +457,51 @@ fn sync_objects() {
     assert_eq!(c.fence_sync(0x1234, 0), 0);
     assert_eq!(c.get_error(), gl::INVALID_ENUM);
 }
+
+#[test]
+fn attributes_at_scattered_locations() {
+    // Locations 0, 3 and 5 (none between): two arrays, interleaved with
+    // an unused attribute between them, and a current value. The vertex
+    // shader reads its inputs packed, as Gallium's drivers take them.
+    let mut c = context(8, 8);
+    let v = c.create_shader(gl::VERTEX_SHADER);
+    c.shader_source(
+        v,
+        &["#version 300 es
+        in vec3 pos; in float life; in vec4 tint; out vec4 vColor;
+        void main() { gl_Position = vec4(pos, 1.0); gl_PointSize = 4.0; vColor = vec4(life, tint.g, tint.b, 1.0); }"],
+    );
+    c.compile_shader(v);
+    let f = c.create_shader(gl::FRAGMENT_SHADER);
+    c.shader_source(
+        f,
+        &["#version 300 es
+        precision mediump float; in vec4 vColor; out vec4 color; void main() { color = vColor; }"],
+    );
+    c.compile_shader(f);
+    let p = c.create_program();
+    c.attach_shader(p, v);
+    c.attach_shader(p, f);
+    c.bind_attrib_location(p, 0, "pos");
+    c.bind_attrib_location(p, 5, "life");
+    c.bind_attrib_location(p, 3, "tint");
+    c.link_program(p);
+    assert_eq!(c.get_programiv(p, gl::LINK_STATUS), 1, "{}", c.get_program_info_log(p));
+    c.use_program(p);
+    // Each vertex: pos (3), something unused (3), life (1).
+    let data: Vec<u8> = [0.0f32, 0.0, 0.0, 9.0, 9.0, 9.0, 1.0].iter().flat_map(|x| x.to_le_bytes()).collect();
+    let b = c.gen_buffer();
+    c.bind_buffer(gl::ARRAY_BUFFER, b);
+    c.buffer_data(gl::ARRAY_BUFFER, &data, gl::STATIC_DRAW);
+    let vao = c.gen_vertex_array();
+    c.bind_vertex_array(vao);
+    c.vertex_attrib_pointer(0, 3, gl::FLOAT, false, 28, 0);
+    c.vertex_attrib_pointer(5, 1, gl::FLOAT, false, 28, 24);
+    c.enable_vertex_attrib_array(0);
+    c.enable_vertex_attrib_array(5);
+    c.vertex_attrib4f(3, 0.0, 1.0, 0.0, 1.0);
+    c.draw_arrays(gl::POINTS, 0, 1);
+    no_error(&mut c);
+    let img = read_rgba(&mut c, 8, 8);
+    assert_eq!(img.chunks(4).filter(|p| p == &[255, 255, 0, 255]).count(), 16);
+}
