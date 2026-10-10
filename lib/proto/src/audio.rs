@@ -217,8 +217,9 @@ message! {
     /// State of the audio system.
     #[derive(Debug, Clone, PartialEq)]
     pub struct AudioStatus {
-        /// Output device ("virtio-snd", or "none" when there is no sound
-        /// hardware and audio is consumed silently in real time).
+        /// Output device ("VirtIO SoundCard (Linux)", or "none" when there
+        /// is no sound hardware and audio is consumed silently in real
+        /// time).
         pub device: String,
         pub rate: u32,
         pub channels: u32,

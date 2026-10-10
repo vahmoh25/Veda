@@ -85,7 +85,10 @@ Each one came from what the alternatives would cost.
    (`ports/linux`, modelled on Linux's Jailhouse and ACRN guests) makes it
    the *Veda platform*. In return the hypervisor emulates no instruction
    at all — no MMIO decoding, the largest source of hypervisor bugs — and
-   Linux boots in about 0.1 s.
+   Linux boots in about 0.1 s. The one device of the PC's own the guest
+   reaches is the keyboard controller (the i8042), whose two ports the
+   monitor reads and writes for it (the processor says which port and
+   what value: nothing to decode), all but what would reset the machine.
 
 4. **The kernel keeps to mechanism.** `vkernel` gives a monitor process
    `Guest` objects (a guest-physical address space of VMOs, and later the
@@ -160,6 +163,7 @@ hypercall is `vmcall` with the call in `rax` and arguments in `rbx`, `rcx`,
 | `BRIDGE` | an operation of the bridge |
 | `PCI_CONFIG_READ`, `PCI_CONFIG_WRITE` | the configuration space of a PCI function the guest has |
 | `PCI_MSI` | routes an MSI of a function to a processor and vector; gives the message the function sends |
+| `ISA_IRQ` | routes an interrupt of the keyboard controller's (the keyboard's, 1; the mouse's, 12) to a processor and vector |
 
 The monitor boots Linux through the x86 boot protocol's 64-bit entry
 (`vhv::linux`): the kernel at the address it prefers, the initramfs at the
@@ -186,8 +190,8 @@ Every PCI function goes to the driver VM but those Veda keeps: the disks
 it starts from (storage controllers, which are none of Linux's
 business), the platform's own functions (bridges, system peripherals,
 the SMBus, and the serial bus controllers, one of which holds the
-firmware's flash), and the devices Veda still has drivers for (sound
-cards, and the SPI controller of a laptop's speaker amplifiers: they
+firmware's flash), and the devices Veda still has drivers for (HD Audio
+controllers, and the SPI controller of a laptop's speaker amplifiers: they
 come with the firmware's descriptions of what is wired to them, see
 [Status](#status)). The boot options give it more
 (`drivervm.devices=VID:DID,...`: a sound card, in tests) or none
@@ -277,21 +281,37 @@ at once: a *watch* (`vrt::guest::watch`) is a file that is readable while
 a handle's signals are, so one `poll` takes a card's socket, a channel of
 Veda's and a ring's wake-up event.
 
-**Input** (`guest/input`). The keyboards, mice, tablets and touchscreens
-Linux drives, on USB, virtio or wherever its drivers find them, are input
-devices of Veda's window system: the driver reads Linux's event devices
+**Input** (`guest/input`). The keyboards, mice, touchpads, tablets and
+touchscreens Linux drives, on USB, PS/2, virtio or wherever its drivers
+find them, are input devices of Veda's window system: the driver reads Linux's event devices
 (evdev), each grabbed, so that nothing of Linux's acts on what is typed,
 and sends what a device reports at once (up to its `SYN_REPORT`) to the
 compositor's `input` service in one batch, as Veda's own drivers do: keys
 and buttons by evdev's codes, which are Veda's; relative motion and
 wheels; where an absolute pointer is, as a fraction of its range (a
-touchscreen's touch is the left button). Devices come and go with the
-kernel's uevents; keys a device held when it went, or whose releases
-Linux dropped, are let go. The keyboards' LEDs show Num Lock (the keypad
-types digits) and Caps Lock as the window system has it. Touchpads, whose
-positions are the pad's rather than the screen's, are not used yet. Linux
-acts on no key itself: it has no console, and SysRq is only
-`/proc/sysrq-trigger`'s.
+touchscreen's touch is the left button). A touchpad's fingers become the
+pointer's motion (one finger, faster as it goes faster), scrolling (two,
+the content following them) and clicks (a tap: one finger's the left
+button, two fingers' the right one; a physical click, the right button
+with two fingers on the pad). Devices come and go with the kernel's
+uevents; keys a device held when it went, or whose releases Linux
+dropped, are let go. The keyboards' LEDs show Num Lock (the keypad types
+digits) and Caps Lock as the window system has it. Linux acts on no key
+itself: it has no console, and SysRq is only `/proc/sysrq-trigger`'s.
+
+**PS/2.** The PC's keyboard controller goes to the driver VM too
+(`devmgr` hands its monitor the controller's data and command ports and
+its two interrupts; no DMA, so no IOMMU is needed). Linux's i8042, atkbd
+and psmouse drive it, a touchpad's protocol among them (Synaptics',
+ALPS', Elantech's...), and its devices reach Veda through `input`. The
+controller also drives the processor's reset line, so the monitor, which
+carries out each of the guest's accesses to the two ports, keeps what
+would pulse it or write it low (the output port's value goes with the
+reset and A20 lines high); the ports around them (0x61, with the NMIs'
+switches) the guest does not reach. The interrupts are Linux's IRQs 1 and
+12, in a domain of the Veda platform above x86's vector domain, routed
+by `ISA_IRQ` as MSIs are by `PCI_MSI`: edges, which the guest owes no
+end-of-interrupt.
 
 **Sound** (`guest/alsa`). Linux's first playback device, through ALSA's
 kernel interface (the PCM and control ioctls; no library), is attached to
@@ -512,14 +532,15 @@ where Veda stands:
 | Linux runs in Veda: hypervisor, monitor, platform, console, SMP, power | done (`tests/ui/drivervm.vts`) |
 | The bridge: Veda's IPC in the guest | done (`tests/ui/drivervm-bridge.vts`) |
 | Devices: IOMMU (DMA and interrupt remapping), PCI given to the guest | done (`tests/ui/iommu.vts`, `tests/ui/drivervm-pci.vts`) |
-| Audio: ALSA → `audiodev` (playback and recording) | done (`tests/ui/drivervm-audio.vts`, `drivervm-mic.vts`) |
+| Audio: ALSA → `audiodev` (playback and recording); virtio's sound devices Linux's, Veda's own driver of them and AC'97's gone | done (`tests/ui/drivervm-audio.vts`, `drivervm-mic.vts`, `music.vts`, `volume.vts`) |
 | Network and Wi-Fi: Linux's cards → `netdev`, nl80211 → `wlanphy` (managed radios); Veda's own network and radio drivers gone | done (`tests/ui/drivervm-net.vts`, `e1000e.vts`, `drivervm-wifi.vts`, `drivervm-wifi-recovery.vts`, `wifi-connect.vts`, `network-failover.vts`) |
 | Display: KMS → `displaydev`, the compositor's pictures shown as they are; Veda's own display drivers gone | done (`tests/ui/drivervm-display.vts`, `drivervm-display-restart.vts`, `drivervm-display-crash.vts`) |
 | GPU: the renderer in the guest, on Mesa's Gallium drivers over Linux's (virgl under QEMU; iris; softpipe); Veda's own GPU drivers gone | done (`tests/ui/drivervm-gpu.vts`, `drivervm-renderer.vts`, `drivervm-compose.vts`); Intel's integrated GPUs next (below) |
 | Input and USB: Linux's event devices → `input`; USB controllers whole (keyboards, mice, network and Bluetooth adapters); Veda's own USB and virtio input drivers gone | done (`tests/ui/usb-input.vts`, `drivervm-usb.vts`, `live-usb.vts`); touchpads later |
 | Every device Veda does not keep goes to the driver VM, which starts with Veda | done (every script, `tests/ui/iommu.vts`) |
 | Restart and device reset | done (`tests/ui/drivervm-restart.vts`); hangs, suspend later |
-| The firmware's ties: its descriptions of devices for the guest (ACPI: I2C touchpads and touchscreens, a laptop's speaker amplifiers on SPI, GPIO pins), PS/2 keyboards, sound | next (below) |
+| PS/2: the keyboard controller, its ports through the monitor, its interrupts routed; touchpads made a pointer; Veda's own PS/2 driver gone | done (every script's keyboard, `tests/ui/window-keys.vts`) |
+| The firmware's ties: its descriptions of devices for the guest (ACPI: I2C touchpads and touchscreens, a laptop's speaker amplifiers on SPI, GPIO pins), HD Audio | next (below) |
 
 **GPUs.** Linux's driver and Mesa's drive a GPU whole in the guest (lesson
 1): the guest's Linux has i915 and virtio-gpu, and its Mesa iris, virgl
@@ -532,20 +553,19 @@ a device the host's for now), their OpRegion (the panel's description,
 VBT) and stolen memory, and their place at 00:02.0. GPU memory is the
 guest's: a GPU needs a driver VM with the memory for it.
 
-**Still Veda's.** Sound cards (HD Audio, with a laptop's speaker
-amplifiers on its SPI controller; AC'97; virtio-snd) and PS/2 keyboards
-keep Veda's drivers until the guest gets the firmware's descriptions of
-what they need: which amplifiers are on which bus, the GPIO pins wired to
-them, the keyboard controller's ports and interrupts (the guest has no
-ACPI of its own). A laptop's I2C touchpad and touchscreen need such
-descriptions too, and nothing drives them yet.
+**Still Veda's.** HD Audio controllers (with a laptop's speaker
+amplifiers on its SPI controller) keep Veda's driver until the guest
+gets the firmware's descriptions of what they need: which amplifiers are
+on which bus, the GPIO pins wired to them (the guest has no ACPI of its
+own). A laptop's I2C touchpad and touchscreen need such descriptions
+too, and nothing drives them yet.
 
 ## Testing
 
 `cargo xtask linux` builds the guest's kernel, its toolchain and Mesa
 (the first image built builds them too, where the machine has the tools);
-every image includes the guest, and without it nothing but the disks,
-sound and a PS/2 keyboard is driven. Under QEMU, Veda runs
+every image includes the guest, and without it nothing but the disks and
+sound is driven. Under QEMU, Veda runs
 its guests on the processor's VMX, which KVM gives it nested
 (`kvm_intel nested=1`), and xtask's machine has an Intel IOMMU that
 remaps interrupts, its virtio functions behind it, as a PC's are

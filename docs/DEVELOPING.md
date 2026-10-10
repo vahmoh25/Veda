@@ -19,7 +19,6 @@ cargo xtask test               # host unit tests + in-system integration tests
 cargo xtask test --ui          # ... plus every GUI script in tests/ui
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
 cargo xtask run --disk-bus ahci             # QEMU with SATA disks
-cargo xtask run --sound ac97   # QEMU with an AC'97 sound card
 cargo xtask run --sound hda    # Intel HD Audio, as most PCs have
 cargo xtask script tests/ui/hda.vts         # HD Audio: music plays and reaches the recording
 cargo xtask run --input usb    # USB keyboard, tablet (behind a hub) and mouse, no PS/2

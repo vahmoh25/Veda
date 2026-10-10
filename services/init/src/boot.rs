@@ -31,14 +31,14 @@ pub mod roles {
 /// else loads data through them), then the network and Wi-Fi services
 /// (drivers attach to them as they start), device management and drivers,
 /// the window system, audio, the voice agent and the desktop shell.
-const SERVICES: [&str; 9] = ["vfs", "netd", "wlan", "devmgr", "ps2", "compositor", "audio", "agent", "shell"];
+const SERVICES: [&str; 8] = ["vfs", "netd", "wlan", "devmgr", "compositor", "audio", "agent", "shell"];
 
 /// Services that are started again if they exit. They hold no state other
 /// processes cannot recover: drivers reconnect to a restarted compositor,
 /// network or Wi-Fi service, and the shell rebuilds its windows. (The file
 /// system and the device manager are not restarted: one holds the user's
 /// files, the other owns the running drivers.)
-pub const RESTARTABLE: [&str; 7] = ["compositor", "shell", "audio", "ps2", "netd", "wlan", "agent"];
+pub const RESTARTABLE: [&str; 6] = ["compositor", "shell", "audio", "netd", "wlan", "agent"];
 
 fn dup(h: &Option<vrt::Vmo>) -> Option<Handle> {
     h.as_ref().and_then(|v| v.0.duplicate(None).ok())
@@ -69,11 +69,6 @@ fn handles_for(init: &Init, name: &str) -> Vec<(u32, Handle)> {
             ] {
                 out.extend(init_resource(init, kind, base, size).map(|h| (r, h)));
             }
-        }
-        // The legacy keyboard controller's ports and IRQ lines.
-        "ps2" => {
-            out.extend(init_resource(init, resource_kind::IOPORT, 0x60, 5).map(|h| (roles::IOPORT_RESOURCE, h)));
-            out.extend(init_resource(init, resource_kind::IRQ, 0, 24).map(|h| (roles::IRQ_RESOURCE, h)));
         }
         "compositor" => {
             out.extend(dup(&init.framebuffer).map(|h| (role::FRAMEBUFFER, h)));

@@ -164,7 +164,7 @@
  obj-y				+= coco/
 --- /dev/null
 +++ b/arch/x86/include/asm/veda_para.h
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,72 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * Veda's paravirtual platform, on which Linux runs as Veda's driver VM:
@@ -199,6 +199,11 @@
 + * message: the address in the low half, the data in the high half.
 + */
 +#define VEDA_HC_PCI_MSI		8
++/*
++ * rbx: the PC's legacy interrupt (the keyboard controller's: 1, 12), rcx:
++ * the processor's APIC id, rdx: the vector (0: it reaches nothing).
++ */
++#define VEDA_HC_ISA_IRQ		9
 +
 +#define VEDA_POWER_OFF		0
 +#define VEDA_POWER_RESTART	1
@@ -234,7 +239,7 @@
 +#endif /* _ASM_X86_VEDA_PARA_H */
 --- /dev/null
 +++ b/arch/x86/kernel/cpu/veda.c
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,297 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Veda's paravirtual platform: Linux as the driver VM of the Veda operating
@@ -248,9 +253,18 @@
 + * monitor announces what it has for the guest (the bridge's finished
 + * waits) with the hypervisor callback vector. The PCI functions Veda
 + * gives the guest are on the platform's PCI (arch/x86/pci/veda.c).
++ *
++ * The PC's keyboard controller (the i8042) the guest may have too
++ * (veda.i8042): its ports reach it through the monitor, and its
++ * interrupts, the keyboard's (1) and the mouse's (12), are Linux's IRQs of
++ * the same numbers, in a domain above x86's vector domain, which picks a
++ * processor and a vector for each; a hypercall routes the interrupt there.
++ * They are edges: the guest owes them no end-of-interrupt.
 + */
 +
 +#include <linux/init.h>
++#include <linux/irq.h>
++#include <linux/irqdomain.h>
 +#include <linux/kernel.h>
 +#include <linux/notifier.h>
 +#include <linux/panic_notifier.h>
@@ -260,10 +274,12 @@
 +#include <asm/acpi.h>
 +#include <asm/apic.h>
 +#include <asm/cpuid/api.h>
++#include <asm/hw_irq.h>
 +#include <asm/hypervisor.h>
 +#include <asm/i8259.h>
 +#include <asm/idtentry.h>
 +#include <asm/irq_regs.h>
++#include <asm/irqdomain.h>
 +#include <asm/mpspec.h>
 +#include <asm/reboot.h>
 +#include <asm/setup.h>
@@ -271,6 +287,14 @@
 +#include <asm/veda_para.h>
 +
 +static u32 veda_base;
++static bool veda_i8042 __initdata;
++
++static int __init veda_i8042_param(char *arg)
++{
++	veda_i8042 = true;
++	return 0;
++}
++early_param("veda.i8042", veda_i8042_param);
 +
 +/* The platform's base leaf; also before Linux looks for its hypervisor. */
 +static u32 veda_find(void)
@@ -388,7 +412,8 @@
 +	x86_platform.get_wallclock		= veda_get_wallclock;
 +	x86_platform.legacy.rtc			= 0;
 +	x86_platform.legacy.warm_reset		= 0;
-+	x86_platform.legacy.i8042		= X86_LEGACY_I8042_PLATFORM_ABSENT;
++	x86_platform.legacy.i8042		= veda_i8042 ? X86_LEGACY_I8042_EXPECTED_PRESENT
++							     : X86_LEGACY_I8042_PLATFORM_ABSENT;
 +
 +	legacy_pic				= &null_legacy_pic;
 +
@@ -410,6 +435,93 @@
 +	veda_pci_init_platform();
 +#endif
 +}
++
++static void veda_isa_route(struct irq_data *data, unsigned int vector)
++{
++	struct irq_cfg *cfg = irqd_cfg(data);
++
++	if (veda_hypercall(VEDA_HC_ISA_IRQ, data->hwirq, cfg->dest_apicid, vector, 0, 0))
++		pr_err_ratelimited("veda: IRQ %lu cannot be routed\n", data->hwirq);
++}
++
++static int veda_isa_set_affinity(struct irq_data *data, const struct cpumask *mask, bool force)
++{
++	int ret = irq_chip_set_affinity_parent(data, mask, force);
++
++	if (ret >= 0 && ret != IRQ_SET_MASK_OK_DONE)
++		veda_isa_route(data, irqd_cfg(data)->vector);
++	return ret;
++}
++
++static struct irq_chip veda_isa_chip = {
++	.name			= "Veda-ISA",
++	.irq_ack		= irq_chip_ack_parent,
++	.irq_set_affinity	= veda_isa_set_affinity,
++	.flags			= IRQCHIP_SKIP_SET_WAKE,
++};
++
++static int veda_isa_alloc(struct irq_domain *d, unsigned int virq, unsigned int nr_irqs, void *arg)
++{
++	struct irq_alloc_info *info = arg;
++	int ret;
++
++	if (nr_irqs != 1)
++		return -EINVAL;
++	ret = irq_domain_alloc_irqs_parent(d, virq, nr_irqs, arg);
++	if (ret)
++		return ret;
++	irq_domain_set_info(d, virq, info->hwirq, &veda_isa_chip, NULL, handle_edge_irq, NULL, "edge");
++	return 0;
++}
++
++static int veda_isa_activate(struct irq_domain *d, struct irq_data *data, bool reserve)
++{
++	veda_isa_route(data, irqd_cfg(data)->vector);
++	return 0;
++}
++
++static void veda_isa_deactivate(struct irq_domain *d, struct irq_data *data)
++{
++	veda_isa_route(data, 0);
++}
++
++static const struct irq_domain_ops veda_isa_domain_ops = {
++	.alloc		= veda_isa_alloc,
++	.free		= irq_domain_free_irqs_common,
++	.activate	= veda_isa_activate,
++	.deactivate	= veda_isa_deactivate,
++};
++
++/* The keyboard controller's IRQs, 1 and 12, if the guest has it. */
++static int __init veda_isa_init(void)
++{
++	static const unsigned int irqs[] = { 1, 12 };
++	struct irq_domain_info info = {
++		.ops		= &veda_isa_domain_ops,
++		.parent		= x86_vector_domain,
++		.hwirq_max	= 16,
++	};
++	struct irq_domain *d;
++
++	if (!veda_platform() || !veda_i8042)
++		return 0;
++	info.fwnode = irq_domain_alloc_named_fwnode("Veda-ISA");
++	if (!info.fwnode)
++		return -ENOMEM;
++	d = irq_domain_instantiate(&info);
++	if (IS_ERR(d))
++		return PTR_ERR(d);
++	for (int i = 0; i < ARRAY_SIZE(irqs); i++) {
++		struct irq_alloc_info alloc;
++
++		init_irq_alloc_info(&alloc, NULL);
++		alloc.hwirq = irqs[i];
++		if (__irq_domain_alloc_irqs(d, irqs[i], 1, NUMA_NO_NODE, &alloc, false, NULL) != irqs[i])
++			pr_err("veda: no IRQ %u for the keyboard controller\n", irqs[i]);
++	}
++	return 0;
++}
++arch_initcall(veda_isa_init);
 +
 +/* Without interrupt remapping, in physical destination mode. */
 +static bool __init veda_x2apic_available(void)

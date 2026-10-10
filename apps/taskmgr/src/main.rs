@@ -38,9 +38,10 @@ const SAMPLE_NS: u64 = 1_000_000_000;
 /// launcher (which knows) cannot be asked.
 const CORE_SERVICES: &[&str] = &["init", "vfs", "devmgr", "compositor", "audio", "shell"];
 
-/// True for device drivers (shown with a chip icon).
+/// True for device drivers (shown with a chip icon), the driver VM's
+/// monitor among them.
 fn is_driver(name: &str) -> bool {
-    name.starts_with("virtio-") || name == "ps2"
+    name.starts_with("virtio-") || name == "drivervm"
 }
 
 /// One row of the process table.

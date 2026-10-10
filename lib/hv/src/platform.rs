@@ -76,6 +76,12 @@ pub mod hypercall {
     /// in the high half. Routing the same MSI again moves it; the message
     /// stays the same.
     pub const PCI_MSI: u64 = 8;
+    /// Routes the PC's legacy interrupt `rbx` (the i8042's, when the
+    /// platform gives the guest the keyboard controller: 1 the keyboard's,
+    /// 12 the mouse's) to vector `rdx` of the processor with APIC id
+    /// `rcx` (0: to nothing). The interrupts are edges: the guest owes
+    /// them no end-of-interrupt. Routing one again moves it.
+    pub const ISA_IRQ: u64 = 9;
 }
 
 /// The message of a [`hypercall::PCI_MSI`], as its result holds it.

@@ -14,7 +14,9 @@
 //! services drivers attach to.
 //!
 //! It gives the guest the PCI functions devmgr hands over (`pci`): their
-//! DMA into the guest's memory only, their BARs, their interrupts.
+//! DMA into the guest's memory only, their BARs, their interrupts; and
+//! the PC's keyboard controller, if devmgr hands its ports and interrupts
+//! over (`i8042`).
 //!
 //! The guest's life is this process's: when Linux powers the machine off,
 //! restarts it, crashes or does something the platform does not allow,
@@ -34,6 +36,7 @@
 extern crate alloc;
 
 mod bridge;
+mod i8042;
 mod machine;
 mod memory;
 mod pci;
@@ -42,7 +45,7 @@ mod registry;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use vrt::object::{Channel, Resource, Vmo};
+use vrt::object::{Channel, Interrupt, IoPorts, Resource, Vmo};
 use vrt::println;
 
 use machine::{Config, Machine};
@@ -53,6 +56,13 @@ vrt::entry!(main);
 const HYPERVISOR_RESOURCE: u32 = vabi::startup::role::USER + 1;
 /// Role of the `pcidev` channels of the guest's PCI functions (one each).
 const DEVICE_ROLE: u32 = vabi::startup::role::USER + 2;
+/// Roles of the keyboard controller's data port, its command port, and
+/// its keyboard's and mouse's interrupts, if devmgr gives the guest the
+/// controller.
+const I8042_DATA_ROLE: u32 = vabi::startup::role::USER + 3;
+const I8042_COMMAND_ROLE: u32 = vabi::startup::role::USER + 4;
+const I8042_KEYBOARD_ROLE: u32 = vabi::startup::role::USER + 5;
+const I8042_MOUSE_ROLE: u32 = vabi::startup::role::USER + 6;
 
 /// Maps the system image (the initrd), where the guest's kernel is.
 fn system_image() -> Option<initrd::Archive<'static>> {
@@ -97,7 +107,18 @@ fn main() -> i32 {
     let config = config();
     let devices: Vec<Channel> =
         core::iter::from_fn(|| vrt::env::take_handle(DEVICE_ROLE)).map(Channel::from_handle).collect();
-    match Machine::start(&hypervisor, kernel.data, initramfs.data, devices, &config) {
+    let take = |role| vrt::env::take_handle(role);
+    let i8042 =
+        match (take(I8042_DATA_ROLE), take(I8042_COMMAND_ROLE), take(I8042_KEYBOARD_ROLE), take(I8042_MOUSE_ROLE)) {
+            (Some(data), Some(command), Some(keyboard), Some(mouse)) => Some(i8042::I8042::new(
+                IoPorts::from_handle(data),
+                IoPorts::from_handle(command),
+                Interrupt::from_handle(keyboard),
+                Interrupt::from_handle(mouse),
+            )),
+            _ => None,
+        };
+    match Machine::start(&hypervisor, kernel.data, initramfs.data, devices, i8042, &config) {
         Ok(machine) => machine.wait(),
         Err(e) => {
             let e: String = e;

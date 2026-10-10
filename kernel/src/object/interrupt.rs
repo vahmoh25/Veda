@@ -5,9 +5,10 @@
 //! waits for `SIGNALED`, services its device and calls `irq_ack`, which
 //! clears the signal and unmasks the line.
 //!
-//! An MSI may instead be bound to a virtual processor (the device is a
-//! guest's): then it raises a vector of the processor's local APIC, and
-//! the guest's driver handles it as on a machine of its own.
+//! An edge (an MSI, or an edge-triggered line) may instead be bound to a
+//! virtual processor (the device is a guest's): then it raises a vector of
+//! the processor's local APIC, and the guest's driver handles it as on a
+//! machine of its own.
 
 use alloc::sync::{Arc, Weak};
 
@@ -89,14 +90,20 @@ impl Interrupt {
     }
 
     /// Makes the interrupt raise `vector` at `vcpu`'s local APIC from now
-    /// on, instead of its signal. Only MSIs can be bound (an edge needs no
-    /// end-of-interrupt from the guest).
+    /// on, instead of its signal. Only edges can be bound, MSIs and
+    /// edge-triggered I/O APIC inputs (an edge needs no end-of-interrupt
+    /// from the guest).
     pub fn bind(&self, vcpu: &Arc<Vcpu>, vector: u8) -> bool {
-        if !matches!(self.source, Source::Msi) {
+        if matches!(self.source, Source::Gsi { level: true, .. }) {
             return false;
         }
         *self.target.lock() = Some((Arc::downgrade(vcpu), vector));
         true
+    }
+
+    /// Makes the interrupt signal again, raising nothing at a processor.
+    pub fn unbind(&self) {
+        *self.target.lock() = None;
     }
 }
 

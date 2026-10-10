@@ -169,12 +169,19 @@ impl Devices {
     }
 
     /// Routes MSI `index` of guest function `function` to `vector` of
-    /// `vcpu`: the message the function sends for it.
+    /// `vcpu`: the message the function sends for it. Vector 0: the MSI
+    /// reaches nothing any more (the guest freed it).
     pub fn msi(&self, function: u64, index: u64, vcpu: &Vcpu, vector: u64) -> u64 {
         let (Some(d), Ok(vector)) = (self.device(function), u8::try_from(vector)) else {
             return vhv::platform::error::INVALID;
         };
         let mut s = d.state.lock();
+        if vector == 0 {
+            if let Some((irq, _)) = s.msis.get(&index) {
+                let _ = vcpu.bind_interrupt(irq, 0);
+            }
+            return 0;
+        }
         if !s.msis.contains_key(&index) {
             match s.pci.alloc_msi() {
                 Ok(Ok((irq, msg))) => {

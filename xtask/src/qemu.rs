@@ -162,8 +162,7 @@ pub struct VmConfig {
     /// Show a window (`false` = headless).
     pub display: bool,
     pub audio: bool,
-    /// The sound card: `virtio` (the default), `ac97` or `hda` (Intel HD
-    /// Audio).
+    /// The sound card: `virtio` (the default) or `hda` (Intel HD Audio).
     pub sound: String,
     /// Record guest audio to this WAV file instead of playing it.
     pub audio_wav: Option<PathBuf>,
@@ -373,7 +372,6 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         // runs (WAV) have none, so a test microphone can take its place.
         let streams = if cfg.audio_wav.is_some() { 1 } else { 2 };
         match cfg.sound.as_str() {
-            "ac97" => cmd.args(["-device", "AC97,audiodev=audio0"]),
             // The ICH9's HD Audio controller with a codec that has a line
             // output and, with the host's sound system, a line input.
             "hda" => {

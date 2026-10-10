@@ -101,6 +101,10 @@ pub fn guest_attach_device(guest: RawHandle, res: RawHandle, device: usize) -> S
 pub fn vcpu_bind_interrupt(vcpu: RawHandle, interrupt: RawHandle, vector: usize) -> SysResult {
     let v = get_vcpu(vcpu, Rights::SIGNAL)?;
     let irq = get_interrupt(interrupt, Rights::WRITE)?;
+    if vector == 0 {
+        irq.unbind();
+        return ok(0);
+    }
     let vector = u8::try_from(vector).ok().filter(|&v| v >= 32).ok_or(Error::InvalidArgs)?;
     if !irq.bind(&v, vector) {
         return Err(Error::NotSupported);

@@ -65,8 +65,8 @@ RUN OPTIONS:
     --gpu, --no-gpu     Give QEMU's machine a 3D GPU (virtio-gpu with virgl, rendering on the
                         host's GPU) or not (default: if this QEMU has one)
     --no-audio          Do not attach a sound device
-    --sound CARD        The sound card: virtio (default), ac97 or hda (Intel HD Audio, as most
-                        PCs have)
+    --sound CARD        The sound card: virtio (default) or hda (Intel HD Audio, as most PCs
+                        have)
     --serial FILE       Write the serial console to FILE instead of the terminal
     --gdb               Wait for a debugger on localhost:1234
     --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
@@ -153,8 +153,8 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--no-audio" => o.vm.audio = false,
             "--sound" => {
                 let card = value(arg)?;
-                if !matches!(card.as_str(), "virtio" | "ac97" | "hda") {
-                    return Err(format!("--sound: unknown card '{card}' (virtio, ac97 or hda)"));
+                if !matches!(card.as_str(), "virtio" | "hda") {
+                    return Err(format!("--sound: unknown card '{card}' (virtio or hda)"));
                 }
                 o.vm.sound = card;
             }
@@ -298,7 +298,7 @@ fn build_system(o: &Options) -> Result<System> {
         }
         None => util::status(
             "Note",
-            "no driver VM in the image: nothing but the disks, sound and a PS/2 keyboard is driven \
+            "no driver VM in the image: nothing but the disks and sound is driven \
              (`cargo xtask linux` builds its Linux)",
         ),
     }
@@ -610,6 +610,8 @@ fn test(o: &Options) -> Result {
         }
         util::run(&mut cmd)?;
     }
+    // The driver VM's programs' logic (touchpads), on Linux as they run.
+    util::run(util::cargo().args(["test", "--quiet", "--package", "guest-input", "--target", linux::GUEST_TARGET]))?;
     // And through Veda's renderer, where it has been built: on softpipe,
     // and on virgl over virglrenderer's test server, as the driver VM's
     // renderer renders under QEMU.

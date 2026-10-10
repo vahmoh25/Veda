@@ -474,7 +474,7 @@ fn system_test(sh: &mut Shell) -> impl Fn(u64, &str) -> bool + use<> {
     };
     move |koid, name| match &apps {
         Some(apps) => !apps.contains(&koid),
-        None => CORE_SERVICES.contains(&name) || name.starts_with("virtio-") || name == "ps2",
+        None => CORE_SERVICES.contains(&name) || name.starts_with("virtio-") || name == "drivervm",
     }
 }
 

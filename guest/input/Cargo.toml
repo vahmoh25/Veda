@@ -1,6 +1,6 @@
 [package]
 name = "guest-input"
-description = "Veda's input driver for Linux: Linux's keyboards, mice, tablets and touchscreens as Veda's input devices"
+description = "Veda's input driver for Linux: Linux's keyboards, mice, touchpads, tablets and touchscreens as Veda's input devices"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,6 @@ license.workspace = true
 [[bin]]
 name = "input"
 path = "src/main.rs"
-test = false
 bench = false
 
 [dependencies]

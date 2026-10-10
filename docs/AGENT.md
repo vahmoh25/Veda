@@ -130,8 +130,11 @@ is closed.
   echo itself lets bursts through at the start of a sentence), and opens
   only when both are louder than their echo: a canceller that loses track
   of the echo for a moment makes the cleaned microphone louder, but only
-  someone talking makes the recorded one louder. Music on its own is not
-  held back.
+  someone talking makes the recorded one louder. Nor does it learn your
+  voice as echo: the recorded microphone louder than its echo for longer
+  than a burst is someone talking, even while the canceller holds the
+  start of it back (it suppresses what starts while the agent talks).
+  Music on its own is not held back.
 * **Doing.** The language model calls functions (below); the agent service
   runs them on a worker thread and answers with JSON results. A function
   that needs your consent answers "waiting for approval", and the outcome

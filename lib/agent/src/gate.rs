@@ -31,6 +31,14 @@
 //! makes the first louder but not the second; only someone talking adds
 //! sound to the room.
 //!
+//! Only echo teaches the gate. While the recorded microphone is louder than
+//! its echo can be, nothing is learnt until that ends: a burst shorter than
+//! speech was echo after all, anything longer someone talking — whom the
+//! canceller may hold back for a moment (it suppresses what starts while
+//! the agent talks), so that the cancelled microphone does not show it yet.
+//! Learning that as echo would set the echo expected above the voice,
+//! which then could never open the gate.
+//!
 //! Levels are in dBFS, computed by the caller.
 
 use alloc::collections::VecDeque;
@@ -120,10 +128,13 @@ pub struct EchoGate {
     /// The echo in the cancelled microphone and in the recorded one.
     coupling: Coupling,
     raw_coupling: Coupling,
-    /// The current run of packets loud enough to be the user, as
-    /// (cancelled, recorded) levels relative to what plays: echo after all
-    /// if the run ends before the gate opens.
-    suspects: Vec<(f32, f32)>,
+    /// The current run of packets in which the recorded microphone is
+    /// louder than its echo can be, as (cancelled, recorded) levels
+    /// relative to what plays — the first `OPEN_PACKETS` of them: echo
+    /// after all if the run ends sooner.
+    burst: Vec<(f32, f32)>,
+    /// Packets in a row that sound like the user.
+    talking: u32,
     hangover: u32,
     open: bool,
     /// The cancelled echo expected for the last packet (dBFS).
@@ -146,7 +157,8 @@ impl EchoGate {
             playing: VecDeque::with_capacity(ECHO_SPAN),
             coupling: Coupling::new(),
             raw_coupling: Coupling::new(),
-            suspects: Vec::with_capacity(OPEN_PACKETS as usize),
+            burst: Vec::with_capacity(OPEN_PACKETS as usize),
+            talking: 0,
             hangover: 0,
             open: false,
             expected_db: -100.0,
@@ -193,18 +205,18 @@ impl EchoGate {
             // The voice quiet for the whole echo span: none of it can be in
             // the microphone.
             self.open = false;
-            self.suspects.clear();
+            self.burst.clear();
+            self.talking = 0;
             self.expected_db = -100.0;
             return Verdict::Pass;
         }
         let expected = loudest + self.coupling.estimate();
         let expected_raw = loudest + self.raw_coupling.estimate();
         self.expected_db = expected;
-        let speech = mic_db > SPEECH_FLOOR_DB
-            && mic_db > expected + MARGIN_DB
-            // Someone talking adds sound to the room; a canceller that
-            // lost track of the echo does not.
-            && raw_db > expected_raw + RAW_MARGIN_DB;
+        // Someone talking adds sound to the room; a canceller that lost
+        // track of the echo does not.
+        let loud = raw_db > expected_raw + RAW_MARGIN_DB;
+        let speech = mic_db > SPEECH_FLOOR_DB && mic_db > expected + MARGIN_DB && loud;
         if self.open {
             if speech || mic_db > expected + MARGIN_DB / 2.0 {
                 self.hangover = HANGOVER_PACKETS;
@@ -216,23 +228,32 @@ impl EchoGate {
             }
             self.open = false;
         }
-        if speech {
-            self.suspects.push((mic_db - loudest, raw_db - loudest));
-            if self.suspects.len() >= OPEN_PACKETS as usize {
-                self.open = true;
-                self.hangover = HANGOVER_PACKETS;
-                self.openings += 1;
-                self.suspects.clear();
-                return Verdict::Open;
+        self.talking = if speech { self.talking + 1 } else { 0 };
+        if self.talking >= OPEN_PACKETS {
+            self.open = true;
+            self.hangover = HANGOVER_PACKETS;
+            self.openings += 1;
+            self.talking = 0;
+            self.burst.clear();
+            return Verdict::Open;
+        }
+        if loud {
+            // Someone talking, or a burst of echo louder than any before:
+            // which one shows when it ends.
+            if self.burst.len() < OPEN_PACKETS as usize {
+                self.burst.push((mic_db - loudest, raw_db - loudest));
             }
         } else {
             // Holding: what the microphone hears now is (at most) echo,
-            // which teaches the gate how loud the echo gets. So was a run
+            // which teaches the gate how loud the echo gets. So was a burst
             // too short to be speech: the echo can be that loud.
-            for (c, r) in self.suspects.drain(..) {
-                self.coupling.learn(c);
-                self.raw_coupling.learn(r);
+            if self.burst.len() < OPEN_PACKETS as usize {
+                for &(c, r) in &self.burst {
+                    self.coupling.learn(c);
+                    self.raw_coupling.learn(r);
+                }
             }
+            self.burst.clear();
             self.coupling.learn(mic_db - loudest);
             self.raw_coupling.learn(raw_db - loudest);
         }
@@ -258,6 +279,20 @@ mod tests {
         raw: impl Fn(usize) -> f32,
         user: impl Fn(usize) -> f32,
     ) -> Vec<Verdict> {
+        run_held_back(gate, packets, delay, coupling, raw, user, |_| 0.0)
+    }
+
+    /// The same, with the canceller taking `held_back` dB off the user's
+    /// voice, packet by packet.
+    fn run_held_back(
+        gate: &mut EchoGate,
+        packets: usize,
+        delay: usize,
+        coupling: impl Fn(usize) -> f32,
+        raw: impl Fn(usize) -> f32,
+        user: impl Fn(usize) -> f32,
+        held_back: impl Fn(usize) -> f32,
+    ) -> Vec<Verdict> {
         let playing = |i: usize| {
             if i >= packets.saturating_sub(10) {
                 -100.0
@@ -272,7 +307,7 @@ mod tests {
         (0..packets)
             .map(|i| {
                 let source = if i >= delay { playing(i - delay) } else { -100.0 };
-                let mic = sum(source + coupling(i), user(i));
+                let mic = sum(source + coupling(i), user(i) - held_back(i));
                 let recorded = sum(source + raw(i), user(i));
                 gate.packet(mic, recorded, playing(i), playing(i))
             })
@@ -338,6 +373,30 @@ mod tests {
         let opened = v.iter().position(|&x| x == Verdict::Open).expect("the gate never opened");
         assert!((150..160).contains(&opened), "opened at packet {opened}");
         assert!(v[opened + 1..380].iter().all(|&x| x == Verdict::Through), "{:?}", &v[opened..]);
+    }
+
+    #[test]
+    fn the_user_held_back_at_first_is_not_learnt_as_echo() {
+        // The user talks in syllables (400 ms of every second) at -10 dBFS
+        // from packet 150. The canceller suppresses every fourth packet of
+        // the first syllable (by 30 dB, echo and voice), so that it never
+        // sounds like speech for long enough; that is no echo to learn, and
+        // the next syllable opens the gate.
+        let mut g = EchoGate::new();
+        let talking = |i: usize| i >= 150 && (i - 150) % 50 < 20;
+        let suppressed = |i: usize| talking(i) && i < 200 && i.is_multiple_of(4);
+        let v = run_held_back(
+            &mut g,
+            400,
+            10,
+            |i| if suppressed(i) { -48.0 } else { -18.0 },
+            |_| -4.0,
+            |i| if talking(i) { -10.0 } else { -100.0 },
+            |i| if suppressed(i) { 30.0 } else { 0.0 },
+        );
+        let opened = v.iter().position(|&x| x == Verdict::Open).expect("the gate never opened");
+        assert!((200..210).contains(&opened), "opened at packet {opened}: {v:?}");
+        assert!(g.coupling_db().0 < -12.0, "learnt {:?}", g.coupling_db());
     }
 
     #[test]

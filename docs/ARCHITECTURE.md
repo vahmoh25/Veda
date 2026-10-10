@@ -15,9 +15,9 @@ that communicate over kernel channels.
  ├──────────────────────────────────────────────────────────────────────────┤
  │ Services       init (registry, launcher) · vfs · compositor · audio ·    │
  │                agent (the voice agent) · netd · wlan                     │
- │ Drivers        virtio-blk · ahci (disks) · hda · virtio-snd · ac97       │
- │                (sound) · ps2 · pci · the driver VM (Linux's: GPUs,       │
- │                displays, input, USB, networks, Wi-Fi …)                  │
+ │ Drivers        virtio-blk · ahci (disks) · hda (sound) · pci · the       │
+ │                driver VM (Linux's: GPUs, displays, input, USB,           │
+ │                networks, Wi-Fi, sound …)                                 │
  ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
  │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
  ├──────────────────────────────────────────────────────────────────────────┤
@@ -44,8 +44,9 @@ that communicate over kernel channels.
 3. The kernel initialises memory, ACPI, APICs, timers and the other CPUs, then
    starts `bin/init.exe` from the initrd (the only program it loads itself).
 4. `init` starts the system services and the desktop shell, then supervises
-   them: the window system, the shell, audio and the PS/2 driver are restarted
-   if they crash (at most three times a minute). Drivers reconnect to a
+   them: the window system, the shell, audio, the network and Wi-Fi services
+   and the agent are restarted if they crash (at most three times a
+   minute). Drivers reconnect to a
    restarted compositor through the registry, which queues connections
    until a service registers again.
 
@@ -218,7 +219,7 @@ has ended and left its stack, which is how thread libraries join threads.
   `devmgr` holds for all of them.
 * **The driver VM.** Every other device goes to Linux in a virtual machine
   ([the driver VM](DRIVERVM.md)): all but the disks, the platform's own
-  functions and the devices Veda still drives itself (sound). `devmgr`
+  functions and the devices Veda still drives itself (HD Audio). `devmgr`
   hands their `pcidev` channels to `drivervm`, which gives them to its
   guest whole, their DMA confined to the guest's memory by the IOMMU. It
   starts when the processors run virtual machines and an IOMMU confines
@@ -595,12 +596,14 @@ renders under QEMU.
 
 ## Audio
 
-* `hda` (Intel High Definition Audio: most PCs, QEMU's `intel-hda`,
-  VirtualBox's HD Audio), `virtio-snd` (QEMU) and `ac97` (VirtualBox's
-  AC'97 card, also in QEMU) drive the sound cards, for playback and the
-  microphone. They connect to the audio service's private `audiodev`
-  protocol, so the service also runs without sound hardware (a null
-  output then consumes audio in real time).
+* `hda` (Intel High Definition Audio: most PCs, QEMU's `intel-hda`)
+  drives the sound cards, for playback and the microphone; QEMU's
+  virtio sound device is Linux's, in [the driver VM](DRIVERVM.md), whose
+  `alsa` serves it (HD Audio goes there too once the guest has the
+  firmware's descriptions of what a laptop wires to it). They connect to
+  the audio service's private `audiodev` protocol, so the service also
+  runs without sound hardware (a null output then consumes audio in real
+  time).
 * **HD Audio.** `devmgr` starts `hda` for the PCI class of HD Audio
   controllers, and for Intel's since Skylake by their IDs (with an audio
   DSP beside them they call themselves audio devices instead). The

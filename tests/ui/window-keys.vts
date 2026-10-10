@@ -1,8 +1,13 @@
 # Window shortcuts (1280x800) on the Text Editor: Super+Right snaps it to the
 # right half, Super+Up maximises it, Super+Down restores it, Super+D shows the
-# desktop and brings the window back, and Super+Down minimises it.
+# desktop and brings the window back, and Super+Down minimises it. The keys
+# come from QEMU's PS/2 keyboard, on the keyboard controller, which the
+# driver VM has: Linux's i8042 and atkbd drive it, its ports reached
+# through the monitor, its interrupts routed to the guest.
 boot-cmdline "run=editor"
 wait-serial "started editor" 60
+wait-serial "input: AT Translated Set 2 keyboard (i8042 0001:0001): keyboard" 60
+expect-serial "serio: i8042 KBD port at 0x60,0x64 irq 1"
 wait 6
 key meta_l-right
 wait 2
@@ -22,3 +27,5 @@ shot target/veda/keys-5-back.png
 key meta_l-down
 wait 2
 shot target/veda/keys-6-minimized.png
+reject-serial "touched I/O port"
+reject-serial "cannot be routed"

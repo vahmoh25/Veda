@@ -131,7 +131,7 @@ protocol! {
         6 => fn alloc_msi() -> Result<(Interrupt, MsiAddress), PciError>;
         /// A resource that allows allocating DMA (physically contiguous) memory.
         7 => fn dma_resource() -> Result<Resource, PciError>;
-        /// The ports of an I/O BAR (older devices such as AC'97 sound).
+        /// The ports of an I/O BAR (older devices').
         8 => fn map_io_bar(index: u8) -> Result<IoPorts, PciError>;
         /// The devices the firmware describes below this one; none if it
         /// describes none (or there are no ACPI tables).

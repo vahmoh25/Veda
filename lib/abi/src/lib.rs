@@ -247,8 +247,10 @@ pub mod nr {
     /// if another guest has the function.
     pub const GUEST_ATTACH_DEVICE: usize = 97;
     /// `vcpu_bind_interrupt(vcpu, interrupt, vector)`: the interrupt (an
-    /// MSI) raises `vector` (32 to 255) at the virtual processor's local
-    /// APIC from now on, instead of signaling. Binding it again moves it.
+    /// edge: an MSI, or an edge-triggered line) raises `vector` (32 to 255)
+    /// at the virtual processor's local APIC from now on, instead of
+    /// signaling. Binding it again moves it; vector 0 unbinds it (it
+    /// signals again).
     pub const VCPU_BIND_INTERRUPT: usize = 98;
 }
 

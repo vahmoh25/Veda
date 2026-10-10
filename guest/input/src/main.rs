@@ -5,17 +5,19 @@
 //!
 //! Each event device is opened as it appears (the kernel's uevents say
 //! when) and grabbed, so that nothing of Linux's acts on what is typed, and
-//! one thread waits on them and the uevents. What a device reports at once (up to its
-//! `SYN_REPORT`) goes to the service in one batch: keys and buttons by
-//! evdev's codes, which are Veda's; relative motion and wheels; where an
-//! absolute pointer is (a tablet's, a touchscreen's, whose touch is the
-//! left button), as a fraction of its range. Keys a device held when it
-//! went away, or whose releases Linux dropped (its queue overflowed), are
-//! let go. The keyboards' LEDs show what the window system's keyboard
-//! does: Num Lock always (the keypad types digits), Caps Lock while it is
-//! on (each press of it, on any keyboard here, turns it on or off).
-//! Touchpads, whose positions are the pad's rather than the screen's, are
-//! not used yet.
+//! one thread waits on them and the uevents. What a device reports at once
+//! (up to its `SYN_REPORT`) goes to the service in one batch: keys and
+//! buttons by evdev's codes, which are Veda's; relative motion and wheels;
+//! where an absolute pointer is (a tablet's, a touchscreen's, whose touch
+//! is the left button), as a fraction of its range; a touchpad's fingers as
+//! a pointer's motion, scrolling and clicks (`touchpad`). Keys a device held
+//! when it went away, or whose releases Linux dropped (its queue
+//! overflowed), are let go. The keyboards' LEDs show what the window
+//! system's keyboard does: Num Lock always (the keypad types digits), Caps
+//! Lock while it is on (each press of it, on any keyboard here, turns it on
+//! or off).
+
+mod touchpad;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -27,6 +29,8 @@ use std::time::Duration;
 
 use guest_sys::{POLLIN, PollFd, ioc, ioctl, poll_many};
 use vproto::input::{InputEvent, InputSink, keys};
+
+use touchpad::{Axis, Touchpad};
 
 // Linux's input events (linux/input-event-codes.h).
 const EV_SYN: u16 = 0x00;
@@ -101,7 +105,7 @@ enum Pointer {
     Tablet,
     /// Where on the screen, touched: the touch is the left button.
     Touchscreen,
-    /// Where on the pad: not used yet.
+    /// Where on the pad: a touchpad's.
     Touchpad,
 }
 
@@ -119,6 +123,8 @@ struct Device {
     left: bool,
     /// Whether it has Num Lock's or Caps Lock's LED.
     leds: bool,
+    /// A touchpad's fingers, made the pointer's motion.
+    touchpad: Option<Touchpad>,
     /// What it reported since its last report.
     pending: Vec<InputEvent>,
     moved: bool,
@@ -176,13 +182,14 @@ impl Device {
         } else {
             Pointer::None
         };
-        // An axis: where it is, its minimum and its maximum.
-        let axis = |a: u16| -> (i32, i32, i32) {
+        // An axis: where it is, its minimum and maximum, its units a
+        // millimetre.
+        let axis = |a: u16| -> (i32, Axis) {
             let info = get(&file, EVIOCGABS + a as u8, 24).unwrap_or_else(|_| vec![0; 24]);
             let field = |i: usize| i32::from_ne_bytes([info[i * 4], info[i * 4 + 1], info[i * 4 + 2], info[i * 4 + 3]]);
-            (field(0), field(1), field(2))
+            (field(0), Axis { min: field(1), max: field(2), resolution: field(5) })
         };
-        let ((x, x_min, x_max), (y, y_min, y_max)) = (axis(ABS_X), axis(ABS_Y));
+        let ((x, x_axis), (y, y_axis)) = (axis(ABS_X), axis(ABS_Y));
         let mut what = Vec::new();
         if has(&keys, KEY_A) {
             what.push("keyboard");
@@ -193,7 +200,7 @@ impl Device {
         match pointer {
             Pointer::Tablet => what.push("tablet"),
             Pointer::Touchscreen => what.push("touchscreen"),
-            Pointer::Touchpad => what.push("touchpad, not used yet"),
+            Pointer::Touchpad => what.push("touchpad"),
             Pointer::None => {}
         }
         if what.is_empty() && (0..KEY_CNT as u16).any(|k| is_key(k) && has(&keys, k)) {
@@ -212,11 +219,12 @@ impl Device {
             file,
             name,
             pointer,
-            x: (x_min, x_max),
-            y: (y_min, y_max),
+            x: (x_axis.min, x_axis.max),
+            y: (y_axis.min, y_axis.max),
             at: (x, y),
             left: has(&keys, keys::BTN_LEFT),
             leds: has(&leds, LED_NUML) || has(&leds, LED_CAPSL),
+            touchpad: (pointer == Pointer::Touchpad).then(|| Touchpad::new(x_axis, y_axis)),
             pending: Vec::new(),
             moved: false,
             motion: (0, 0),
@@ -238,54 +246,80 @@ impl Device {
                 Err(e) => return Err(e),
             };
             for e in buf[..n].as_chunks::<EVENT_SIZE>().0 {
+                let field = |at: usize| i64::from_ne_bytes(e[at..at + 8].try_into().unwrap_or_default());
+                let time_us = (field(0) * 1_000_000 + field(8)) as u64;
                 let kind = u16::from_ne_bytes([e[16], e[17]]);
                 let code = u16::from_ne_bytes([e[18], e[19]]);
                 let value = i32::from_ne_bytes([e[20], e[21], e[22], e[23]]);
-                batches.extend(self.event(kind, code, value));
+                batches.extend(self.event(kind, code, value, time_us));
             }
         }
     }
 
-    /// Takes an event: a batch at the end of a report.
-    fn event(&mut self, kind: u16, code: u16, value: i32) -> Option<Vec<InputEvent>> {
+    /// Takes an event (at `time_us`, Linux's): a batch at the end of a
+    /// report.
+    fn event(&mut self, kind: u16, code: u16, value: i32, time_us: u64) -> Option<Vec<InputEvent>> {
         if self.dropped {
             if (kind, code) == (EV_SYN, SYN_REPORT) {
                 self.dropped = false;
-                return self.resync();
+                return self.resync(time_us);
             }
             return None;
         }
         match (kind, code) {
-            (EV_SYN, SYN_REPORT) => return self.report(),
+            (EV_SYN, SYN_REPORT) => {
+                if let Some(t) = &mut self.touchpad {
+                    t.report(time_us, &mut self.pending);
+                }
+                return self.report();
+            }
             (EV_SYN, SYN_DROPPED) => {
                 self.dropped = true;
                 self.pending.clear();
                 self.moved = false;
                 self.motion = (0, 0);
+                if let Some(t) = &mut self.touchpad {
+                    t.dropped();
+                }
             }
             // Auto-repeat (2) is the window system's.
             (EV_KEY, _) if value != 2 => {
                 let pressed = value != 0;
                 let changed = if pressed { self.held.insert(code) } else { self.held.remove(&code) };
                 if changed {
-                    self.pending.extend(self.key(code, pressed));
+                    self.key_changed(code, pressed, time_us);
                 }
             }
             (EV_REL, REL_X) => self.motion.0 += value,
             (EV_REL, REL_Y) => self.motion.1 += value,
             (EV_REL, REL_WHEEL) => self.pending.push(InputEvent::Scroll { dx: 0, dy: value }),
             (EV_REL, REL_HWHEEL) => self.pending.push(InputEvent::Scroll { dx: value, dy: 0 }),
-            (EV_ABS, ABS_X | ABS_Y) if matches!(self.pointer, Pointer::Tablet | Pointer::Touchscreen) => {
-                if code == ABS_X {
-                    self.at.0 = value;
-                } else {
-                    self.at.1 = value;
+            (EV_ABS, ABS_X | ABS_Y) => {
+                if let Some(t) = &mut self.touchpad {
+                    t.abs(code, value);
+                } else if matches!(self.pointer, Pointer::Tablet | Pointer::Touchscreen) {
+                    if code == ABS_X {
+                        self.at.0 = value;
+                    } else {
+                        self.at.1 = value;
+                    }
+                    self.moved = true;
                 }
-                self.moved = true;
             }
             _ => {}
         }
         None
+    }
+
+    /// Key or button `code` went down or up: the touchpad's, or Veda's
+    /// event for it.
+    fn key_changed(&mut self, code: u16, pressed: bool, time_us: u64) {
+        if let Some(t) = &mut self.touchpad
+            && t.key(code, pressed, time_us, &mut self.pending)
+        {
+            return;
+        }
+        self.pending.extend(self.key(code, pressed));
     }
 
     /// Veda's event for key or button `code` going down or up, if it takes
@@ -321,17 +355,16 @@ impl Device {
 
     /// After Linux dropped events: the presses and releases that make what
     /// Veda was told the device holds what it does hold.
-    fn resync(&mut self) -> Option<Vec<InputEvent>> {
+    fn resync(&mut self, time_us: u64) -> Option<Vec<InputEvent>> {
         let now = get(&self.file, EVIOCGKEY, KEY_CNT / 8).ok()?;
-        let mut events = Vec::new();
         for code in 0..KEY_CNT as u16 {
             let down = has(&now, code);
             let changed = if down { self.held.insert(code) } else { self.held.remove(&code) };
             if changed {
-                events.extend(self.key(code, down));
+                self.key_changed(code, down, time_us);
             }
         }
-        (!events.is_empty()).then_some(events)
+        (!self.pending.is_empty()).then(|| std::mem::take(&mut self.pending))
     }
 
     /// Lights its LEDs as the window system's keyboard is: Num Lock, and
@@ -357,6 +390,9 @@ impl Device {
     /// Lets go of what it holds (it went away).
     fn let_go(&mut self) -> Vec<InputEvent> {
         let held = std::mem::take(&mut self.held);
+        if let Some(t) = &mut self.touchpad {
+            return t.let_go().into_iter().collect();
+        }
         held.into_iter().filter_map(|code| self.key(code, false)).collect()
     }
 }

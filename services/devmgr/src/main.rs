@@ -11,7 +11,8 @@
 //!
 //! Every other device goes to the driver VM, whose Linux drives it: all
 //! but the disks Veda starts from, the platform's own functions, and the
-//! devices Veda still has drivers for (see [`veda_keeps`]). The driver VM
+//! devices Veda still has drivers for (see [`veda_keeps`]); the PC's
+//! keyboard controller too. The driver VM
 //! gets their `pcidev` channels, through which it also gets the resource
 //! that lets it give them to its guest. It starts when the machine can
 //! give it devices: its processors run virtual machines, an IOMMU confines
@@ -37,7 +38,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use vabi::{cache_policy, signals};
+use vabi::{cache_policy, irq_flags, signals};
 use vacpi::name::Path;
 use vacpi::resource::Resource as FirmwareResource;
 use vipc::WaitSet;
@@ -65,6 +66,14 @@ const DRIVERVM_HYPERVISOR_ROLE: u32 = vabi::startup::role::USER + 1;
 /// Role of the `pcidev` channels of the devices the driver VM gets (one
 /// each).
 const DRIVERVM_DEVICE_ROLE: u32 = vabi::startup::role::USER + 2;
+/// Roles of the keyboard controller's data port, its command port, and its
+/// keyboard's and mouse's interrupts, which the driver VM gets.
+const DRIVERVM_I8042_ROLES: [u32; 4] = [
+    vabi::startup::role::USER + 3,
+    vabi::startup::role::USER + 4,
+    vabi::startup::role::USER + 5,
+    vabi::startup::role::USER + 6,
+];
 
 /// Which driver handles which device.
 struct DriverMatch {
@@ -74,10 +83,6 @@ struct DriverMatch {
 }
 
 const DRIVERS: &[DriverMatch] = &[
-    // virtio 1.0 sound
-    DriverMatch { vendor: 0x1AF4, devices: &[0x1059], driver: "virtio-snd" },
-    // Intel 82801AA AC'97 audio (QEMU's AC97).
-    DriverMatch { vendor: 0x8086, devices: &[0x2415], driver: "ac97" },
     // Intel's HD Audio controllers since Skylake: with an audio DSP beside
     // them (laptops with digital microphones, mostly) they call themselves
     // audio devices (class 04/01) rather than HD Audio controllers.
@@ -143,9 +148,9 @@ fn driver_for(info: &DeviceInfo) -> Option<&'static str> {
 /// controllers, bridges, system peripherals, processors, encryption and
 /// signal processing controllers, the SMBus, and the serial bus
 /// controllers, one of which holds the firmware's flash), and the devices
-/// it has drivers of its own for (sound cards, and the speaker amplifiers'
-/// SPI controller, until the firmware's descriptions of what is wired to
-/// them reach the guest).
+/// it has drivers of its own for (HD Audio controllers, and the speaker
+/// amplifiers' SPI controller, until the firmware's descriptions of what
+/// is wired to them reach the guest).
 fn veda_keeps(info: &DeviceInfo) -> bool {
     matches!(info.class, 0x01 | 0x05 | 0x06 | 0x08 | 0x0B | 0x10 | 0x11)
         || (info.class == 0x0C && matches!(info.subclass, 0x05 | 0x80))
@@ -412,6 +417,40 @@ fn boot_image() -> Option<(initrd::Archive<'static>, Vmo)> {
     Some((initrd::Archive::open(bytes).ok()?, vmo))
 }
 
+/// The PC's keyboard controller (the i8042), which the driver VM gets: its
+/// data port, its command port (the ports around them stay Veda's), and
+/// its keyboard's and mouse's interrupts (ISA 1 and 12). It does no DMA,
+/// so it needs no IOMMU; the driver VM's monitor keeps it from resetting
+/// the machine.
+struct I8042 {
+    data: IoPorts,
+    command: IoPorts,
+    keyboard: Interrupt,
+    mouse: Interrupt,
+}
+
+impl I8042 {
+    fn claim(io: &Resource, irq: &Resource) -> Option<I8042> {
+        Some(I8042 {
+            data: IoPorts::create(io, 0x60, 1).ok()?,
+            command: IoPorts::create(io, 0x64, 1).ok()?,
+            keyboard: Interrupt::create(irq, 1, irq_flags::ISA).ok()?,
+            mouse: Interrupt::create(irq, 12, irq_flags::ISA).ok()?,
+        })
+    }
+
+    /// Copies of its handles, by role, for a run of the driver VM.
+    fn handles(&self) -> Option<Vec<(u32, vrt::object::Handle)>> {
+        let handles = [
+            self.data.0.duplicate(None),
+            self.command.0.duplicate(None),
+            self.keyboard.0.duplicate(None),
+            self.mouse.0.duplicate(None),
+        ];
+        DRIVERVM_I8042_ROLES.into_iter().zip(handles).map(|(role, h)| Some((role, h.ok()?))).collect()
+    }
+}
+
 /// A run of the driver VM that ends sooner than this after it started is
 /// a failure; the next start waits longer after each in a row, and stops
 /// after a few.
@@ -427,6 +466,7 @@ struct DriverVm {
     /// `devices`, which is devmgr's.
     args: Vec<String>,
     devices: Vec<(Address, DeviceInfo)>,
+    i8042: Option<I8042>,
     hypervisor: Resource,
     process: Option<Process>,
     /// How many times it started, when it last did, the failures in a row
@@ -438,7 +478,12 @@ struct DriverVm {
 }
 
 impl DriverVm {
-    fn new(options: &[String], devices: Vec<(Address, DeviceInfo)>, hypervisor: Resource) -> DriverVm {
+    fn new(
+        options: &[String],
+        devices: Vec<(Address, DeviceInfo)>,
+        i8042: Option<I8042>,
+        hypervisor: Resource,
+    ) -> DriverVm {
         let args = options
             .iter()
             .filter_map(|a| a.strip_prefix("drivervm."))
@@ -448,6 +493,7 @@ impl DriverVm {
         DriverVm {
             args,
             devices,
+            i8042,
             hypervisor,
             process: None,
             starts: 0,
@@ -458,8 +504,8 @@ impl DriverVm {
     }
 
     /// Starts it, with what it runs on: the hypervisor resource, the system
-    /// image, which holds its Linux, and new channels of its devices (which
-    /// devmgr serves as `bound`'s).
+    /// image, which holds its Linux, new channels of its devices (which
+    /// devmgr serves as `bound`'s), and the keyboard controller.
     fn start(
         &mut self,
         boot: &initrd::Archive<'static>,
@@ -470,6 +516,7 @@ impl DriverVm {
         self.next_start_ns = None;
         let (Ok(h), Ok(i)) = (self.hypervisor.duplicate(), image.0.duplicate(None)) else { return };
         let mut handles = alloc::vec![(DRIVERVM_HYPERVISOR_ROLE, h.into_handle()), (vabi::startup::role::INITRD, i)];
+        handles.extend(self.i8042.as_ref().and_then(I8042::handles).unwrap_or_default());
         for (address, info) in &self.devices {
             let Ok((ours, theirs)) = Channel::create() else { continue };
             handles.push((DRIVERVM_DEVICE_ROLE, theirs.into_handle()));
@@ -565,7 +612,7 @@ fn guest_devices(options: &[String]) -> Vec<(u16, u16)> {
 
 fn main() -> i32 {
     let take = |role| vrt::env::take_handle(role).map(Resource::from_handle);
-    let (Some(io), Some(_irq), Some(mmio), Some(dma), Some(pci)) =
+    let (Some(io), Some(irq), Some(mmio), Some(dma), Some(pci)) =
         (take(IOPORT_RESOURCE), take(IRQ_RESOURCE), take(MMIO_RESOURCE), take(DMA_RESOURCE), take(PCI_RESOURCE))
     else {
         println!("missing hardware resources");
@@ -655,11 +702,14 @@ fn main() -> i32 {
         }
     }
 
+    // The keyboard controller goes too, whose ports and interrupts are
+    // the PC's whether or not anything answers there.
+    let i8042 = if runs.is_ok() { I8042::claim(&mgr.io, &irq) } else { None };
     // It starts for its devices, or because the boot options ask for it.
     let mut vm = None;
-    if runs.is_ok() && (!guest.is_empty() || drivervm.iter().any(|a| a == "drivervm")) {
+    if runs.is_ok() && (!guest.is_empty() || i8042.is_some() || drivervm.iter().any(|a| a == "drivervm")) {
         match take(HYPERVISOR_RESOURCE) {
-            Some(hypervisor) => vm = Some(DriverVm::new(&drivervm, guest, hypervisor)),
+            Some(hypervisor) => vm = Some(DriverVm::new(&drivervm, guest, i8042, hypervisor)),
             None => println!("no hypervisor resource for the driver VM"),
         }
     }

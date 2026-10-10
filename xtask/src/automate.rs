@@ -27,7 +27,7 @@
 //! double-click 0.05 0.44           # two quick clicks
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
 //! nic e1000e                       # QEMU model of the wired card for this run, applied before boot
-//! sound ac97                       # the sound card for this run (virtio, ac97 or hda), applied before boot
+//! sound hda                        # the sound card for this run (virtio or hda), applied before boot
 //! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
 //! qmp device_del '{"id":"kbd2"}'   # a QMP command, such as plugging USB devices in and out
@@ -67,9 +67,10 @@
 //! ```
 //!
 //! Scripts that use the microphone commands boot with `testmic`, which
-//! connects back to the host (see `mic.rs`). The pointer's commands wait,
-//! the first time in a boot, until the guest's tablet is Veda's (Linux
-//! drives it in the driver VM, which may come after the desktop).
+//! connects back to the host (see `mic.rs`). The pointer's and the
+//! keyboard's commands wait, the first time in a boot, until the guest's
+//! tablet or keyboard is Veda's (Linux drives them in the driver VM, which
+//! may come after the desktop).
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
@@ -153,9 +154,11 @@ pub struct Session {
     /// Byte offset in the serial log where `wait-serial` and `expect-serial`
     /// start looking (moved past the output of earlier boots by `reset`).
     since: usize,
-    /// Where this boot's output starts, and whether its pointer is up.
+    /// Where this boot's output starts, and whether its pointer and its
+    /// keyboard are up.
     boot: usize,
     pointer: bool,
+    keyboard: bool,
     /// The Wi-Fi simulator, when the machine has the virtual radio.
     pub sim: Option<AirSim>,
 }
@@ -187,7 +190,16 @@ impl Session {
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
         let child = cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?;
         let qmp = Qmp::connect(port, Duration::from_secs(20))?;
-        Ok(Session { m: Machine { child, qmp }, serial_log, fail_patterns, since: 0, boot: 0, pointer: false, sim })
+        Ok(Session {
+            m: Machine { child, qmp },
+            serial_log,
+            fail_patterns,
+            since: 0,
+            boot: 0,
+            pointer: false,
+            keyboard: false,
+            sim,
+        })
     }
 
     fn serial_bytes(&self) -> Vec<u8> {
@@ -215,6 +227,7 @@ impl Session {
         self.since = self.serial_bytes().len();
         self.boot = self.since;
         self.pointer = false;
+        self.keyboard = false;
         self.m.reset()
     }
 
@@ -230,6 +243,16 @@ impl Session {
         if !self.pointer {
             self.wait_from(self.boot, "): tablet", Duration::from_secs(60))?;
             self.pointer = true;
+        }
+        Ok(())
+    }
+
+    /// The first key of a boot waits until the guest's keyboard is Veda's,
+    /// as the pointer does for its tablet.
+    fn keyboard(&mut self) -> Result {
+        if !self.keyboard {
+            self.wait_from(self.boot, "): keyboard", Duration::from_secs(60))?;
+            self.keyboard = true;
         }
         Ok(())
     }
@@ -434,7 +457,7 @@ pub fn needs_toolchain(script: &str) -> Option<&'static str> {
     })
 }
 
-/// The sound card a script asks for with `sound` (`virtio` or `ac97`).
+/// The sound card a script asks for with `sound` (`virtio` or `hda`).
 pub fn sound_card(script: &str) -> Option<String> {
     script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "sound")).find_map(|w| w.get(1).cloned())
 }
@@ -633,15 +656,25 @@ pub fn run_script(
                         s.m.mouse_button("left", false).map_err(ctx)?;
                     }
                 }
-                "key" => s.m.send_keys(w.get(1).ok_or("missing key")?).map_err(ctx)?,
-                "key-down" => s.m.key_event(w.get(1).ok_or("missing key")?, true).map_err(ctx)?,
+                "key" => {
+                    s.keyboard().map_err(ctx)?;
+                    s.m.send_keys(w.get(1).ok_or("missing key")?).map_err(ctx)?
+                }
+                "key-down" => {
+                    s.keyboard().map_err(ctx)?;
+                    s.m.key_event(w.get(1).ok_or("missing key")?, true).map_err(ctx)?
+                }
                 "key-up" => s.m.key_event(w.get(1).ok_or("missing key")?, false).map_err(ctx)?,
-                "type" => s.m.type_text(w.get(1).ok_or("missing text")?).map_err(ctx)?,
+                "type" => {
+                    s.keyboard().map_err(ctx)?;
+                    s.m.type_text(w.get(1).ok_or("missing text")?).map_err(ctx)?
+                }
                 // Types a secret (an API key) from the environment, so it
                 // appears in neither the script nor the logs.
                 "type-env" => {
                     let name = w.get(1).ok_or("missing variable name")?;
                     let value = std::env::var(name).map_err(|_| ctx(format!("${name} is not set")))?;
+                    s.keyboard().map_err(ctx)?;
                     s.m.type_text(value.trim()).map_err(|_| ctx(format!("cannot type ${name}")))?;
                 }
                 "expect-serial" => {

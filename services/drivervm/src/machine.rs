@@ -31,6 +31,7 @@ use vrt::sync::Mutex;
 use vrt::vm::Mapping;
 
 use crate::bridge::Bridge;
+use crate::i8042::{self, I8042};
 use crate::memory::GuestMemory;
 use crate::pci::{Devices, Windows};
 
@@ -84,6 +85,8 @@ pub struct Machine {
     memory: GuestMemory,
     bridge: Bridge,
     devices: Devices,
+    /// The keyboard controller, if the guest has it.
+    i8042: Option<I8042>,
     /// The guest's first processor, which the bridge's interrupts go to.
     notify: Vcpu,
     /// The processors that have started (by APIC id), for the devices'
@@ -99,12 +102,14 @@ pub struct Machine {
 
 impl Machine {
     /// Makes the machine, gives it the PCI functions of `devices` (their
-    /// `pcidev` channels), loads Linux and starts its first processor.
+    /// `pcidev` channels) and the keyboard controller, loads Linux and
+    /// starts its first processor.
     pub fn start(
         hypervisor: &Resource,
         kernel: &[u8],
         initramfs: &[u8],
         devices: Vec<Channel>,
+        i8042: Option<I8042>,
         config: &Config,
     ) -> Result<Arc<Machine>, String> {
         let size = config.memory_mib as u64 * MIB;
@@ -135,6 +140,9 @@ impl Machine {
         }
         let mut cmdline = String::from(CMDLINE);
         cmdline.push_str(&devices.host_options());
+        if i8042.is_some() {
+            cmdline.push_str(" veda.i8042");
+        }
         cmdline.push_str(config.cmdline.trim_end());
         if cmdline.len() > image.cmdline_size as usize || cmdline.len() >= 4096 {
             return Err(String::from("the kernel's command line is too long"));
@@ -180,6 +188,7 @@ impl Machine {
             memory,
             bridge: Bridge::new().map_err(|e| format!("no bridge: {e}"))?,
             devices,
+            i8042,
             notify,
             vcpus: Mutex::new(vcpus),
             console: Mutex::new((0..config.cpus).map(|_| Vec::new()).collect()),
@@ -279,6 +288,10 @@ impl Machine {
                 Some(Some(vcpu)) => self.devices.msi(data[1], data[2], vcpu, data[4]),
                 _ => error::INVALID,
             },
+            hypercall::ISA_IRQ => match (&self.i8042, self.vcpus.lock().get(data[2] as usize)) {
+                (Some(i8042), Some(Some(vcpu))) if i8042.route(data[1], vcpu, data[3]) => 0,
+                _ => error::INVALID,
+            },
             _ => error::UNKNOWN,
         }
     }
@@ -327,10 +340,22 @@ impl Machine {
         }
     }
 
-    /// The platform has no I/O ports: reads find nothing, writes go
-    /// nowhere. Each port is reported the first time.
+    /// The platform has no I/O ports but the keyboard controller's, if the
+    /// guest has it: elsewhere reads find nothing, writes go nowhere. Each
+    /// port is reported the first time.
     fn port(&self, exit: &mut VcpuExit) {
         let port = exit.data[0] as u16;
+        if let Some(i8042) = &self.i8042
+            && matches!(port, i8042::DATA | i8042::COMMAND)
+            && exit.data[1] == 1
+        {
+            if exit.data[2] == 1 {
+                i8042.write(port, exit.data[3] as u8);
+            } else {
+                exit.data[3] = i8042.read(port) as u64;
+            }
+            return;
+        }
         let mut seen = self.ports.lock();
         if !seen.contains(&port) && seen.len() < 32 {
             seen.push(port);
