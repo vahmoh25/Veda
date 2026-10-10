@@ -133,6 +133,18 @@ impl AgentSim {
         self.shared.log.lock().unwrap().listen_connections
     }
 
+    /// Waits until the agent has no recognition stream open.
+    pub fn wait_not_listening(&self, timeout: Duration) -> Result {
+        let start = Instant::now();
+        while self.shared.listen_writer.lock().unwrap().is_some() {
+            if start.elapsed() > timeout {
+                return Err("the agent kept listening".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Ok(())
+    }
+
     fn send(&self, frame: Vec<u8>) -> Result {
         let mut w = self.shared.writer.lock().unwrap();
         let s = w.as_mut().ok_or("the agent is not connected to the simulator")?;

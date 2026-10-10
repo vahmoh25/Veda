@@ -318,7 +318,8 @@ sleep between events.
   `agent-connected`, `agent-call FUNCTION 'ARGS'`, `agent-result TEXT` (in
   the function's result), `agent-mark` and `agent-expect TEXT` (in what the
   agent sent), `agent-speak SECONDS`, `agent-interrupt`, `agent-hear TEXT`,
-  `agent-listens N`, `agent-asleep` (start asleep), `agent-mic-quiet DB`
+  `agent-listens N` (and `agent-not-listening`, until no recognition
+  stream is open), `agent-asleep` (start asleep), `agent-mic-quiet DB`
   and `agent-mic-heard DB` (how loud the microphone audio the agent sent
   was). The test microphone (`mic-silence`, `mic-tone`, `say TEXT`,
   `mic-wav FILE`) feeds the agent's microphone through `testmic`;

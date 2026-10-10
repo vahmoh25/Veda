@@ -64,6 +64,7 @@
 //! agent-hear "Hey Veda. | Hi" 30   # " | " splits it into final transcripts 0.3 s apart (the last ends the utterance)
 //! agent-listens 1                  # fail unless the agent opened exactly this many recognition streams
 //! agent-listens-at-most 2          # fail if the agent opened more recognition streams than this
+//! agent-not-listening 20           # wait until the agent has no recognition stream open
 //! agent-mic-quiet -60              # fail if the agent sent microphone audio this loud (dBFS) since agent-mark
 //! agent-mic-heard -30              # fail unless it sent microphone audio at least this loud since agent-mark
 //! ```
@@ -861,6 +862,9 @@ pub fn run_script(
                                     a.listen_connections()
                                 )));
                             }
+                        }
+                        "agent-not-listening" => {
+                            a.wait_not_listening(Duration::from_secs_f64(num(&w, 1).unwrap_or(30.0))).map_err(ctx)?
                         }
                         "agent-send" => a.send_json(w.get(1).ok_or("missing message")?).map_err(ctx)?,
                         "agent-audio" => {

@@ -20,7 +20,9 @@ wait-serial "music: playing Neon Horizon" 30
 wait 30
 agent-listens-at-most 2
 reject-serial "much speech this hour"
-# Called over the music.
+# Called over the music, once nothing it stood out with is still being
+# listened to (a stream open then would hear the call as it is).
+agent-not-listening 20
 checkpoint
 mic-tone 2 16000
 wait-serial "someone is speaking" 20
