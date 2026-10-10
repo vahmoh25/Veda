@@ -134,6 +134,21 @@ fn view<T>(raw: RawHandle, wrap: fn(Handle) -> T) -> ManuallyDrop<T> {
     ManuallyDrop::new(wrap(unsafe { Handle::from_raw(raw) }))
 }
 
+/// Reads Veda's log for a program of the guest ([`op::LOG_READ`]).
+fn log_read(memory: &GuestMemory, r: &mut b::LogRead) -> Result<(), Error> {
+    if r.len > b::MAX_COPY {
+        return Err(Error::InvalidArgs);
+    }
+    if !memory.contains(r.buffer, r.len) {
+        return Err(Error::Fault);
+    }
+    let mut data = alloc::vec![0u8; r.len as usize];
+    let (n, next) = vrt::object::log_read(r.offset, &mut data)?;
+    memory.write(r.buffer, &data[..n]);
+    (r.len, r.next) = (n as u64, next);
+    Ok(())
+}
+
 fn status(r: Result<(), Error>) -> u32 {
     match r {
         Ok(()) => b::OK,
@@ -221,6 +236,7 @@ impl Bridge {
             op::CLOCK => request(memory, gpa, |r: &mut b::Clock| {
                 r.status = status(vrt::time::clock_info().map(|info| r.info = info));
             }),
+            op::LOG_READ => request(memory, gpa, |r: &mut b::LogRead| r.status = status(log_read(memory, r))),
             _ => vhv::platform::error::UNKNOWN,
         }
     }

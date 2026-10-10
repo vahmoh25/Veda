@@ -76,7 +76,10 @@ partition table in the system area, the EFI system partition of a stick the
 image is written to as it is. Its `BOOT.CFG` puts `live` on the kernel
 command line; `init` passes it on to `devmgr`, which then starts no disk
 driver, and to `vfs`, which keeps `/home` in memory, so the computer's disks
-are never read or written.
+are never read or written. The stick keeps the system's log instead
+(`VEDA/LOGS`, which the image has, with room for it): the driver VM's
+Linux, which has the stick on its USB controller, writes each start's
+logs there (`logkeeper`, see [DRIVERVM.md](DRIVERVM.md)).
 
 ## The kernel (`kernel/`)
 
@@ -766,7 +769,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/virtio` | virtio device access shared by the drivers |
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `lib/hv`, `lib/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the virtual APIC, `cpuid`, the guests' platform and boot protocol, the bridge's ABI; VT-d's tables and structures |
-| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`) |
+| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), `airlink` (QEMU's virtual radio as Linux's), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
 | `lib/splash` | the boot splash's picture, which the boot loader and the window system draw alike |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |

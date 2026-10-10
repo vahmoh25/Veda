@@ -193,9 +193,10 @@ pub struct VmConfig {
     pub debug_exit: bool,
     /// Disk image holding the user's home directory (serial `veda-home`).
     pub home_disk: Option<PathBuf>,
-    /// The boot image is the live system's ISO on a USB stick (read-only),
-    /// not the boot disk.
+    /// The boot image is the live system's ISO on a USB stick (read-only,
+    /// unless `usb_stick_writable`), not the boot disk.
     pub usb_stick: bool,
+    pub usb_stick_writable: bool,
     /// How the boot and home disks are attached.
     pub disk_bus: DiskBus,
     /// ACPI tables added to the firmware's (tests' descriptions of devices).
@@ -243,6 +244,7 @@ impl Default for VmConfig {
             debug_exit: false,
             home_disk: None,
             usb_stick: false,
+            usb_stick_writable: false,
             disk_bus: DiskBus::Virtio,
             acpi_tables: Vec::new(),
             firmware_variables: Vec::new(),
@@ -348,7 +350,8 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     }
     if cfg.usb_stick {
         // As a PC sees a stick the ISO was written to.
-        cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,readonly=on,file={}", disk.display())]);
+        let readonly = if cfg.usb_stick_writable { "" } else { "readonly=on," };
+        cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,{readonly}file={}", disk.display())]);
         cmd.args(["-device", "usb-storage,bus=xhci.0,drive=disk0,bootindex=0,removable=on"]);
     } else {
         cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,file={}", disk.display())]);

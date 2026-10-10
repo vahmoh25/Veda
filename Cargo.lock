@@ -663,6 +663,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "guest-logkeeper"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+ "vrt",
+]
+
+[[package]]
 name = "guest-net"
 version = "0.1.0"
 dependencies = [

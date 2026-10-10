@@ -732,6 +732,7 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     if live {
         // A stick with the ISO on it, and no home disk.
         vm.usb_stick = true;
+        vm.usb_stick_writable = automate::live_writable(script);
     } else {
         // Every scripted run starts with a new, empty home directory.
         let home = util::out_dir().join("test-home.img");
@@ -811,8 +812,9 @@ fn test(o: &Options) -> Result {
         util::run(&mut cmd)?;
     }
     // The driver VM's programs' logic (touchpads, sound cards' devices, a
-    // display's mode and where pictures go on it), on Linux as they run.
-    for package in ["guest-input", "guest-alsa", "guest-kms"] {
+    // display's mode and where pictures go on it, the logs a stick keeps),
+    // on Linux as they run.
+    for package in ["guest-input", "guest-alsa", "guest-kms", "guest-logkeeper"] {
         util::run(util::cargo().args(["test", "--quiet", "--package", package, "--target", linux::GUEST_TARGET]))?;
     }
     // And through Veda's renderer, where it has been built: on softpipe,

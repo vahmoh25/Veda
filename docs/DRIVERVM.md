@@ -146,7 +146,7 @@ Each one came from what the alternatives would cost.
 | Monitor | `services/drivervm` | the machine, its hypercalls, its PCI functions, the bridge, the narrowed registry |
 | Guest kernel | `ports/linux` | Linux with the Veda platform: `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`, `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/virt/veda/efi.c`, `drivers/gpio/gpio-veda.c` |
 | Guest runtime | `lib/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
-| Guest programs | `guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`; what they share (`sys`: system calls, network interfaces; `netlink`) |
+| Guest programs | `guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `logkeeper` (the system's log on the live system's stick); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`; what they share (`sys`: system calls, network interfaces; `netlink`) |
 | Build | `xtask/src/linux.rs`, `ports/linux/build.sh` | `cargo xtask linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `ports/linux/firmware.txt`; the image's `linux/` |
 
 ### The platform
@@ -540,10 +540,31 @@ had since about 2012), and Linux drives them, their hubs and every device
 on them as on any PC: keyboards, mice and tablets for `input`, network
 adapters for `net` (CDC Ethernet and NCM, Realtek's and ASIX's), Bluetooth
 adapters with Linux's Bluetooth stack (and their firmware), which no
-service of Veda's uses yet. Disks on USB it leaves alone: disks are
-Veda's, which has no driver for them yet. When the driver VM ends,
+service of Veda's uses yet. Disks on USB it reads only to find the stick
+the live system started from, which keeps the system's log (below); its
+files it leaves alone, as it does other disks': disks are Veda's, which
+has no driver for USB ones yet. When the driver VM ends,
 `devmgr` resets the controller with its other devices, and the next driver
 VM finds the devices again.
+
+**The system's log** (`guest/logkeeper`). The stick the live system
+started from keeps each start's logs, so that what happened can be read
+afterwards on any computer, however the system fared (with nothing on the
+screen, say): Veda's log (every program's lines, the kernel's, Linux's
+console among them), which the bridge reads out (`LOG_READ`, Veda's
+`log_read`), and Linux's own, whole (`/dev/kmsg`), in which its display
+drivers say in detail what they do (DRM's driver, mode-setting and PRIME
+debugging messages, `drm.debug`, which reach no console). `logkeeper`,
+which `init` starts first where there is a USB controller, looks for the
+stick: a USB disk with a FAT32 file system named `VEDA` that has a
+`VEDA/LOGS` directory (the live system's image has one, with room for the
+logs; a stick it is written to as it is has that file system, and one
+Rufus copied its files onto has the directory). It mounts it and writes a
+directory of the start's own there, numbered after the last
+(`VEDA/LOGS/0007/VEDA.TXT` and `LINUX.TXT`), the oldest starts' going to
+leave eight at most and room for the new one's; what it writes it syncs
+every second. A stick that cannot be written to, or without the
+directory, it leaves alone.
 
 **Firmware.** The initial RAM file system carries the firmware Linux's
 drivers load (`/lib/firmware`): the files `ports/linux/firmware.txt`
@@ -563,6 +584,7 @@ grows.
 | `Mapping::new(vmo)` | `VEDA_IOC_VMO_MAP`, then `mmap` | maps the VMO into the window of guest-physical memory |
 | `vrt::guest::watch(handle, signals)` | `VEDA_IOC_WATCH`: a file whose `poll` makes a wait, and reads its result | an ordinary wait (cancelled when the file closes) |
 | `vrt::guest::dmabuf(vmo, offset, len, writable)` | `VEDA_IOC_VMO_DMABUF`: a dma-buf of the window range, DMA addresses for importers' devices or mapped for the processor | maps the VMO into the window, as for a program; unmaps it when the dma-buf goes |
+| `vrt::object::log_read(offset, buf)` | `VEDA_IOC_LOG_READ`: copies the bytes out | reads Veda's log, as `log_read` does |
 
 A guest program's handles are its own: the guest's kernel lets a file use
 only handles it made or received, and closes what is left when the file

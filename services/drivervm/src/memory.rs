@@ -44,6 +44,7 @@ plain!(
     vhv::bridge::VmoMap,
     vhv::bridge::Bootstrap,
     vhv::bridge::Clock,
+    vhv::bridge::LogRead,
     vhv::bridge::Completion,
     vhv::platform::Variable
 );

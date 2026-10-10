@@ -80,6 +80,7 @@ members = [
     "guest/gpiotest",
     "guest/efivartest",
     "guest/kmspause",
+    "guest/logkeeper",
     "guest/sys",
     "guest/alsa",
     "guest/net",

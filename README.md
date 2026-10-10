@@ -264,8 +264,12 @@ mode), or as it is with any image writer, and start the PC from the stick
 UEFI mode with Secure Boot off, as Veda's loader is not signed. Veda runs
 from memory and leaves the PC alone: no disk driver starts, so it never
 reads or writes the PC's disks or the systems installed on them, and its
-home directory lasts until the PC is turned off. To try the stick in QEMU
-first:
+home directory lasts until the PC is turned off. The stick keeps the
+system's log of each start, in `VEDA/LOGS` (the newest start's in the
+directory with the highest number: `VEDA.TXT`, Veda's log, and
+`LINUX.TXT`, the driver VM's Linux's), synced every second: whatever
+happened, even with nothing on the screen, can be read on any computer
+afterwards. To try the stick in QEMU first:
 
 ```bash
 cargo xtask run --live
@@ -491,7 +495,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `drivers/` | Veda's own drivers: `virtio-blk`, `ahci` (SATA), `nvme` (NVM Express); everything else is Linux's, in the driver VM |
 | `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `racer` (*Velocity*) and `starfall` |
 | `ports/` | the C toolchain built from source: GCC, binutils, GMP, MPFR, MPC and musl, each an upstream release and Veda's patch; and Linux for the driver VM |
-| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests |
+| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), `airlink` (QEMU's virtual radio as Linux's), and its tests |
 | `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), C and C++ test programs (`c/`), GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
 | `third_party/` | vendored crates with Veda patches (smoltcp) |

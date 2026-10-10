@@ -138,14 +138,27 @@ impl<'a> IsoBuilder<'a> {
     pub fn add_file(&mut self, path: &str, data: &'a [u8]) -> Result<(), String> {
         let mut parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
         let file = parts.pop().ok_or("empty path")?;
-        let mut dir = &mut self.root;
-        for p in parts {
-            check_name(p, false)?;
-            dir = dir.dirs.entry(p.into()).or_default();
-        }
+        let dir = self.dir(&parts)?;
         check_name(file, true)?;
         dir.files.insert(file.into(), data);
         Ok(())
+    }
+
+    /// Adds the directory at `path` (empty, if nothing goes into it), and
+    /// its parents.
+    pub fn add_dir(&mut self, path: &str) -> Result<(), String> {
+        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+        self.dir(&parts).map(drop)
+    }
+
+    /// The directory at `parts`, made where it is not.
+    fn dir(&mut self, parts: &[&str]) -> Result<&mut Dir<'a>, String> {
+        let mut dir = &mut self.root;
+        for p in parts {
+            check_name(p, false)?;
+            dir = dir.dirs.entry((*p).into()).or_default();
+        }
+        Ok(dir)
     }
 
     /// Serialises the image. `boot_image` makes the FAT file system given

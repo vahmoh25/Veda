@@ -93,6 +93,14 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   it (`--resolution` changes it), and adds no time zone, as a PC's clock
   keeps local time under Windows. Scripts boot it with a `live` line
   (`tests/ui/live-usb.vts`); `--out FILE` writes it elsewhere.
+* A stick the live system started from keeps the logs of its last eight
+  starts: `VEDA/LOGS/NNNN/VEDA.TXT` (Veda's log, Linux's console among it)
+  and `LINUX.TXT` (the driver VM's Linux's whole log, its display drivers'
+  debugging messages too), synced every second, so they hold what
+  happened even when the screen showed nothing. Read them on any computer
+  (the stick's EFI system partition mounts as `VEDA`). Scripts boot from a
+  stick that can be written to with `live writable`, and check what it
+  keeps with `expect-stick` (`tests/ui/live-logs.vts`).
 * `--input usb` replaces QEMU's PS/2 controller and virtio tablet with
   USB devices on an xHCI controller: a hub with a keyboard and a tablet,
   and a mouse. Scripts ask for

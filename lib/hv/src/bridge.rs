@@ -61,6 +61,8 @@ pub mod op {
     /// [`super::VmoDmabuf`]: the guest kernel's own, made of [`VMO_MAP`]
     /// and [`VMO_UNMAP`].
     pub const VMO_DMABUF: u32 = 21;
+    /// [`super::LogRead`].
+    pub const LOG_READ: u32 = 22;
 }
 
 /// The operation was carried out.
@@ -286,6 +288,23 @@ pub struct Clock {
     pub info: vabi::ClockInfo,
 }
 
+/// [`op::LOG_READ`]: up to `len` bytes of Veda's log (every program's
+/// lines, Linux's console among them) from `offset` (counted from the
+/// first byte ever logged) into `buffer`, at most [`MAX_COPY`]. Out: `len`
+/// is what was read, `next` the offset after it. The log keeps its latest
+/// part only: what was read starts later than `offset` (at `next - len`)
+/// if that is gone.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LogRead {
+    pub status: u32,
+    pub _reserved: u32,
+    pub offset: u64,
+    pub buffer: u64,
+    pub len: u64,
+    pub next: u64,
+}
+
 /// The notification ring: a page the monitor writes finished waits into.
 /// The monitor advances `HEAD`, the guest `TAIL`; each entry is a
 /// [`Completion`].
@@ -313,5 +332,6 @@ const _: () = {
     assert!(core::mem::size_of::<ChannelRead>() == 40);
     assert!(core::mem::size_of::<VmoMap>() == 40);
     assert!(core::mem::size_of::<Clock>() == 48);
+    assert!(core::mem::size_of::<LogRead>() == 40);
     assert!(core::mem::size_of::<Completion>() == ring::ENTRY_SIZE);
 };

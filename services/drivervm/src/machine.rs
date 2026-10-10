@@ -68,8 +68,12 @@ const LOW_RESERVED: u64 = 0x1_0000;
 /// The legacy video and firmware area below 1 MiB.
 const LEGACY_START: u64 = 0x9_F000;
 const LEGACY_END: u64 = 0x10_0000;
-/// The kernel's console is the platform's, from its first message on.
-const CMDLINE: &str = "earlycon=veda console=hvc0 panic=-1 rdinit=/init";
+/// The kernel's console is the platform's, from its first message on. Its
+/// display drivers say in detail what they do (DRM's driver, mode-setting
+/// and PRIME debugging messages), which only its log has (`logkeeper`
+/// keeps it on the live system's stick), with room for all they say while
+/// Linux starts.
+const CMDLINE: &str = "earlycon=veda console=hvc0 panic=-1 rdinit=/init log_buf_len=4M drm.debug=0xe";
 /// The register of the boot parameters at entry.
 const RSI: usize = 6;
 /// Where PCI functions' BARs go: below 4 GiB (RAM ends before), above the

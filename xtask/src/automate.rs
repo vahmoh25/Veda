@@ -31,7 +31,8 @@
 //! acpi-table touchpad              # add a table to the firmware's (xtask/src/acpitest.rs), applied before boot
 //! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store, before boot
 //! sound hda                        # the sound card for this run (virtio or hda), applied before boot
-//! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot
+//! live [writable]                  # boot the live system (`xtask iso`) from a USB stick (read-only unless writable), applied before boot
+//! expect-stick VEDA/LOGS/0001/VEDA.TXT "desktop ready"  # fail unless a file on the live system's stick contains the text
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
 //! qmp device_del '{"id":"kbd2"}'   # a QMP command, such as plugging USB devices in and out
 //! audio host                       # the host's loudspeakers and microphone instead of a WAV file (echo on real hardware)
@@ -437,6 +438,14 @@ pub fn live(script: &str) -> bool {
     script.lines().map(words).any(|w| w.first().is_some_and(|c| c == "live"))
 }
 
+/// Whether the live system's stick can be written to (`live writable`).
+pub fn live_writable(script: &str) -> bool {
+    script
+        .lines()
+        .map(words)
+        .any(|w| w.first().is_some_and(|c| c == "live") && w.get(1).is_some_and(|m| m == "writable"))
+}
+
 /// Whether a script talks to the simulated Voice Agent service.
 pub fn needs_agentsim(script: &str) -> bool {
     script.lines().map(words).any(|w| w.first().is_some_and(|c| c.starts_with("agent-")))
@@ -744,6 +753,17 @@ pub fn run_script(
                     let needle = w.get(1).ok_or("missing text")?;
                     if !s.recent().contains(needle.as_str()) {
                         return Err(ctx(format!("serial log does not contain \"{needle}\"")));
+                    }
+                }
+                // A file the guest wrote on the live system's stick (its
+                // EFI system partition) contains the text.
+                "expect-stick" => {
+                    let path = w.get(1).ok_or("missing path")?;
+                    let needle = w.get(2).ok_or("missing text")?;
+                    let image = std::fs::read(disk).map_err(|e| ctx(format!("{}: {e}", disk.display())))?;
+                    let file = crate::image::esp_file(&image, path).map_err(ctx)?;
+                    if !String::from_utf8_lossy(&file).contains(needle.as_str()) {
+                        return Err(ctx(format!("{path} on the stick does not contain \"{needle}\"")));
                     }
                 }
                 // The guest's sound output (QEMU records it to a WAV file in

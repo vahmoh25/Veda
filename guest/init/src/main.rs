@@ -1,8 +1,10 @@
 //! `init` — the first program of Linux in Veda's driver VM.
 //!
 //! It mounts the kernel's file systems, says on the console (which is
-//! Veda's log) how Linux came up, and starts Veda's drivers for Linux that
-//! the guest's devices need (`input` for whatever input devices come,
+//! Veda's log) how Linux came up, starts `logkeeper` first where there is
+//! a USB controller (the stick the live system started from keeps the
+//! system's log), and Veda's drivers for Linux that the guest's devices
+//! need (`input` for whatever input devices come,
 //! `alsa` for sound cards, `net` for Ethernet cards, `wifi` for Wi-Fi radios
 //! and `airlink` for QEMU's virtual one, `kms` for displays and `renderer`
 //! for their GPUs), again if they end. With `veda.renderer=softpipe` the
@@ -82,6 +84,9 @@ fn main() {
         .unwrap_or_default();
     println!("veda: Linux {} is up, processors {}, {} KiB of memory", release.trim(), cpus.trim(), memory);
     let options: Vec<&str> = cmdline.split_whitespace().collect();
+    if has_class(&["0x0c03"]) {
+        keep_running("logkeeper", &[]);
+    }
     keep_running("input", &[]);
     let softpipe = options.contains(&"veda.renderer=softpipe");
     if softpipe {

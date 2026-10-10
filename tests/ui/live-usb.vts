@@ -1,8 +1,9 @@
 # The live system (`cargo xtask iso`) started from a USB stick, as a PC starts
 # it: the desktop comes up with the home directory in memory, and no disk
-# driver runs, so the computer's disks are never touched. The stick is on
-# the USB controller, which goes to the driver VM: Linux finds it, and has
-# no driver for it (disks are Veda's).
+# driver of Veda's runs, so the computer's disks are never touched. The
+# stick is on the USB controller, which goes to the driver VM: Linux finds
+# it, where logkeeper would keep the system's log (live-logs.vts), but this
+# one cannot be written to.
 live
 fail-on "PANIC"
 wait-serial "desktop ready" 120
@@ -11,5 +12,6 @@ expect-serial "live system: ahci not started"
 reject-serial "devmgr: started ahci"
 reject-serial "devmgr: started virtio-blk"
 wait-serial "Product: QEMU USB HARDDRIVE" 60
+wait-serial "logkeeper: sda1 has Veda's files but cannot be written to" 60
 wait 4
 shot target/veda/live-usb.png

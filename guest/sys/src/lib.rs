@@ -1,6 +1,6 @@
 //! The Linux system calls the driver VM's programs make that Rust's `std`
-//! does not: mounting, powering off, signals, `ioctl`, `poll`, and sockets
-//! other than the Internet's. Raw, on x86-64. [`netif`] has what the network
+//! does not: mounting (and file systems' free space), powering off,
+//! signals, `ioctl`, `poll`, and sockets other than the Internet's. Raw, on x86-64. [`netif`] has what the network
 //! drivers share: interfaces switched on and off, raw packet sockets.
 
 use std::ffi::CString;
@@ -17,7 +17,9 @@ const SYS_SOCKET: usize = 41;
 const SYS_BIND: usize = 49;
 const SYS_SETSOCKOPT: usize = 54;
 const SYS_KILL: usize = 62;
+const SYS_STATFS: usize = 137;
 const SYS_MOUNT: usize = 165;
+const SYS_UMOUNT2: usize = 166;
 const SYS_REBOOT: usize = 169;
 const REBOOT_MAGIC1: usize = 0xFEE1_DEAD;
 const REBOOT_MAGIC2: usize = 672_274_793;
@@ -170,6 +172,24 @@ pub fn mount(source: &str, target: &str, kind: &str) -> io::Result<()> {
         syscall(SYS_MOUNT, [source.as_ptr() as usize, target.as_ptr() as usize, kind.as_ptr() as usize, 0, 0])
             .map(|_| ())
     }
+}
+
+/// Unmounts the file system at `target`.
+pub fn unmount(target: &str) -> io::Result<()> {
+    let target = CString::new(target).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: a string that lives through the call, no flags.
+    unsafe { syscall(SYS_UMOUNT2, [target.as_ptr() as usize, 0, 0, 0, 0]).map(|_| ()) }
+}
+
+/// The bytes free for programs on the file system `path` is on.
+pub fn free_bytes(path: &str) -> io::Result<u64> {
+    let path = CString::new(path).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // `struct statfs` (x86-64): its type, block size, blocks, free ones,
+    // those free for programs, and more, 120 bytes.
+    let mut s = [0u64; 15];
+    // SAFETY: the kernel writes the structure into `s`, which has room.
+    unsafe { syscall(SYS_STATFS, [path.as_ptr() as usize, s.as_mut_ptr() as usize, 0, 0, 0])? };
+    Ok(s[1].saturating_mul(s[4]))
 }
 
 /// Powers the machine off.

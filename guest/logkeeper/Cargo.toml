@@ -1,0 +1,18 @@
+[package]
+name = "guest-logkeeper"
+description = "Keeps the system's log on the stick the live system started from"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "logkeeper"
+path = "src/main.rs"
+bench = false
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+guest-sys = { workspace = true }
+
+[lints]
+workspace = true

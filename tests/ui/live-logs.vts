@@ -1,0 +1,21 @@
+# The live system keeps its log on the stick it started from: logkeeper,
+# in the driver VM, whose Linux has the stick (it is on the USB controller),
+# writes Veda's log (Linux's console among it) and Linux's own, whole, into
+# a directory of the start's own in the stick's VEDA/LOGS, synced every
+# second. The next start keeps its logs beside the first's.
+live writable
+fail-on "PANIC"
+wait-serial "desktop ready" 120
+wait-serial "logkeeper: keeping the log on the stick (sda1), in VEDA/LOGS/0001" 60
+wait 3
+expect-stick VEDA/LOGS/0001/VEDA.TXT "logkeeper: Veda's log of the start of"
+expect-stick VEDA/LOGS/0001/VEDA.TXT "desktop ready"
+expect-stick VEDA/LOGS/0001/VEDA.TXT "logkeeper: keeping the log on the stick"
+expect-stick VEDA/LOGS/0001/LINUX.TXT "usb-storage"
+reject-serial "logkeeper: cannot"
+reset
+wait-serial "logkeeper: keeping the log on the stick (sda1), in VEDA/LOGS/0002" 120
+wait 3
+expect-stick VEDA/LOGS/0002/VEDA.TXT "logkeeper: Veda's log of the start of"
+expect-stick VEDA/LOGS/0001/VEDA.TXT "desktop ready"
+reject-serial "logkeeper: cannot"

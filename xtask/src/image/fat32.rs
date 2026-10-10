@@ -1,8 +1,10 @@
-//! A minimal FAT32 formatter that writes a populated volume into memory.
+//! A minimal FAT32 formatter that writes a populated volume into memory,
+//! and a reader of files on such a volume (what a test's guest wrote).
 //!
 //! Only what the EFI system partition needs is implemented: short (8.3)
-//! upper-case names, nested directories and regular files. The result is a
-//! spec-conformant volume that OVMF (and Windows, Linux, ...) can mount.
+//! upper-case names, nested directories (empty ones too) and regular
+//! files. The result is a spec-conformant volume that OVMF (and Windows,
+//! Linux, ...) can mount.
 
 use std::collections::BTreeMap;
 
@@ -59,14 +61,27 @@ impl Fat32Builder {
     pub fn add_file(&mut self, path: &str, data: Vec<u8>) -> Result<(), String> {
         let mut parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
         let file = parts.pop().ok_or("empty path")?;
+        let dir = self.dir(&parts)?;
+        short_name(file)?;
+        dir.files.insert(file.to_ascii_uppercase(), data);
+        Ok(())
+    }
+
+    /// Adds the directory at `path` (empty, if nothing goes into it),
+    /// creating parent directories as needed.
+    pub fn add_dir(&mut self, path: &str) -> Result<(), String> {
+        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+        self.dir(&parts).map(drop)
+    }
+
+    /// The directory at `parts`, made where it is not.
+    fn dir(&mut self, parts: &[&str]) -> Result<&mut Dir, String> {
         let mut dir = &mut self.root;
         for p in parts {
             short_name(p)?;
             dir = dir.dirs.entry(p.to_ascii_uppercase()).or_default();
         }
-        short_name(file)?;
-        dir.files.insert(file.to_ascii_uppercase(), data);
-        Ok(())
+        Ok(dir)
     }
 
     /// Serialises the volume into exactly `total_sectors` sectors.
@@ -251,6 +266,66 @@ impl Volume {
     }
 }
 
+/// The file at `path` (8.3 names, any case) on FAT32 `volume`, as the
+/// volume has it: written by [`Fat32Builder`] or by anyone.
+pub fn read_file(volume: &[u8], path: &str) -> Result<Vec<u8>, String> {
+    let u16_at = |at: usize| volume.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let u32_at = |at: usize| volume.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    let not_fat32 = || String::from("not a FAT32 file system");
+    if volume.get(82..90) != Some(b"FAT32   ") {
+        return Err(not_fat32());
+    }
+    let sector = u16_at(11).ok_or_else(not_fat32)?;
+    let cluster_bytes = sector * *volume.get(13).ok_or_else(not_fat32)? as usize;
+    let fat_at = sector * u16_at(14).ok_or_else(not_fat32)?;
+    let fats = *volume.get(16).ok_or_else(not_fat32)? as usize;
+    let data_at = fat_at + fats * sector * u32_at(36).ok_or_else(not_fat32)?;
+    // A chain's clusters, in order; at most as many as the volume has.
+    let chain = |first: usize| -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::new();
+        let mut cluster = first;
+        while (2..0x0FFF_FFF8).contains(&cluster) {
+            let at = data_at + (cluster - 2) * cluster_bytes;
+            bytes.extend_from_slice(volume.get(at..at + cluster_bytes).ok_or("a cluster beyond the volume")?);
+            if bytes.len() > volume.len() {
+                return Err(String::from("a cluster chain that loops"));
+            }
+            cluster = u32_at(fat_at + cluster * 4).ok_or("a cluster beyond the FAT")? & 0x0FFF_FFFF;
+        }
+        Ok(bytes)
+    };
+    let mut entries = chain(u32_at(44).ok_or_else(not_fat32)?)?;
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    for (i, part) in parts.iter().enumerate() {
+        let name = short_name(part)?;
+        let entry = entries
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .take_while(|e| e[0] != 0)
+            .find(|e| e[0] != 0xE5 && e[11] != 0x0F && e[11] & ATTR_VOLUME_ID == 0 && e[..11] == name)
+            .ok_or_else(|| format!("{path}: no {part}"))?;
+        let first = (u16::from_le_bytes([entry[20], entry[21]]) as usize) << 16
+            | u16::from_le_bytes([entry[26], entry[27]]) as usize;
+        let size = u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]) as usize;
+        let last = i + 1 == parts.len();
+        match (entry[11] & ATTR_DIRECTORY != 0, last) {
+            (false, true) => {
+                let mut data = if first == 0 { Vec::new() } else { chain(first)? };
+                if data.len() < size {
+                    return Err(format!("{path}: shorter than its size"));
+                }
+                data.truncate(size);
+                return Ok(data);
+            }
+            (true, false) => entries = chain(first)?,
+            (true, true) => return Err(format!("{path}: a directory")),
+            (false, false) => return Err(format!("{path}: {part} is a file")),
+        }
+    }
+    Err(format!("{path}: no file named"))
+}
+
 fn push_entry(buf: &mut Vec<u8>, name: &[u8; 11], attr: u8, cluster: u32, size: u32) {
     let mut e = [0u8; 32];
     e[0..11].copy_from_slice(name);
@@ -276,6 +351,24 @@ mod tests {
         assert_eq!(&short_name("EFI").unwrap(), b"EFI        ");
         assert!(short_name("waytoolongname.txt").is_err());
         assert!(short_name("a.toolong").is_err());
+    }
+
+    #[test]
+    fn reads_back_what_it_wrote() {
+        let mut b = Fat32Builder::new("VEDA");
+        let big: Vec<u8> = (0..20_000u32).map(|i| i as u8).collect();
+        b.add_file("VEDA/BOOT.CFG", b"run=editor".to_vec()).unwrap();
+        b.add_file("VEDA/BIG.BIN", big.clone()).unwrap();
+        b.add_file("VEDA/EMPTY.TXT", Vec::new()).unwrap();
+        b.add_dir("VEDA/LOGS").unwrap();
+        let img = b.build(64 * 1024 * 1024 / SECTOR as u32, 0).unwrap();
+        assert_eq!(read_file(&img, "veda/boot.cfg").unwrap(), b"run=editor");
+        assert_eq!(read_file(&img, "VEDA/BIG.BIN").unwrap(), big);
+        assert_eq!(read_file(&img, "VEDA/EMPTY.TXT").unwrap(), b"");
+        assert!(read_file(&img, "VEDA/LOGS").unwrap_err().contains("a directory"));
+        assert!(read_file(&img, "VEDA/LOGS/0001/VEDA.TXT").unwrap_err().contains("no 0001"));
+        assert!(read_file(&img, "VEDA/NONE.TXT").is_err());
+        assert!(read_file(&[0; 4096], "VEDA/BOOT.CFG").is_err());
     }
 
     #[test]

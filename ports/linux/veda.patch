@@ -829,7 +829,7 @@
 +device_initcall(veda_hvc_init);
 --- /dev/null
 +++ b/include/uapi/linux/veda.h
-@@ -0,0 +1,202 @@
+@@ -0,0 +1,219 @@
 +/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 +/*
 + * The bridge of Veda's driver VM: Veda's IPC for the programs of Linux in
@@ -1011,6 +1011,22 @@
 +	__s32 fd;
 +};
 +
++/*
++ * Up to len bytes of Veda's log (every program's lines, Linux's console
++ * among them) from offset (counted from the first byte ever logged) into
++ * buffer, at most 64 KiB. Out: len is what was read, next the
++ * offset after it. The log keeps its latest part only: what was read
++ * starts later than offset (at next - len) if that is gone.
++ */
++struct veda_log_read {
++	__u32 status;
++	__u32 reserved;
++	__u64 offset;
++	__u64 buffer;
++	__u64 len;
++	__u64 next;
++};
++
 +#define VEDA_IOCTL		0xB9
 +#define VEDA_IOC_CLOSE		_IOWR(VEDA_IOCTL, 2, struct veda_close)
 +#define VEDA_IOC_DUPLICATE	_IOWR(VEDA_IOCTL, 3, struct veda_duplicate)
@@ -1030,6 +1046,7 @@
 +#define VEDA_IOC_CLOCK		_IOWR(VEDA_IOCTL, 19, struct veda_clock)
 +#define VEDA_IOC_WATCH		_IOWR(VEDA_IOCTL, 20, struct veda_watch)
 +#define VEDA_IOC_VMO_DMABUF	_IOWR(VEDA_IOCTL, 21, struct veda_vmo_dmabuf)
++#define VEDA_IOC_LOG_READ	_IOWR(VEDA_IOCTL, 22, struct veda_log_read)
 +
 +#endif /* _UAPI_LINUX_VEDA_H */
 --- /dev/null
@@ -1062,7 +1079,7 @@
 +obj-$(CONFIG_VEDA_EFI)		+= efi.o
 --- /dev/null
 +++ b/drivers/virt/veda/bridge.c
-@@ -0,0 +1,1063 @@
+@@ -0,0 +1,1102 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * /dev/veda: the bridge of Veda's driver VM, through which the programs of
@@ -1448,6 +1465,43 @@
 +out:
 +	kfree(buffer);
 +	kfree(c);
++	return ret;
++}
++
++/* Veda's log, read into a copy of the driver's, then the program's. */
++static long do_log_read(void __user *arg)
++{
++	struct veda_log_read *r;
++	void *buffer = NULL;
++	u64 ubuffer;
++	long ret;
++
++	r = kmalloc(sizeof(*r), GFP_KERNEL);
++	if (!r)
++		return -ENOMEM;
++	ret = -EFAULT;
++	if (copy_from_user(r, arg, sizeof(*r)))
++		goto out;
++	ret = -EINVAL;
++	if (r->len > MAX_COPY)
++		goto out;
++	ret = -ENOMEM;
++	buffer = kmalloc(max_t(u64, r->len, 1), GFP_KERNEL);
++	if (!buffer)
++		goto out;
++	ubuffer = r->buffer;
++	r->buffer = __pa(buffer);
++	ret = bridge_call(22, r);
++	if (ret)
++		goto out;
++	ret = -EFAULT;
++	if (r->status == 0 && copy_to_user(u64_to_user_ptr(ubuffer), buffer, r->len))
++		goto out;
++	r->buffer = ubuffer;
++	ret = copy_to_user(arg, r, sizeof(*r)) ? -EFAULT : 0;
++out:
++	kfree(buffer);
++	kfree(r);
 +	return ret;
 +}
 +
@@ -1984,6 +2038,8 @@
 +		return do_vmo_dmabuf(f, uarg);
 +	case VEDA_IOC_WATCH:
 +		return do_watch(file, uarg);
++	case VEDA_IOC_LOG_READ:
++		return do_log_read(uarg);
 +	default:
 +		return -ENOTTY;
 +	}

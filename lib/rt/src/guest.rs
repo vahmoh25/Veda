@@ -2,12 +2,12 @@
 //!
 //! A program built for the guest (with `--cfg veda_guest`, which the
 //! guest's target sets) makes its system calls here instead of with
-//! `syscall`: the ones on Veda's objects through the bridge (`/dev/veda`,
-//! `vhv::bridge`), the rest with Linux's own (time from the TSC, which the
-//! guest reads as Veda does; futexes; sleeping). So the program uses
-//! `vrt`, and everything built on it (`vipc`, `vproto`), as a Veda program
-//! does. What makes no sense in the guest (processes, hardware, virtual
-//! machines) is `NotSupported`.
+//! `syscall`: the ones on Veda's objects, and its log, through the bridge
+//! (`/dev/veda`, `vhv::bridge`), the rest with Linux's own (time from the
+//! TSC, which the guest reads as Veda does; futexes; sleeping). So the
+//! program uses `vrt`, and everything built on it (`vipc`, `vproto`), as a
+//! Veda program does. What makes no sense in the guest (processes,
+//! hardware, virtual machines) is `NotSupported`.
 
 use core::arch::asm;
 use core::sync::atomic::{AtomicI32, Ordering};
@@ -289,6 +289,12 @@ pub(crate) fn call(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
                 done += len;
             }
             one(a[3])
+        }
+        nr::LOG_READ => {
+            let len = a[2].min(b::MAX_COPY as usize);
+            let mut r = b::LogRead { offset: a[0] as u64, buffer: a[1] as u64, len: len as u64, ..b::LogRead::default() };
+            bridge(op::LOG_READ, &mut r)?;
+            Ok((r.len as usize, r.next as usize))
         }
         nr::VM_MAP => {
             // Only into this program, wherever Linux puts it.
