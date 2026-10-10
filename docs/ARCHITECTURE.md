@@ -189,7 +189,8 @@ has ended and left its stack, which is how thread libraries join threads.
   has one for, matched by vendor and device or by PCI class. A driver gets
   a channel speaking the `pcidev` protocol for exactly its device: that
   device's configuration space (its BAR registers stay as the firmware set
-  them), its BARs mapped, MSI interrupts and DMA memory. Drivers never see
+  them), its BARs mapped, MSI interrupts (or the line its INTx is wired
+  to, where the firmware's `_PRT` says) and DMA memory. Drivers never see
   other devices.
 * **ACPI.** `devmgr` also reads the firmware's ACPI tables (the kernel
   hands `init` the RSDP and the firmware's ACPI memory ranges, `init`
@@ -204,7 +205,9 @@ has ended and left its stack, which is how thread libraries join threads.
   ports, PCI configuration space or embedded controller. Definitions
   inside an `If` outside any method exist only when their condition holds
   (that is how a board leaves out what its settings turn off); a region
-  whose address depends on a later table is placed when first read, as
+  whose address depends on a later table is placed when first read, and a
+  name whose data refers to objects defined after it (a `_PRT` package
+  naming interrupt link devices) is evaluated again once they are, as
   ACPICA does. Every evaluation is bounded. The tables and the firmware's
   ACPI memory are mapped cached, anything else AML reads uncached. On the
   laptop this was written for, all of a 480 KiB DSDT and fifteen SSDTs
@@ -221,7 +224,8 @@ has ended and left its stack, which is how thread libraries join threads.
   ([the driver VM](DRIVERVM.md)): all but the disks, the platform's own
   functions and the devices Veda still drives itself (HD Audio). `devmgr`
   hands their `pcidev` channels to `drivervm`, which gives them to its
-  guest whole, their DMA confined to the guest's memory by the IOMMU. It
+  guest whole, their DMA confined to the guest's memory by the IOMMU, and
+  describes them in ACPI tables of its own, as a PC's firmware would. It
   starts when the processors run virtual machines and an IOMMU confines
   devices (the kernel says both in the boot information, `vabi::platform`),
   and the system image has its Linux. When it ends without Linux having

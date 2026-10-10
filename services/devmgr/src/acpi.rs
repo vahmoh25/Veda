@@ -175,6 +175,12 @@ impl Acpi {
         device::pci_companion(&self.ns, &self.roots, (bus, slot, function), &self.memory)
     }
 
+    /// Where INTx `pin` (1 to 4) of the functions in `slot` of root bus
+    /// `bus` goes (see [`device::pci_interrupt`]).
+    pub fn pci_interrupt(&self, bus: u8, slot: u8, pin: u8) -> Option<device::IntxRoute> {
+        device::pci_interrupt(&self.ns, &self.roots, (bus, slot), pin, &self.memory)
+    }
+
     /// The devices directly below `path`, as their drivers see them.
     pub fn children(&self, path: &Path) -> Vec<Described> {
         device::describe_children(&self.ns, path, &self.memory)

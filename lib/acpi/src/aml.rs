@@ -176,6 +176,18 @@ pub struct Namespace {
     pub skipped: usize,
     /// Why the first of them were (the scope and the error).
     pub skip_reasons: Vec<(Path, Error)>,
+    /// Names whose data refers to objects not defined when they were (a
+    /// package naming a device further on, or in a later table): they are
+    /// evaluated again once a table has loaded.
+    unresolved: Vec<Unresolved>,
+}
+
+/// A name's data, to be evaluated again.
+struct Unresolved {
+    path: Path,
+    scope: Path,
+    table: usize,
+    start: usize,
 }
 
 impl Default for Namespace {
@@ -194,6 +206,7 @@ impl Namespace {
             integer_bits: 64,
             skipped: 0,
             skip_reasons: Vec::new(),
+            unresolved: Vec::new(),
         };
         ns.objects.insert(Path::root(), Object::Scope);
         for s in ["_GPE", "_PR", "_SB", "_SI", "_TZ"] {
@@ -222,7 +235,35 @@ impl Namespace {
         let table = self.code.len();
         let code: Arc<[u8]> = Arc::from(aml);
         self.code.push(code.clone());
-        self.load_list(table, &code, 0, code.len(), &Path::root(), memory)
+        let loaded = self.load_list(table, &code, 0, code.len(), &Path::root(), memory);
+        self.resolve_again(memory);
+        loaded
+    }
+
+    /// Evaluates again the data of the names that referred to objects not
+    /// defined yet; those that still do wait for the next table.
+    fn resolve_again(&mut self, memory: &dyn Memory) {
+        for u in core::mem::take(&mut self.unresolved) {
+            let code = self.code[u.table].clone();
+            let mut c = Cursor { code: &code, pos: u.start };
+            let mut f = Frame::new(u.scope.clone(), Vec::new());
+            let value = Evaluator::new(self, memory).term(&mut f, &mut c, true);
+            match value {
+                Ok(v) if !self.dangles(&v) => {
+                    self.objects.insert(u.path, Object::Name(v));
+                }
+                _ => self.unresolved.push(u),
+            }
+        }
+    }
+
+    /// Whether `value` refers to an object that does not exist.
+    fn dangles(&self, value: &Value) -> bool {
+        match value {
+            Value::Reference(p) => !self.objects.contains_key(p),
+            Value::Package(items) => items.iter().any(|v| self.dangles(v)),
+            _ => false,
+        }
     }
 
     /// The object at `path` (aliases followed).
@@ -266,7 +307,30 @@ impl Namespace {
     /// Reads the object at `path`, or calls it with `args` if it is a
     /// method.
     pub fn evaluate(&self, path: &Path, args: &[Value], memory: &dyn Memory) -> Result<Value, Error> {
+        self.evaluate_in(&mut Evaluator::new(self, memory), path, args)
+    }
+
+    /// Calls method `first` with `first_args`, then evaluates `path` as
+    /// [`Namespace::evaluate`] does, in the same evaluation: what the first
+    /// stores holds for the second (`\_PIC (1)`, the interrupt model the
+    /// firmware's `_PRT` methods answer for). Without a method `first`,
+    /// just evaluates `path`.
+    pub fn evaluate_after(
+        &self,
+        first: &Path,
+        first_args: &[Value],
+        path: &Path,
+        args: &[Value],
+        memory: &dyn Memory,
+    ) -> Result<Value, Error> {
         let mut ev = Evaluator::new(self, memory);
+        if let Some(Object::Method { .. }) = self.get(first) {
+            ev.call(first, first_args.to_vec())?;
+        }
+        self.evaluate_in(&mut ev, path, args)
+    }
+
+    fn evaluate_in(&self, ev: &mut Evaluator, path: &Path, args: &[Value]) -> Result<Value, Error> {
         match self.get(path) {
             Some(Object::Method { .. }) => ev.call(path, args.to_vec()),
             Some(Object::Osi) => Ok(ev.osi(args.first())),
@@ -344,7 +408,11 @@ impl Namespace {
                             Value::Uninitialized
                         }
                     };
-                    self.define(name.in_scope(scope), Object::Name(value));
+                    let path = name.in_scope(scope);
+                    if self.dangles(&value) && !self.objects.contains_key(&path) {
+                        self.unresolved.push(Unresolved { path: path.clone(), scope: scope.clone(), table, start: at });
+                    }
+                    self.define(path, Object::Name(value));
                 }
                 // Alias
                 0x06 => {

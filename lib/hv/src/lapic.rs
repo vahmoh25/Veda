@@ -2,8 +2,11 @@
 //!
 //! A guest reaches it through the x2APIC MSRs (`0x800` to `0x8FF`) and
 //! `IA32_TSC_DEADLINE`: there is no memory-mapped (xAPIC) interface, and
-//! the APIC cannot leave x2APIC mode. Interrupts are edge-triggered and
-//! delivered as fixed interrupts (or NMIs, which the caller delivers).
+//! the APIC cannot leave x2APIC mode. Interrupts are delivered as fixed
+//! interrupts (or NMIs, which the caller delivers): edges, or level-
+//! triggered ones, whose end-of-interrupt the APIC reports, for the caller
+//! to end the interrupt at its source (as an APIC's end-of-interrupt
+//! message ends an I/O APIC's).
 //!
 //! Time is the TSC's, which the guest reads as it is: the timer counts TSC
 //! ticks divided by its divider, and in TSC-deadline mode fires when the
@@ -104,6 +107,8 @@ pub enum Write {
     Refused,
     /// The guest sent an inter-processor interrupt.
     Ipi(Ipi),
+    /// The guest ended a level-triggered interrupt of this vector.
+    EndOfLevel(u8),
 }
 
 /// A virtual local APIC.
@@ -118,6 +123,9 @@ pub struct Lapic {
     esr: u32,
     irr: [u32; 8],
     isr: [u32; 8],
+    /// The trigger mode of the interrupts requested and in service: set
+    /// for level-triggered ones.
+    tmr: [u32; 8],
     lvt: [u32; LVT_COUNT],
     icr: u64,
     timer_initial: u32,
@@ -140,6 +148,7 @@ impl Lapic {
             esr: 0,
             irr: [0; 8],
             isr: [0; 8],
+            tmr: [0; 8],
             lvt: [LVT_MASKED; LVT_COUNT],
             icr: 0,
             timer_initial: 0,
@@ -202,8 +211,7 @@ impl Lapic {
             LDR => self.logical_id(),
             SVR => self.svr,
             ISR..=0x817 => self.isr[(msr - ISR) as usize],
-            // Interrupts are edge-triggered: no vector is ever level.
-            TMR..=0x81F => 0,
+            TMR..=0x81F => self.tmr[(msr - TMR) as usize],
             IRR..=0x827 => self.irr[(msr - IRR) as usize],
             ESR => self.esr,
             ICR => return Some(self.icr),
@@ -235,7 +243,11 @@ impl Lapic {
         let Ok(v) = u32::try_from(value) else { return Write::Refused };
         match msr {
             TPR if v <= 0xFF => self.tpr = v,
-            EOI if v == 0 => self.eoi(),
+            EOI if v == 0 => {
+                if let Some(vector) = self.eoi() {
+                    return Write::EndOfLevel(vector);
+                }
+            }
             SVR if v & !0x1FF == 0 => {
                 self.svr = v;
                 if !self.enabled() {
@@ -340,14 +352,29 @@ impl Lapic {
         }
     }
 
-    /// Accepts an interrupt (from a device, another processor or the
-    /// APIC itself).
+    /// Accepts an edge-triggered interrupt (from a device, another
+    /// processor or the APIC itself).
     pub fn request(&mut self, vector: u8) {
+        if self.accept(vector) {
+            clear(&mut self.tmr, vector);
+        }
+    }
+
+    /// Accepts a level-triggered interrupt (a device's line): its
+    /// end-of-interrupt is reported ([`Write::EndOfLevel`]).
+    pub fn request_level(&mut self, vector: u8) {
+        if self.accept(vector) {
+            set(&mut self.tmr, vector);
+        }
+    }
+
+    fn accept(&mut self, vector: u8) -> bool {
         if vector < 16 {
             self.errors |= ESR_RECEIVE_ILLEGAL;
-            return;
+            return false;
         }
         set(&mut self.irr, vector);
+        true
     }
 
     /// The processor priority: the task priority, or the class of the
@@ -376,11 +403,19 @@ impl Lapic {
         Some(v)
     }
 
-    /// End of interrupt: the highest interrupt in service is done.
-    fn eoi(&mut self) {
-        if let Some(v) = highest(&self.isr) {
-            clear(&mut self.isr, v);
+    /// End of interrupt: the highest interrupt in service is done. Its
+    /// vector if it was level-triggered.
+    fn eoi(&mut self) -> Option<u8> {
+        let v = highest(&self.isr)?;
+        clear(&mut self.isr, v);
+        if !is_set(&self.tmr, v) {
+            return None;
         }
+        // The trigger mode is a new request's, if one came meanwhile.
+        if !is_set(&self.irr, v) {
+            clear(&mut self.tmr, v);
+        }
+        Some(v)
     }
 }
 
@@ -390,6 +425,10 @@ fn set(bits: &mut [u32; 8], v: u8) {
 
 fn clear(bits: &mut [u32; 8], v: u8) {
     bits[v as usize / 32] &= !(1 << (v % 32));
+}
+
+fn is_set(bits: &[u32; 8], v: u8) -> bool {
+    bits[v as usize / 32] & (1 << (v % 32)) != 0
 }
 
 fn highest(bits: &[u32; 8]) -> Option<u8> {
@@ -451,6 +490,26 @@ mod tests {
         assert_eq!(a.read(ISR + 1, 0), Some(0));
         // EOI takes no value but 0.
         assert_eq!(a.write(EOI, 1, 0), Write::Refused);
+    }
+
+    #[test]
+    fn level_triggered_interrupts_report_their_end() {
+        let mut a = enabled(0);
+        a.request_level(0x51);
+        a.request(0x40);
+        assert_eq!(a.read(TMR + 2, 0), Some(1 << 17));
+        assert_eq!(a.acknowledge(), Some(0x51));
+        // Ending it says so, once; an edge's end says nothing.
+        assert_eq!(a.write(EOI, 0, 0), Write::EndOfLevel(0x51));
+        assert_eq!(a.read(TMR + 2, 0), Some(0));
+        assert_eq!(a.acknowledge(), Some(0x40));
+        assert_eq!(a.write(EOI, 0, 0), Write::Done);
+        assert_eq!(a.write(EOI, 0, 0), Write::Done);
+        // An edge on a vector that was level makes it an edge again.
+        a.request_level(0x60);
+        a.request(0x60);
+        assert_eq!(a.acknowledge(), Some(0x60));
+        assert_eq!(a.write(EOI, 0, 0), Write::Done);
     }
 
     #[test]

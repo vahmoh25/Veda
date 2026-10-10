@@ -6,8 +6,9 @@
 //! tables that map the first 4 GiB as they are, the boot parameters and
 //! the command line) and stay reserved: the processors Linux starts later
 //! start on the same page tables. As on a PC, the memory map leaves out
-//! the legacy area below 1 MiB. The kernel goes where it prefers to be,
-//! the initial RAM file system at the top of memory.
+//! the legacy area below 1 MiB, where the ACPI tables are (from 0xE0000).
+//! The kernel goes where it prefers to be, the initial RAM file system at
+//! the top of memory.
 //!
 //! The rest of the guest-physical address space:
 //!
@@ -23,6 +24,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use vabi::{VcpuExit, map_flags, vcpu_exit};
+use vhv::acpi;
 use vhv::linux::{self, E820_RAM, E820_RESERVED, MemoryRange};
 use vhv::platform::{self, error, hypercall, power};
 use vrt::object::{Channel, Guest, Resource, Vcpu, Vmo};
@@ -32,6 +34,7 @@ use vrt::vm::Mapping;
 
 use crate::bridge::Bridge;
 use crate::i8042::{self, I8042};
+use crate::lines::Lines;
 use crate::memory::GuestMemory;
 use crate::pci::{Devices, Windows};
 
@@ -87,6 +90,8 @@ pub struct Machine {
     devices: Devices,
     /// The keyboard controller, if the guest has it.
     i8042: Option<I8042>,
+    /// The interrupt lines the guest has.
+    lines: Lines,
     /// The guest's first processor, which the bridge's interrupts go to.
     notify: Vcpu,
     /// The processors that have started (by APIC id), for the devices'
@@ -102,14 +107,16 @@ pub struct Machine {
 
 impl Machine {
     /// Makes the machine, gives it the PCI functions of `devices` (their
-    /// `pcidev` channels) and the keyboard controller, loads Linux and
-    /// starts its first processor.
+    /// `pcidev` channels), the keyboard controller and the interrupt lines
+    /// of `lines` (to which the functions' are added), describes them in
+    /// ACPI tables, loads Linux and starts its first processor.
     pub fn start(
         hypervisor: &Resource,
         kernel: &[u8],
         initramfs: &[u8],
         devices: Vec<Channel>,
         i8042: Option<I8042>,
+        mut lines: Lines,
         config: &Config,
     ) -> Result<Arc<Machine>, String> {
         let size = config.memory_mib as u64 * MIB;
@@ -128,8 +135,15 @@ impl Machine {
         let devices = if devices.is_empty() {
             Devices::none()
         } else {
-            Devices::attach(&guest, devices, &mut Windows { low: PCI_LOW, high: PCI_HIGH })
+            Devices::attach(&guest, devices, &mut Windows { low: PCI_LOW, high: PCI_HIGH }, &mut lines)
         };
+        let functions = devices.functions();
+        let description =
+            acpi::Machine { functions: &functions, i8042: i8042.is_some(), pci_low: PCI_LOW, pci_high: PCI_HIGH };
+        let acpi_tables = acpi::tables(&description);
+        if acpi_tables.len() > acpi::ROOM {
+            return Err(format!("the ACPI tables take {} KiB, more than they have", acpi_tables.len() / 1024));
+        }
 
         // The kernel where it prefers to be, the initial RAM file system at
         // the top, between them the room the kernel unpacks itself into.
@@ -140,9 +154,6 @@ impl Machine {
         }
         let mut cmdline = String::from(CMDLINE);
         cmdline.push_str(&devices.host_options());
-        if i8042.is_some() {
-            cmdline.push_str(" veda.i8042");
-        }
         cmdline.push_str(config.cmdline.trim_end());
         if cmdline.len() > image.cmdline_size as usize || cmdline.len() >= 4096 {
             return Err(String::from("the kernel's command line is too long"));
@@ -160,6 +171,7 @@ impl Machine {
             cmdline_at: CMDLINE_AT,
             initrd: Some((initrd_at, initramfs.len() as u64)),
             memory: &ranges,
+            rsdp: Some(acpi::AT),
         };
         let gdt: Vec<u8> = linux::GDT.iter().flat_map(|e| e.to_le_bytes()).collect();
         let tables = linux::identity_page_tables(PAGE_TABLES_AT);
@@ -170,6 +182,7 @@ impl Machine {
         }
         loaded &= memory.write(BOOT_PARAMS_AT, &linux::boot_params(&boot));
         loaded &= memory.write(CMDLINE_AT, cmdline.as_bytes());
+        loaded &= memory.write(acpi::AT, &acpi_tables);
         loaded &= memory.write(kernel_at, image.protected);
         loaded &= memory.write(initrd_at, initramfs);
         if !loaded {
@@ -189,6 +202,7 @@ impl Machine {
             bridge: Bridge::new().map_err(|e| format!("no bridge: {e}"))?,
             devices,
             i8042,
+            lines,
             notify,
             vcpus: Mutex::new(vcpus),
             console: Mutex::new((0..config.cpus).map(|_| Vec::new()).collect()),
@@ -288,8 +302,8 @@ impl Machine {
                 Some(Some(vcpu)) => self.devices.msi(data[1], data[2], vcpu, data[4]),
                 _ => error::INVALID,
             },
-            hypercall::ISA_IRQ => match (&self.i8042, self.vcpus.lock().get(data[2] as usize)) {
-                (Some(i8042), Some(Some(vcpu))) if i8042.route(data[1], vcpu, data[3]) => 0,
+            hypercall::GSI => match self.vcpus.lock().get(data[2] as usize) {
+                Some(Some(vcpu)) if self.lines.route(data[1], vcpu, data[3]) => 0,
                 _ => error::INVALID,
             },
             _ => error::UNKNOWN,

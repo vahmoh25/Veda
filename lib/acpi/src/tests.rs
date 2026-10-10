@@ -341,6 +341,81 @@ fn stores_stay_inside_an_evaluation() {
 }
 
 #[test]
+fn the_descriptors_veda_writes_read_back() {
+    let template = cat(&[
+        &io(0x60, 1),
+        &irq_no_flags(12),
+        &word_bus_number(0, 0),
+        &dword_memory(0xC000_0000, 0xFEBF_FFFF),
+        &qword_memory(0x20_0000_0000, 0x3F_FFFF_FFFF),
+        &END_TAG,
+    ]);
+    let r = resource::parse(&template).unwrap();
+    assert_eq!(r[0], Resource::Io { base: 0x60, length: 1 });
+    assert!(matches!(&r[1], Resource::Irq { irqs, edge: true, active_low: false, .. } if irqs == &[12]));
+    assert_eq!(r[2], Resource::Window { kind: 2, min: 0, max: 0, translation: 0, length: 1 });
+    assert_eq!(
+        r[3],
+        Resource::Window { kind: 0, min: 0xC000_0000, max: 0xFEBF_FFFF, translation: 0, length: 0x3EC0_0000 }
+    );
+    assert_eq!(
+        r[4],
+        Resource::Window { kind: 0, min: 0x20_0000_0000, max: 0x3F_FFFF_FFFF, translation: 0, length: 0x20_0000_0000 }
+    );
+}
+
+#[test]
+fn pci_interrupts_in_apic_mode() {
+    // As QEMU's q35 has it: `_PRT` answers for the model `_PIC` sets, its
+    // routes through interrupt link devices defined after it (in APIC
+    // mode, to the I/O APIC's inputs from 16, level-triggered and active
+    // high); a route can name a GSI itself too.
+    let gsi_link = |irq: u32| cat(&[&[0x89, 6, 0, 0x09, 1], &irq.to_le_bytes(), &END_TAG]);
+    let aml = cat(&[
+        &name("PICF", &int(0)),
+        &method("_PIC", 1, &store(&[ARG0], &nm("PICF"))),
+        &scope(
+            "\\_SB",
+            &cat(&[
+                &device(
+                    "PCI0",
+                    &cat(&[
+                        &name("_HID", &eisa("PNP0A08")),
+                        &name("PRTP", &package(&[package(&[int(0x0002_FFFF), int(0), nm("LNKA"), int(0)])])),
+                        &name(
+                            "PRTA",
+                            &package(&[
+                                package(&[int(0x0002_FFFF), int(0), nm("GSIA"), int(0)]),
+                                package(&[int(0x0003_FFFF), int(1), int(0), int(0x11)]),
+                            ]),
+                        ),
+                        &method("_PRT", 0, &cat(&[&if_(&nm("PICF"), &ret(&nm("PRTA"))), &ret(&nm("PRTP"))])),
+                    ]),
+                ),
+                &device("GSIA", &cat(&[&name("_HID", &eisa("PNP0C0F")), &name("_CRS", &buffer(&gsi_link(16)))])),
+                // IRQ (Level, ActiveLow, Shared) {11}: the PIC's.
+                &device(
+                    "LNKA",
+                    &cat(&[
+                        &name("_HID", &eisa("PNP0C0F")),
+                        &name("_CRS", &buffer(&[0x23, 0x00, 0x08, 0x18, 0x79, 0])),
+                    ]),
+                ),
+            ]),
+        ),
+    ]);
+    let mut ns = Namespace::new();
+    ns.load(&aml, &crate::NoMemory).unwrap();
+    let roots = device::pci_roots(&ns, &crate::NoMemory);
+    let route = |slot, pin| device::pci_interrupt(&ns, &roots, (0, slot), pin, &crate::NoMemory);
+    assert_eq!(route(2, 1), Some(device::IntxRoute { gsi: 16, level: true, active_low: false }));
+    assert_eq!(route(3, 2), Some(device::IntxRoute { gsi: 0x11, level: true, active_low: true }));
+    assert_eq!(route(3, 1), None);
+    // Nothing the evaluation stored stays: the namespace is in PIC mode.
+    assert_eq!(eval(&ns, "\\PICF", &crate::NoMemory), Ok(Value::Integer(0)));
+}
+
+#[test]
 fn integers_are_32_bits_under_a_revision_1_dsdt() {
     let aml = method("ONES", 0, &ret(&[0xFF]));
     let mut data = vec![0u8; 36];

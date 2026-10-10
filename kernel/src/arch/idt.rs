@@ -6,13 +6,10 @@ use super::entry::{TrapFrame, vk_isr_stubs};
 use super::gdt::{IST_DOUBLE_FAULT, IST_MACHINE_CHECK, IST_NMI, KERNEL_CS};
 use crate::sync::bkl;
 
-/// First vector used for I/O APIC interrupts (vector = base + GSI).
-pub const IOAPIC_VECTOR_BASE: u8 = 0x30;
-/// Number of GSIs that get a fixed vector.
-pub const IOAPIC_VECTORS: u8 = 32;
-/// Dynamically allocated MSI vectors.
-pub const MSI_VECTOR_FIRST: u8 = 0x50;
-pub const MSI_VECTOR_LAST: u8 = 0xEF;
+/// The vectors of devices' interrupts (I/O APIC inputs and MSIs), each
+/// allocated when its interrupt is set up.
+pub const DEVICE_VECTOR_FIRST: u8 = 0x30;
+pub const DEVICE_VECTOR_LAST: u8 = 0xEF;
 pub const TIMER_VECTOR: u8 = 0xF0;
 pub const RESCHED_VECTOR: u8 = 0xF1;
 pub const TLB_VECTOR: u8 = 0xF2;
@@ -163,9 +160,7 @@ pub extern "sysv64" fn trap_dispatch(frame: &mut TrapFrame) {
             crate::iommu::fault_interrupt();
             super::apic::eoi();
         }
-        v if (IOAPIC_VECTOR_BASE..IOAPIC_VECTOR_BASE + IOAPIC_VECTORS).contains(&v)
-            || (MSI_VECTOR_FIRST..=MSI_VECTOR_LAST).contains(&v) =>
-        {
+        v @ DEVICE_VECTOR_FIRST..=DEVICE_VECTOR_LAST => {
             crate::object::interrupt::dispatch(v);
             super::apic::eoi();
         }

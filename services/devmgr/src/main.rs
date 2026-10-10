@@ -34,6 +34,7 @@ mod gpio;
 mod pci;
 
 use alloc::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
@@ -42,7 +43,7 @@ use vabi::{cache_policy, irq_flags, signals};
 use vacpi::name::Path;
 use vacpi::resource::Resource as FirmwareResource;
 use vipc::WaitSet;
-use vproto::pci::{AcpiDevice, AcpiResource, DeviceInfo, MsiAddress, PciError, pcidev};
+use vproto::pci::{AcpiDevice, AcpiResource, DeviceInfo, IntxLine, MsiAddress, PciError, pcidev};
 use vrt::object::{Channel, Interrupt, IoPorts, Process, Resource, Vmo};
 use vrt::println;
 
@@ -192,11 +193,20 @@ struct Bound {
 struct Manager {
     config: ConfigSpace,
     io: Resource,
+    irq: Resource,
     mmio: Resource,
     dma: Resource,
     pci: Resource,
     acpi: Option<Acpi>,
     gpio: RefCell<Gpio>,
+    /// The lines functions' INTx are wired to, by GSI: one interrupt each,
+    /// which every function on the line shares.
+    lines: RefCell<BTreeMap<u32, Interrupt>>,
+}
+
+/// `A` for INTA# (pin 1) to `D`.
+fn intx_letter(pin: u8) -> char {
+    (b'A' + pin.saturating_sub(1)) as char
 }
 
 /// A resource as the `pcidev` protocol carries it.
@@ -293,6 +303,48 @@ impl pcidev::Server for DeviceSession<'_> {
 
     fn dma_resource(&mut self) -> Result<Resource, PciError> {
         self.mgr.dma.duplicate().map_err(|_| PciError::Denied)
+    }
+
+    fn intx(&mut self) -> Result<(Interrupt, IntxLine), PciError> {
+        let (a, pin) = (self.dev.address, self.dev.info.irq_pin);
+        if !(1..=4).contains(&pin) {
+            return Err(PciError::NotFound);
+        }
+        let route = self.mgr.acpi.as_ref().and_then(|acpi| acpi.pci_interrupt(a.bus, a.slot, pin));
+        let Some(route) = route else {
+            println!(
+                "{:02x}:{:02x}.{}: the firmware does not say where INT{}# goes",
+                a.bus,
+                a.slot,
+                a.function,
+                intx_letter(pin)
+            );
+            return Err(PciError::NotFound);
+        };
+        let line = IntxLine { pin, gsi: route.gsi, level: route.level, active_low: route.active_low };
+        let mut lines = self.mgr.lines.borrow_mut();
+        let irq = match lines.entry(route.gsi) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
+                let flags = if route.level { irq_flags::LEVEL } else { 0 }
+                    | if route.active_low { irq_flags::ACTIVE_LOW } else { 0 };
+                e.insert(
+                    Interrupt::create(&self.mgr.irq, route.gsi as usize, flags).map_err(|_| PciError::NoResources)?,
+                )
+            }
+        };
+        let irq = irq.0.duplicate(None).map_err(|_| PciError::NoResources)?;
+        println!(
+            "{:02x}:{:02x}.{}: INT{}# on GSI {} ({}, active {})",
+            a.bus,
+            a.slot,
+            a.function,
+            intx_letter(pin),
+            route.gsi,
+            if route.level { "level" } else { "edge" },
+            if route.active_low { "low" } else { "high" }
+        );
+        Ok((Interrupt(irq), line))
     }
 
     fn device_resource(&mut self) -> Result<Resource, PciError> {
@@ -632,8 +684,17 @@ fn main() -> i32 {
     let machine = boot_info();
     let acpi = machine.as_ref().and_then(|m| Acpi::load(&mmio, m));
     let platform = machine.map_or(0, |m| m.platform);
-    let mgr =
-        Manager { config: ConfigSpace::new(ports), io, mmio, dma, pci, acpi, gpio: RefCell::new(Gpio::default()) };
+    let mgr = Manager {
+        config: ConfigSpace::new(ports),
+        io,
+        irq,
+        mmio,
+        dma,
+        pci,
+        acpi,
+        gpio: RefCell::new(Gpio::default()),
+        lines: RefCell::new(BTreeMap::new()),
+    };
     let args = vrt::env::args();
     let live = args.iter().any(|a| a == "live");
     // The driver VM's options: `drivervm`, `drivervm=off`, and its own as
@@ -707,7 +768,7 @@ fn main() -> i32 {
 
     // The keyboard controller goes too, whose ports and interrupts are
     // the PC's whether or not anything answers there.
-    let i8042 = if runs.is_ok() { I8042::claim(&mgr.io, &irq) } else { None };
+    let i8042 = if runs.is_ok() { I8042::claim(&mgr.io, &mgr.irq) } else { None };
     // It starts for its devices, or because the boot options ask for it.
     let mut vm = None;
     if runs.is_ok() && (!guest.is_empty() || i8042.is_some() || drivervm.iter().any(|a| a == "drivervm")) {

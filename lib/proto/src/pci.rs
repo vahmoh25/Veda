@@ -2,7 +2,8 @@
 //!
 //! A driver is started with a channel speaking this protocol for exactly one
 //! device: it can read and write that device's configuration space, map its
-//! BARs, enable it, and allocate MSI interrupts and DMA memory. It also
+//! BARs, enable it, and allocate MSI interrupts and DMA memory (or have the
+//! line its INTx is wired to). It also
 //! learns what the firmware describes below the device (ACPI: the
 //! amplifiers on an SPI controller, say), and drives the GPIO pins those
 //! devices are wired to — those pins only. Nothing else.
@@ -47,6 +48,19 @@ message! {
     pub struct MsiAddress {
         pub address: u64,
         pub data: u32,
+    }
+}
+
+message! {
+    /// Where a function's INTx goes, as the firmware routes it (`_PRT`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct IntxLine {
+        /// The function's pin: 1 for INTA# to 4.
+        pub pin: u8,
+        /// The I/O APIC input (GSI) it is wired to, and how.
+        pub gsi: u32,
+        pub level: bool,
+        pub active_low: bool,
     }
 }
 
@@ -147,6 +161,11 @@ protocol! {
         /// requester id), for giving it to a virtual machine: only the
         /// driver VM's devices have one (`Denied`).
         12 => fn device_resource() -> Result<Resource, PciError>;
+        /// The interrupt line the function's INTx is wired to (`NotFound`:
+        /// it has none, or the firmware does not say where it goes). Every
+        /// function on a line shares the one interrupt; a driver that
+        /// takes it leaves the function's MSIs off.
+        13 => fn intx() -> Result<(Interrupt, IntxLine), PciError>;
     }
 }
 

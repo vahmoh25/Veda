@@ -10,6 +10,7 @@
 //! * [`linux`]: booting a Linux kernel on it (the x86 boot protocol).
 //! * [`bridge`]: Veda's IPC for the guest's programs.
 //! * [`pci`]: the configuration space of a PCI function given to a guest.
+//! * [`acpi`]: the ACPI tables that describe the guest's machine.
 //!
 //! The kernel drives them under its virtual processors (`kernel/src/hv`),
 //! and the virtual machine monitor and the Linux guest's side use the
@@ -21,6 +22,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod acpi;
 pub mod bridge;
 pub mod cpuid;
 pub mod lapic;

@@ -547,9 +547,9 @@ impl Vcpu {
         call(nr::VCPU_INTERRUPT, [self.raw() as usize, vector as usize, 0, 0, 0, 0]).map(|_| ())
     }
 
-    /// Makes `irq` (an edge: an MSI, or an edge-triggered line) raise
-    /// `vector` at the virtual processor's local APIC, rather than signal,
-    /// from now on; vector 0 makes it signal again.
+    /// Makes `irq` raise `vector` at the virtual processor's local APIC,
+    /// rather than signal, from now on (a level-triggered line masked until
+    /// the guest's end-of-interrupt); vector 0 makes it signal again.
     pub fn bind_interrupt(&self, irq: &Interrupt, vector: u8) -> Result<(), Error> {
         call(nr::VCPU_BIND_INTERRUPT, [self.raw() as usize, irq.raw() as usize, vector as usize, 0, 0, 0]).map(|_| ())
     }

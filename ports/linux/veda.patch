@@ -37,7 +37,7 @@
  
 +config VEDA_GUEST
 +	bool "Veda driver VM support"
-+	depends on X86_64 && SMP && X86_X2APIC
++	depends on X86_64 && SMP && X86_X2APIC && ACPI
 +	select X86_HV_CALLBACK_VECTOR
 +	select IRQ_MSI_LIB if PCI_MSI
 +	help
@@ -46,7 +46,7 @@
 +	  processors with an x2APIC and memory, and no emulated hardware.
 +	  Processors start, the machine powers off, the console writes and
 +	  the PCI functions Veda gives the guest are reached through
-+	  hypercalls.
++	  hypercalls; ACPI tables describe the devices.
 +
  config INTEL_TDX_GUEST
  	bool "Intel TDX (Trust Domain Extensions) - Guest Support"
@@ -113,6 +113,18 @@
  0xBA  00-0F  uapi/linux/liveupdate.h                                   Pasha Tatashin
                                                                         <mailto:pasha.tatashin@soleen.com>
  0xC0  00-0F  linux/usb/iowarrior.h
+--- a/drivers/acpi/bus.c
++++ b/drivers/acpi/bus.c
+@@ -1437,6 +1437,9 @@
+ 	}
+ 
+ #ifdef CONFIG_X86
++	/* Hardware-reduced ACPI has no SCI. */
++	if (acpi_gbl_reduced_hardware)
++		return;
+ 	if (!acpi_ioapic) {
+ 		/* compatible (0) means level (3) */
+ 		if (!(acpi_sci_flags & ACPI_MADT_TRIGGER_MASK)) {
 --- a/drivers/tty/hvc/Kconfig
 +++ b/drivers/tty/hvc/Kconfig
 @@ -77,6 +77,17 @@
@@ -164,7 +176,7 @@
  obj-y				+= coco/
 --- /dev/null
 +++ b/arch/x86/include/asm/veda_para.h
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,73 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * Veda's paravirtual platform, on which Linux runs as Veda's driver VM:
@@ -200,10 +212,11 @@
 + */
 +#define VEDA_HC_PCI_MSI		8
 +/*
-+ * rbx: the PC's legacy interrupt (the keyboard controller's: 1, 12), rcx:
-+ * the processor's APIC id, rdx: the vector (0: it reaches nothing).
++ * rbx: a global system interrupt (a GSI, below VEDA_GSIS), rcx: the
++ * processor's APIC id, rdx: the vector (0: it reaches nothing, masked).
 + */
-+#define VEDA_HC_ISA_IRQ		9
++#define VEDA_HC_GSI		9
++#define VEDA_GSIS		256
 +
 +#define VEDA_POWER_OFF		0
 +#define VEDA_POWER_RESTART	1
@@ -239,29 +252,35 @@
 +#endif /* _ASM_X86_VEDA_PARA_H */
 --- /dev/null
 +++ b/arch/x86/kernel/cpu/veda.c
-@@ -0,0 +1,297 @@
+@@ -0,0 +1,337 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Veda's paravirtual platform: Linux as the driver VM of the Veda operating
 + * system.
 + *
 + * The platform has processors with an x2APIC whose timer runs on the TSC,
-+ * and memory: no PIC, PIT, I/O APIC, RTC, legacy devices, firmware or ACPI.
-+ * The number of processors and the clocks' frequencies come from the
++ * and memory: no PIC, PIT, I/O APIC, RTC, legacy devices or firmware. The
++ * number of processors and the clocks' frequencies come from the
 + * platform's CPUID leaves; processors start, the machine powers off and
 + * the time of day is read through hypercalls (asm/veda_para.h). The
 + * monitor announces what it has for the guest (the bridge's finished
 + * waits) with the hypervisor callback vector. The PCI functions Veda
 + * gives the guest are on the platform's PCI (arch/x86/pci/veda.c).
 + *
-+ * The PC's keyboard controller (the i8042) the guest may have too
-+ * (veda.i8042): its ports reach it through the monitor, and its
-+ * interrupts, the keyboard's (1) and the mouse's (12), are Linux's IRQs of
-+ * the same numbers, in a domain above x86's vector domain, which picks a
-+ * processor and a vector for each; a hypercall routes the interrupt there.
-+ * They are edges: the guest owes them no end-of-interrupt.
++ * The monitor describes the machine in ACPI tables, as a PC's firmware
++ * does, in hardware-reduced ACPI (no SCI, no fixed hardware, no MADT: the
++ * processors are the platform's): the PCI root and its functions, the
++ * devices the PC's firmware describes that the guest has (the keyboard
++ * controller's, which it reaches through the monitor), and the interrupts
++ * they use. Those are the PC's global system interrupts (GSIs), Linux's
++ * IRQs of the same numbers as on a PC, in a domain above x86's vector
++ * domain, which picks a processor and a vector for each; a hypercall
++ * routes the GSI there, or to nothing, which masks it. An edge needs no
++ * end-of-interrupt; a level-triggered line stays masked from when it fires
++ * until the processor's end-of-interrupt, as an I/O APIC's input does.
 + */
 +
++#include <linux/acpi.h>
 +#include <linux/init.h>
 +#include <linux/irq.h>
 +#include <linux/irqdomain.h>
@@ -278,6 +297,7 @@
 +#include <asm/hypervisor.h>
 +#include <asm/i8259.h>
 +#include <asm/idtentry.h>
++#include <asm/io_apic.h>
 +#include <asm/irq_regs.h>
 +#include <asm/irqdomain.h>
 +#include <asm/mpspec.h>
@@ -287,14 +307,6 @@
 +#include <asm/veda_para.h>
 +
 +static u32 veda_base;
-+static bool veda_i8042 __initdata;
-+
-+static int __init veda_i8042_param(char *arg)
-+{
-+	veda_i8042 = true;
-+	return 0;
-+}
-+early_param("veda.i8042", veda_i8042_param);
 +
 +/* The platform's base leaf; also before Linux looks for its hypervisor. */
 +static u32 veda_find(void)
@@ -399,6 +411,8 @@
 +	.priority = INT_MIN,
 +};
 +
++static int veda_register_gsi(struct device *dev, u32 gsi, int trigger, int polarity);
++
 +static void __init veda_init_platform(void)
 +{
 +	x86_init.irqs.pre_vector_init		= x86_init_noop;
@@ -412,8 +426,8 @@
 +	x86_platform.get_wallclock		= veda_get_wallclock;
 +	x86_platform.legacy.rtc			= 0;
 +	x86_platform.legacy.warm_reset		= 0;
-+	x86_platform.legacy.i8042		= veda_i8042 ? X86_LEGACY_I8042_EXPECTED_PRESENT
-+							     : X86_LEGACY_I8042_PLATFORM_ABSENT;
++	/* The platform's timer stays, which hardware-reduced ACPI drops. */
++	x86_init.acpi.reduced_hw_early_init	= x86_init_noop;
 +
 +	legacy_pic				= &null_legacy_pic;
 +
@@ -430,39 +444,63 @@
 +	apic_update_callback(wakeup_secondary_cpu_64, veda_wakeup_cpu);
 +	sysvec_install(HYPERVISOR_CALLBACK_VECTOR, sysvec_veda_callback);
 +	atomic_notifier_chain_register(&panic_notifier_list, &veda_panic_block);
-+	disable_acpi();
++	/* IRQs below VEDA_GSIS are the GSIs of the same numbers. */
++	gsi_top = VEDA_GSIS;
++	__acpi_register_gsi = veda_register_gsi;
 +#ifdef CONFIG_PCI
 +	veda_pci_init_platform();
 +#endif
 +}
 +
-+static void veda_isa_route(struct irq_data *data, unsigned int vector)
++static struct irq_domain *veda_gsi_domain;
++
++static void veda_gsi_route(struct irq_data *data, unsigned int vector)
 +{
 +	struct irq_cfg *cfg = irqd_cfg(data);
 +
-+	if (veda_hypercall(VEDA_HC_ISA_IRQ, data->hwirq, cfg->dest_apicid, vector, 0, 0))
-+		pr_err_ratelimited("veda: IRQ %lu cannot be routed\n", data->hwirq);
++	if (veda_hypercall(VEDA_HC_GSI, data->hwirq, cfg->dest_apicid, vector, 0, 0))
++		pr_err_ratelimited("veda: GSI %lu cannot be routed\n", data->hwirq);
 +}
 +
-+static int veda_isa_set_affinity(struct irq_data *data, const struct cpumask *mask, bool force)
++static void veda_gsi_mask(struct irq_data *data)
++{
++	veda_gsi_route(data, 0);
++}
++
++static void veda_gsi_unmask(struct irq_data *data)
++{
++	veda_gsi_route(data, irqd_cfg(data)->vector);
++}
++
++static int veda_gsi_set_affinity(struct irq_data *data, const struct cpumask *mask, bool force)
 +{
 +	int ret = irq_chip_set_affinity_parent(data, mask, force);
 +
-+	if (ret >= 0 && ret != IRQ_SET_MASK_OK_DONE)
-+		veda_isa_route(data, irqd_cfg(data)->vector);
++	if (ret >= 0 && ret != IRQ_SET_MASK_OK_DONE && !irqd_irq_masked(data))
++		veda_gsi_unmask(data);
 +	return ret;
 +}
 +
-+static struct irq_chip veda_isa_chip = {
-+	.name			= "Veda-ISA",
++/*
++ * An edge's acknowledgement and a level-triggered line's end-of-interrupt
++ * are the local APIC's end-of-interrupt (which ends the masking of a level
++ * line that fired).
++ */
++static struct irq_chip veda_gsi_chip = {
++	.name			= "Veda-GSI",
 +	.irq_ack		= irq_chip_ack_parent,
-+	.irq_set_affinity	= veda_isa_set_affinity,
++	.irq_eoi		= irq_chip_ack_parent,
++	.irq_mask		= veda_gsi_mask,
++	.irq_unmask		= veda_gsi_unmask,
++	.irq_set_affinity	= veda_gsi_set_affinity,
 +	.flags			= IRQCHIP_SKIP_SET_WAKE,
 +};
 +
-+static int veda_isa_alloc(struct irq_domain *d, unsigned int virq, unsigned int nr_irqs, void *arg)
++static int veda_gsi_alloc(struct irq_domain *d, unsigned int virq, unsigned int nr_irqs, void *arg)
 +{
 +	struct irq_alloc_info *info = arg;
++	bool level = info->ioapic.is_level;
++	unsigned int type;
 +	int ret;
 +
 +	if (nr_irqs != 1)
@@ -470,58 +508,73 @@
 +	ret = irq_domain_alloc_irqs_parent(d, virq, nr_irqs, arg);
 +	if (ret)
 +		return ret;
-+	irq_domain_set_info(d, virq, info->hwirq, &veda_isa_chip, NULL, handle_edge_irq, NULL, "edge");
++	irq_domain_set_info(d, virq, info->hwirq, &veda_gsi_chip, NULL,
++			    level ? handle_fasteoi_irq : handle_edge_irq, NULL, level ? "fasteoi" : "edge");
++	if (level)
++		type = info->ioapic.active_low ? IRQ_TYPE_LEVEL_LOW : IRQ_TYPE_LEVEL_HIGH;
++	else
++		type = info->ioapic.active_low ? IRQ_TYPE_EDGE_FALLING : IRQ_TYPE_EDGE_RISING;
++	irqd_set_trigger_type(irq_domain_get_irq_data(d, virq), type);
 +	return 0;
 +}
 +
-+static int veda_isa_activate(struct irq_domain *d, struct irq_data *data, bool reserve)
++static void veda_gsi_deactivate(struct irq_domain *d, struct irq_data *data)
 +{
-+	veda_isa_route(data, irqd_cfg(data)->vector);
-+	return 0;
++	veda_gsi_route(data, 0);
 +}
 +
-+static void veda_isa_deactivate(struct irq_domain *d, struct irq_data *data)
-+{
-+	veda_isa_route(data, 0);
-+}
-+
-+static const struct irq_domain_ops veda_isa_domain_ops = {
-+	.alloc		= veda_isa_alloc,
++static const struct irq_domain_ops veda_gsi_domain_ops = {
++	.alloc		= veda_gsi_alloc,
 +	.free		= irq_domain_free_irqs_common,
-+	.activate	= veda_isa_activate,
-+	.deactivate	= veda_isa_deactivate,
++	.deactivate	= veda_gsi_deactivate,
 +};
 +
-+/* The keyboard controller's IRQs, 1 and 12, if the guest has it. */
-+static int __init veda_isa_init(void)
++/*
++ * A GSI an ACPI description names: the IRQ of its number, set up the first
++ * time with the trigger the description gives (the polarity is the host's
++ * to program). Lines are shared as on a PC.
++ */
++static int veda_register_gsi(struct device *dev, u32 gsi, int trigger, int polarity)
 +{
-+	static const unsigned int irqs[] = { 1, 12 };
++	struct irq_alloc_info info;
++	int irq;
++
++	if (!veda_gsi_domain || gsi >= VEDA_GSIS)
++		return -EINVAL;
++	irq = irq_find_mapping(veda_gsi_domain, gsi);
++	if (irq)
++		return irq;
++	init_irq_alloc_info(&info, NULL);
++	info.hwirq = gsi;
++	info.ioapic.is_level = trigger == ACPI_LEVEL_SENSITIVE;
++	info.ioapic.active_low = polarity == ACPI_ACTIVE_LOW;
++	irq = __irq_domain_alloc_irqs(veda_gsi_domain, gsi, 1, NUMA_NO_NODE, &info, false, NULL);
++	if (irq < 0)
++		pr_err("veda: no IRQ for GSI %u: %d\n", gsi, irq);
++	return irq;
++}
++
++static int __init veda_gsi_init(void)
++{
 +	struct irq_domain_info info = {
-+		.ops		= &veda_isa_domain_ops,
++		.ops		= &veda_gsi_domain_ops,
 +		.parent		= x86_vector_domain,
-+		.hwirq_max	= 16,
++		.hwirq_max	= VEDA_GSIS,
 +	};
 +	struct irq_domain *d;
 +
-+	if (!veda_platform() || !veda_i8042)
++	if (!veda_platform())
 +		return 0;
-+	info.fwnode = irq_domain_alloc_named_fwnode("Veda-ISA");
++	info.fwnode = irq_domain_alloc_named_fwnode("Veda-GSI");
 +	if (!info.fwnode)
 +		return -ENOMEM;
 +	d = irq_domain_instantiate(&info);
 +	if (IS_ERR(d))
 +		return PTR_ERR(d);
-+	for (int i = 0; i < ARRAY_SIZE(irqs); i++) {
-+		struct irq_alloc_info alloc;
-+
-+		init_irq_alloc_info(&alloc, NULL);
-+		alloc.hwirq = irqs[i];
-+		if (__irq_domain_alloc_irqs(d, irqs[i], 1, NUMA_NO_NODE, &alloc, false, NULL) != irqs[i])
-+			pr_err("veda: no IRQ %u for the keyboard controller\n", irqs[i]);
-+	}
++	veda_gsi_domain = d;
 +	return 0;
 +}
-+arch_initcall(veda_isa_init);
++arch_initcall(veda_gsi_init);
 +
 +/* Without interrupt remapping, in physical destination mode. */
 +static bool __init veda_x2apic_available(void)
@@ -1907,7 +1960,7 @@
 +device_initcall(bridge_init);
 --- /dev/null
 +++ b/arch/x86/pci/veda.c
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,177 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * PCI on Veda's paravirtual platform: the PCI functions Veda gives its
@@ -1916,8 +1969,11 @@
 + * Their configuration space is read and written through hypercalls (there
 + * is none of the PC's mechanisms), and is the functions' own but for what
 + * the platform owns: the memory BARs hold the addresses Veda mapped them
-+ * at, which stay; there is no expansion ROM, I/O BAR or INTx. x86's own PCI
-+ * code scans the bus and claims the BARs where they are.
++ * at, which stay; there is no expansion ROM or I/O BAR. The bus is the PCI
++ * root the platform's ACPI tables describe, whose windows hold the BARs:
++ * ACPI's PCI code scans it and claims them where they are. A function's
++ * INTx, where the PC wires it, is the GSI the root's _PRT names (see the
++ * platform's GSIs in arch/x86/kernel/cpu/veda.c).
 + *
 + * MSIs and MSI-X go through the platform's MSI parent domain, above x86's
 + * vector domain, which picks a processor and a vector as it does on a PC.
@@ -2074,7 +2130,7 @@
 +
 +void __init veda_pci_init_platform(void)
 +{
-+	/* None of the PC's configuration mechanisms, BIOS or IRQ routing. */
++	/* None of the PC's configuration mechanisms or BIOS IRQ routing. */
 +	pci_probe = 0;
 +	x86_init.pci.arch_init = veda_pci_arch_init;
 +	x86_init.pci.init_irq = x86_init_noop;

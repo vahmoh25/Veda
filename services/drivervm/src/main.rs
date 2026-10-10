@@ -14,9 +14,10 @@
 //! services drivers attach to.
 //!
 //! It gives the guest the PCI functions devmgr hands over (`pci`): their
-//! DMA into the guest's memory only, their BARs, their interrupts; and
-//! the PC's keyboard controller, if devmgr hands its ports and interrupts
-//! over (`i8042`).
+//! DMA into the guest's memory only, their BARs, their interrupts (MSIs,
+//! and the lines their INTx are wired to: `lines`); the PC's keyboard
+//! controller, if devmgr hands its ports and interrupts over (`i8042`);
+//! and ACPI tables that describe them (`vhv::acpi`).
 //!
 //! The guest's life is this process's: when Linux powers the machine off,
 //! restarts it, crashes or does something the platform does not allow,
@@ -37,6 +38,7 @@ extern crate alloc;
 
 mod bridge;
 mod i8042;
+mod lines;
 mod machine;
 mod memory;
 mod pci;
@@ -48,6 +50,7 @@ use alloc::vec::Vec;
 use vrt::object::{Channel, Interrupt, IoPorts, Resource, Vmo};
 use vrt::println;
 
+use lines::Lines;
 use machine::{Config, Machine};
 
 vrt::entry!(main);
@@ -108,17 +111,17 @@ fn main() -> i32 {
     let devices: Vec<Channel> =
         core::iter::from_fn(|| vrt::env::take_handle(DEVICE_ROLE)).map(Channel::from_handle).collect();
     let take = |role| vrt::env::take_handle(role);
+    let mut lines = Lines::default();
     let i8042 =
         match (take(I8042_DATA_ROLE), take(I8042_COMMAND_ROLE), take(I8042_KEYBOARD_ROLE), take(I8042_MOUSE_ROLE)) {
-            (Some(data), Some(command), Some(keyboard), Some(mouse)) => Some(i8042::I8042::new(
-                IoPorts::from_handle(data),
-                IoPorts::from_handle(command),
-                Interrupt::from_handle(keyboard),
-                Interrupt::from_handle(mouse),
-            )),
+            (Some(data), Some(command), Some(keyboard), Some(mouse)) => {
+                lines.add(i8042::KEYBOARD_GSI, Interrupt::from_handle(keyboard), false);
+                lines.add(i8042::MOUSE_GSI, Interrupt::from_handle(mouse), false);
+                Some(i8042::I8042::new(IoPorts::from_handle(data), IoPorts::from_handle(command)))
+            }
             _ => None,
         };
-    match Machine::start(&hypervisor, kernel.data, initramfs.data, devices, i8042, &config) {
+    match Machine::start(&hypervisor, kernel.data, initramfs.data, devices, i8042, lines, &config) {
         Ok(machine) => machine.wait(),
         Err(e) => {
             let e: String = e;

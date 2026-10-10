@@ -246,11 +246,14 @@ pub mod nr {
     /// ends, it reaches nothing. Needs the IOMMU (`NotSupported`); `Busy`
     /// if another guest has the function.
     pub const GUEST_ATTACH_DEVICE: usize = 97;
-    /// `vcpu_bind_interrupt(vcpu, interrupt, vector)`: the interrupt (an
-    /// edge: an MSI, or an edge-triggered line) raises `vector` (32 to 255)
-    /// at the virtual processor's local APIC from now on, instead of
-    /// signaling. Binding it again moves it; vector 0 unbinds it (it
-    /// signals again).
+    /// `vcpu_bind_interrupt(vcpu, interrupt, vector)`: the interrupt
+    /// raises `vector` (32 to 255) at the virtual processor's local APIC
+    /// from now on, instead of signaling: an edge (an MSI, an
+    /// edge-triggered line) as an edge; a level-triggered line as a
+    /// level-triggered interrupt, the line masked from when it fires until
+    /// the guest's end-of-interrupt of the vector (if it is still bound
+    /// then; `irq_ack` unmasks it too). Binding it again moves it; vector
+    /// 0 unbinds it (it signals again).
     pub const VCPU_BIND_INTERRUPT: usize = 98;
 }
 

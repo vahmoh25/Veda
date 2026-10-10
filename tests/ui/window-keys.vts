@@ -2,12 +2,14 @@
 # right half, Super+Up maximises it, Super+Down restores it, Super+D shows the
 # desktop and brings the window back, and Super+Down minimises it. The keys
 # come from QEMU's PS/2 keyboard, on the keyboard controller, which the
-# driver VM has: Linux's i8042 and atkbd drive it, its ports reached
-# through the monitor, its interrupts routed to the guest.
+# driver VM has: Linux finds it in the platform's ACPI tables, as on a PC,
+# and its i8042 and atkbd drive it, its ports reached through the monitor,
+# its interrupts (GSIs 1 and 12) routed to the guest.
 boot-cmdline "run=editor"
 wait-serial "started editor" 60
 wait-serial "input: AT Translated Set 2 keyboard (i8042 0001:0001): keyboard" 60
 expect-serial "serio: i8042 KBD port at 0x60,0x64 irq 1"
+expect-serial "i8042: PNP: PS/2 Controller [PNP0303"
 wait 6
 key meta_l-right
 wait 2

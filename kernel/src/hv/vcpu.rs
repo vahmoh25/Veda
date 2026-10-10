@@ -23,7 +23,7 @@
 //! any CPU next; there it forgets the translations an earlier run may have
 //! left (`invvpid`, `invept`).
 
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -36,6 +36,7 @@ use super::vmx::{self, entry_ctl, field, proc, reason};
 use crate::arch::cpu::{self, rdmsr, wrmsr};
 use crate::arch::{apic, gdt, idt, percpu};
 use crate::mm::{phys, phys_to_virt};
+use crate::object::interrupt::Interrupt;
 use crate::sched::{self, Thread, WakeReason, thread::FpuArea};
 use crate::sync::{SpinLock, bkl};
 
@@ -215,6 +216,9 @@ struct Shared {
     nmi: bool,
     /// The thread waiting in the guest's `hlt`.
     halted: Option<Arc<Thread>>,
+    /// The device line each level-triggered vector came from, which the
+    /// guest's end-of-interrupt ends.
+    level: [Option<Weak<Interrupt>>; 256],
 }
 
 /// The guest's registers that only the thread running the virtual
@@ -311,7 +315,12 @@ impl Vcpu {
             msr_bitmap,
             running: AtomicBool::new(false),
             in_guest: AtomicU32::new(0),
-            shared: SpinLock::new(Shared { lapic: Lapic::new(id), nmi: false, halted: None }),
+            shared: SpinLock::new(Shared {
+                lapic: Lapic::new(id),
+                nmi: false,
+                halted: None,
+                level: [const { None }; 256],
+            }),
             ctx: UnsafeCell::new(Context {
                 regs: GuestRegs { gprs: state.gprs, cr2: state.cr2 },
                 initial: Some(state),
@@ -352,6 +361,16 @@ impl Vcpu {
     /// Raises interrupt `vector` at the virtual processor's local APIC.
     pub fn interrupt(&self, vector: u8) {
         self.shared.lock().lapic.request(vector);
+        self.kick();
+    }
+
+    /// Raises level-triggered interrupt `vector` for `line`, which the
+    /// guest's end-of-interrupt ends ([`Interrupt::end_of_level`]).
+    pub fn interrupt_level(&self, vector: u8, line: &Arc<Interrupt>) {
+        let mut shared = self.shared.lock();
+        shared.lapic.request_level(vector);
+        shared.level[vector as usize] = Some(Arc::downgrade(line));
+        drop(shared);
         self.kick();
     }
 
@@ -984,6 +1003,13 @@ impl Vcpu {
                 lapic::Write::Refused => false,
                 lapic::Write::Ipi(ipi) => {
                     self.send_ipi(ipi);
+                    true
+                }
+                lapic::Write::EndOfLevel(vector) => {
+                    let line = self.shared.lock().level[vector as usize].take();
+                    if let Some(line) = line.and_then(|l| l.upgrade()) {
+                        line.end_of_level();
+                    }
                     true
                 }
             };

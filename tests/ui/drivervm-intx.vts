@@ -1,0 +1,21 @@
+# A card without MSIs: QEMU's Intel 82540EM ("e1000") interrupts through
+# its INTx, a level-triggered line of the I/O APIC. devmgr finds where the
+# firmware wires it (its _PRT), the driver VM gets the line, and the
+# guest's ACPI tables route the card's INTx to it: Linux's e1000 drives the
+# card through the line, which stays masked from when it fires until
+# Linux's end-of-interrupt. The card attaches to the network service and
+# gets an address by DHCP; nettest checks DNS, TCP, HTTP and ping through
+# it.
+net ethernet
+nic e1000
+boot-cmdline "run=nettest"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+fail-on "nettest: FAIL"
+wait-serial "goes to the driver VM" 60
+wait-serial "INTA# on GSI" 30
+wait-serial "net: eth0 (e1000, pci 00:" 120
+wait-serial "net: eth0: attached as eth0" 60
+wait-serial "nettest: PASS" 300
+reject-serial "cannot be routed"
+reject-serial "panicked"

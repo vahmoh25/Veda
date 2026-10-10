@@ -106,8 +106,6 @@ pub fn vcpu_bind_interrupt(vcpu: RawHandle, interrupt: RawHandle, vector: usize)
         return ok(0);
     }
     let vector = u8::try_from(vector).ok().filter(|&v| v >= 32).ok_or(Error::InvalidArgs)?;
-    if !irq.bind(&v, vector) {
-        return Err(Error::NotSupported);
-    }
+    irq.bind(&v, vector);
     ok(0)
 }

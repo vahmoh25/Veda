@@ -167,6 +167,60 @@ pub fn pci_companion(
     })
 }
 
+/// Where a PCI function's INTx goes: an I/O APIC input (a GSI), and how
+/// it signals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntxRoute {
+    pub gsi: u32,
+    pub level: bool,
+    pub active_low: bool,
+}
+
+/// Where INTx `pin` (1 for INTA# to 4) of the functions in `slot` of a
+/// root bus goes, as the root bridge's `_PRT` says with the interrupt
+/// model set to the I/O APICs' (`\_PIC (1)`, as an OS that uses them
+/// calls first): a GSI it names (level-triggered, active low), or the one
+/// an interrupt link device's `_CRS` holds. Devices on a root bus only.
+pub fn pci_interrupt(
+    ns: &Namespace,
+    roots: &[(u8, Path)],
+    (bus, slot): (u8, u8),
+    pin: u8,
+    memory: &dyn Memory,
+) -> Option<IntxRoute> {
+    let (_, root) = roots.iter().find(|(b, _)| *b == bus)?;
+    let pic = Path::parse("\\_PIC")?;
+    let prt = root.join("_PRT")?;
+    let Value::Package(routes) = ns.evaluate_after(&pic, &[Value::Integer(1)], &prt, &[], memory).ok()? else {
+        return None;
+    };
+    for route in routes {
+        let Value::Package(r) = route else { continue };
+        let [address, route_pin, source, index] = r.as_slice() else { continue };
+        let (Some(address), Some(route_pin)) = (address.as_integer(), route_pin.as_integer()) else { continue };
+        if address >> 16 != slot as u64 || route_pin + 1 != pin as u64 {
+            continue;
+        }
+        let index = index.as_integer().unwrap_or(0);
+        return match source {
+            Value::Reference(link) => link_interrupt(ns, link, index as usize, memory),
+            v if v.as_integer() == Some(0) => Some(IntxRoute { gsi: index as u32, level: true, active_low: true }),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// The `index`-th interrupt an interrupt link device's `_CRS` holds.
+fn link_interrupt(ns: &Namespace, link: &Path, index: usize, memory: &dyn Memory) -> Option<IntxRoute> {
+    resources(ns, link, memory).ok()?.into_iter().find_map(|r| match r {
+        Resource::Irq { irqs, edge, active_low, .. } => {
+            Some(IntxRoute { gsi: *irqs.get(index)?, level: !edge, active_low })
+        }
+        _ => None,
+    })
+}
+
 /// A device as its driver sees it: what it is and what it uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Described {

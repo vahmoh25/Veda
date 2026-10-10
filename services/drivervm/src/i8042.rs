@@ -2,16 +2,16 @@
 //! guest: Linux's driver of it reaches its two ports through the monitor,
 //! which carries the reads and writes out on the controller, but what would
 //! reset the machine (the controller also drives the processor's reset
-//! line); its interrupts, edges, go to the guest's processors as its
-//! functions' MSIs do. The ports around them (0x61's NMI controls among
-//! them) the guest does not reach.
+//! line). Its interrupts are the guest's lines 1 and 12 (the keyboard's and
+//! the mouse's, edges: see `lines`). The ports around them (0x61's NMI
+//! controls among them) the guest does not reach.
 
-use vrt::object::{Interrupt, IoPorts, Vcpu};
+use vrt::object::IoPorts;
 use vrt::sync::Mutex;
 
-/// The controller's data port, and its status and command port.
-pub const DATA: u16 = 0x60;
-pub const COMMAND: u16 = 0x64;
+/// The controller's data port, and its status and command port; the
+/// keyboard's and the mouse's interrupt lines.
+pub use vhv::acpi::{I8042_COMMAND as COMMAND, I8042_DATA as DATA, KEYBOARD_GSI, MOUSE_GSI};
 
 /// The controller's commands that write its output port, whose lines
 /// reset the processor (bit 0, low) and gate A20 (bit 1), and that turn
@@ -22,16 +22,13 @@ const A20_OFF: u8 = 0xDD;
 pub struct I8042 {
     data: IoPorts,
     command: IoPorts,
-    /// The keyboard's interrupt (ISA 1) and the mouse's (ISA 12).
-    keyboard: Interrupt,
-    mouse: Interrupt,
     /// The next data byte is the output port's (after `WRITE_OUTPUT`).
     output_next: Mutex<bool>,
 }
 
 impl I8042 {
-    pub fn new(data: IoPorts, command: IoPorts, keyboard: Interrupt, mouse: Interrupt) -> I8042 {
-        I8042 { data, command, keyboard, mouse, output_next: Mutex::new(false) }
+    pub fn new(data: IoPorts, command: IoPorts) -> I8042 {
+        I8042 { data, command, output_next: Mutex::new(false) }
     }
 
     /// Reads a port of the controller's.
@@ -54,16 +51,5 @@ impl I8042 {
             let value = if core::mem::take(&mut *output_next) { value | 0b11 } else { value };
             self.data.out8(port, value);
         }
-    }
-
-    /// Routes ISA interrupt `irq` (1 or 12) to `vector` of `vcpu` (0: to
-    /// nothing).
-    pub fn route(&self, irq: u64, vcpu: &Vcpu, vector: u64) -> bool {
-        let interrupt = match irq {
-            1 => &self.keyboard,
-            12 => &self.mouse,
-            _ => return false,
-        };
-        u8::try_from(vector).is_ok_and(|v| vcpu.bind_interrupt(interrupt, v).is_ok())
     }
 }

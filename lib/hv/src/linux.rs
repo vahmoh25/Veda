@@ -123,6 +123,8 @@ pub struct Boot<'a> {
     /// The initial RAM file system: where, and how long.
     pub initrd: Option<(u64, u64)>,
     pub memory: &'a [MemoryRange],
+    /// Where the ACPI tables' RSDP is.
+    pub rsdp: Option<u64>,
 }
 
 /// The boot parameters (the zero page) for `boot`.
@@ -140,6 +142,9 @@ pub fn boot_params(boot: &Boot) -> [u8; 4096] {
         put32(&mut p, 0x21C, len as u32);
         put32(&mut p, 0x0C0, (at >> 32) as u32);
         put32(&mut p, 0x0C4, (len >> 32) as u32);
+    }
+    if let Some(at) = boot.rsdp {
+        p[0x070..0x078].copy_from_slice(&at.to_le_bytes());
     }
     let ranges = &boot.memory[..boot.memory.len().min(128)];
     p[0x1E8] = ranges.len() as u8;
@@ -274,8 +279,10 @@ mod tests {
             cmdline_at: 0x9000,
             initrd: Some((0x3F00_0000, 0x12_3456)),
             memory: &memory,
+            rsdp: Some(0xE_0000),
         };
         let p = boot_params(&boot);
+        assert_eq!(u64_at(&p, 0x070), 0xE_0000);
         assert_eq!(&p[0x202..0x206], b"HdrS");
         assert_eq!(p[0x210], 0xFF);
         assert_eq!(u32_at(&p, 0x228), 0x9000);

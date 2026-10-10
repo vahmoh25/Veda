@@ -52,7 +52,7 @@ pub fn irq_create(res: RawHandle, irq: usize, flags: usize) -> SysResult {
     if !r.permits(resource_kind::IRQ, gsi as u64, 1) {
         return Err(Error::AccessDenied);
     }
-    let i = Interrupt::new_gsi(gsi, level, active_low).ok_or(Error::AlreadyExists)?;
+    let i = Interrupt::new_gsi(gsi, level, active_low)?;
     let rights = Rights(Rights::BASIC.0 | Rights::WRITE.0);
     ok(insert(KObject::Interrupt(i), rights)? as usize)
 }

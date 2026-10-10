@@ -1,9 +1,10 @@
 //! The paravirtual platform Veda's guests run on.
 //!
 //! A guest finds no emulated hardware: no PIC, PIT, I/O APIC, RTC, serial
-//! port or firmware. It has processors with an x2APIC whose timer runs on
-//! the TSC (`TSC-deadline` mode included), memory, and the platform's
-//! hypercalls, which it finds through `cpuid`:
+//! port or firmware code. It has processors with an x2APIC whose timer runs
+//! on the TSC (`TSC-deadline` mode included), memory, ACPI tables that
+//! describe its devices, and the platform's hypercalls, which it finds
+//! through `cpuid`:
 //!
 //! * leaf [`CPUID_SIGNATURE`]: the highest platform leaf in `eax`, and
 //!   [`SIGNATURE`] in `ebx`, `ecx` and `edx`;
@@ -22,12 +23,20 @@
 //! all this is `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c` and
 //! `arch/x86/include/asm/veda_para.h` in the Linux port (`ports/linux`).
 //!
+//! The ACPI tables (hardware-reduced ACPI: no fixed hardware, no SCI, no
+//! MADT) are where the boot parameters say (`acpi_rsdp_addr`). They
+//! describe the PCI root and its functions, the devices of the PC that the
+//! guest has (its keyboard controller), and the interrupt lines those use:
+//! the PC's global system interrupts (GSIs), which the guest routes to its
+//! processors with [`hypercall::GSI`].
+//!
 //! PCI functions given to the guest are on its PCI segment 0, where the
 //! platform puts them (bus 0); the guest finds them by reading their
 //! configuration space, which it reaches only through hypercalls. Their
 //! memory BARs hold the addresses the platform mapped them at, which stay.
-//! They have no INTx: only MSIs and MSI-X, which the guest routes with a
-//! hypercall that gives back the message the function must send. Their DMA
+//! Their MSIs and MSI-X the guest routes with a hypercall that gives back
+//! the message the function must send; a function's INTx, where the PC
+//! wires one, is a GSI the root's `_PRT` names. Their DMA
 //! reaches the guest's memory, at its guest-physical addresses, and
 //! nothing else.
 
@@ -76,13 +85,18 @@ pub mod hypercall {
     /// in the high half. Routing the same MSI again moves it; the message
     /// stays the same.
     pub const PCI_MSI: u64 = 8;
-    /// Routes the PC's legacy interrupt `rbx` (the i8042's, when the
-    /// platform gives the guest the keyboard controller: 1 the keyboard's,
-    /// 12 the mouse's) to vector `rdx` of the processor with APIC id
-    /// `rcx` (0: to nothing). The interrupts are edges: the guest owes
-    /// them no end-of-interrupt. Routing one again moves it.
-    pub const ISA_IRQ: u64 = 9;
+    /// Routes GSI `rbx` (below [`GSIS`]; one the ACPI tables name) to
+    /// vector `rdx` of the processor with APIC id `rcx`, or to nothing
+    /// (vector 0), which masks the line. Routing one again moves it. An
+    /// edge needs no end-of-interrupt; a level-triggered line is masked
+    /// when it fires until the processor's end-of-interrupt of its vector
+    /// (as with an I/O APIC). An edge that came while the line was masked
+    /// is raised when it is routed again.
+    pub const GSI: u64 = 9;
 }
+
+/// GSIs are below this: the guest's IRQs of the same numbers.
+pub const GSIS: u32 = 256;
 
 /// The message of a [`hypercall::PCI_MSI`], as its result holds it.
 pub fn msi_result(address: u64, data: u32) -> u64 {

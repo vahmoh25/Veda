@@ -1,9 +1,11 @@
 //! The PCI functions the guest gets. devmgr hands each over as a `pcidev`
 //! channel, and each is given to the guest whole: its DMA reaches the
 //! guest's memory and nothing else (the IOMMU), its memory BARs are mapped
-//! into the guest's memory, its MSIs are bound to the guest's processors.
-//! Linux finds them on bus 0 of the guest's PCI, their configuration space
-//! as `vhv::pci` makes it, through the platform's hypercalls.
+//! into the guest's memory, its MSIs are bound to the guest's processors,
+//! and the line its INTx is wired to is the guest's (`lines`; functions on
+//! one line share it). Linux finds them on bus 0 of the guest's PCI, their
+//! configuration space as `vhv::pci` makes it, through the platform's
+//! hypercalls.
 //!
 //! A function reports no errors to the host, which a PC may make NMIs of:
 //! its error reporting is turned off before the guest runs, and stays off.
@@ -30,10 +32,12 @@ use core::ops::Range;
 
 use vabi::map_flags;
 use vhv::pci::{Bar, ConfigSpace, Write};
-use vproto::pci::{DeviceInfo, pcidev};
+use vproto::pci::{DeviceInfo, IntxLine, pcidev};
 use vrt::object::{Channel, Guest, Interrupt, Vcpu};
 use vrt::println;
 use vrt::sync::Mutex;
+
+use crate::lines::Lines;
 
 const PAGE: u64 = 4096;
 
@@ -42,6 +46,8 @@ struct Device {
     /// Where the guest has it on bus 0: device << 3 | function.
     devfn: u8,
     info: DeviceInfo,
+    /// Its INTx, if the guest has the line.
+    intx: Option<IntxLine>,
     state: Mutex<State>,
 }
 
@@ -86,8 +92,9 @@ impl Devices {
     }
 
     /// Gives the guest the functions of `channels` it can have: their DMA,
-    /// their BARs (in `windows`), their place on its bus 0.
-    pub fn attach(guest: &Guest, channels: Vec<Channel>, windows: &mut Windows) -> Devices {
+    /// their BARs (in `windows`), their place on its bus 0, the lines their
+    /// INTx are wired to (added to `lines`).
+    pub fn attach(guest: &Guest, channels: Vec<Channel>, windows: &mut Windows, lines: &mut Lines) -> Devices {
         let mut given = Vec::new();
         for channel in channels {
             let pci = pcidev::Client::new(channel);
@@ -114,11 +121,20 @@ impl Devices {
                     continue;
                 }
             };
-            let at: Vec<String> =
+            // The line its INTx is wired to; other functions may have it
+            // already.
+            let intx = match pci.intx() {
+                Ok(Ok((irq, line))) => (lines.has(line.gsi) || lines.add(line.gsi, irq, line.level)).then_some(line),
+                _ => None,
+            };
+            let mut at: Vec<String> =
                 bars.iter().map(|b| format!("BAR {} at {:#x} ({} KiB)", b.index, b.address, b.size / 1024)).collect();
+            if let Some(l) = intx {
+                at.push(format!("INT{}# on GSI {}", (b'A' + l.pin - 1) as char, l.gsi));
+            }
             println!("{} is the guest's 00:{:02x}.{}: {}", name, devfn >> 3, devfn & 7, at.join(", "));
-            let config = ConfigSpace::new(bars, multifunction, pci_express);
-            list.push(Device { devfn, info, state: Mutex::new(State { pci, config, msis: BTreeMap::new() }) });
+            let config = ConfigSpace::new(bars, multifunction, pci_express, intx.map(|l| (l.pin, l.gsi as u8)));
+            list.push(Device { devfn, info, intx, state: Mutex::new(State { pci, config, msis: BTreeMap::new() }) });
         }
         Devices { list }
     }
@@ -136,6 +152,11 @@ impl Devices {
             }
         }
         options
+    }
+
+    /// The functions, as the ACPI tables describe them.
+    pub fn functions(&self) -> Vec<vhv::acpi::Function> {
+        self.list.iter().map(|d| vhv::acpi::Function { devfn: d.devfn, intx: d.intx.map(|l| (l.pin, l.gsi)) }).collect()
     }
 
     fn device(&self, function: u64) -> Option<&Device> {

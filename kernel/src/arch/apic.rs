@@ -7,7 +7,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::cpu::{self, rdmsr, wrmsr};
-use super::idt::{IOAPIC_VECTOR_BASE, SPURIOUS_VECTOR, TIMER_VECTOR};
+use super::idt::{SPURIOUS_VECTOR, TIMER_VECTOR};
 use super::port::outb;
 use crate::sync::SpinLock;
 
@@ -233,14 +233,13 @@ pub fn add_ioapic(id: u8, phys: u64, gsi_base: u32) {
     IOAPICS.lock().push(io);
 }
 
-/// Routes `gsi` to vector `IOAPIC_VECTOR_BASE + gsi` on the BSP.
-pub fn route_gsi(gsi: u32, level: bool, active_low: bool, masked: bool) -> bool {
+/// Routes `gsi` to `vector` on the BSP. False if no I/O APIC has it.
+pub fn route_gsi(gsi: u32, vector: u8, level: bool, active_low: bool, masked: bool) -> bool {
     let ioapics = IOAPICS.lock();
     let Some(io) = ioapics.iter().find(|io| gsi >= io.gsi_base && gsi < io.gsi_base + io.count) else {
         return false;
     };
     let pin = gsi - io.gsi_base;
-    let vector = (IOAPIC_VECTOR_BASE as u32 + gsi) as u8;
     let entry = crate::iommu::ioapic_entry(io.id, vector, level, active_low, masked).unwrap_or_else(|| {
         let dest = super::percpu::get(0).apic_id as u64;
         vector as u64 | (active_low as u64) << 13 | (level as u64) << 15 | (masked as u64) << 16 | dest << 56

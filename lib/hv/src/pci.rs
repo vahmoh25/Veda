@@ -2,8 +2,11 @@
 //! space: the function's own, but for what the platform owns. The memory
 //! BARs hold the guest-physical addresses the platform mapped them at (and
 //! answer sizing as BARs do; other writes leave them where they are);
-//! there is no expansion ROM, I/O BAR or INTx; the header type says what
-//! the function's place in the guest's topology is.
+//! there is no expansion ROM or I/O BAR; the header type says what the
+//! function's place in the guest's topology is. The interrupt pin is the
+//! function's when the guest has the line its INTx is wired to (the
+//! interrupt line register says which GSI that is, as a PC's firmware
+//! leaves it), none otherwise.
 //!
 //! And the function reports no errors to the host: the errors a function
 //! signals become the host's system errors, which a PC may turn into NMIs
@@ -66,11 +69,14 @@ pub struct ConfigSpace {
     /// The BAR registers the guest wrote all ones to (and reads their size
     /// from).
     sizing: u8,
+    /// The function's INTx, if the guest has its line: the pin (1 for
+    /// INTA# to 4) and the GSI.
+    intx: Option<(u8, u8)>,
 }
 
 impl ConfigSpace {
-    pub fn new(bars: Vec<Bar>, multifunction: bool, pci_express: Option<u16>) -> ConfigSpace {
-        ConfigSpace { bars, multifunction, pci_express, sizing: 0 }
+    pub fn new(bars: Vec<Bar>, multifunction: bool, pci_express: Option<u16>, intx: Option<(u8, u8)>) -> ConfigSpace {
+        ConfigSpace { bars, multifunction, pci_express, sizing: 0, intx }
     }
 
     /// The memory BARs.
@@ -107,8 +113,11 @@ impl ConfigSpace {
             }
             _ if BARS.contains(&at) => self.bar_register(((at - BARS.start) / 4) as u8),
             ROM => 0,
-            // No INTx: the interrupt line says none, the pin is 0.
-            INTERRUPT_DWORD => (device(at) & 0xFFFF_0000) | 0xFF,
+            // The pin and the line, or none (the line 0xFF, the pin 0).
+            INTERRUPT_DWORD => {
+                let (pin, line) = self.intx.unwrap_or((0, 0xFF));
+                (device(at) & 0xFFFF_0000) | (pin as u32) << 8 | line as u32
+            }
             _ => device(at),
         };
         let shift = 8 * (offset & 3) as u32;
@@ -137,7 +146,7 @@ impl ConfigSpace {
         match at {
             ROM => Write::Absorbed,
             // The header type is read-only; the interrupt line is the
-            // platform's (there is none).
+            // platform's.
             HEADER_TYPE_DWORD if offset == 0x0E => Write::Absorbed,
             INTERRUPT_DWORD if offset < 0x3E => Write::Absorbed,
             // No system errors, no error messages.
@@ -168,7 +177,7 @@ mod tests {
     /// A device as Intel's HD Audio controllers are: one 64-bit BAR.
     fn hda() -> ConfigSpace {
         let bar = Bar { index: 0, address: 0xC000_4000, size: 0x4000, is64: true, prefetchable: false };
-        ConfigSpace::new(vec![bar], false, Some(0x60))
+        ConfigSpace::new(vec![bar], false, Some(0x60), None)
     }
 
     /// The function's own registers: a header that says multi-function,
@@ -199,6 +208,11 @@ mod tests {
         // No INTx.
         assert_eq!(c.read(0x3D, 1, device), 0);
         assert_eq!(c.read(0x3C, 1, device), 0xFF);
+        assert_eq!(c.read(0x3E, 2, device), 0);
+        // INTB# on GSI 22, when the guest has its line.
+        let c = ConfigSpace::new(vec![], false, None, Some((2, 22)));
+        assert_eq!(c.read(0x3C, 4, device), 0x0000_0216);
+        assert_eq!(c.read(0x3D, 1, device), 2);
         assert_eq!(c.read(0x40, 4, device), 0x1234_5678);
         // Beyond what is given, or unaligned: nothing.
         assert_eq!(c.read(0x100, 4, device), u32::MAX);
@@ -228,7 +242,7 @@ mod tests {
     #[test]
     fn high_bars_and_prefetchable_ones() {
         let bar = Bar { index: 2, address: 0x20_0000_0000, size: 1 << 28, is64: true, prefetchable: true };
-        let mut c = ConfigSpace::new(vec![bar], true, None);
+        let mut c = ConfigSpace::new(vec![bar], true, None, None);
         assert_eq!(c.read(0x18, 4, device), 0x0000_000C);
         assert_eq!(c.read(0x1C, 4, device), 0x20);
         assert_eq!(c.read(0x0E, 1, device), 0x80);
@@ -252,7 +266,7 @@ mod tests {
         assert_eq!(c.write(0x68, 4, 0x000F_201F), Write::Device { offset: 0x68, width: 4, value: 0x000F_2010 });
         assert_eq!(c.write(0x6A, 2, 0x000F), Write::Device { offset: 0x6A, width: 2, value: 0x000F });
         // Without the capability, nothing there is the platform's.
-        let mut plain = ConfigSpace::new(vec![], false, None);
+        let mut plain = ConfigSpace::new(vec![], false, None, None);
         assert_eq!(plain.write(0x68, 2, 0x281F), Write::Device { offset: 0x68, width: 2, value: 0x281F });
     }
 

@@ -78,10 +78,13 @@ Each one came from what the alternatives would cost.
    the monitor gives meaning to, so it reaches exactly what it was given.
 
 3. **The guest is fully paravirtualized.** There is no emulated hardware:
-   no PIC, PIT, I/O APIC, RTC, serial port, firmware or ACPI. Processors
+   no PIC, PIT, I/O APIC, RTC, serial port or firmware code. Processors
    have an x2APIC (with the TSC-deadline timer) and start through a
    hypercall; the console, power, the time of day, PCI configuration and
-   interrupts of the devices are hypercalls. A small patch to Linux
+   interrupts of the devices are hypercalls. What a PC's firmware
+   describes, the monitor describes too, in ACPI tables of its own
+   (hardware-reduced ACPI: tables, no fixed hardware): the guest's devices
+   and the interrupt lines they use, so that Linux finds them as on a PC. A small patch to Linux
    (`ports/linux`, modelled on Linux's Jailhouse and ACRN guests) makes it
    the *Veda platform*. In return the hypervisor emulates no instruction
    at all — no MMIO decoding, the largest source of hypervisor bugs — and
@@ -150,9 +153,15 @@ Each one came from what the alternatives would cost.
 
 A guest finds the platform with `cpuid`: leaf `0x40000000` says
 `VedaVedaVeda`; `0x40000001` gives the number of processors (local APIC ids
-0 to n−1); `0x40000010` the TSC's and the APIC timer's frequencies. A
-hypercall is `vmcall` with the call in `rax` and arguments in `rbx`, `rcx`,
-`rdx`, `rsi`, `rdi` (`vhv::platform`):
+0 to n−1); `0x40000010` the TSC's and the APIC timer's frequencies. Its
+devices are in ACPI tables (`vhv::acpi`), where the boot parameters say
+(`acpi_rsdp_addr`): an RSDP, an XSDT, a FADT that says hardware-reduced
+ACPI (and whether there is a keyboard controller, that there is no VGA or
+CMOS clock), and a DSDT with the PCI root (bus 0, the windows its BARs are
+in), its functions and where their INTx go (`_PRT`), and the keyboard
+controller's devices. There is no MADT: the processors are the
+platform's. A hypercall is `vmcall` with the call in `rax` and arguments
+in `rbx`, `rcx`, `rdx`, `rsi`, `rdi` (`vhv::platform`):
 
 | Call | Does |
 |------|------|
@@ -163,12 +172,13 @@ hypercall is `vmcall` with the call in `rax` and arguments in `rbx`, `rcx`,
 | `BRIDGE` | an operation of the bridge |
 | `PCI_CONFIG_READ`, `PCI_CONFIG_WRITE` | the configuration space of a PCI function the guest has |
 | `PCI_MSI` | routes an MSI of a function to a processor and vector; gives the message the function sends |
-| `ISA_IRQ` | routes an interrupt of the keyboard controller's (the keyboard's, 1; the mouse's, 12) to a processor and vector |
+| `GSI` | routes an interrupt line the guest has (a GSI: the keyboard controller's 1 and 12, the lines functions' INTx are wired to) to a processor and vector, or masks it |
 
 The monitor boots Linux through the x86 boot protocol's 64-bit entry
 (`vhv::linux`): the kernel at the address it prefers, the initramfs at the
 top of memory, a memory map that keeps the first 64 KiB (the GDT and page
-tables the processors start on) and the legacy hole out.
+tables the processors start on) and the legacy hole out; the ACPI tables
+are in the hole, from 0xE0000, where a PC's firmware puts its own.
 
 ### The hypervisor
 
@@ -230,10 +240,20 @@ interrupts, whatever the guest writes into its MSI or MSI-X registers.
 I/O APIC entries are remappable too, validated as the I/O APIC's. An MSI
 of the guest's function is an `Interrupt` object bound to a virtual
 processor (`vcpu_bind_interrupt`): the kernel raises the guest's vector at
-its local APIC straight from the interrupt, without the monitor.
+its local APIC straight from the interrupt, without the monitor. So is an
+interrupt line the guest has (an I/O APIC input, any of them: device
+interrupts take vectors from one pool): an edge as an MSI; a
+level-triggered line is masked when it fires and raised as a
+level-triggered interrupt, and the guest's end-of-interrupt of its vector,
+which the virtual local APIC reports, unmasks it again, as a PC's I/O APIC
+waits for its processor's. The guest masks a line by routing it to
+nothing (`GSI` with vector 0), which unbinds it: a level-triggered line
+that fires then stays masked, and an edge that comes is raised when the
+line is routed again.
 
-**The guest's PCI.** Linux's own x86 PCI code scans bus 0 and claims the
-BARs where they are; `arch/x86/pci/veda.c` gives it the configuration space
+**The guest's PCI.** Linux's ACPI code finds the PCI root in the
+platform's tables, scans its bus 0 and claims the BARs where they are (in
+the root's windows); `arch/x86/pci/veda.c` gives it the configuration space
 through hypercalls (`raw_pci_ops`), and an MSI parent domain above x86's
 vector domain, modelled on Hyper-V's root partition: when Linux's vector
 domain has picked a processor and a vector, composing the message routes
@@ -244,7 +264,14 @@ message stays. The monitor's view of the configuration space
 (`vhv::pci`) is the function's own but for what the platform owns: the
 memory BARs hold the guest-physical addresses it mapped them at (3 GiB to
 4 GiB, or above the bridge's window), and answer sizing; there is no
-expansion ROM, I/O BAR or INTx. A function on the host's bus 0 keeps its
+expansion ROM or I/O BAR. A function's INTx goes where the PC's firmware
+wires it: devmgr reads the root bridge's `_PRT` (in APIC mode, `\_PIC (1)`
+first, through the interrupt link devices it names) and gives the monitor
+the line, one interrupt for every function on it (`intx`); the function's
+interrupt pin is then its own, and the guest's `_PRT` routes its INTx to
+that GSI. GSIs are Linux's IRQs of the same numbers, as on a PC, in a
+domain of the platform's above x86's vector domain, which ACPI's GSIs are
+registered in (`__acpi_register_gsi`). A function on the host's bus 0 keeps its
 device number when it can, so drivers that look for a sibling where it is
 on a PC find it. The kernel's command line says where each function's
 memory is on the host (`veda.device=00:01.0,0:0x80000000,...`): a driver
@@ -259,8 +286,9 @@ Express error reporting off before the guest runs, and they stay off,
 whatever the guest writes.
 
 What a function needs for this, and the limits for now: MSIs (or MSI-X),
-without which it has no interrupts in the guest (QEMU's 82540EM, its
-`e1000`, has none; a PCI Express function always has them), memory BARs
+or an INTx the firmware routes on a root bus (QEMU's 82540EM, its
+`e1000`, has only that; a function behind a bridge needs MSIs, which a
+PCI Express function always has), memory BARs
 of whole pages (an I/O BAR it also has is not given: Linux's drivers of
 PCI Express functions use their memory BARs), and its first 256 bytes of
 configuration space (`devmgr` reaches no more yet); no memory the
@@ -308,10 +336,10 @@ controller also drives the processor's reset line, so the monitor, which
 carries out each of the guest's accesses to the two ports, keeps what
 would pulse it or write it low (the output port's value goes with the
 reset and A20 lines high); the ports around them (0x61, with the NMIs'
-switches) the guest does not reach. The interrupts are Linux's IRQs 1 and
-12, in a domain of the Veda platform above x86's vector domain, routed
-by `ISA_IRQ` as MSIs are by `PCI_MSI`: edges, which the guest owes no
-end-of-interrupt.
+switches) the guest does not reach. The guest's ACPI tables describe the
+controller as a PC's firmware does (`PNP0303` and `PNP0F13`, at its ports
+and GSIs 1 and 12), and Linux's i8042 finds it through ACPI's Plug and
+Play; its interrupts are edges, routed by `GSI`.
 
 **Sound** (`guest/alsa`). Linux's first playback device, through ALSA's
 kernel interface (the PCM and control ioctls; no library), is attached to
@@ -540,7 +568,8 @@ where Veda stands:
 | Every device Veda does not keep goes to the driver VM, which starts with Veda | done (every script, `tests/ui/iommu.vts`) |
 | Restart and device reset | done (`tests/ui/drivervm-restart.vts`); hangs, suspend later |
 | PS/2: the keyboard controller, its ports through the monitor, its interrupts routed; touchpads made a pointer; Veda's own PS/2 driver gone | done (every script's keyboard, `tests/ui/window-keys.vts`) |
-| The firmware's ties: its descriptions of devices for the guest (ACPI: I2C touchpads and touchscreens, a laptop's speaker amplifiers on SPI, GPIO pins), HD Audio | next (below) |
+| ACPI for the guest: the platform's tables (the PCI root, its functions, the keyboard controller); interrupt lines (GSIs), level-triggered ones too; functions' INTx | done (`tests/ui/drivervm-intx.vts`, `window-keys.vts`) |
+| The firmware's ties: its descriptions of devices for the guest's tables (I2C touchpads and touchscreens, a laptop's speaker amplifiers on SPI, GPIO pins), HD Audio | next (below) |
 
 **GPUs.** Linux's driver and Mesa's drive a GPU whole in the guest (lesson
 1): the guest's Linux has i915 and virtio-gpu, and its Mesa iris, virgl
@@ -554,11 +583,11 @@ VBT) and stolen memory, and their place at 00:02.0. GPU memory is the
 guest's: a GPU needs a driver VM with the memory for it.
 
 **Still Veda's.** HD Audio controllers (with a laptop's speaker
-amplifiers on its SPI controller) keep Veda's driver until the guest
-gets the firmware's descriptions of what they need: which amplifiers are
-on which bus, the GPIO pins wired to them (the guest has no ACPI of its
-own). A laptop's I2C touchpad and touchscreen need such descriptions
-too, and nothing drives them yet.
+amplifiers on its SPI controller) keep Veda's driver until the guest's
+tables carry the firmware's descriptions of what they need: which
+amplifiers are on which bus, the GPIO pins wired to them. A laptop's I2C
+touchpad and touchscreen need such descriptions too, and nothing drives
+them yet.
 
 ## Testing
 

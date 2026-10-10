@@ -1,9 +1,9 @@
-//! A small AML assembler, so that tables written in tests and simulated
-//! boards read like ASL: `device("SPK1", &cat(&[&name("_HID",
-//! &string("CSC3551")), ...]))`. Each function returns the bytes of one
-//! term; `cat` joins them. Names are ASL text (`\_SB.PC00`, `^GPI0`,
-//! `SBUF`); the functions panic on a malformed one (they are for tables
-//! written by hand).
+//! A small AML assembler, so that the tables Veda writes (the driver VM's,
+//! and those of tests and simulated boards) read like ASL:
+//! `device("SPK1", &cat(&[&name("_HID", &string("CSC3551")), ...]))`.
+//! Each function returns the bytes of one term; `cat` joins them. Names are
+//! ASL text (`\_SB.PC00`, `^GPI0`, `SBUF`); the functions panic on a
+//! malformed one (they are for names written into code).
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -226,6 +226,42 @@ pub fn memory32_fixed(base: u32, length: u32) -> Vec<u8> {
 /// `Interrupt (ResourceConsumer, Level, ActiveLow, Shared) { irq }`.
 pub fn interrupt(irq: u32) -> Vec<u8> {
     large(0x09, &cat(&[&[0x0D, 1], &irq.to_le_bytes()]))
+}
+
+/// `IO (Decode16, base, base, 1, length)`.
+pub fn io(base: u16, length: u8) -> Vec<u8> {
+    cat(&[&[0x47, 1], &base.to_le_bytes(), &base.to_le_bytes(), &[1, length]])
+}
+
+/// `IRQNoFlags () { irq }`: an ISA interrupt (an edge, active high).
+pub fn irq_no_flags(irq: u8) -> Vec<u8> {
+    cat(&[&[0x22], &(1u16 << (irq & 15)).to_le_bytes()])
+}
+
+/// `WordBusNumber (ResourceProducer, MinFixed, MaxFixed, PosDecode, 0,
+/// min, max, 0, max - min + 1)`: the buses a bridge decodes.
+pub fn word_bus_number(min: u16, max: u16) -> Vec<u8> {
+    let fields = [0, min, max, 0, max - min + 1];
+    large(0x08, &cat(&[&[2, 0x0C, 0], &fields.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>()]))
+}
+
+/// `DWordMemory (ResourceProducer, PosDecode, MinFixed, MaxFixed,
+/// NonCacheable, ReadWrite, 0, min, max, 0, max - min + 1)`: memory a
+/// bridge decodes, below 4 GiB.
+pub fn dword_memory(min: u32, max: u32) -> Vec<u8> {
+    let fields = [0, min, max, 0, max - min + 1];
+    large(0x07, &cat(&[&[0, 0x0C, 1], &fields.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>()]))
+}
+
+/// `QWordMemory (...)`, as [`dword_memory`] for 64-bit addresses.
+pub fn qword_memory(min: u64, max: u64) -> Vec<u8> {
+    let fields = [0, min, max, 0, max - min + 1];
+    large(0x0A, &cat(&[&[0, 0x0C, 1], &fields.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>()]))
+}
+
+/// A `ResourceTemplate` of `descriptors`: a buffer, with its end tag.
+pub fn resource_template(descriptors: &[u8]) -> Vec<u8> {
+    buffer(&cat(&[descriptors, &END_TAG]))
 }
 
 pub const END_TAG: [u8; 2] = [0x79, 0x00];
