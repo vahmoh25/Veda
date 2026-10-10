@@ -50,6 +50,7 @@ cargo xtask run --no-iommu     # QEMU without its IOMMU: no device goes to the d
 cargo xtask run --cmdline "drivervm=off"    # ... or no driver VM at all
 cargo xtask script tests/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
 cargo xtask script tests/ui/drivervm-unplaced.vts   # ... and its xHCI, their BARs left unplaced for devmgr to place
+cargo xtask script tests/ui/drivervm-gpio.vts   # GPIO pins for Linux: a simulated controller's, their interrupts
 cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo cp -r /sys/firmware/acpi/tables target/acpi)
 cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 stack, against airsim's networks
 ```

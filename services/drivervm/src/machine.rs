@@ -138,8 +138,14 @@ impl Machine {
             Devices::attach(&guest, devices, &mut Windows { low: PCI_LOW, high: PCI_HIGH }, &mut lines)
         };
         let functions = devices.functions();
-        let description =
-            acpi::Machine { functions: &functions, i8042: i8042.is_some(), pci_low: PCI_LOW, pci_high: PCI_HIGH };
+        let gpio = devices.gpio_controllers();
+        let description = acpi::Machine {
+            functions: &functions,
+            gpio: &gpio,
+            i8042: i8042.is_some(),
+            pci_low: PCI_LOW,
+            pci_high: PCI_HIGH,
+        };
         let acpi_tables = acpi::tables(&description);
         if acpi_tables.len() > acpi::ROOM {
             return Err(format!("the ACPI tables take {} KiB, more than they have", acpi_tables.len() / 1024));
@@ -306,6 +312,7 @@ impl Machine {
                 Some(Some(vcpu)) if self.lines.route(data[1], vcpu, data[3]) => 0,
                 _ => error::INVALID,
             },
+            hypercall::GPIO => self.devices.gpio(data[1], data[2], data[3], data[4]),
             _ => error::UNKNOWN,
         }
     }

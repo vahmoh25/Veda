@@ -84,6 +84,7 @@ members = [
     "guest/init",
     "guest/bridgetest",
     "guest/pcitest",
+    "guest/gpiotest",
     "guest/sys",
     "guest/alsa",
     "guest/net",

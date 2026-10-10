@@ -18,13 +18,24 @@
 //! Every device interrupt has a vector of its own, from one pool: an MSI's
 //! when it is made, a line's when it is set up (any input of the machine's
 //! I/O APICs).
+//!
+//! A program can make interrupts of its own and raise them (`irq_raise`):
+//! the lines of an interrupt controller it drives itself, which the kernel
+//! does not (a GPIO controller's pins, whose controller has one line for
+//! them all). They reach their driver, or a guest, as a line's do. A
+//! level-triggered one stays raised until it is ended — acknowledged, or
+//! the guest's end-of-interrupt — and then signals the event its maker
+//! gave, so the maker looks at its source again (KVM's irqfd and resample
+//! eventfd have VFIO do the same).
 
 use alloc::sync::{Arc, Weak};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use vabi::Error;
 use vabi::signals::SIGNALED;
 
 use super::Signals;
+use super::event::Event;
 use crate::arch::{apic, idt};
 use crate::hv::vcpu::Vcpu;
 use crate::sync::SpinLock;
@@ -35,6 +46,8 @@ pub enum Source {
     Gsi { gsi: u32, level: bool },
     /// A message-signalled interrupt (of a PCI function).
     Msi,
+    /// Raised by a program: no vector of the machine's.
+    Software { level: bool },
 }
 
 pub struct Interrupt {
@@ -44,6 +57,10 @@ pub struct Interrupt {
     pub signals: Signals,
     /// The virtual processor and vector it is raised at instead, if bound.
     target: SpinLock<Option<(Weak<Vcpu>, u8)>>,
+    /// A level-triggered software interrupt raised and not yet ended.
+    raised: AtomicBool,
+    /// What a software interrupt's ending signals.
+    ended: Option<Arc<Event>>,
 }
 
 /// The interrupt each vector belongs to, and its source (seen without
@@ -64,13 +81,50 @@ static VECTORS: SpinLock<[Option<Slot>; 256]> = SpinLock::new([const { None }; 2
 
 impl Interrupt {
     fn new(vector: u8, source: Source) -> Arc<Interrupt> {
+        Self::with_ended(vector, source, None)
+    }
+
+    fn with_ended(vector: u8, source: Source, ended: Option<Arc<Event>>) -> Arc<Interrupt> {
         Arc::new(Interrupt {
             koid: super::new_koid(),
             vector,
             source,
             signals: Signals::new(0),
             target: SpinLock::new(None),
+            raised: AtomicBool::new(false),
+            ended,
         })
+    }
+
+    /// An interrupt its maker raises: an edge, or a level-triggered one,
+    /// whose ending signals `ended`.
+    pub fn new_software(level: bool, ended: Option<Arc<Event>>) -> Arc<Interrupt> {
+        Self::with_ended(0, Source::Software { level }, ended)
+    }
+
+    /// Raises a software interrupt: at the virtual processor it is bound
+    /// to, or its signal. A level-triggered one raised already stays
+    /// raised, once, until it is ended.
+    pub fn raise(self: &Arc<Self>) -> Result<(), Error> {
+        let Source::Software { level } = self.source else { return Err(Error::WrongType) };
+        if level && self.raised.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let target = self.target.lock().clone();
+        match target {
+            Some((vcpu, vector)) => {
+                // A processor that is gone takes no more interrupts.
+                if let Some(vcpu) = vcpu.upgrade() {
+                    if level {
+                        vcpu.interrupt_level(vector, self);
+                    } else {
+                        vcpu.interrupt(vector);
+                    }
+                }
+            }
+            None => self.signals.update(0, SIGNALED),
+        }
+        Ok(())
     }
 
     /// Sets up an I/O APIC input. Fails if the line is already set up, if
@@ -103,11 +157,18 @@ impl Interrupt {
         Some((irq, apic::msi_message(vector, device)))
     }
 
-    /// Re-arms the interrupt after the driver has serviced it.
+    /// Re-arms the interrupt after the driver has serviced it: a line is
+    /// unmasked, a level-triggered software interrupt ends.
     pub fn ack(&self) {
         self.signals.update(SIGNALED, 0);
-        if let Source::Gsi { gsi, level: true } = self.source {
-            apic::set_gsi_masked(gsi, false);
+        match self.source {
+            Source::Gsi { gsi, level: true } => apic::set_gsi_masked(gsi, false),
+            Source::Software { level: true } if self.raised.swap(false, Ordering::AcqRel) => {
+                if let Some(e) = &self.ended {
+                    e.signals.update(0, SIGNALED);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -140,6 +201,9 @@ fn free_vector(table: &[Option<Slot>; 256]) -> Option<u8> {
 
 impl Drop for Interrupt {
     fn drop(&mut self) {
+        if let Source::Software { .. } = self.source {
+            return;
+        }
         let mut table = VECTORS.lock();
         // The vector may be another interrupt's already, taken while this
         // one was going: then the line and the vector are that one's.

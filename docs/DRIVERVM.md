@@ -144,9 +144,9 @@ Each one came from what the alternatives would cost.
 | IOMMU logic | `lib/iommu` (`viommu`) | the DMAR table; the units' registers, tables, entries and descriptors (host-tested) |
 | Device manager | `services/devmgr` | which devices go to the driver VM (all but Veda's own), their `pcidev` channels, resetting them and starting the driver VM again |
 | Monitor | `services/drivervm` | the machine, its hypercalls, its PCI functions, the bridge, the narrowed registry |
-| Guest kernel | `ports/linux` | Linux with the Veda platform: `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`, `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c` |
+| Guest kernel | `ports/linux` | Linux with the Veda platform: `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`, `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/gpio/gpio-veda.c` |
 | Guest runtime | `lib/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
-| Guest programs | `guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`; what they share (`sys`: system calls, network interfaces; `netlink`) |
+| Guest programs | `guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`, `gpiotest`; what they share (`sys`: system calls, network interfaces; `netlink`) |
 | Build | `xtask/src/linux.rs`, `ports/linux/build.sh` | `cargo xtask linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `ports/linux/firmware.txt`; the image's `linux/` |
 
 ### The platform
@@ -158,9 +158,10 @@ devices are in ACPI tables (`vhv::acpi`), where the boot parameters say
 (`acpi_rsdp_addr`): an RSDP, an XSDT, a FADT that says hardware-reduced
 ACPI (and whether there is a keyboard controller, that there is no VGA or
 CMOS clock), and a DSDT with the PCI root (bus 0, the windows its BARs are
-in), its functions and where their INTx go (`_PRT`), and the keyboard
-controller's devices. There is no MADT: the processors are the
-platform's. A hypercall is `vmcall` with the call in `rax` and arguments
+in), its functions and where their INTx go (`_PRT`), the keyboard
+controller's devices, and GPIO controllers of the platform's for the PC's
+GPIO pins the guest has (`VEDA0001`, below). There is no MADT: the
+processors are the platform's. A hypercall is `vmcall` with the call in `rax` and arguments
 in `rbx`, `rcx`, `rdx`, `rsi`, `rdi` (`vhv::platform`):
 
 | Call | Does |
@@ -172,7 +173,8 @@ in `rbx`, `rcx`, `rdx`, `rsi`, `rdi` (`vhv::platform`):
 | `BRIDGE` | an operation of the bridge |
 | `PCI_CONFIG_READ`, `PCI_CONFIG_WRITE` | the configuration space of a PCI function the guest has |
 | `PCI_MSI` | routes an MSI of a function to a processor and vector; gives the message the function sends |
-| `GSI` | routes an interrupt line the guest has (a GSI: the keyboard controller's 1 and 12, the lines functions' INTx are wired to) to a processor and vector, or masks it |
+| `GSI` | routes an interrupt line the guest has (a GSI: the keyboard controller's 1 and 12, the lines functions' INTx are wired to, from 256 the platform's own: GPIO pins' interrupts) to a processor and vector, or masks it |
+| `GPIO` | reads a GPIO pin the guest has, drives it, makes it an input, or tells its direction |
 
 The monitor boots Linux through the x86 boot protocol's 64-bit entry
 (`vhv::linux`): the kernel at the address it prefers, the initramfs at the
@@ -293,10 +295,32 @@ interrupts (GSIs, whose lines devmgr hands over as it does a function's
 INTx: `acpi_interrupt`), what its `_DSM` answers HID over I2C (its HID
 descriptor's address, which Linux's i2c-hid-acpi asks for), and constant
 data (`_DSD`), and the function's own constant data (an I2C controller's
-timing, `SSCN`, `FMCN`, `FPCN`, `HSCN`). What a device uses that the guest
-does not get yet (GPIO connections, an SPI bus) is left out, and said.
-Linux's intel-lpss, i2c-designware and i2c-hid-acpi then drive the
-controllers and devices as on the PC.
+timing, `SSCN`, `FMCN`, `FPCN`, `HSCN`). A device on an SPI controller has
+its connection to it (`SpiSerialBusV2`, retargeted as I2C's are). What a
+device uses that the guest does not get is left out, and said. Linux's
+intel-lpss, i2c-designware and i2c-hid-acpi then drive the controllers and
+devices as on the PC.
+
+**GPIO pins.** The pins a described device is wired to (`GpioIo`,
+`GpioInt`: a laptop's amplifiers have a chip select, a reset line, a
+speaker id and an interrupt) are the guest's too, and only those: for each
+of the PC's GPIO controllers they are on, the guest's tables have one of
+the platform's (`VEDA0001`, its number in `_UID`), with the PC's numbers
+for the pins, so that the devices' connections are the firmware's but for
+the controller they name. Its `_DSD` lists its pins (`veda,pins`) and
+those that interrupt (`veda,interrupt-pins`), whose lines are its
+interrupts, in that order: GSIs of the platform's, from 256 on, routed and
+ended as the PC's are. The `GPIO` hypercall reads a pin, drives it, makes
+it an input or tells its direction; the monitor carries it out through
+the channel of the function the pin's device is below, and `devmgr` drives
+the PC's pad. A pin's interrupt is one `devmgr` raises (its controller's
+line, demultiplexed), bound to the guest's processor as any line is: a
+level-triggered one masks the pin until the guest's end-of-interrupt,
+which has `devmgr` unmask it. Linux's driver of the platform's
+controllers is `drivers/gpio/gpio-veda.c`: a GPIO chip at the controller's
+ACPI device, whose lines are the pins, and whose pins' IRQs are its
+interrupts, so that Linux's ACPI finds a device's GPIOs and its GPIO
+interrupt as on the PC.
 
 **Power states.** The guest puts its functions to sleep and wakes them as
 Linux does on a PC (runtime power management), and a firmware may leave
@@ -598,7 +622,8 @@ where Veda stands:
 | PS/2: the keyboard controller, its ports through the monitor, its interrupts routed; touchpads made a pointer; Veda's own PS/2 driver gone | done (every script's keyboard, `tests/ui/window-keys.vts`) |
 | ACPI for the guest: the platform's tables (the PCI root, its functions, the keyboard controller); interrupt lines (GSIs), level-triggered ones too; functions' INTx | done (`tests/ui/drivervm-intx.vts`, `window-keys.vts`) |
 | The firmware's descriptions of devices below functions, in the guest's tables (ids, I2C addresses, interrupt lines, `_DSM`, constant data); a laptop's I2C controllers and HID devices (touchpads, touchscreens) to Linux | done under QEMU (`tests/ui/drivervm-described.vts`); not yet tried on a PC |
-| The firmware's ties: GPIO pins for the guest (a laptop's speaker amplifiers on SPI, their pins), HD Audio (and the DSP the built-in microphones are on) | next (below) |
+| GPIO pins for the guest: the platform's GPIO controllers, the PC's pins that described devices are wired to, their interrupts (lines `devmgr` raises); devices on SPI controllers | done under QEMU (`tests/ui/drivervm-gpio.vts`, a simulated controller) |
+| The firmware's ties: a laptop's speaker amplifiers on SPI, HD Audio (and the DSP the built-in microphones are on) | next (below) |
 
 **GPUs.** Linux's driver and Mesa's drive a GPU whole in the guest (lesson
 1): the guest's Linux has i915 and virtio-gpu, and its Mesa iris, virgl
@@ -612,10 +637,8 @@ VBT) and stolen memory, and their place at 00:02.0. GPU memory is the
 guest's: a GPU needs a driver VM with the memory for it.
 
 **Still Veda's.** HD Audio controllers (with a laptop's speaker
-amplifiers on its SPI controller) keep Veda's driver until the guest can
-have the GPIO pins wired to the amplifiers (their reset and chip select
-lines, and their interrupt), which the guest's tables cannot describe
-yet.
+amplifiers on its SPI controller) keep Veda's driver until Linux's
+drives them in the guest, which now has the amplifiers' pins.
 
 ## Testing
 

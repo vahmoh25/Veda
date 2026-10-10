@@ -1,7 +1,11 @@
 //! ACPI tables that tests add to QEMU's (`-acpitable`), describing what a
 //! PC's firmware does and QEMU's does not, for the driver VM to pass on.
 
-use vacpi::asm::{cat, device, dsm, i2c_descriptor, int, interrupt_of, name, resource_template, scope, string, uuid};
+use vacpi::asm::{
+    cat, device, dsm, gpio_descriptor_of, i2c_descriptor, int, interrupt_of, name, resource_template, scope, string,
+    uuid,
+};
+use vacpi::resource::Gpio;
 
 /// HID over I2C's `_DSM`.
 const HID_OVER_I2C: &str = "3cdff6f7-4267-4555-ad05-b30a3d8938de";
@@ -9,7 +13,8 @@ const HID_OVER_I2C: &str = "3cdff6f7-4267-4555-ad05-b30a3d8938de";
 /// The SSDT `name` stands for: `touchpad`, a HID-over-I2C device (as a
 /// laptop's touchpad is described, on GSI 10, active high, since nothing
 /// drives that input of QEMU's I/O APIC) below QEMU's virtio GPU at 00:10.0
-/// (the firmware's `\_SB.PCI0.S80`), on its "bus".
+/// (the firmware's `\_SB.PCI0.S80`), on its "bus"; `gpio`, a device there
+/// wired to pins of a simulated GPIO controller of devmgr's.
 pub fn table(name_of: &str) -> Option<Vec<u8>> {
     let aml = match name_of {
         "touchpad" => {
@@ -26,6 +31,34 @@ pub fn table(name_of: &str) -> Option<Vec<u8>> {
                 &dsm(&uuid(HID_OVER_I2C)?, 1, &int(0x20)),
             ]);
             scope(controller, &device("TPD0", &body))
+        }
+        "gpio" => {
+            // One of devmgr's simulated GPIO controllers, and a device below
+            // QEMU's virtio GPU wired to three of its pins: 0 an output, 1
+            // an input that interrupts on both edges, 3 an input.
+            let controller = "\\_SB.TGPI";
+            let pin = |pin: u16, interrupt: bool, restriction: u8| Gpio {
+                interrupt,
+                pins: vec![pin],
+                controller: controller.into(),
+                pull: 3,
+                restriction,
+                edge: interrupt,
+                polarity: if interrupt { 2 } else { 0 },
+                shared: false,
+                wake: false,
+                debounce: 0,
+            };
+            let crs = cat(&[
+                &gpio_descriptor_of(&pin(0, false, 2)),
+                &gpio_descriptor_of(&pin(1, false, 1)),
+                &gpio_descriptor_of(&pin(1, true, 0)),
+                &gpio_descriptor_of(&pin(3, false, 1)),
+            ]);
+            let simulated = device("TGPI", &cat(&[&name("_HID", &string("VTST0002")), &name("_UID", &int(0))]));
+            let wired =
+                device("GPT0", &cat(&[&name("_HID", &string("VTST0003")), &name("_CRS", &resource_template(&crs))]));
+            cat(&[&scope("\\_SB", &simulated), &scope("\\_SB.PCI0.S80", &wired)])
         }
         _ => return None,
     };

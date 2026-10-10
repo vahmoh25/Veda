@@ -6,11 +6,17 @@
 //! guest has, level-triggered), and the keyboard controller's devices when
 //! the guest has it, with the ports and lines a PC's are at. Below a
 //! function are the devices the PC's firmware describes there that the
-//! guest has — a touchpad on an I2C controller, say — with their ids, their
-//! place on the function's bus, the lines their interrupts are on, what
+//! guest has — a touchpad on an I2C controller, amplifiers on an SPI
+//! controller — with their ids, their place on the function's bus, the
+//! lines their interrupts are on, the GPIO pins they are wired to, what
 //! their `_DSM` answers HID over I2C, and constant data of theirs and the
-//! function's (an I2C controller's timing). The FADT says whether there is
-//! a keyboard controller, and that there is no VGA and no CMOS clock.
+//! function's (an I2C controller's timing). Those pins are on GPIO
+//! controllers of the platform's (`VEDA0001`), one for each of the PC's
+//! that the pins are on, with the PC's numbers for them: the pins it has
+//! (`veda,pins` in its `_DSD`), and the lines the ones that interrupt are
+//! on (its `_CRS`, in the order of `veda,interrupt-pins`). The FADT says
+//! whether there is a keyboard controller, and that there is no VGA and no
+//! CMOS clock.
 //!
 //! The tables go in the PC's firmware area below 1 MiB, which the memory
 //! map reserves; the boot parameters say where the RSDP is.
@@ -21,9 +27,13 @@ use core::ops::Range;
 
 use alloc::string::String;
 use vacpi::asm::{
-    cat, device, dsm, dword_memory, eisa, i2c_descriptor, int, interrupt_of, io, irq_no_flags, name, package,
-    qword_memory, resource_template, scope, string, word_bus_number,
+    cat, device, dsm, dword_memory, eisa, gpio_descriptor_of, i2c_descriptor, int, interrupt_of, io, irq_no_flags,
+    name, package, qword_memory, resource_template, scope, spi_descriptor_of, string, word_bus_number,
 };
+use vacpi::resource::Spi;
+
+/// A GPIO connection, as [`Resource::Gpio`] holds it.
+pub use vacpi::resource::Gpio;
 
 /// Where the tables are in the guest's memory, the RSDP first.
 pub const AT: u64 = 0xE_0000;
@@ -70,13 +80,48 @@ pub struct Child {
 }
 
 /// A resource of a described device, as the guest has it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resource {
     /// Its address on its function's I2C bus.
     I2c { address: u16, speed_hz: u32, ten_bit: bool },
+    /// Its connection to its function's SPI bus.
+    Spi { chip_select: u16, speed_hz: u32, bits: u8, cpol: bool, cpha: bool, cs_active_high: bool, three_wire: bool },
     /// An interrupt line the guest has (a GSI).
     Interrupt { gsi: u32, edge: bool, active_low: bool, shared: bool, wake: bool },
+    /// GPIO pins it is wired to, on a controller of the guest's
+    /// (`controller`: its path, `\_SB.GPI0`), by the PC's numbers.
+    Gpio(Gpio),
 }
+
+/// The hardware id of the platform's GPIO controllers.
+pub const GPIO_CONTROLLER: &str = "VEDA0001";
+
+/// A GPIO controller of the guest's: the pins of one of the PC's that its
+/// devices are wired to, by the PC's numbers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpioController {
+    /// Its name in `\_SB` (the PC's controller's, `GPI0`).
+    pub name: String,
+    /// Its number for [`crate::platform::hypercall::GPIO`] (its `_UID`).
+    pub uid: u32,
+    /// Its pins, in order.
+    pub pins: Vec<u16>,
+    /// The pins that interrupt, and the lines they do on.
+    pub interrupts: Vec<GpioInterrupt>,
+}
+
+/// A GPIO pin's interrupt: the line (a GSI the platform makes), as the
+/// pin's connection describes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpioInterrupt {
+    pub pin: u16,
+    pub gsi: u32,
+    pub edge: bool,
+    pub active_low: bool,
+}
+
+/// Device properties' UUID (`_DSD`).
+const DEVICE_PROPERTIES: &str = "daffd814-6eba-4d8c-8a91-bc9bbf4aa301";
 
 /// HID over I2C's `_DSM` (function 1: the HID descriptor's address).
 pub const HID_OVER_I2C: &str = "3cdff6f7-4267-4555-ad05-b30a3d8938de";
@@ -87,6 +132,7 @@ pub use vacpi::asm::uuid;
 /// What the tables describe.
 pub struct Machine<'a> {
     pub functions: &'a [Function],
+    pub gpio: &'a [GpioController],
     /// The guest has the keyboard controller.
     pub i8042: bool,
     /// Where the functions' BARs are, below and above 4 GiB.
@@ -177,6 +223,9 @@ fn fadt(m: &Machine, dsdt_at: u64) -> Vec<u8> {
 /// The DSDT's definitions.
 fn dsdt(m: &Machine) -> Vec<u8> {
     let mut sb = pci_root(m);
+    for c in m.gpio {
+        sb.extend_from_slice(&gpio_controller(c));
+    }
     if m.i8042 {
         let keyboard = cat(&[&io(I8042_DATA, 1), &io(I8042_COMMAND, 1), &irq_no_flags(KEYBOARD_GSI as u8)]);
         let mouse = irq_no_flags(MOUSE_GSI as u8);
@@ -234,6 +283,27 @@ fn pci_root(m: &Machine) -> Vec<u8> {
     device("PCI0", &body)
 }
 
+/// A GPIO controller of the platform's.
+fn gpio_controller(c: &GpioController) -> Vec<u8> {
+    let lines: Vec<u8> =
+        c.interrupts.iter().flat_map(|i| interrupt_of(i.gsi, i.edge, i.active_low, false, false)).collect();
+    let numbers = |pins: &mut dyn Iterator<Item = u16>| package(&pins.map(|p| int(p as u64)).collect::<Vec<_>>());
+    let properties = package(&[
+        package(&[string("veda,pins"), numbers(&mut c.pins.iter().copied())]),
+        package(&[string("veda,interrupt-pins"), numbers(&mut c.interrupts.iter().map(|i| i.pin))]),
+    ]);
+    let dsd = package(&[vacpi::asm::buffer(&uuid(DEVICE_PROPERTIES).unwrap_or_default()), properties]);
+    device(
+        &c.name,
+        &cat(&[
+            &name("_HID", &string(GPIO_CONTROLLER)),
+            &name("_UID", &int(c.uid as u64)),
+            &name("_CRS", &resource_template(&lines)),
+            &name("_DSD", &dsd),
+        ]),
+    )
+}
+
 /// The name of the device of function `devfn` (`S18` for 00:03.0).
 fn function_name(devfn: u8) -> String {
     format!("S{:02X}", devfn)
@@ -268,11 +338,25 @@ fn child(c: &Child, parent: &str) -> Vec<u8> {
     let descriptors: Vec<u8> = c
         .resources
         .iter()
-        .flat_map(|r| match *r {
-            Resource::I2c { address, speed_hz, ten_bit } => i2c_descriptor(address, speed_hz, ten_bit, parent),
-            Resource::Interrupt { gsi, edge, active_low, shared, wake } => {
+        .flat_map(|r| match r {
+            &Resource::I2c { address, speed_hz, ten_bit } => i2c_descriptor(address, speed_hz, ten_bit, parent),
+            &Resource::Spi { chip_select, speed_hz, bits, cpol, cpha, cs_active_high, three_wire } => {
+                let controller = parent.into();
+                spi_descriptor_of(&Spi {
+                    controller,
+                    chip_select,
+                    speed_hz,
+                    bits,
+                    cpol,
+                    cpha,
+                    cs_active_high,
+                    three_wire,
+                })
+            }
+            &Resource::Interrupt { gsi, edge, active_low, shared, wake } => {
                 interrupt_of(gsi, edge, active_low, shared, wake)
             }
+            Resource::Gpio(g) => gpio_descriptor_of(g),
         })
         .collect();
     body.extend_from_slice(&name("_CRS", &resource_template(&descriptors)));
@@ -301,7 +385,13 @@ mod tests {
     #[test]
     fn the_tables_add_up() {
         let functions = [function(0x18, Some((1, 22))), function(0x80, None)];
-        let m = Machine { functions: &functions, i8042: true, pci_low: 0xC000_0000..0xFEC0_0000, pci_high: 0..1 };
+        let m = Machine {
+            functions: &functions,
+            gpio: &[],
+            i8042: true,
+            pci_low: 0xC000_0000..0xFEC0_0000,
+            pci_high: 0..1,
+        };
         let t = tables(&m);
         assert!(t.len() <= ROOM);
         let sum = |b: &[u8]| b.iter().fold(0u8, |a, &x| a.wrapping_add(x));
@@ -357,7 +447,13 @@ mod tests {
             children: alloc::vec![touchpad],
         };
         let functions = [i2c];
-        let m = Machine { functions: &functions, i8042: false, pci_low: 0xC000_0000..0xFEC0_0000, pci_high: 0..1 };
+        let m = Machine {
+            functions: &functions,
+            gpio: &[],
+            i8042: false,
+            pci_low: 0xC000_0000..0xFEC0_0000,
+            pci_high: 0..1,
+        };
         let t = tables(&m);
         let dsdt = (u64::from_le_bytes(t[96 + 140..96 + 148].try_into().unwrap()) - AT) as usize;
         let len = u32::from_le_bytes(t[dsdt + 4..dsdt + 8].try_into().unwrap()) as usize;
@@ -386,5 +482,93 @@ mod tests {
         );
         let timing = ns.evaluate(&at("\\_SB.PCI0.SA9.FMCN"), &[], &NoMemory).unwrap();
         assert!(matches!(timing, vacpi::value::Value::Package(p) if p.len() == 3));
+    }
+
+    #[test]
+    fn amplifiers_below_their_spi_controller_and_their_pins() {
+        // As the Zenbook's: two CS35L41 on SPI1 (00:1e.3), the second's chip
+        // select, their reset and speaker id on GPIO pins, their
+        // interrupt a pin's, on the platform's line 256.
+        let pin = |interrupt: bool, pin: u16| Gpio {
+            interrupt,
+            pins: alloc::vec![pin],
+            controller: String::from("\\_SB.GPI0"),
+            pull: 0,
+            restriction: 0,
+            edge: false,
+            polarity: if interrupt { 1 } else { 0 },
+            shared: false,
+            wake: false,
+            debounce: 0,
+        };
+        let spi = |cs| Resource::Spi {
+            chip_select: cs,
+            speed_hz: 4_000_000,
+            bits: 8,
+            cpol: false,
+            cpha: false,
+            cs_active_high: false,
+            three_wire: false,
+        };
+        let amps = Child {
+            name: String::from("SPK1"),
+            hid: Some(String::from("CSC3551")),
+            cids: Vec::new(),
+            uid: Some(String::from("1")),
+            sub: Some(String::from("10431F62")),
+            resources: alloc::vec![
+                spi(0),
+                spi(1),
+                Resource::Gpio(pin(false, 23)),
+                Resource::Gpio(pin(false, 305)),
+                Resource::Gpio(pin(false, 302)),
+                Resource::Gpio(pin(true, 303)),
+            ],
+            hid_descriptor: None,
+            data: Vec::new(),
+        };
+        let functions = [Function { devfn: 0xF3, intx: Some((4, 37)), data: Vec::new(), children: alloc::vec![amps] }];
+        let gpio = [GpioController {
+            name: String::from("GPI0"),
+            uid: 0,
+            pins: alloc::vec![23, 302, 303, 305],
+            interrupts: alloc::vec![GpioInterrupt { pin: 303, gsi: 256, edge: false, active_low: true }],
+        }];
+        let m = Machine {
+            functions: &functions,
+            gpio: &gpio,
+            i8042: false,
+            pci_low: 0xC000_0000..0xFEC0_0000,
+            pci_high: 0..1,
+        };
+        let t = tables(&m);
+        let dsdt = (u64::from_le_bytes(t[96 + 140..96 + 148].try_into().unwrap()) - AT) as usize;
+        let len = u32::from_le_bytes(t[dsdt + 4..dsdt + 8].try_into().unwrap()) as usize;
+        let mut ns = Namespace::new();
+        ns.load(&t[dsdt + HEADER..dsdt + len], &NoMemory).unwrap();
+        let at = |p| Path::parse(p).unwrap();
+        let r = device::resources(&ns, &at("\\_SB.PCI0.SF3.SPK1"), &NoMemory).unwrap();
+        assert!(matches!(&r[1], Resource2::Spi(s) if s.chip_select == 1 && s.controller == "\\_SB.PCI0.SF3"));
+        let gpios: Vec<_> =
+            r[2..].iter().filter_map(|r| if let Resource2::Gpio(g) = r { Some(g.clone()) } else { None }).collect();
+        assert_eq!(gpios, [pin(false, 23), pin(false, 305), pin(false, 302), pin(true, 303)]);
+        assert_eq!(device::identify(&ns, &at("\\_SB.PCI0.SF3.SPK1"), &NoMemory).sub.as_deref(), Some("10431F62"));
+        // The controller: its id and number, its pins, its line.
+        let controller = at("\\_SB.GPI0");
+        let id = device::identify(&ns, &controller, &NoMemory);
+        assert_eq!((id.hid.as_deref(), id.uid.as_deref()), (Some(GPIO_CONTROLLER), Some("0")));
+        let lines = device::resources(&ns, &controller, &NoMemory).unwrap();
+        assert!(matches!(&lines[..], [Resource2::Irq { irqs, edge: false, active_low: true, .. }] if irqs == &[256]));
+        use vacpi::value::Value;
+        let Ok(Value::Package(dsd)) = ns.evaluate(&at("\\_SB.GPI0._DSD"), &[], &NoMemory) else { panic!() };
+        assert_eq!(dsd[0], Value::Buffer(uuid(DEVICE_PROPERTIES).unwrap().to_vec()));
+        let numbers = |v: &[u16]| Value::Package(v.iter().map(|&p| Value::Integer(p as u64)).collect());
+        assert_eq!(
+            dsd[1],
+            Value::Package(alloc::vec![
+                Value::Package(alloc::vec![Value::String("veda,pins".into()), numbers(&[23, 302, 303, 305])]),
+                Value::Package(alloc::vec![Value::String("veda,interrupt-pins".into()), numbers(&[303])]),
+            ])
+        );
     }
 }

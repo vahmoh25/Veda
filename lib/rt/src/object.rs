@@ -448,6 +448,21 @@ impl Interrupt {
         Ok((Interrupt(Handle(h as RawHandle)), info))
     }
 
+    /// An interrupt the caller raises itself ([`Interrupt::raise`]), for a
+    /// line of a controller it drives: an edge, or a level-triggered one,
+    /// raised until it is ended, which signals `ended`. Whoever it is for
+    /// gets a duplicate without `SIGNAL`, which raising takes.
+    pub fn create_software(level: bool, ended: Option<&Event>) -> Result<Interrupt, Error> {
+        let flags = if level { vabi::irq_flags::LEVEL } else { 0 };
+        let ended = ended.map_or(vabi::INVALID_HANDLE, |e| e.raw());
+        call(nr::IRQ_CREATE_SOFTWARE, [flags, ended as usize, 0, 0, 0, 0]).map(|h| Interrupt(Handle(h as RawHandle)))
+    }
+
+    /// Raises an interrupt made by [`Interrupt::create_software`].
+    pub fn raise(&self) -> Result<(), Error> {
+        call(nr::IRQ_RAISE, [self.raw() as usize, 0, 0, 0, 0, 0]).map(|_| ())
+    }
+
     /// Re-arms the interrupt after servicing the device.
     pub fn ack(&self) -> Result<(), Error> {
         call(nr::IRQ_ACK, [self.raw() as usize, 0, 0, 0, 0, 0]).map(|_| ())

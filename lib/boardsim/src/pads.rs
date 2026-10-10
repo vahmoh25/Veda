@@ -81,11 +81,12 @@ impl PadsModel {
     /// Locks a pad's configuration and, with `tx`, its output level.
     pub fn lock(&mut self, pin: u16, tx: bool) {
         let at = self.at(pin);
-        let v = self.read(at.community, at.lock.0) | 1 << at.lock.1;
-        self.write(at.community, at.lock.0, v);
+        let (lock, bit) = self.layout.lock(&at);
+        let v = self.read(at.community, lock) | 1 << bit;
+        self.write(at.community, lock, v);
         if tx {
-            let v = self.read(at.community, at.lock.0 + 4) | 1 << at.lock.1;
-            self.write(at.community, at.lock.0 + 4, v);
+            let v = self.read(at.community, lock + 4) | 1 << bit;
+            self.write(at.community, lock + 4, v);
         }
     }
 

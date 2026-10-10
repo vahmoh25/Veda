@@ -6,7 +6,8 @@
 //! line its INTx is wired to). It also
 //! learns what the firmware describes below the device (ACPI: the
 //! amplifiers on an SPI controller, say), and drives the GPIO pins those
-//! devices are wired to — those pins only. Nothing else.
+//! devices are wired to, and has their interrupts — those pins only.
+//! Nothing else.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -107,10 +108,25 @@ union! {
         3 => Irq { irqs: Vec<u32>, edge: bool, active_low: bool, shared: bool },
         /// A GPIO connection: an input or output (`GpioIo`), or an
         /// interrupt (`GpioInt`). `pull`: 0 default, 1 up, 2 down, 3 none;
-        /// `restriction`: 0 either way, 1 input only, 2 output only. The
-        /// controllers of connections are absolute paths where the name
-        /// resolves (as written where it does not).
-        4 => Gpio { interrupt: bool, pins: Vec<u16>, controller: String, pull: u8, restriction: u8, shared: bool },
+        /// `restriction`: 0 either way, 1 input only, 2 output only. An
+        /// interrupt is an edge or level-triggered (`edge`), `polarity` 0
+        /// active high (or rising), 1 active low (or falling), 2 both
+        /// edges, and may wake the machine (`wake`); `debounce` is in
+        /// hundredths of a millisecond. The controllers of connections are
+        /// absolute paths where the name resolves (as written where it
+        /// does not).
+        4 => Gpio {
+            interrupt: bool,
+            pins: Vec<u16>,
+            controller: String,
+            pull: u8,
+            restriction: u8,
+            shared: bool,
+            edge: bool,
+            polarity: u8,
+            wake: bool,
+            debounce: u16,
+        },
         /// The device's connection to an SPI controller.
         5 => Spi {
             controller: String,
@@ -164,12 +180,13 @@ protocol! {
         /// The devices the firmware describes below this one; none if it
         /// describes none (or there are no ACPI tables).
         9 => fn acpi_devices() -> Vec<AcpiDevice>;
-        /// The level of GPIO connection `index` (counting the device's
-        /// `Gpio` resources in order) of ACPI device `device` (its index in
-        /// `acpi_devices`).
+        /// The level of GPIO pin `index` of ACPI device `device` (its index
+        /// in `acpi_devices`), counting the pins of its `Gpio` resources in
+        /// order: what it drives, if it is an output; what it reads, made
+        /// an input if it is neither.
         10 => fn gpio_read(device: u32, index: u32) -> Result<bool, PciError>;
-        /// Drives GPIO connection `index` of ACPI device `device` high or
-        /// low, making the pin an output if it is not one.
+        /// Drives GPIO pin `index` of ACPI device `device` high or low,
+        /// making it an output if it is not one.
         11 => fn gpio_write(device: u32, index: u32, high: bool) -> Result<(), PciError>;
         /// The resource that names this function (a PCI resource of its
         /// requester id), for giving it to a virtual machine: only the
@@ -196,6 +213,18 @@ protocol! {
         /// (counting the interrupts of its `Irq` resources in order), as
         /// `intx` gives a function's: shared by whoever else is on it.
         16 => fn acpi_interrupt(device: u32, index: u32) -> Result<(Interrupt, InterruptLine), PciError>;
+        /// Makes GPIO pin `index` of ACPI device `device` an input.
+        17 => fn gpio_input(device: u32, index: u32) -> Result<(), PciError>;
+        /// Whether GPIO pin `index` of ACPI device `device` drives its level
+        /// (an output) rather than reading it.
+        18 => fn gpio_is_output(device: u32, index: u32) -> Result<bool, PciError>;
+        /// The interrupt of GPIO pin `index` of ACPI device `device`, whose
+        /// connection is an interrupt (`GpioInt`; `NotFound` if it is
+        /// not), the pin set up to interrupt as the connection says: raised
+        /// when the pin does — an edge, or level-triggered, raised (and the
+        /// pin masked) until it is ended (acknowledged, or the guest's
+        /// end-of-interrupt). `Busy` if the firmware keeps the pin.
+        19 => fn gpio_interrupt(device: u32, index: u32) -> Result<Interrupt, PciError>;
     }
 }
 

@@ -276,10 +276,11 @@ pub struct Described {
 }
 
 impl Described {
-    /// Its `index`-th GPIO connection (counting `GpioIo` and `GpioInt` in
-    /// order): the controller, resolved in the namespace, and the pin.
-    pub fn gpio(&self, ns: &Namespace, index: usize) -> Option<(Path, u16)> {
-        let gpio = self
+    /// Its `index`-th GPIO pin, counting the pins of its connections
+    /// (`GpioIo` and `GpioInt`) in order: the controller, resolved in the
+    /// namespace, the pin, and the connection it is of.
+    pub fn gpio(&self, ns: &Namespace, index: usize) -> Option<(Path, u16, &crate::resource::Gpio)> {
+        let (gpio, pin) = self
             .resources
             .as_ref()
             .ok()?
@@ -288,9 +289,10 @@ impl Described {
                 Resource::Gpio(g) => Some(g),
                 _ => None,
             })
+            .flat_map(|g| g.pins.iter().map(move |&p| (g, p)))
             .nth(index)?;
         let name = crate::name::NameString::parse(&gpio.controller)?;
-        Some((ns.resolve(&self.path, &name)?, *gpio.pins.first()?))
+        Some((ns.resolve(&self.path, &name)?, pin, gpio))
     }
 }
 

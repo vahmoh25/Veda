@@ -15,11 +15,12 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use vabi::Rights;
 use vipc::Bytes;
 use vproto::fs::{FsError, open_flags, vfs};
 use vproto::init::TaskEvent;
 use vproto::launcher;
-use vrt::object::{Channel, Event, Vmo};
+use vrt::object::{Channel, Event, Interrupt, Vmo};
 use vrt::println;
 use vrt::sync::{Condvar, Mutex};
 
@@ -246,6 +247,35 @@ fn test_ipc_primitives() -> TestResult {
     check(r == Err(vabi::Error::TimedOut) && start.elapsed().as_millis() >= 25, "wait timeout")
 }
 
+/// Interrupts a program raises: an edge signals each time; a
+/// level-triggered one stays raised until it is ended, which signals its
+/// event; a duplicate without `SIGNAL` cannot raise it.
+fn test_software_interrupts() -> TestResult {
+    let err = |e: vabi::Error| e.to_string();
+    let now = 0;
+    let ended = Event::create().map_err(err)?;
+    let level = Interrupt::create_software(true, Some(&ended)).map_err(err)?;
+    check(level.wait_irq(now).is_err(), "a new interrupt is not raised")?;
+    level.raise().map_err(err)?;
+    level.raise().map_err(err)?;
+    check(level.wait_irq(now).is_ok(), "raised")?;
+    check(ended.wait(vabi::signals::SIGNALED, now).is_err(), "not ended while raised")?;
+    let consumer = Interrupt(level.0.duplicate(Some(Rights(Rights::BASIC.0 | Rights::WRITE.0))).map_err(err)?);
+    check(consumer.raise() == Err(vabi::Error::AccessDenied), "its consumer cannot raise it")?;
+    consumer.ack().map_err(err)?;
+    check(level.wait_irq(now).is_err(), "acknowledged")?;
+    check(ended.wait(vabi::signals::SIGNALED, now).is_ok(), "the ending signals its event")?;
+    ended.clear().map_err(err)?;
+    consumer.ack().map_err(err)?;
+    check(ended.wait(vabi::signals::SIGNALED, now).is_err(), "only an interrupt raised ends")?;
+
+    let edge = Interrupt::create_software(false, None).map_err(err)?;
+    edge.raise().map_err(err)?;
+    check(edge.wait_irq(now).is_ok(), "an edge signals")?;
+    edge.ack().map_err(err)?;
+    check(edge.wait_irq(now).is_err(), "and is acknowledged")
+}
+
 /// A named test.
 type Test = (&'static str, fn() -> TestResult);
 
@@ -260,8 +290,9 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 15] = [
+    let tests: [Test; 16] = [
         ("ipc primitives", test_ipc_primitives),
+        ("software interrupts", test_software_interrupts),
         ("sockets", posix::test_sockets),
         ("memory protection", posix::test_memory_protection),
         ("private memory", posix::test_private_memory),

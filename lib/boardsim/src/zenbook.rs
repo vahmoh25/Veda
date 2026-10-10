@@ -411,7 +411,7 @@ impl<'a> Drivers<'a> {
         let below = device::describe_children(ns, &companion, settings);
         let device = below.into_iter().find(|d| d.identity.is("CSC3551")).ok_or("no amplifiers below 00:1e.3")?;
         // The GPIO controller of its first GPIO connection.
-        let (controller, _) = device.gpio(ns, 0).ok_or("no GPIO connection")?;
+        let (controller, _, _) = device.gpio(ns, 0).ok_or("no GPIO connection")?;
         let hid = device::identify(ns, &controller, settings).hid.unwrap_or_default();
         let layout = vgpio::layout(&hid).ok_or_else(|| format!("a GPIO controller {}", hid))?;
         let windows: Vec<u64> = device::resources(ns, &controller, settings)
@@ -439,7 +439,7 @@ impl<'a> Drivers<'a> {
 
     /// The pin of GPIO connection `index`, as devmgr finds it.
     fn pin(&self, index: u32) -> Result<u16, BoardError> {
-        let (controller, pin) = self.device.gpio(&self.machine.ns, index as usize).ok_or(BoardError)?;
+        let (controller, pin, _) = self.device.gpio(&self.machine.ns, index as usize).ok_or(BoardError)?;
         if controller != self.gpio.0 {
             return Err(BoardError);
         }

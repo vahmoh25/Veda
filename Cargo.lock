@@ -613,6 +613,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "guest-gpiotest"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+]
+
+[[package]]
 name = "guest-init"
 version = "0.1.0"
 dependencies = [

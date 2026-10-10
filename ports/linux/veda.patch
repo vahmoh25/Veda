@@ -174,9 +174,35 @@
  obj-$(CONFIG_ACRN_HSM)		+= acrn/
 +obj-$(CONFIG_VEDA_BRIDGE)	+= veda/
  obj-y				+= coco/
+--- a/drivers/gpio/Kconfig
++++ b/drivers/gpio/Kconfig
+@@ -2083,6 +2083,13 @@
+ 	  These virtual GPIOs can be routed to real GPIOs or attached to
+ 	  simulators on the host (like QEMU).
+ 
++config GPIO_VEDA
++	bool "GPIO pins of Veda's paravirtual platform"
++	depends on VEDA_GUEST
++	help
++	  The GPIO pins of the PC that the devices Veda gives its driver VM
++	  are wired to, on GPIO controllers of Veda's platform.
++
+ config GPIO_SIM
+ 	tristate "GPIO Simulator Module"
+ 	depends on SYSFS
+--- a/drivers/gpio/Makefile
++++ b/drivers/gpio/Makefile
+@@ -200,6 +200,7 @@
+ obj-$(CONFIG_GPIO_TWL6040)		+= gpio-twl6040.o
+ obj-$(CONFIG_GPIO_UNIPHIER)		+= gpio-uniphier.o
+ obj-$(CONFIG_GPIO_USBIO) 		+= gpio-usbio.o
++obj-$(CONFIG_GPIO_VEDA)			+= gpio-veda.o
+ obj-$(CONFIG_GPIO_VF610)		+= gpio-vf610.o
+ obj-$(CONFIG_GPIO_VIPERBOARD)		+= gpio-viperboard.o
+ obj-$(CONFIG_GPIO_VIRTUSER)		+= gpio-virtuser.o
 --- /dev/null
 +++ b/arch/x86/include/asm/veda_para.h
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,86 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * Veda's paravirtual platform, on which Linux runs as Veda's driver VM:
@@ -214,9 +240,22 @@
 +/*
 + * rbx: a global system interrupt (a GSI, below VEDA_GSIS), rcx: the
 + * processor's APIC id, rdx: the vector (0: it reaches nothing, masked).
++ * GSIs below VEDA_PLATFORM_GSIS are the PC's; from there, lines of the
++ * platform's (the interrupts of GPIO pins).
 + */
 +#define VEDA_HC_GSI		9
-+#define VEDA_GSIS		256
++#define VEDA_GSIS		512
++#define VEDA_PLATFORM_GSIS	256
++/*
++ * rbx: a GPIO controller of the platform's (its _UID), rcx: the pin (the
++ * PC's number), rdx: VEDA_GPIO_*, rsi: a level. Returns the level, 1 if the
++ * pin is an output (0: an input), or 0.
++ */
++#define VEDA_HC_GPIO		10
++#define VEDA_GPIO_READ		0	/* made an input if it is neither */
++#define VEDA_GPIO_WRITE		1	/* made an output */
++#define VEDA_GPIO_INPUT		2
++#define VEDA_GPIO_DIRECTION	3
 +
 +#define VEDA_POWER_OFF		0
 +#define VEDA_POWER_RESTART	1
@@ -2138,3 +2177,173 @@
 +	x86_init.irqs.create_pci_msi_domain = veda_create_pci_msi_domain;
 +#endif
 +}
+--- /dev/null
++++ b/drivers/gpio/gpio-veda.c
+@@ -0,0 +1,167 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * The GPIO controllers of Veda's paravirtual platform: the pins of a PC's
++ * GPIO controller that the devices Veda gives its driver VM are wired to
++ * (a laptop's amplifiers: a chip select, their reset, their interrupt), by
++ * the PC's numbers for them, so that the devices' ACPI descriptions name
++ * them as the PC's firmware does. The platform's ACPI tables describe each
++ * controller (VEDA0001, its number in _UID): the pins it has ("veda,pins"),
++ * and for those that interrupt ("veda,interrupt-pins") the lines they
++ * raise, its interrupts in the same order: GSIs of the platform's, routed
++ * and ended as the PC's are. Hypercalls read a pin, drive it, make it an
++ * input and tell its direction; Veda drives the PC's pin itself, and only
++ * those the guest has.
++ */
++
++#include <linux/acpi.h>
++#include <linux/bitmap.h>
++#include <linux/gpio/driver.h>
++#include <linux/mod_devicetable.h>
++#include <linux/platform_device.h>
++#include <linux/property.h>
++#include <asm/veda_para.h>
++
++struct veda_gpio {
++	struct gpio_chip chip;
++	u64 uid;
++	u32 *pins;
++	unsigned int npins;
++	/* The pins that interrupt, and their IRQs: the controller's, in order. */
++	u32 *irq_pins;
++	int *irqs;
++	unsigned int nirqs;
++};
++
++static long veda_gpio_call(struct gpio_chip *chip, unsigned int pin, unsigned long op, unsigned long value)
++{
++	struct veda_gpio *g = gpiochip_get_data(chip);
++
++	return veda_hypercall(VEDA_HC_GPIO, g->uid, pin, op, value, 0);
++}
++
++static int veda_gpio_get(struct gpio_chip *chip, unsigned int pin)
++{
++	long level = veda_gpio_call(chip, pin, VEDA_GPIO_READ, 0);
++
++	return level < 0 ? -EIO : !!level;
++}
++
++static int veda_gpio_set(struct gpio_chip *chip, unsigned int pin, int value)
++{
++	return veda_gpio_call(chip, pin, VEDA_GPIO_WRITE, value) < 0 ? -EIO : 0;
++}
++
++static int veda_gpio_direction_input(struct gpio_chip *chip, unsigned int pin)
++{
++	return veda_gpio_call(chip, pin, VEDA_GPIO_INPUT, 0) < 0 ? -EIO : 0;
++}
++
++/* Driving a level makes the pin an output, the level set first. */
++static int veda_gpio_direction_output(struct gpio_chip *chip, unsigned int pin, int value)
++{
++	return veda_gpio_set(chip, pin, value);
++}
++
++static int veda_gpio_get_direction(struct gpio_chip *chip, unsigned int pin)
++{
++	long output = veda_gpio_call(chip, pin, VEDA_GPIO_DIRECTION, 0);
++
++	if (output < 0)
++		return -EIO;
++	return output ? GPIO_LINE_DIRECTION_OUT : GPIO_LINE_DIRECTION_IN;
++}
++
++static int veda_gpio_init_valid_mask(struct gpio_chip *chip, unsigned long *valid, unsigned int ngpios)
++{
++	struct veda_gpio *g = gpiochip_get_data(chip);
++	unsigned int i;
++
++	bitmap_zero(valid, ngpios);
++	for (i = 0; i < g->npins; i++)
++		__set_bit(g->pins[i], valid);
++	return 0;
++}
++
++static int veda_gpio_to_irq(struct gpio_chip *chip, unsigned int pin)
++{
++	struct veda_gpio *g = gpiochip_get_data(chip);
++	unsigned int i;
++
++	for (i = 0; i < g->nirqs; i++)
++		if (g->irq_pins[i] == pin)
++			return g->irqs[i];
++	return -ENXIO;
++}
++
++/* The numbers of property `name` (none if it has none). */
++static int veda_gpio_numbers(struct device *dev, const char *name, u32 **out)
++{
++	int n = device_property_count_u32(dev, name);
++
++	if (n <= 0)
++		return 0;
++	*out = devm_kcalloc(dev, n, sizeof(**out), GFP_KERNEL);
++	if (!*out)
++		return -ENOMEM;
++	return device_property_read_u32_array(dev, name, *out, n) ?: n;
++}
++
++static int veda_gpio_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct veda_gpio *g;
++	unsigned int i;
++	int n;
++
++	g = devm_kzalloc(dev, sizeof(*g), GFP_KERNEL);
++	if (!g)
++		return -ENOMEM;
++	if (acpi_dev_uid_to_integer(ACPI_COMPANION(dev), &g->uid))
++		return dev_err_probe(dev, -EINVAL, "no _UID\n");
++	n = veda_gpio_numbers(dev, "veda,pins", &g->pins);
++	if (n <= 0)
++		return dev_err_probe(dev, n ?: -ENODEV, "no pins\n");
++	g->npins = n;
++	n = veda_gpio_numbers(dev, "veda,interrupt-pins", &g->irq_pins);
++	if (n < 0)
++		return n;
++	g->nirqs = n;
++	g->irqs = devm_kcalloc(dev, max(g->nirqs, 1u), sizeof(*g->irqs), GFP_KERNEL);
++	if (!g->irqs)
++		return -ENOMEM;
++	for (i = 0; i < g->nirqs; i++) {
++		g->irqs[i] = platform_get_irq(pdev, i);
++		if (g->irqs[i] < 0)
++			return g->irqs[i];
++	}
++
++	g->chip.label = dev_name(dev);
++	g->chip.parent = dev;
++	g->chip.owner = THIS_MODULE;
++	g->chip.base = -1;
++	for (i = 0; i < g->npins; i++)
++		g->chip.ngpio = max_t(u16, g->chip.ngpio, g->pins[i] + 1);
++	g->chip.get = veda_gpio_get;
++	g->chip.set = veda_gpio_set;
++	g->chip.direction_input = veda_gpio_direction_input;
++	g->chip.direction_output = veda_gpio_direction_output;
++	g->chip.get_direction = veda_gpio_get_direction;
++	g->chip.init_valid_mask = veda_gpio_init_valid_mask;
++	g->chip.to_irq = veda_gpio_to_irq;
++	dev_info(dev, "%u pins, %u interrupting\n", g->npins, g->nirqs);
++	return devm_gpiochip_add_data(dev, &g->chip, g);
++}
++
++static const struct acpi_device_id veda_gpio_ids[] = {
++	{ "VEDA0001" },
++	{ }
++};
++
++static struct platform_driver veda_gpio_driver = {
++	.driver = {
++		.name = "veda-gpio",
++		.acpi_match_table = veda_gpio_ids,
++	},
++	.probe = veda_gpio_probe,
++};
++builtin_platform_driver(veda_gpio_driver);

@@ -28,7 +28,11 @@
 //! describe the PCI root and its functions, the devices of the PC that the
 //! guest has (its keyboard controller), and the interrupt lines those use:
 //! the PC's global system interrupts (GSIs), which the guest routes to its
-//! processors with [`hypercall::GSI`].
+//! processors with [`hypercall::GSI`]. GPIO pins of the PC's that the
+//! guest's devices are wired to are on GPIO controllers of the platform's
+//! (`VEDA0001`), which [`hypercall::GPIO`] drives, by the PC's numbers for
+//! the pins; their interrupts are lines too, GSIs from
+//! [`PLATFORM_GSIS`] on.
 //!
 //! PCI functions given to the guest are on its PCI segment 0, where the
 //! platform puts them (bus 0); the guest finds them by reading their
@@ -93,10 +97,32 @@ pub mod hypercall {
     /// (as with an I/O APIC). An edge that came while the line was masked
     /// is raised when it is routed again.
     pub const GSI: u64 = 9;
+    /// Operation `rdx` ([`super::gpio`]) on pin `rcx` (the PC's number, as
+    /// the ACPI tables give it) of the platform's GPIO controller `rbx`
+    /// (its `_UID`), with `rsi` for a level. Returns the level, whether the
+    /// pin is an output, or 0; [`super::error::INVALID`] if the guest has
+    /// no such pin, or the PC would not do it.
+    pub const GPIO: u64 = 10;
 }
 
 /// GSIs are below this: the guest's IRQs of the same numbers.
-pub const GSIS: u32 = 256;
+pub const GSIS: u32 = 512;
+/// GSIs below this are the PC's own; from it, lines the platform makes
+/// (the interrupts of GPIO pins).
+pub const PLATFORM_GSIS: u32 = 256;
+
+/// What [`hypercall::GPIO`] does with a pin.
+pub mod gpio {
+    /// The level: what the pin drives if it is an output, else what it
+    /// reads (made an input if it is neither).
+    pub const READ: u64 = 0;
+    /// Drives `rsi`'s level (0 low, else high), making the pin an output.
+    pub const WRITE: u64 = 1;
+    /// Makes the pin an input.
+    pub const INPUT: u64 = 2;
+    /// 1 if the pin is an output, 0 if an input.
+    pub const DIRECTION: u64 = 3;
+}
 
 /// The message of a [`hypercall::PCI_MSI`], as its result holds it.
 pub fn msi_result(address: u64, data: u32) -> u64 {

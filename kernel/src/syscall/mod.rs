@@ -116,6 +116,8 @@ fn dispatch(n: usize, a: [usize; 6]) -> SysResult {
         nr::IRQ_CREATE => hw::irq_create(a[0] as RawHandle, a[1], a[2]),
         nr::IRQ_ACK => hw::irq_ack(a[0] as RawHandle),
         nr::MSI_CREATE => hw::msi_create(a[0] as RawHandle, a[1], a[2]),
+        nr::IRQ_CREATE_SOFTWARE => hw::irq_create_software(a[0], a[1] as RawHandle),
+        nr::IRQ_RAISE => hw::irq_raise(a[0] as RawHandle),
 
         nr::GUEST_CREATE => hv::guest_create(a[0] as RawHandle, a[1]),
         nr::GUEST_MAP => hv::guest_map(a[0] as RawHandle, a[1] as RawHandle, a[2], a[3], a[4], a[5]),
@@ -173,6 +175,7 @@ typed_getter!(get_thread, Thread, crate::sched::Thread);
 typed_getter!(get_resource, Resource, crate::object::resource::Resource);
 typed_getter!(get_ioports, IoPorts, crate::object::ioport::IoPorts);
 typed_getter!(get_interrupt, Interrupt, crate::object::interrupt::Interrupt);
+typed_getter!(get_event, Event, crate::object::event::Event);
 
 /// A process handle argument where 0 means "the calling process".
 fn target_process(raw: RawHandle) -> Result<Arc<Process>, Error> {

@@ -1,0 +1,18 @@
+[package]
+name = "guest-gpiotest"
+description = "Checks, inside the driver VM's Linux, the GPIO pins Veda gave it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gpiotest"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+guest-sys = { workspace = true }
+
+[lints]
+workspace = true

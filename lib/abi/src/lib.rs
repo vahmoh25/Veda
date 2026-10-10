@@ -210,6 +210,19 @@ pub mod nr {
     /// ([`resource_kind::PCI`](crate::resource_kind::PCI)). When the IOMMU
     /// remaps interrupts, only that function can raise it.
     pub const MSI_CREATE: usize = 86;
+    /// `irq_create_software(flags, ended) -> h`: an interrupt the caller
+    /// raises (`irq_raise`), for the lines of an interrupt controller it
+    /// drives itself (a GPIO controller's pins): an edge, or with
+    /// [`irq_flags::LEVEL`](crate::irq_flags::LEVEL) a level-triggered
+    /// one, raised until it is ended (`irq_ack`, or a guest's
+    /// end-of-interrupt while it is bound to a virtual processor), which
+    /// signals event `ended` (a handle with [`Rights::SIGNAL`]; 0 for
+    /// none). The handle has `SIGNAL`, which raising takes: a duplicate
+    /// without it is for whoever the interrupt is for.
+    pub const IRQ_CREATE_SOFTWARE: usize = 87;
+    /// `irq_raise(h)`: raises an interrupt made by `irq_create_software`, as
+    /// a line raises its own.
+    pub const IRQ_RAISE: usize = 88;
 
     // --- virtual machines (requires a hypervisor resource) ------------
     /// `guest_create(resource, cpus) -> h`: a virtual machine with an

@@ -6,10 +6,11 @@
 //! one line share it). Linux finds them on bus 0 of the guest's PCI, their
 //! configuration space as `vhv::pci` makes it, through the platform's
 //! hypercalls. What the PC's firmware describes below a function goes into
-//! the guest's ACPI tables (`vhv::acpi`): the devices on its bus that use
-//! nothing but their place on the bus and interrupt lines (a touchpad on an
-//! I2C controller, whose line the guest gets too), and the function's and
-//! their constant data.
+//! the guest's ACPI tables (`vhv::acpi`): the devices on its bus, with their
+//! place on it (I2C or SPI), their interrupt lines (a touchpad's on an I2C
+//! controller, whose line the guest gets too), the GPIO pins they are wired
+//! to (`gpio`: a laptop's amplifiers on an SPI controller have some), and
+//! the function's and their constant data.
 //!
 //! A function reports no errors to the host, which a PC may make NMIs of:
 //! its error reporting is turned off before the guest runs, and stays off.
@@ -35,13 +36,15 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use vabi::map_flags;
-use vhv::acpi::{self, Child, Function, HID_OVER_I2C, Resource};
+use vhv::acpi::{self, Child, Function, Gpio, GpioController, GpioInterrupt, HID_OVER_I2C, Resource};
 use vhv::pci::{Bar, ConfigSpace, Write};
+use vhv::platform::{error, gpio};
 use vproto::pci::{AcpiDevice, AcpiResource, DeviceInfo, IntxLine, pcidev};
 use vrt::object::{Channel, Guest, Interrupt, Vcpu};
 use vrt::println;
 use vrt::sync::Mutex;
 
+use crate::gpio::{Owner, Pins};
 use crate::lines::Lines;
 
 const PAGE: u64 = 4096;
@@ -66,6 +69,8 @@ struct State {
 /// The functions the guest has.
 pub struct Devices {
     list: Vec<Device>,
+    /// The GPIO pins their devices are wired to.
+    pins: Pins,
 }
 
 /// Where in the guest's memory BARs go: below 4 GiB the ones that must
@@ -93,7 +98,7 @@ impl Windows {
 impl Devices {
     /// No functions.
     pub fn none() -> Devices {
-        Devices { list: Vec::new() }
+        Devices { list: Vec::new(), pins: Pins::default() }
     }
 
     /// Gives the guest the functions of `channels` it can have: their DMA,
@@ -110,6 +115,7 @@ impl Devices {
         }
         let places = places(&given.iter().map(|(_, i)| (i.bus, i.slot, i.function)).collect::<Vec<_>>());
         let mut list = Vec::new();
+        let mut pins = Pins::default();
         for ((pci, info), place) in given.into_iter().zip(places) {
             let name = format!(
                 "{:04x}:{:04x} at {:02x}:{:02x}.{}",
@@ -138,12 +144,13 @@ impl Devices {
                 at.push(format!("INT{}# on GSI {}", (b'A' + l.pin - 1) as char, l.gsi));
             }
             println!("{} is the guest's 00:{:02x}.{}: {}", name, devfn >> 3, devfn & 7, at.join(", "));
-            let description = describe(&pci, &name, devfn, intx, lines);
+            let mut given = Given { pci: &pci, name: &name, function: list.len(), lines, pins: &mut pins };
+            let description = describe(&mut given, devfn, intx);
             let config = ConfigSpace::new(bars, multifunction, pci_express, intx.map(|l| (l.pin, l.gsi as u8)));
             let state = Mutex::new(State { pci, config, msis: BTreeMap::new() });
             list.push(Device { devfn, info, description, state });
         }
-        Devices { list }
+        Devices { list, pins }
     }
 
     /// The kernel command line's options that say where the functions'
@@ -164,6 +171,34 @@ impl Devices {
     /// The functions, as the ACPI tables describe them.
     pub fn functions(&self) -> Vec<Function> {
         self.list.iter().map(|d| d.description.clone()).collect()
+    }
+
+    /// The GPIO controllers of their devices' pins, as the ACPI tables
+    /// describe them.
+    pub fn gpio_controllers(&self) -> Vec<GpioController> {
+        self.pins.controllers()
+    }
+
+    /// Operation `op` ([`gpio`]) on pin `pin` of GPIO controller
+    /// `controller`, with `value` for a level: through the channel of the
+    /// function the pin's device is below.
+    pub fn gpio(&self, controller: u64, pin: u64, op: u64, value: u64) -> u64 {
+        let Some(Owner { function, device, index }) = self.pins.owner(controller, pin) else {
+            return error::INVALID;
+        };
+        let Some(d) = self.list.get(function) else { return error::INVALID };
+        let s = d.state.lock();
+        let done = match op {
+            gpio::READ => s.pci.gpio_read(device, index).map(|r| r.map(u64::from)),
+            gpio::WRITE => s.pci.gpio_write(device, index, value != 0).map(|r| r.map(|_| 0)),
+            gpio::INPUT => s.pci.gpio_input(device, index).map(|r| r.map(|_| 0)),
+            gpio::DIRECTION => s.pci.gpio_is_output(device, index).map(|r| r.map(u64::from)),
+            _ => return error::INVALID,
+        };
+        match done {
+            Ok(Ok(v)) => v,
+            _ => error::INVALID,
+        }
     }
 
     fn device(&self, function: u64) -> Option<&Device> {
@@ -259,11 +294,22 @@ const CONTROLLER_DATA: [&str; 4] = ["SSCN", "FMCN", "FPCN", "HSCN"];
 /// HID over I2C's ids.
 const HID_OVER_I2C_IDS: [&str; 2] = ["PNP0C50", "ACPI0C50"];
 
-/// What the guest's tables say about function `name` at `devfn`: its
-/// INTx, its constant data, and the devices the firmware describes below
-/// it, whose interrupt lines are added to `lines`. What a device uses that
-/// the guest cannot have is left out, and said.
-fn describe(pci: &pcidev::Client, name: &str, devfn: u8, intx: Option<IntxLine>, lines: &mut Lines) -> Function {
+/// A function being given: its channel and name, its place among the
+/// guest's functions, and the lines and GPIO pins its devices add to.
+struct Given<'a> {
+    pci: &'a pcidev::Client,
+    name: &'a str,
+    function: usize,
+    lines: &'a mut Lines,
+    pins: &'a mut Pins,
+}
+
+/// What the guest's tables say about function `f` at `devfn`: its INTx,
+/// its constant data, and the devices the firmware describes below it,
+/// whose interrupt lines and GPIO pins the guest gets. What a device uses
+/// that the guest cannot have is left out, and said.
+fn describe(f: &mut Given, devfn: u8, intx: Option<IntxLine>) -> Function {
+    let pci = f.pci;
     let data_of = |device: u32, names: &[&str]| -> Vec<(String, Vec<u8>)> {
         names
             .iter()
@@ -279,28 +325,43 @@ fn describe(pci: &pcidev::Client, name: &str, devfn: u8, intx: Option<IntxLine>,
         .iter()
         .enumerate()
         .filter(|(_, d)| d.status & 1 != 0)
-        .filter_map(|(i, d)| child(pci, name, i as u32, d, lines))
+        .filter_map(|(i, d)| child(f, i as u32, d))
         .collect::<Vec<Child>>();
     Function { devfn, intx: intx.map(|l| (l.pin, l.gsi)), data: data_of(u32::MAX, &CONTROLLER_DATA), children }
 }
 
-/// Described device `index` (`d`) of function `name`, as the guest has it:
-/// its connection to the function's bus, its interrupts (whose lines go to
-/// `lines`), what its `_DSM` answers HID over I2C, its `_DSD`.
-fn child(pci: &pcidev::Client, name: &str, index: u32, d: &AcpiDevice, lines: &mut Lines) -> Option<Child> {
+/// Described device `index` (`d`) of function `f`, as the guest has it:
+/// its connection to the function's bus, its interrupts (whose lines the
+/// guest gets), the GPIO pins it is wired to, what its `_DSM` answers HID
+/// over I2C, its `_DSD`.
+fn child(f: &mut Given, index: u32, d: &AcpiDevice) -> Option<Child> {
+    let (pci, name) = (f.pci, f.name);
     let (parent, own) = d.path.rsplit_once('.')?;
     let mut resources = Vec::new();
     let mut interrupts = 0;
+    // The device's GPIO pins, counted in order.
+    let mut pin_index = 0;
     for r in &d.resources {
         match r {
             AcpiResource::I2c { controller, address, speed_hz, ten_bit } if controller == parent => {
                 resources.push(Resource::I2c { address: *address, speed_hz: *speed_hz, ten_bit: *ten_bit });
             }
+            &AcpiResource::Spi { ref controller, chip_select, speed_hz, bits, cpol, cpha, cs_active_high }
+                if controller == parent =>
+            {
+                let three_wire = false;
+                resources.push(Resource::Spi { chip_select, speed_hz, bits, cpol, cpha, cs_active_high, three_wire });
+            }
+            AcpiResource::Gpio { .. } => {
+                if let Some(g) = gpio_connection(f, index, d, r, &mut pin_index) {
+                    resources.push(Resource::Gpio(g));
+                }
+            }
             AcpiResource::Irq { irqs, edge, active_low, shared } => {
                 for _ in irqs {
                     let given = match pci.acpi_interrupt(index, interrupts) {
                         Ok(Ok((irq, line))) => {
-                            (lines.has(line.gsi) || lines.add(line.gsi, irq, line.level)).then_some(line)
+                            (f.lines.has(line.gsi) || f.lines.add(line.gsi, irq, line.level)).then_some(line)
                         }
                         _ => None,
                     };
@@ -348,6 +409,59 @@ fn child(pci: &pcidev::Client, name: &str, index: u32, d: &AcpiDevice, lines: &m
         hid_descriptor,
         data,
     })
+}
+
+/// GPIO connection `r` of described device `index` (`d`) of function `f`,
+/// as the guest has it: its pins on the guest's controller for the PC's,
+/// each driven through the function's channel (`pin_index` counts the
+/// device's pins), an interrupt's pin raising a line of the platform's.
+/// `None` if the guest gets none of its pins.
+fn gpio_connection(f: &mut Given, index: u32, d: &AcpiDevice, r: &AcpiResource, pin_index: &mut u32) -> Option<Gpio> {
+    let &AcpiResource::Gpio {
+        interrupt,
+        ref pins,
+        ref controller,
+        pull,
+        restriction,
+        shared,
+        edge,
+        polarity,
+        wake,
+        debounce,
+    } = r
+    else {
+        return None;
+    };
+    let (path, uid) = f.pins.controller(controller);
+    let mut given = Vec::new();
+    for &pin in pins {
+        let at = *pin_index;
+        *pin_index += 1;
+        if interrupt {
+            let irq = match f.pci.gpio_interrupt(index, at) {
+                Ok(Ok(irq)) => irq,
+                e => {
+                    println!(
+                        "{}: {}'s interrupt on GPIO pin {} cannot be given to the guest: {:?}",
+                        f.name, d.path, pin, e
+                    );
+                    continue;
+                }
+            };
+            let Some(gsi) = f.lines.add_platform(irq, !edge) else {
+                println!("{}: no line is left for {}'s GPIO pin {}", f.name, d.path, pin);
+                continue;
+            };
+            f.pins.add_interrupt(uid, GpioInterrupt { pin, gsi, edge, active_low: polarity == 1 });
+            println!("{}: {}'s GPIO pin {} interrupts on the guest's GSI {}", f.name, d.path, pin, gsi);
+        }
+        f.pins.add(uid, pin, Owner { function: f.function, device: index, index: at });
+        given.push(pin);
+    }
+    if given.is_empty() {
+        return None;
+    }
+    Some(Gpio { interrupt, pins: given, controller: path, pull, restriction, edge, polarity, shared, wake, debounce })
 }
 
 /// Turns off the errors the function reports to the host (its SERR# and

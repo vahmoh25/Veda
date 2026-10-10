@@ -1,0 +1,20 @@
+# GPIO pins for the driver VM. A test table describes one of devmgr's
+# simulated GPIO controllers (VTST0002, Alder Lake-P's pads, its even pins
+# wired to the odd ones after them) and a device below QEMU's virtio GPU
+# wired to three of its pins: 0 an output, 1 an input that interrupts on
+# both edges, 3 an input. The guest gets those pins, by the controller's
+# numbers, on a GPIO controller of the platform's, and pin 1's interrupt as
+# a line of the platform's; gpiotest drives pin 0, reads pin 1 and gets its
+# edges as events, through Linux's GPIO character device, devmgr's pads and
+# the interrupt devmgr raises. Pin 2 it does not have.
+acpi-table gpio
+boot-cmdline "drivervm.run=gpiotest drivervm.poweroff"
+fail-on "PANIC"
+fail-on "gpiotest: FAIL"
+wait-serial "is a simulated controller with Tiger Lake-LP's pads" 60
+wait-serial "\_SB.PCI0.S80.GPT0's GPIO pin 1 interrupts on the guest's GSI 256" 30
+wait-serial "veda-gpio VEDA0001:00: 3 pins, 1 interrupting" 60
+wait-serial "gpiotest: PASS" 60
+wait-serial "drivervm: Linux powered the machine off" 30
+reject-serial "uses what the guest does not get"
+reject-serial "cannot be given to the guest"

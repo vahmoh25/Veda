@@ -363,6 +363,48 @@ fn stores_stay_inside_an_evaluation() {
 }
 
 #[test]
+fn spi_and_gpio_connections_read_back() {
+    // The amplifiers' connections, as a guest's tables describe them.
+    let spi = Spi {
+        controller: "\\_SB.PCI0.SF3".into(),
+        chip_select: 1,
+        speed_hz: 4_000_000,
+        bits: 8,
+        cpol: true,
+        cpha: true,
+        cs_active_high: true,
+        three_wire: false,
+    };
+    let reset = Gpio {
+        interrupt: false,
+        pins: alloc::vec![305, 23],
+        controller: "\\_SB.GPI0".into(),
+        pull: 2,
+        restriction: 2,
+        edge: false,
+        polarity: 0,
+        shared: true,
+        wake: false,
+        debounce: 0,
+    };
+    let irq = Gpio {
+        interrupt: true,
+        pins: alloc::vec![303],
+        controller: "\\_SB.GPI0".into(),
+        pull: 1,
+        restriction: 0,
+        edge: true,
+        polarity: 2,
+        shared: false,
+        wake: true,
+        debounce: 100,
+    };
+    let template = cat(&[&spi_descriptor_of(&spi), &gpio_descriptor_of(&reset), &gpio_descriptor_of(&irq), &END_TAG]);
+    let r = resource::parse(&template).unwrap();
+    assert_eq!(r, [Resource::Spi(spi), Resource::Gpio(reset), Resource::Gpio(irq)]);
+}
+
+#[test]
 fn the_descriptors_veda_writes_read_back() {
     let template = cat(&[
         &io(0x60, 1),

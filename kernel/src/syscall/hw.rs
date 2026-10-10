@@ -3,7 +3,7 @@
 
 use vabi::{Error, MsiInfo, RawHandle, Rights, irq_flags, resource_kind};
 
-use super::{SysResult, get_interrupt, get_ioports, get_resource, insert, ok};
+use super::{SysResult, get_event, get_interrupt, get_ioports, get_resource, insert, ok};
 use crate::mm::user;
 use crate::object::KObject;
 use crate::object::interrupt::Interrupt;
@@ -59,6 +59,24 @@ pub fn irq_create(res: RawHandle, irq: usize, flags: usize) -> SysResult {
 
 pub fn irq_ack(raw: RawHandle) -> SysResult {
     get_interrupt(raw, Rights::WRITE)?.ack();
+    ok(0)
+}
+
+pub fn irq_create_software(flags: usize, ended: RawHandle) -> SysResult {
+    if flags & !irq_flags::LEVEL != 0 {
+        return Err(Error::InvalidArgs);
+    }
+    let ended = match ended {
+        vabi::INVALID_HANDLE => None,
+        h => Some(get_event(h, Rights::SIGNAL)?),
+    };
+    let i = Interrupt::new_software(flags & irq_flags::LEVEL != 0, ended);
+    let rights = Rights(Rights::BASIC.0 | Rights::WRITE.0 | Rights::SIGNAL.0);
+    ok(insert(KObject::Interrupt(i), rights)? as usize)
+}
+
+pub fn irq_raise(raw: RawHandle) -> SysResult {
+    get_interrupt(raw, Rights::SIGNAL)?.raise()?;
     ok(0)
 }
 

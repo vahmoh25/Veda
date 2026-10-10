@@ -509,7 +509,7 @@ pub fn acpi_tables(script: &str) -> Result<Vec<PathBuf>> {
     let mut tables = Vec::new();
     for w in script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "acpi-table")) {
         let n = w.get(1).ok_or("acpi-table: missing name")?;
-        let table = crate::acpitest::table(n).ok_or(format!("acpi-table: no table '{n}' (touchpad)"))?;
+        let table = crate::acpitest::table(n).ok_or(format!("acpi-table: no table '{n}' (touchpad, gpio)"))?;
         let path = util::out_dir().join(format!("acpi-{n}.aml"));
         std::fs::write(&path, table).map_err(|e| format!("{}: {e}", path.display()))?;
         tables.push(path);

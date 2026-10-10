@@ -37,6 +37,7 @@
 extern crate alloc;
 
 mod bridge;
+mod gpio;
 mod i8042;
 mod lines;
 mod machine;

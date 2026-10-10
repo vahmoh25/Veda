@@ -246,13 +246,29 @@ has ended and left its stack, which is how thread libraries join threads.
   interrupt lines, what their `_DSM` answers, constant data (`_DSD`, an
   I2C controller's timing).
 * **GPIO.** `devmgr` drives the GPIO pins those devices are wired to on
-  the driver's behalf, and no others: a driver names a GPIO connection of
-  one of its devices, `devmgr` finds the controller (its registers from
-  its own `_CRS`) and the pad (`vgpio`, `lib/gpio`). The controllers are
-  Intel's (Tiger Lake-LP's pads, which Alder Lake-P kept; the layout as
-  Linux's `pinctrl-tigerlake` has it): a pad owned by the firmware, or
-  whose settings are locked, is refused; one in another function becomes
-  a GPIO only when needed; a level is set before the output is enabled.
+  the driver's behalf, and no others: a driver names a pin of one of its
+  devices (counting the pins of its GPIO connections), `devmgr` finds the
+  controller (its registers from its own `_CRS`) and the pad (`vgpio`,
+  `lib/gpio`). The controllers are Intel's (Tiger Lake-LP's pads, which
+  Alder Lake-P kept; the layout as Linux's `pinctrl-tigerlake` has it): a
+  pad owned by the firmware, or whose settings are locked, is refused; one
+  in another function becomes a GPIO only when needed; a level is set
+  before the output is enabled. A pin's interrupt (a `GpioInt`
+  connection) is an interrupt `devmgr` raises: a controller has one line
+  for all its pins, which `devmgr` waits on, and when it fires each pin
+  with an interrupt pending raises its own — an edge, or level-triggered
+  as its connection says, the pin masked until the interrupt is ended (the
+  ending signals an event, and `devmgr` unmasks the pin, which fires again
+  if its level lasts). Only a pad the firmware leaves in GPIO driver mode
+  interrupts (one in ACPI mode raises the firmware's events; Linux refuses
+  those too). The kernel's part is mechanism: an interrupt a program
+  raises (`irq_raise`, with a handle's `SIGNAL` right; whoever it is for
+  gets a handle without it), which reaches its driver, or a guest's
+  processor, as a line's does, and signals the event its maker gave when
+  a level-triggered one ends (as KVM's resample event does for VFIO). A
+  test's ACPI table may describe a simulated controller (`VTST0002`):
+  `vgpio::sim`'s registers, as the hardware keeps them, its even pins
+  wired to the odd ones after them.
 
 ## Storage
 

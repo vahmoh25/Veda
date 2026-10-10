@@ -9,6 +9,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::name::NameString;
+use crate::resource::{Gpio, Spi};
 use crate::value::Value;
 
 /// The bytes of `body` behind its PkgLength.
@@ -243,11 +244,28 @@ fn large(kind: u8, body: &[u8]) -> Vec<u8> {
 /// `SpiSerialBusV2 (cs, PolarityLow, FourWireMode, 8, ControllerInitiated,
 /// speed, ClockPolarityLow, ClockPhaseFirst, controller)`.
 pub fn spi_descriptor(cs: u16, speed: u32, controller: &str) -> Vec<u8> {
-    let mut d = vec![2, 0, 2, 2, 0, 0, 1, 9, 0];
-    d.extend_from_slice(&speed.to_le_bytes());
-    d.extend([8, 0, 0]);
-    d.extend_from_slice(&cs.to_le_bytes());
-    d.extend_from_slice(controller.as_bytes());
+    spi_descriptor_of(&Spi {
+        controller: controller.into(),
+        chip_select: cs,
+        speed_hz: speed,
+        bits: 8,
+        cpol: false,
+        cpha: false,
+        cs_active_high: false,
+        three_wire: false,
+    })
+}
+
+/// The `SpiSerialBusV2` [`crate::resource::parse`] reads as `s`.
+pub fn spi_descriptor_of(s: &Spi) -> Vec<u8> {
+    let specific = s.three_wire as u16 | (s.cs_active_high as u16) << 1;
+    let mut d = vec![2, 0, 2, 2];
+    d.extend_from_slice(&specific.to_le_bytes());
+    d.extend([1, 9, 0]);
+    d.extend_from_slice(&s.speed_hz.to_le_bytes());
+    d.extend([s.bits, s.cpha as u8, s.cpol as u8]);
+    d.extend_from_slice(&s.chip_select.to_le_bytes());
+    d.extend_from_slice(s.controller.as_bytes());
     d.push(0);
     large(0x0E, &d)
 }
@@ -255,20 +273,36 @@ pub fn spi_descriptor(cs: u16, speed: u32, controller: &str) -> Vec<u8> {
 /// `GpioIo` (or `GpioInt`) with one pin. `flags`: the I/O restriction and
 /// sharing (`GpioIo`) or the interrupt's mode, polarity and sharing.
 pub fn gpio_descriptor(interrupt: bool, flags: u16, pull: u8, debounce: u16, pin: u16, controller: &str) -> Vec<u8> {
+    gpio_connection(interrupt, flags, pull, debounce, &[pin], controller)
+}
+
+/// The `GpioIo` or `GpioInt` [`crate::resource::parse`] reads as `g`.
+pub fn gpio_descriptor_of(g: &Gpio) -> Vec<u8> {
+    let flags = if g.interrupt {
+        g.edge as u16 | (g.polarity as u16 & 3) << 1 | (g.shared as u16) << 3 | (g.wake as u16) << 4
+    } else {
+        g.restriction as u16 & 3 | (g.shared as u16) << 3
+    };
+    gpio_connection(g.interrupt, flags, g.pull, g.debounce, &g.pins, &g.controller)
+}
+
+fn gpio_connection(interrupt: bool, flags: u16, pull: u8, debounce: u16, pins: &[u16], controller: &str) -> Vec<u8> {
     let mut d = vec![1, if interrupt { 0 } else { 1 }, 1, 0];
     d.extend_from_slice(&flags.to_le_bytes());
     d.push(pull);
     d.extend_from_slice(&0u16.to_le_bytes());
     d.extend_from_slice(&debounce.to_le_bytes());
     // Pin table right after the fixed part (23 bytes in), then the name.
-    let name_at = 23 + 2;
+    let name_at = 23 + 2 * pins.len();
     d.extend_from_slice(&23u16.to_le_bytes());
     d.push(0);
     d.extend_from_slice(&(name_at as u16).to_le_bytes());
     let vendor_at = name_at + controller.len() + 1;
     d.extend_from_slice(&(vendor_at as u16).to_le_bytes());
     d.extend_from_slice(&0u16.to_le_bytes());
-    d.extend_from_slice(&pin.to_le_bytes());
+    for pin in pins {
+        d.extend_from_slice(&pin.to_le_bytes());
+    }
     d.extend_from_slice(controller.as_bytes());
     d.push(0);
     large(0x0C, &d)

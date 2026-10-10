@@ -251,6 +251,10 @@ fn wire(r: &FirmwareResource, acpi: &Acpi, scope: &Path) -> AcpiResource {
             pull: g.pull,
             restriction: g.restriction,
             shared: g.shared,
+            edge: g.edge,
+            polarity: g.polarity,
+            wake: g.wake,
+            debounce: g.debounce,
         },
         FirmwareResource::Spi(s) => AcpiResource::Spi {
             controller: controller(&s.controller),
@@ -275,6 +279,9 @@ fn wire(r: &FirmwareResource, acpi: &Acpi, scope: &Path) -> AcpiResource {
 struct DeviceSession<'a> {
     mgr: &'a Manager,
     dev: &'a Bound,
+    /// The key the session's channel is waited on with, which owns what
+    /// it is given that goes when it does (its pins' interrupts).
+    key: u64,
 }
 
 impl DeviceSession<'_> {
@@ -471,25 +478,44 @@ impl pcidev::Server for DeviceSession<'_> {
     }
 
     fn gpio_read(&mut self, device: u32, index: u32) -> Result<bool, PciError> {
-        let (controller, pin) = self.gpio_pin(device, index)?;
-        let acpi = self.mgr.acpi.as_ref().ok_or(PciError::NotFound)?;
-        self.mgr.gpio.borrow_mut().read(acpi, &self.mgr.mmio, &controller, pin)
+        let (acpi, controller, pin, _) = self.gpio_pin(device, index)?;
+        self.mgr.gpio.borrow_mut().read(acpi, &controller, pin)
     }
 
     fn gpio_write(&mut self, device: u32, index: u32, high: bool) -> Result<(), PciError> {
-        let (controller, pin) = self.gpio_pin(device, index)?;
-        let acpi = self.mgr.acpi.as_ref().ok_or(PciError::NotFound)?;
-        self.mgr.gpio.borrow_mut().write(acpi, &self.mgr.mmio, &controller, pin, high)
+        let (acpi, controller, pin, _) = self.gpio_pin(device, index)?;
+        self.mgr.gpio.borrow_mut().write(acpi, &controller, pin, high)
+    }
+
+    fn gpio_input(&mut self, device: u32, index: u32) -> Result<(), PciError> {
+        let (acpi, controller, pin, _) = self.gpio_pin(device, index)?;
+        self.mgr.gpio.borrow_mut().input(acpi, &controller, pin)
+    }
+
+    fn gpio_is_output(&mut self, device: u32, index: u32) -> Result<bool, PciError> {
+        let (acpi, controller, pin, _) = self.gpio_pin(device, index)?;
+        self.mgr.gpio.borrow_mut().is_output(acpi, &controller, pin)
+    }
+
+    fn gpio_interrupt(&mut self, device: u32, index: u32) -> Result<Interrupt, PciError> {
+        let (acpi, controller, pin, connection) = self.gpio_pin(device, index)?;
+        if !connection.interrupt {
+            return Err(PciError::NotFound);
+        }
+        let trigger = gpio::trigger(&connection);
+        let line = |gsi, level, active_low| self.line(gsi, level, active_low);
+        self.mgr.gpio.borrow_mut().interrupt(acpi, &controller, pin, trigger, self.key, line)
     }
 }
 
 impl DeviceSession<'_> {
-    /// The controller and pin of GPIO connection `index` of ACPI device
-    /// `device` below this driver's PCI function.
-    fn gpio_pin(&self, device: u32, index: u32) -> Result<(Path, u16), PciError> {
+    /// GPIO pin `index` of ACPI device `device` below this driver's PCI
+    /// function: its controller, the pin, and the connection it is of.
+    fn gpio_pin(&self, device: u32, index: u32) -> Result<(&Acpi, Path, u16, vacpi::resource::Gpio), PciError> {
         let acpi = self.mgr.acpi.as_ref().ok_or(PciError::NotFound)?;
         let d = self.dev.acpi.get(device as usize).ok_or(PciError::NotFound)?;
-        d.gpio(&acpi.ns, index as usize).ok_or(PciError::NotFound)
+        let (controller, pin, connection) = d.gpio(&acpi.ns, index as usize).ok_or(PciError::NotFound)?;
+        Ok((acpi, controller, pin, connection.clone()))
     }
 }
 
@@ -788,6 +814,10 @@ fn main() -> i32 {
     let machine = boot_info();
     let acpi = machine.as_ref().and_then(|m| Acpi::load(&mmio, m, config.clone()));
     let platform = machine.map_or(0, |m| m.platform);
+    let Ok(gpio_mmio) = mmio.duplicate() else {
+        println!("cannot keep the MMIO resource for GPIO");
+        return 1;
+    };
     let mgr = Manager {
         config,
         io,
@@ -796,7 +826,7 @@ fn main() -> i32 {
         dma,
         pci,
         acpi,
-        gpio: RefCell::new(Gpio::default()),
+        gpio: RefCell::new(Gpio::new(gpio_mmio)),
         lines: RefCell::new(BTreeMap::new()),
     };
     let args = vrt::env::args();
@@ -915,6 +945,9 @@ fn main() -> i32 {
         for (&k, b) in &bound {
             ws.add(b.channel.raw(), signals::READABLE | signals::PEER_CLOSED, k);
         }
+        for (handle, wanted, k) in mgr.gpio.borrow().waits() {
+            ws.add(handle, wanted, k);
+        }
         let mut deadline = vabi::DEADLINE_INFINITE;
         if let Some(vm) = &vm {
             if let Some(p) = &vm.process {
@@ -937,10 +970,14 @@ fn main() -> i32 {
                 }
                 continue;
             }
+            if k & gpio::KEYS != 0 {
+                mgr.gpio.borrow_mut().signalled(k);
+                continue;
+            }
             let Some(dev) = bound.get(&k) else { continue };
             if observed & signals::READABLE != 0 {
                 while let Ok(msg) = dev.channel.read() {
-                    let mut s = DeviceSession { mgr: &mgr, dev };
+                    let mut s = DeviceSession { mgr: &mgr, dev, key: k };
                     if let Ok(reply) = pcidev::dispatch(&mut s, msg) {
                         let _ = reply.send(&dev.channel);
                     }
@@ -950,6 +987,7 @@ fn main() -> i32 {
             }
         }
         for k in closed {
+            mgr.gpio.borrow_mut().release(k);
             if let Some(b) = bound.remove(&k) {
                 if b.guest {
                     match vm.as_mut() {
