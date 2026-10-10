@@ -53,12 +53,12 @@ pub fn virgl_requested() -> bool {
 }
 
 /// Whether the tests run on softpipe, through Veda's renderer
-/// (`VGL_TEST_BACKEND=gallium`, unless `VGL_GALLIUM_DEVICE=virgl`): its
+/// (`VGL_TEST_BACKEND=gallium`, with no other `VGL_GALLIUM_DEVICE`): its
 /// points sit an eighth of a pixel off their place, and it filters depth
 /// before comparing it rather than the comparisons. GPUs do neither.
 pub fn on_softpipe() -> bool {
     std::env::var("VGL_TEST_BACKEND").is_ok_and(|v| v == "gallium")
-        && !std::env::var("VGL_GALLIUM_DEVICE").is_ok_and(|d| d == "virgl")
+        && std::env::var("VGL_GALLIUM_DEVICE").ok().is_none_or(|d| d.is_empty() || d == "softpipe")
 }
 
 /// Whether the renderer has multisampling (softpipe has none); tests of it

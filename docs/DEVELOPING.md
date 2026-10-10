@@ -42,6 +42,7 @@ VGL_TEST_HOST=gles VGL_TEST_BACKEND=virgl cargo test -p vgl      # ... on OpenGL
 VGL_TEST_RENDERNODE=/dev/dri/renderD129 VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on another GPU
 VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mesa's softpipe (vgallium.so)
 VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl   # ... with depth kept as on iris (lower 24 bits)
+VGL_TEST_BACKEND=gallium VGL_GALLIUM_DEVICE=iris cargo test -p vgl -p prism-scene   # ... on this PC's Intel GPU, as `cargo xtask test` does where there is one
 cargo xtask script tests/ui/drivervm-renderer.vts   # Prism through the renderer in the driver VM, on softpipe
 cargo xtask toolchain          # build the C toolchain from ports/ (GCC, binutils, musl) -> target/toolchain
 cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program

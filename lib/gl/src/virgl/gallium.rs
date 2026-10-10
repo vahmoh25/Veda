@@ -10,7 +10,9 @@
 //! `cargo xtask test` brings the library up to date). With
 //! `VGL_GALLIUM_DEVICE=virgl` the decoder renders on virgl, over
 //! virglrenderer's test server (`virgl_test_server`, at `VTEST_SOCKET_NAME`),
-//! as the driver VM's renderer does under QEMU, rather than on softpipe.
+//! as the driver VM's renderer does under QEMU, and with
+//! `VGL_GALLIUM_DEVICE=iris` on this machine's Intel GPU (iris, through its
+//! render node), as the renderer does on a PC's; on softpipe otherwise.
 
 use std::boxed::Box;
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -27,9 +29,17 @@ use crate::virgl::{Lost, ResourceArgs, Transport};
 type Device = *mut c_void;
 type Ctx = *mut c_void;
 
+/// How the library makes a device: on its own (softpipe, virgl over
+/// vtest), or on the GPU of a render node it is given (an open one).
+#[derive(Clone, Copy)]
+enum Make {
+    Plain(unsafe extern "C" fn() -> Device),
+    Drm(unsafe extern "C" fn(c_int) -> Device, c_int),
+}
+
 /// The library's functions (`guest/renderer/decoder/renderer.h`).
 struct Lib {
-    device_create: unsafe extern "C" fn() -> Device,
+    make: Make,
     device_destroy: unsafe extern "C" fn(Device),
     device_caps: unsafe extern "C" fn(Device, *mut c_void, usize) -> usize,
     context_create: unsafe extern "C" fn(Device, *mut u8, usize) -> Ctx,
@@ -57,7 +67,26 @@ fn dll_path() -> String {
     })
 }
 
-/// The library, loaded once; `None` if it is not there.
+/// This machine's Intel GPU's render node, open (for as long as the tests
+/// run): the node whose Linux driver is i915 or xe.
+fn intel_render_node() -> Option<c_int> {
+    let mut nodes: Vec<String> = std::fs::read_dir("/sys/class/drm")
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("renderD"))
+        .collect();
+    nodes.sort();
+    let node = nodes.into_iter().find(|n| {
+        std::fs::read_link(std::format!("/sys/class/drm/{n}/device/driver"))
+            .is_ok_and(|d| d.file_name().is_some_and(|f| f == "i915" || f == "xe"))
+    })?;
+    let file = std::fs::OpenOptions::new().read(true).write(true).open(std::format!("/dev/dri/{node}")).ok()?;
+    Some(std::os::fd::IntoRawFd::into_raw_fd(file))
+}
+
+/// The library, loaded once; `None` if it is not there (or the device the
+/// tests ask for is not).
 fn lib() -> Option<&'static Lib> {
     static LIB: OnceLock<Option<Lib>> = OnceLock::new();
     LIB.get_or_init(|| {
@@ -68,12 +97,13 @@ fn lib() -> Option<&'static Lib> {
             if m.is_null() {
                 return None;
             }
+            let make = match std::env::var("VGL_GALLIUM_DEVICE").as_deref() {
+                Ok("virgl") => Make::Plain(sym(m, "vr_device_create_vtest")),
+                Ok("iris") => Make::Drm(sym(m, "vr_device_create_drm"), intel_render_node()?),
+                _ => Make::Plain(sym(m, "vr_device_create_softpipe")),
+            };
             Some(Lib {
-                device_create: if std::env::var("VGL_GALLIUM_DEVICE").is_ok_and(|d| d == "virgl") {
-                    sym(m, "vr_device_create_vtest")
-                } else {
-                    sym(m, "vr_device_create_softpipe")
-                },
+                make,
                 device_destroy: sym(m, "vr_device_destroy"),
                 device_caps: sym(m, "vr_device_caps"),
                 context_create: sym(m, "vr_context_create"),
@@ -95,7 +125,7 @@ fn lib() -> Option<&'static Lib> {
 /// Shared memory: 16 MiB of staging and the query area, as virtio-gpu's.
 const SHARED_BYTES: usize = 16 * 1024 * 1024 + 16 * 1024;
 
-/// A context of Veda's renderer, on a softpipe device of its own.
+/// A context of Veda's renderer, on a device of its own.
 pub struct GalliumTransport {
     lib: &'static Lib,
     dev: Device,
@@ -110,7 +140,10 @@ impl GalliumTransport {
         // SAFETY: calls as renderer.h describes; the shared memory lives as
         // long as the context (it is dropped after it).
         unsafe {
-            let dev = (lib.device_create)();
+            let dev = match lib.make {
+                Make::Plain(make) => make(),
+                Make::Drm(make, fd) => make(fd),
+            };
             if dev.is_null() {
                 return None;
             }

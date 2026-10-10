@@ -178,6 +178,12 @@ bool vr_query_wait_later(struct vr_context *ctx, uint32_t handle);
 bool vr_query_write(struct vr_context *ctx, struct vr_query *q, bool wait);
 
 
+/* conventions.c */
+/* Fragment shader `tokens` (in virgl's conventions) in the driver's, as
+ * `out` (NULL when they are the same, or for another stage's shader);
+ * false if it cannot be. The caller frees `out` (tgsi_free_tokens). */
+bool vr_adapt_fragment_inputs(const struct tgsi_token *tokens, struct pipe_screen *screen, struct tgsi_token **out);
+
 /* formats.c */
 enum pipe_format vr_format_from_virgl(uint32_t format);
 enum pipe_format vr_format(const struct vr_device *dev, uint32_t format);

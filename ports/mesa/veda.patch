@@ -178,7 +178,7 @@
 +endif
 --- a/src/gallium/targets/veda/meson.build
 +++ b/src/gallium/targets/veda/meson.build
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,79 @@
 +# Copyright © 2026 Vahid Mohammadi
 +# SPDX-License-Identifier: MIT
 +#
@@ -191,6 +191,7 @@
 +  veda_dir / 'decoder' / 'device.c',
 +  veda_dir / 'decoder' / 'context.c',
 +  veda_dir / 'decoder' / 'commands.c',
++  veda_dir / 'decoder' / 'conventions.c',
 +  veda_dir / 'decoder' / 'formats.c',
 +)
 +veda_includes = [
@@ -200,16 +201,24 @@
 +
 +if not meson.is_cross_build()
 +  # For the host tests of Veda's OpenGL ES, a build for this machine:
-+  # softpipe, and virgl over virglrenderer's test server (vtest), as the
-+  # driver VM's renderer renders under QEMU, which vgl's tests call through
++  # softpipe; virgl over virglrenderer's test server (vtest), as the driver
++  # VM's renderer renders under QEMU; and iris, on this machine's Intel GPU,
++  # as the renderer renders on a PC's. vgl's tests call them through
 +  # vgallium.so.
 +  host_args = ['-DVR_EXPORTS', '-DVR_SOFTPIPE']
 +  host_deps = [idep_nir, idep_mesautil, driver_softpipe]
 +  host_sources = [veda_sources]
++  if with_gallium_virgl or with_gallium_iris
++    host_deps += dep_libdrm
++    host_sources += files(veda_dir / 'drm' / 'xf86drm.c')
++  endif
 +  if with_gallium_virgl
 +    host_args += '-DVR_VTEST'
-+    host_deps += [driver_virgl, dep_libdrm]
-+    host_sources += files(veda_dir / 'drm' / 'xf86drm.c')
++    host_deps += driver_virgl
++  endif
++  if with_gallium_iris
++    host_args += '-DVR_IRIS'
++    host_deps += [driver_iris, idep_xmlconfig]
 +  endif
 +  shared_library(
 +    'vgallium',

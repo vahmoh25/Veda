@@ -204,9 +204,10 @@ stage libstdcxx gcc musl
 # streams of Veda's applications on Mesa's Gallium drivers, over the GPU's
 # Linux driver: softpipe (no GPU), virgl (QEMU's virtio-gpu), iris (Intel's
 # GPUs). The stage configures Mesa's build for the guest, and for this
-# machine the same decoder as a library (vgallium.so) on softpipe and on
-# virgl over virglrenderer's test server, which the OpenGL ES tests use.
-# `cargo xtask` builds them (ninja) when it needs them.
+# machine the same decoder as a library (vgallium.so) on softpipe, on virgl
+# over virglrenderer's test server, and on iris (this machine's Intel GPU,
+# if it has one), which the OpenGL ES tests use. `cargo xtask` builds them
+# (ninja) when it needs them.
 stage_src_mesa() { unpack mesa; }
 stage src_mesa "$PORTS/mesa/port.toml" "$PORTS/mesa/veda.patch"
 
@@ -240,7 +241,7 @@ stage_mesa() {
 		"${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" -Dveda-renderer-lib="$RENDERER_LIB" \
 		-Dgallium-drivers=softpipe,virgl,iris
 	quiet "$BUILD/mesa-host-setup.log" meson setup "$BUILD/mesa-host" "$SRC/mesa" \
-		"${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" -Dgallium-drivers=softpipe,virgl
+		"${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" -Dgallium-drivers=softpipe,virgl,iris
 }
 stage mesa src_mesa libstdcxx linux_headers @MESA_OPTIONS @RENDERER_LIB
 

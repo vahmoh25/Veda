@@ -817,9 +817,10 @@ fn test(o: &Options) -> Result {
     for package in ["guest-input", "guest-alsa", "guest-kms", "guest-logkeeper"] {
         util::run(util::cargo().args(["test", "--quiet", "--package", package, "--target", linux::GUEST_TARGET]))?;
     }
-    // And through Veda's renderer, where it has been built: on softpipe,
-    // and on virgl over virglrenderer's test server, as the driver VM's
-    // renderer renders under QEMU.
+    // And through Veda's renderer, where it has been built: on softpipe;
+    // on virgl over virglrenderer's test server, as the driver VM's
+    // renderer renders under QEMU; and on this machine's Intel GPU (iris),
+    // as it renders on a PC's.
     if let Some(dll) = linux::vgallium()? {
         // As OpenGL hosts keep depth, then as iris does (VR_DEPTH_LOW).
         for (depth, how) in [("0", ""), ("1", ", depth kept as on iris")] {
@@ -860,6 +861,18 @@ fn test(o: &Options) -> Result {
             let _ = server.kill();
             let _ = server.wait();
             result?;
+        }
+        if linux::intel_gpu() {
+            util::status("Testing", "OpenGL ES through Veda's renderer (Mesa's iris, on this machine's Intel GPU)");
+            // Prism's scene too: its shadows and sparks on the GPU.
+            for package in ["vgl", "prism-scene"] {
+                let mut cmd = util::cargo();
+                cmd.args(["test", "--quiet", "--package", package])
+                    .env("VGL_TEST_BACKEND", "gallium")
+                    .env("VGL_GALLIUM_DEVICE", "iris")
+                    .env("VGL_GALLIUM_DLL", &dll);
+                util::run(&mut cmd)?;
+            }
         }
     }
     if virgl {

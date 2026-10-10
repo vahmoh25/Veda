@@ -529,7 +529,11 @@ renders on the host's GPU), softpipe when asked (`drivervm.renderer=softpipe`,
 for tests). Each connection gets a context and a block of Veda's memory
 shared with it, which the renderer maps through the bridge; the decoder
 (`decoder/`, C) checks every command before Gallium's calls carry it out,
-and a context's fences signal through the shared memory and an event.
+and gives each driver the shaders as it takes them (virgl's conventions
+are a fragment's position at the pixel's centre and its facing as a
+signed float; iris has the position as a system value at the pixel's
+corner, and the facing as an integer one: `decoder/conventions.c`), and
+a context's fences signal through the shared memory and an event.
 The compositor's pictures reach a GPU's driver as dma-bufs of their VMOs
 (the bridge's, as for `kms`), which it renders into through the IOMMU, so
 the GPU composes the screen in place; softpipe renders into them mapped,

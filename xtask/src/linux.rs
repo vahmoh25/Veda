@@ -6,7 +6,8 @@
 //!   It also builds a cross toolchain for the guest's programs in C and C++
 //!   (`target/linux/toolchain`, for Linux on musl) and configures Mesa's
 //!   build with it for the renderer, and for this machine (`vgallium.so`,
-//!   the renderer's decoder on softpipe, for the OpenGL ES tests).
+//!   the renderer's decoder on softpipe, virgl and iris, for the OpenGL ES
+//!   tests).
 //! * Once it is built, every image build also builds the guest's programs
 //!   (`guest/`: Rust for Linux on musl, static; the renderer, Mesa's build
 //!   around its Rust half) and packs them into the initial RAM file system
@@ -82,16 +83,29 @@ fn renderer_lib() -> Result<PathBuf> {
     Ok(util::target_dir().join(GUEST_TARGET).join("release").join("librenderer.a"))
 }
 
-/// The renderer's decoder on softpipe for this machine (`vgallium.so`), up
-/// to date; None if Mesa has not been configured for it.
+/// The renderer's decoder for this machine (`vgallium.so`: on softpipe, on
+/// virgl over vtest, on iris), up to date; None if Mesa has not been
+/// configured for it.
 pub fn vgallium() -> Result<Option<PathBuf>> {
     let dir = mesa_host_build();
     if !dir.join("build.ninja").is_file() {
         return Ok(None);
     }
-    util::status("Building", "the renderer on softpipe for the host (Mesa)");
+    util::status("Building", "the renderer for the host (Mesa)");
     util::ninja(&dir, "src/gallium/targets/veda/vgallium.so")?;
     Ok(Some(dir.join("src").join("gallium").join("targets").join("veda").join("vgallium.so")))
+}
+
+/// Whether this machine has an Intel GPU (a render node of i915's or
+/// xe's), which Veda's renderer can be tested on.
+pub fn intel_gpu() -> bool {
+    std::fs::read_dir("/sys/class/drm").is_ok_and(|d| {
+        d.flatten().any(|e| {
+            e.file_name().to_string_lossy().starts_with("renderD")
+                && std::fs::read_link(e.path().join("device/driver"))
+                    .is_ok_and(|p| p.file_name().is_some_and(|f| f == "i915" || f == "xe"))
+        })
+    })
 }
 
 /// Whether the driver VM can run in this machine's QEMU: its Linux is

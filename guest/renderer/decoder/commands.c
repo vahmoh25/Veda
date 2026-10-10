@@ -15,6 +15,7 @@
 
 #include "internal.h"
 
+#include "tgsi/tgsi_dump.h"
 #include "tgsi/tgsi_exec.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_text.h"
@@ -294,8 +295,9 @@ create_rasterizer(struct vr_context *ctx, const struct cmd *c)
    r->offset_scale = argf(c, VIRGL_OBJ_RS_OFFSET_SCALE);
    r->offset_clamp = argf(c, VIRGL_OBJ_RS_OFFSET_CLAMP);
    if (r->fill_front > PIPE_POLYGON_MODE_POINT || r->fill_back > PIPE_POLYGON_MODE_POINT) {
+      unsigned front = r->fill_front, back = r->fill_back;
       free(o);
-      return vr_fail(ctx, "polygon modes %u and %u", r->fill_front, r->fill_back);
+      return vr_fail(ctx, "polygon modes %u and %u", front, back);
    }
    return vr_object_put(ctx, arg(c, VIRGL_OBJ_RS_HANDLE), o);
 }
@@ -356,8 +358,9 @@ create_sampler_state(struct vr_context *ctx, const struct cmd *c)
    for (unsigned i = 0; i < 4; i++)
       s->border_color.ui[i] = arg(c, VIRGL_OBJ_SAMPLER_STATE_BORDER_COLOR(i));
    if (s->min_mip_filter > PIPE_TEX_MIPFILTER_NONE) {
+      unsigned filter = s->min_mip_filter;
       free(o);
-      return vr_fail(ctx, "mipmap filter %u", s->min_mip_filter);
+      return vr_fail(ctx, "mipmap filter %u", filter);
    }
    return vr_object_put(ctx, arg(c, VIRGL_OBJ_SAMPLER_STATE_HANDLE), o);
 }
@@ -485,13 +488,24 @@ compile_shader(struct vr_context *ctx, struct vr_shader *s)
       free(tokens);
       return vr_fail(ctx, "a shader whose branches go astray:\n%.400s", s->text);
    }
+   struct tgsi_token *adapted;
+   if (!vr_adapt_fragment_inputs(tokens, ctx->dev->screen, &adapted)) {
+      free(tokens);
+      return vr_fail(ctx, "a shader whose fragment position the driver cannot give:\n%.400s", s->text);
+   }
+   if (adapted && tracing()) {
+      fprintf(stderr, "vr %p: as the driver takes it\n", (void *)ctx);
+      tgsi_dump_to_file(adapted, 0, stderr);
+      fflush(stderr);
+   }
    struct pipe_shader_state state;
    memset(&state, 0, sizeof(state));
    state.type = PIPE_SHADER_IR_TGSI;
-   state.tokens = tokens;
+   state.tokens = adapted ? adapted : tokens;
    state.stream_output = s->so;
    struct pipe_context *pipe = ctx->pipe;
    s->cso = s->stage == MESA_SHADER_VERTEX ? pipe->create_vs_state(pipe, &state) : pipe->create_fs_state(pipe, &state);
+   tgsi_free_tokens(adapted);
    free(tokens);
    free(s->text);
    s->text = NULL;
