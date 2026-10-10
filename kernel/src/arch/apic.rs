@@ -148,11 +148,17 @@ pub const ICR_INIT: u32 = 0b101 << 8;
 pub const ICR_STARTUP: u32 = 0b110 << 8;
 const ICR_ASSERT: u32 = 1 << 14;
 const ICR_DELIVERY_PENDING: u32 = 1 << 12;
-/// Sends an inter-processor interrupt.
+/// Sends an inter-processor interrupt. What was stored before is seen by
+/// its target's handler.
 pub fn send_ipi(dest_apic: u32, low: u32) {
     if is_x2apic() {
-        // SAFETY: x2APIC ICR write.
-        unsafe { wrmsr(0x830, ((dest_apic as u64) << 32) | (low | ICR_ASSERT) as u64) };
+        // SAFETY: the fences only order; then an x2APIC ICR write. Writing
+        // the ICR does not wait for earlier stores (it is not serializing):
+        // MFENCE drains them, LFENCE keeps the WRMSR after it.
+        unsafe {
+            core::arch::asm!("mfence", "lfence", options(nostack, preserves_flags));
+            wrmsr(0x830, ((dest_apic as u64) << 32) | (low | ICR_ASSERT) as u64);
+        }
     } else {
         write(REG_ICR_HIGH, dest_apic << 24);
         write(REG_ICR_LOW, low | ICR_ASSERT);

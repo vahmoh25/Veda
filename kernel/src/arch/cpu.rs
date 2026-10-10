@@ -34,13 +34,16 @@ pub fn rdmsr(msr: u32) -> u64 {
     (hi as u64) << 32 | lo as u64
 }
 
+/// A barrier to the compiler: what an MSR starts (an IPI, a timer) may
+/// read memory written before.
+///
 /// # Safety
 /// Writing MSRs changes fundamental CPU behaviour.
 #[inline]
 pub unsafe fn wrmsr(msr: u32, value: u64) {
     // SAFETY: forwarded to the caller.
     unsafe {
-        asm!("wrmsr", in("ecx") msr, in("eax") value as u32, in("edx") (value >> 32) as u32, options(nomem, nostack, preserves_flags))
+        asm!("wrmsr", in("ecx") msr, in("eax") value as u32, in("edx") (value >> 32) as u32, options(nostack, preserves_flags))
     };
 }
 
@@ -136,17 +139,19 @@ pub fn halt() {
 }
 
 /// Enables interrupts and halts atomically (no wake-up can be lost between
-/// the two instructions), then disables interrupts again.
+/// the two instructions), then disables interrupts again. The interrupts'
+/// handlers change memory meanwhile: a barrier to the compiler.
 #[inline]
 pub fn enable_interrupts_and_halt() {
     // SAFETY: STI's one-instruction interrupt shadow makes STI;HLT atomic.
-    unsafe { asm!("sti", "hlt", "cli", options(nomem, nostack)) };
+    unsafe { asm!("sti", "hlt", "cli", options(nostack)) };
 }
 
+/// A barrier to the compiler: what follows stays where interrupts are off.
 #[inline]
 pub fn disable_interrupts() {
     // SAFETY: masking interrupts is always safe.
-    unsafe { asm!("cli", options(nomem, nostack)) };
+    unsafe { asm!("cli", options(nostack)) };
 }
 
 #[inline]
@@ -421,11 +426,15 @@ pub fn brand_string() -> [u8; 48] {
 pub static ONLINE_CPUS: AtomicU32 = AtomicU32::new(1);
 
 /// Temporarily allows supervisor access to user pages (SMAP).
+///
+/// This and [`user_access_end`] are barriers to the compiler (their `asm!`
+/// may touch memory, as far as it knows): the user accesses between them
+/// stay between them.
 #[inline]
 pub fn user_access_begin() {
     if features().smap {
         // SAFETY: STAC only toggles RFLAGS.AC.
-        unsafe { asm!("stac", options(nomem, nostack)) };
+        unsafe { asm!("stac", options(nostack)) };
     }
 }
 
@@ -434,7 +443,7 @@ pub fn user_access_begin() {
 pub fn user_access_end() {
     if features().smap {
         // SAFETY: CLAC only toggles RFLAGS.AC.
-        unsafe { asm!("clac", options(nomem, nostack)) };
+        unsafe { asm!("clac", options(nostack)) };
     }
 }
 
