@@ -23,7 +23,11 @@
 //!
 //! If the driver goes away, or stops answering, frames go into all of its
 //! pictures and into the firmware's framebuffer, in place: whichever of
-//! them the screen shows, it shows the frames.
+//! them the screen shows, it shows the frames (but a panel that refreshes
+//! itself while nothing is flipped, as a laptop's may, does not). A driver
+//! that stopped answering is waited for still: once it carries out the
+//! flip it was given up at, frames are flipped again. Its first flip sets
+//! the display's mode, which may take seconds; the others take a frame.
 
 use alloc::format;
 use alloc::string::String;
@@ -42,6 +46,10 @@ pub(crate) const FRAME_NS: u64 = 16_666_666;
 /// A flip the driver has not carried out after this long: it stopped
 /// answering.
 const FLIP_TIMEOUT_NS: u64 = 1_000_000_000;
+/// The same for a driver's first flip, which sets the display's mode: a
+/// display takes that long to come up at most (a laptop's panel takes a
+/// second or more, powering up).
+const MODESET_TIMEOUT_NS: u64 = 10_000_000_000;
 
 /// Memory the screen may show: rows of pixels `pitch` bytes apart.
 struct Surface {
@@ -114,6 +122,10 @@ struct Flips {
     first_frames: Option<u32>,
     /// Gone, or stopped answering: frames go everywhere, in place.
     lost: bool,
+    /// The flip that was waited for when the driver stopped answering (its
+    /// picture and number): if it is carried out after all, the driver
+    /// answers again, and frames are flipped again.
+    late: Option<(usize, u32)>,
 }
 
 impl Flips {
@@ -503,13 +515,16 @@ impl Screen {
             count: 0,
             first_frames: None,
             lost: false,
+            late: None,
         });
         Ok(())
     }
 
-    /// The event the driver signals when a flip waits and is carried out.
+    /// The event the driver signals when a flip waits and is carried out
+    /// (or one it stopped answering at, late).
     pub(crate) fn done_event(&self) -> Option<vabi::RawHandle> {
-        self.flips.as_ref().filter(|f| !f.lost && f.pending.is_some()).map(|f| f.done.raw())
+        let waits = |f: &&Flips| if f.lost { f.late.is_some() } else { f.pending.is_some() };
+        self.flips.as_ref().filter(waits).map(|f| f.done.raw())
     }
 
     /// The driver signalled: the picture asked for may be on the screen.
@@ -517,6 +532,18 @@ impl Screen {
         let Some(f) = self.flips.as_mut() else { return };
         let _ = f.done.clear();
         let shown = f.state.shown();
+        // The flip it stopped answering at, carried out after all: frames
+        // went into every picture meanwhile, so all of them are up to
+        // date, and flips go on from that one.
+        if f.lost
+            && let Some((picture, seq)) = f.late
+            && shown.seq == seq
+        {
+            println!("{} answers again: frames are flipped at the vertical blank", f.name);
+            f.lost = false;
+            f.late = None;
+            f.pending = Some((picture, seq, 0));
+        }
         if let Some((picture, seq, _)) = f.pending
             && shown.seq == seq
         {
@@ -528,28 +555,36 @@ impl Screen {
         }
     }
 
-    /// When the waiting flip times out, if one waits.
+    /// When the waiting flip times out, if one waits: the first, which sets
+    /// the display's mode, after as long as that takes.
     pub(crate) fn timeout(&self) -> Option<u64> {
         let f = self.flips.as_ref().filter(|f| !f.lost)?;
-        f.pending.map(|(_, _, since)| since + FLIP_TIMEOUT_NS)
+        let limit = if f.count == 0 { MODESET_TIMEOUT_NS } else { FLIP_TIMEOUT_NS };
+        f.pending.map(|(_, _, since)| since + limit)
     }
 
-    /// Gives up on a driver that does not carry its flips out.
+    /// Gives up on a driver that does not carry its flips out, until it
+    /// carries out the one it was given up at.
     pub(crate) fn check(&mut self, now: u64) {
         if self.timeout().is_some_and(|t| now >= t) {
-            let name = self.flips.as_ref().map(|f| f.name.clone()).unwrap_or_default();
-            self.lose(&format!("{} stopped answering", name));
+            let Some(f) = &mut self.flips else { return };
+            f.late = f.pending.map(|(picture, seq, _)| (picture, seq));
+            let why = format!("{} stopped answering", f.name);
+            self.lose(&why);
         }
     }
 
     /// Connection `key` closed: if it was the driver's, it went away.
     pub(crate) fn detach(&mut self, key: u64) {
-        if let Some(f) = &self.flips
+        if let Some(f) = &mut self.flips
             && f.key == key
-            && !f.lost
+            && (!f.lost || f.late.is_some())
         {
-            let why = format!("{} went away", f.name);
-            self.lose(&why);
+            f.late = None;
+            if !f.lost {
+                let why = format!("{} went away", f.name);
+                self.lose(&why);
+            }
         }
     }
 

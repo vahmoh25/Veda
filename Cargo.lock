@@ -656,6 +656,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "guest-kmspause"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+]
+
+[[package]]
 name = "guest-net"
 version = "0.1.0"
 dependencies = [

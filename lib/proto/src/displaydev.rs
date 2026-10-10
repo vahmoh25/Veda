@@ -31,6 +31,14 @@
 //! and how long the screen takes for a frame, so that the compositor can
 //! time its animations for the moment a frame will be seen.
 //!
+//! A driver that sets the mode does so at the first flip, which then takes
+//! as long as the display takes to come up (seconds, for a laptop's panel
+//! powering up); every other flip takes a frame or two. A flip that takes
+//! much longer than that (the compositor waits a second, ten for the first)
+//! means the driver stopped answering: the compositor draws into all of
+//! its pictures meanwhile, in place, and flips again once the driver
+//! carries the flip out.
+//!
 //! If the driver goes away, the compositor keeps drawing into the pictures
 //! (all of them, not knowing which one the screen shows); if the
 //! compositor goes away, the driver shows the firmware's framebuffer again

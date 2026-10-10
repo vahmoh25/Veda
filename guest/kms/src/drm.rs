@@ -297,6 +297,7 @@ const OBJECT_CONNECTOR: u32 = 0xC0C0_C0C0;
 const OBJECT_PLANE: u32 = 0xEEEE_EEEE;
 const PLANE_TYPE_PRIMARY: u64 = 1;
 const ATOMIC_TEST_ONLY: u32 = 0x100;
+const ATOMIC_NONBLOCK: u32 = 0x200;
 const ATOMIC_ALLOW_MODESET: u32 = 0x400;
 const MODE_CONNECTED: u32 = 1;
 const PAGE_FLIP_EVENT: u32 = 1;
@@ -318,6 +319,16 @@ pub struct Place {
     pub y: u32,
     pub width: u32,
     pub height: u32,
+}
+
+/// What a CRTC's primary plane shows: framebuffer `fb` (`size`, its width
+/// and height), at `at` on the display, which the display engine scales
+/// the framebuffer to if that is not its size.
+#[derive(Debug, Clone, Copy)]
+pub struct Scanout {
+    pub fb: u32,
+    pub size: (u32, u32),
+    pub at: Place,
 }
 
 /// A page flip that completed: the request's own number, and the
@@ -477,28 +488,28 @@ impl Card {
         let _ = self.call(MODE_RMFB, &mut id);
     }
 
-    /// Sets `output`'s `mode`, showing framebuffer `fb` (`size`, its width
-    /// and height) at `at`: on the CRTC's primary plane, which the display
-    /// engine scales if `at` is not the framebuffer's size. Its flips keep
-    /// the place.
-    pub fn set_mode(&self, output: &Output, fb: u32, size: (u32, u32), mode: &ModeInfo, at: Place) -> io::Result<()> {
-        self.modeset(output, fb, size, mode, at, ATOMIC_ALLOW_MODESET)
+    /// Sets `output`'s `mode`, its CRTC's primary plane showing `scanout`
+    /// (its flips keep the place), without waiting: a display takes a
+    /// while to come up (a laptop's panel a second or more). Like a flip's,
+    /// its completion is an event ([`Card::events`]), with `user_data`.
+    pub fn set_mode(&self, output: &Output, mode: &ModeInfo, scanout: Scanout, user_data: u64) -> io::Result<()> {
+        let flags = ATOMIC_NONBLOCK | ATOMIC_ALLOW_MODESET | PAGE_FLIP_EVENT;
+        self.modeset(output, mode, scanout, flags, user_data)
     }
 
     /// What [`Card::set_mode`] would do, checked by Linux's driver: the
     /// error it would end in, if any. Changes nothing.
-    pub fn test_mode(&self, output: &Output, fb: u32, size: (u32, u32), mode: &ModeInfo, at: Place) -> io::Result<()> {
-        self.modeset(output, fb, size, mode, at, ATOMIC_TEST_ONLY | ATOMIC_ALLOW_MODESET)
+    pub fn test_mode(&self, output: &Output, mode: &ModeInfo, scanout: Scanout) -> io::Result<()> {
+        self.modeset(output, mode, scanout, ATOMIC_TEST_ONLY | ATOMIC_ALLOW_MODESET, 0)
     }
 
     fn modeset(
         &self,
         output: &Output,
-        fb: u32,
-        size: (u32, u32),
         mode: &ModeInfo,
-        at: Place,
+        scanout: Scanout,
         flags: u32,
+        user_data: u64,
     ) -> io::Result<()> {
         let plane = self.primary_plane(output)?;
         let blob = self.mode_blob(mode)?;
@@ -509,7 +520,7 @@ impl Card {
         commit.set(output.crtc, &crtc, "MODE_ID", blob as u64)?;
         commit.set(output.crtc, &crtc, "ACTIVE", 1)?;
         let planes = self.property_ids(plane, OBJECT_PLANE)?;
-        let (width, height) = size;
+        let Scanout { fb, size: (width, height), at } = scanout;
         for (name, value) in [
             ("FB_ID", fb as u64),
             ("CRTC_ID", output.crtc as u64),
@@ -525,7 +536,7 @@ impl Card {
         ] {
             commit.set(plane, &planes, name, value)?;
         }
-        let done = commit.commit(self, flags);
+        let done = commit.commit(self, flags, user_data);
         // The CRTC's state holds the mode now, if it is set.
         let mut id = blob;
         let _ = self.call(MODE_DESTROYPROPBLOB, &mut id);
@@ -658,8 +669,9 @@ impl Commit {
         Ok(())
     }
 
-    /// Carries it out, all at once (with `flags`).
-    fn commit(&self, card: &Card, flags: u32) -> io::Result<()> {
+    /// Carries it out, all at once (with `flags`; its event, if it asks
+    /// for one, has `user_data`).
+    fn commit(&self, card: &Card, flags: u32, user_data: u64) -> io::Result<()> {
         // The objects, how many properties each sets, then those, object by
         // object, and their values.
         let objects: Vec<u32> = self.objects.iter().map(|&(o, _)| o).collect();
@@ -673,7 +685,7 @@ impl Commit {
             props: props.as_ptr() as u64,
             prop_values: values.as_ptr() as u64,
             reserved: 0,
-            user_data: 0,
+            user_data,
         };
         card.call(MODE_ATOMIC, &mut a)
     }

@@ -1,6 +1,6 @@
 //! The Linux system calls the driver VM's programs make that Rust's `std`
-//! does not: mounting, powering off, `ioctl`, `poll`, and sockets other
-//! than the Internet's. Raw, on x86-64. [`netif`] has what the network
+//! does not: mounting, powering off, signals, `ioctl`, `poll`, and sockets
+//! other than the Internet's. Raw, on x86-64. [`netif`] has what the network
 //! drivers share: interfaces switched on and off, raw packet sockets.
 
 use std::ffi::CString;
@@ -16,6 +16,7 @@ const SYS_IOCTL: usize = 16;
 const SYS_SOCKET: usize = 41;
 const SYS_BIND: usize = 49;
 const SYS_SETSOCKOPT: usize = 54;
+const SYS_KILL: usize = 62;
 const SYS_MOUNT: usize = 165;
 const SYS_REBOOT: usize = 169;
 const REBOOT_MAGIC1: usize = 0xFEE1_DEAD;
@@ -175,6 +176,12 @@ pub fn mount(source: &str, target: &str, kind: &str) -> io::Result<()> {
 pub fn power_off() -> io::Result<()> {
     // SAFETY: the reboot system call takes no memory.
     unsafe { syscall(SYS_REBOOT, [REBOOT_MAGIC1, REBOOT_MAGIC2, REBOOT_POWER_OFF, 0, 0]).map(|_| ()) }
+}
+
+/// Sends `signal` to process `pid`.
+pub fn kill(pid: i32, signal: i32) -> io::Result<()> {
+    // SAFETY: the kill system call takes no memory.
+    unsafe { syscall(SYS_KILL, [pid as usize, signal as usize, 0, 0, 0]).map(|_| ()) }
 }
 
 /// `read(fd, buf)`: what came (`WouldBlock` on a file that does not block

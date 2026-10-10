@@ -1,0 +1,22 @@
+# A display driver that stops answering for a while, and goes on: Linux's
+# display driver (QEMU's VGA in the driver VM, as in drivervm-display.vts)
+# is paused for four seconds once it shows the compositor's frames
+# (kmspause), longer than the compositor waits for a flip (a second). The
+# compositor draws into all of the driver's pictures meanwhile, in place,
+# and flips again once the driver carries out the flip it was given up at.
+gpu off
+boot-cmdline "drivervm.run=kmspause"
+fail-on "PANIC"
+wait-serial "kms: bochs-drm (Linux): showing the compositor's frames, 1280x800" 120
+wait-serial "kmspause: kms paused" 60
+# A frame (the pointer moves), whose flip waits.
+move 0.3 0.98
+wait-serial "bochs-drm (Linux) stopped answering: frames go into its pictures and the firmware's framebuffer, in place" 5
+wait-serial "kmspause: kms goes on" 10
+wait-serial "bochs-drm (Linux) answers again: frames are flipped at the vertical blank" 10
+# Flips go on: the pointer moves again, and the frame shows it.
+move 0.6 0.98
+wait 1
+shot target/veda/drivervm-display-pause.png
+reject-serial "cannot have the screen"
+reject-serial "kmspause: cannot"

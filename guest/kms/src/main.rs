@@ -19,11 +19,14 @@
 //! (`displaydev::screen`) if the display has one, the one it prefers of
 //! them; else the display's own (a laptop's panel has no other), the
 //! display engine scaling the pictures to it as their proportions allow,
-//! in its middle. The display is the one the compositor draws on, whose
-//! memory holds the firmware's framebuffer (a machine may have more GPUs
-//! with outputs): the card whose device has it at the host's address of
-//! one of its BARs, which the monitor writes on the kernel's command line
-//! (`veda.device=`), and the compositor checks again.
+//! in its middle. Setting it is that frame's flip, which completes as the
+//! others do, with an event, once the display is up (a laptop's panel
+//! takes a second or more to power up). The display is the one the
+//! compositor draws on, whose memory holds the firmware's framebuffer (a
+//! machine may have more GPUs with outputs): the card whose device has it
+//! at the host's address of one of its BARs, which the monitor writes on
+//! the kernel's command line (`veda.device=`), and the compositor checks
+//! again.
 
 mod drm;
 
@@ -38,7 +41,7 @@ use vproto::displaydev::{self, DisplayDevError, FlipState, Link, Screen, ScreenM
 use vrt::object::{Channel, Event, Vmo};
 use vrt::vm::Mapping;
 
-use drm::{Card, DumbMap, ModeInfo, Output, Place};
+use drm::{Card, DumbMap, ModeInfo, Output, Place, Scanout};
 
 /// How long to wait for Linux's driver to make the card.
 const CARD_WAIT: Duration = Duration::from_secs(10);
@@ -79,7 +82,8 @@ struct Display {
     /// The pictures (Veda's memory), as the compositor gets them.
     pictures: Vec<Vmo>,
     shows: Shows,
-    /// Whether the mode is set (at the compositor's first frame).
+    /// Whether the mode is set (at the compositor's first frame, from then
+    /// on whatever compositor attaches).
     on: bool,
     name: String,
     firmware: Vec<u64>,
@@ -262,7 +266,8 @@ impl Display {
         // Before the compositor counts on the display: whether its driver
         // takes the mode, and the pictures where they go (scaled, it may
         // not).
-        card.test_mode(&output, shows.any_framebuffer(), (width, height), &mode, place).map_err(|e| {
+        let scanout = Scanout { fb: shows.any_framebuffer(), size: (width, height), at: place };
+        card.test_mode(&output, &mode, scanout).map_err(|e| {
             let (w, h) = mode.size();
             format!(
                 "{} cannot show {width}x{height} pictures at {}x{} in a {w}x{h} mode: {e}",
@@ -274,9 +279,10 @@ impl Display {
         Ok(Display { card, output, mode, place, width, height, stride, pictures, shows, on: false, name, firmware })
     }
 
-    /// Shows `picture` from the next vertical blank on (from now on if the
-    /// mode is not set yet: the compositor's first frame).
-    fn show(&mut self, picture: usize, seq: u32) -> io::Result<bool> {
+    /// Shows `picture` from the next vertical blank on, setting the mode
+    /// first if it is not set yet (the compositor's first frame): the
+    /// card's event, with `seq`, says when.
+    fn show(&mut self, picture: usize, seq: u32) -> io::Result<()> {
         let fb = match &mut self.shows {
             Shows::Pictures(fbs) => fbs[picture],
             Shows::Copies { buffers, pictures, next } => {
@@ -291,13 +297,13 @@ impl Display {
                 *fb
             }
         };
-        if !self.on {
-            self.card.set_mode(&self.output, fb, (self.width, self.height), &self.mode, self.place)?;
-            self.on = true;
-            return Ok(false);
+        if self.on {
+            return self.card.flip(self.output.crtc, fb, seq as u64);
         }
-        self.card.flip(self.output.crtc, fb, seq as u64)?;
-        Ok(true)
+        let scanout = Scanout { fb, size: (self.width, self.height), at: self.place };
+        self.card.set_mode(&self.output, &self.mode, scanout, seq as u64)?;
+        self.on = true;
+        Ok(())
     }
 }
 
@@ -358,9 +364,11 @@ fn serve(d: &mut Display, s: &Session) -> io::Result<()> {
     let period = d.mode.period_ns();
     let mut last_seq = 0;
     // A flip on its way to the screen, and the request that came meanwhile
-    // (one at a time: the compositor waits for each).
+    // (one at a time: the compositor waits for each); whether one was
+    // carried out yet.
     let mut flipping = false;
     let mut waiting: Option<(usize, u32)> = None;
+    let mut showing = false;
     loop {
         let mut fds = [
             PollFd::new(request.as_raw_fd(), POLLIN),
@@ -391,18 +399,15 @@ fn serve(d: &mut Display, s: &Session) -> io::Result<()> {
                 };
                 s.state.set_shown(shown);
                 let _ = s.done.signal();
+                if !showing {
+                    showing = true;
+                    println!("kms: {}: showing the compositor's frames, {}x{}", d.name, d.width, d.height);
+                }
             }
         }
         if !flipping && let Some((picture, seq)) = waiting.take() {
             match d.show(picture, seq) {
-                Ok(true) => flipping = true,
-                // The mode is set: the picture is on the screen now.
-                Ok(false) => {
-                    let blank_ns = vrt::time::now_ns();
-                    s.state.set_shown(Shown { seq, frames: 0, blank_ns, period_ns: period });
-                    let _ = s.done.signal();
-                    println!("kms: {}: showing the compositor's frames, {}x{}", d.name, d.width, d.height);
-                }
+                Ok(()) => flipping = true,
                 Err(e) if e.raw_os_error() == Some(16) => waiting = Some((picture, seq)),
                 Err(e) => return Err(e),
             }

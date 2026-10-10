@@ -79,6 +79,7 @@ members = [
     "guest/pcitest",
     "guest/gpiotest",
     "guest/efivartest",
+    "guest/kmspause",
     "guest/sys",
     "guest/alsa",
     "guest/net",

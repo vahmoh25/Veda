@@ -1,0 +1,18 @@
+[package]
+name = "guest-kmspause"
+description = "Pauses Veda's display driver for Linux for a few seconds, for the compositor's test of a driver that stops answering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kmspause"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+guest-sys = { workspace = true }
+
+[lints]
+workspace = true
