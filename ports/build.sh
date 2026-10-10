@@ -252,48 +252,4 @@ stage_native() {
 }
 stage native binutils_native gcc_native posix_layer
 
-# --- Mesa, for Veda's renderer ------------------------------------------------
-
-# Veda's renderer (services/renderer) carries out OpenGL ES command streams
-# on Mesa's Gallium drivers. The stage configures Mesa's build (meson) for
-# Veda and for this machine: the renderer as a library on softpipe
-# (vgallium.so), which the OpenGL ES tests use.
-# `cargo xtask` builds them (ninja) when it needs them.
-eval "stage_src_mesa() { unpack mesa; }"
-stage src_mesa "$PORTS/mesa/port.toml" "$PORTS/mesa/veda.patch"
-
-MESA_OPTIONS=(
-	--buildtype=release -Ddefault_library=static -Dvulkan-drivers=
-	-Dplatforms= -Dopengl=false -Dgles1=disabled -Dgles2=disabled -Degl=disabled -Dglx=disabled
-	-Dgbm=disabled -Dllvm=disabled -Dmesa-clc=auto -Dzlib=disabled -Dzstd=disabled -Dexpat=disabled
-	-Dxmlconfig=disabled -Dshader-cache=disabled -Dbuild-tests=false -Dvalgrind=disabled
-	-Dlibunwind=disabled -Dgallium-va=disabled -Dmicrosoft-clc=disabled -Dvideo-codecs=
-)
-
-stage_mesa() {
-	local renderer
-	renderer=$(realpath "$PORTS/../services/renderer")
-	cat > "$BUILD/mesa-veda.cross" <<-EOF
-	[binaries]
-	c = '$CROSS/bin/$TARGET-gcc'
-	cpp = '$CROSS/bin/$TARGET-g++'
-	ar = '$CROSS/bin/$TARGET-ar'
-	strip = '$CROSS/bin/$TARGET-strip'
-	[properties]
-	needs_exe_wrapper = true
-	[host_machine]
-	system = 'linux'
-	cpu_family = 'x86_64'
-	cpu = 'x86_64'
-	endian = 'little'
-	EOF
-	rm -rf "$BUILD/mesa" "$BUILD/mesa-host"
-	quiet "$BUILD/mesa-setup.log" meson setup "$BUILD/mesa" "$SRC/mesa" \
-		--cross-file "$BUILD/mesa-veda.cross" "${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" \
-		-Dgallium-drivers=softpipe,iris -Dintel-elk=false
-	quiet "$BUILD/mesa-host-setup.log" meson setup "$BUILD/mesa-host" "$SRC/mesa" \
-		"${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" -Dgallium-drivers=softpipe
-}
-stage mesa src_mesa gcc_cross musl @MESA_OPTIONS
-
 log Finished "the C toolchain ($ROOT)"

@@ -2,7 +2,7 @@
 //!
 //! A reflective torus knot under a sky, with orbiting crystals, shadows
 //! and a fountain of sparks (see `prism_scene`), rendered with `vgl` (on the
-//! host's GPU through virtio-gpu if there is one, in software otherwise)
+//! GPU through Veda's renderer if there is one, in software otherwise)
 //! and shown in a window. The scene is rendered at a resolution that adapts
 //! to what rendering costs, and scaled to the window.
 //!

@@ -1,30 +1,3 @@
---- a/include/drm-uapi/drm.h
-+++ b/include/drm-uapi/drm.h
-@@ -45,7 +45,8 @@
- 
- #include <stdint.h>
- #include <sys/types.h>
--#if defined(__GNU__)
-+#if defined(__GNU__) || defined(__veda__)
-+/* Veda: musl's, with Linux's ioctl numbers. */
- #include <sys/ioctl.h>
- #else
- #include <sys/ioccom.h>
---- a/include/drm-uapi/sync_file.h
-+++ b/include/drm-uapi/sync_file.h
-@@ -15,7 +15,12 @@
- 
- #include <stdint.h>
- #include <sys/types.h>
-+#if defined(__veda__)
-+/* Veda: musl's, with Linux's ioctl numbers. */
-+#include <sys/ioctl.h>
-+#else
- #include <sys/ioccom.h>
-+#endif
- 
- typedef int8_t   __s8;
- typedef uint8_t  __u8;
 --- a/meson.build
 +++ b/meson.build
 @@ -954,7 +954,9 @@
@@ -47,14 +20,38 @@
  ].contains(true)
  if with_gfx_compute
    pre_args += '-DHAVE_GFX_COMPUTE'
-@@ -1917,7 +1921,14 @@
+@@ -1758,18 +1762,21 @@
+ ld_args_build_id = cc.get_supported_link_arguments('-Wl,--build-id=sha1')
+ 
+ # check for dl support
++# Veda's renderer in the driver VM is a static program: no dynamic linker
++# answers dladdr, so Mesa does without finding its own build id.
++veda_static = get_option('veda-renderer-lib') != ''
+ dep_dl = null_dep
+ if host_machine.system() != 'windows'
+   if not cc.has_function('dlopen')
+     dep_dl = cc.find_library('dl', required : true)
+   endif
+-  if cc.has_function('dladdr', dependencies : dep_dl)
++  if cc.has_function('dladdr', dependencies : dep_dl) and not veda_static
+     # This is required for src/util
+     pre_args += '-DHAVE_DLADDR'
+   endif
+ endif
+ 
+-if cc.has_function('dl_iterate_phdr')
++if cc.has_function('dl_iterate_phdr') and not veda_static
+   pre_args += '-DHAVE_DL_ITERATE_PHDR'
+ elif with_intel_vk or with_intel_hasvk
+   error('Intel "Anvil" Vulkan driver requires the dl_iterate_phdr function')
+@@ -1917,7 +1924,14 @@
  allow_fallback_for_libdrm = get_option('allow-fallback-for').contains('libdrm')
  
  with_gallium_drisw_kms = false
 -if system_has_kms_drm
-+if system_has_kms_drm and cc.get_define('__veda__') != ''
-+  # Veda: its own libdrm, of what Mesa uses (the renderer's drm/), over
-+  # Veda's DRM device. The renderer's program compiles it in.
++if system_has_kms_drm and get_option('veda-renderer') != ''
++  # Veda's renderer: its own libdrm, of what Mesa uses (the renderer's
++  # drm/), which its program compiles in.
 +  dep_libdrm = declare_dependency(
 +    include_directories : include_directories(get_option('veda-renderer') / 'drm'),
 +    version : '2.4.125',
@@ -65,7 +62,7 @@
      required : with_dri2 or with_dri or with_gbm,
 --- a/meson.options
 +++ b/meson.options
-@@ -915,3 +915,10 @@
+@@ -915,3 +915,17 @@
    value : false,
    description : 'Build panfrost Rust components.'
  )
@@ -75,6 +72,13 @@
 +  type : 'string',
 +  value : '',
 +  description : 'Veda: build its renderer (virgl command streams on Gallium) from the sources in this directory.'
++)
++
++option(
++  'veda-renderer-lib',
++  type : 'string',
++  value : '',
++  description : 'Veda: the static library of the renderer program\'s Rust half (its build for the driver VM).'
 +)
 --- a/src/gallium/drivers/iris/iris_draw.c
 +++ b/src/gallium/drivers/iris/iris_draw.c
@@ -174,58 +178,75 @@
 +endif
 --- a/src/gallium/targets/veda/meson.build
 +++ b/src/gallium/targets/veda/meson.build
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,70 @@
 +# Copyright © 2026 Vahid Mohammadi
 +# SPDX-License-Identifier: MIT
 +#
 +# Veda's renderer: the virgl command streams of Veda's OpenGL ES library
 +# carried out by a Gallium driver. Its sources are in the Veda repository
-+# (services/renderer), which -Dveda-renderer names.
++# (guest/renderer), which -Dveda-renderer names.
 +
 +veda_dir = get_option('veda-renderer')
 +veda_sources = files(
-+  veda_dir / 'src' / 'device.c',
-+  veda_dir / 'src' / 'context.c',
-+  veda_dir / 'src' / 'commands.c',
-+  veda_dir / 'src' / 'formats.c',
++  veda_dir / 'decoder' / 'device.c',
++  veda_dir / 'decoder' / 'context.c',
++  veda_dir / 'decoder' / 'commands.c',
++  veda_dir / 'decoder' / 'formats.c',
 +)
 +veda_includes = [
 +  inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_gallium_drivers,
 +  inc_gallium_winsys, inc_gallium_winsys_sw, inc_virtio_gpu,
 +]
 +
-+if cc.get_define('__veda__') == ''
++if not meson.is_cross_build()
 +  # For the host tests of Veda's OpenGL ES, a build for this machine:
-+  # softpipe, which vgl's tests call through vgallium.dll (vgallium.so
-+  # on Linux).
++  # softpipe, and virgl over virglrenderer's test server (vtest), as the
++  # driver VM's renderer renders under QEMU, which vgl's tests call through
++  # vgallium.so.
++  host_args = ['-DVR_EXPORTS', '-DVR_SOFTPIPE']
++  host_deps = [idep_nir, idep_mesautil, driver_softpipe]
++  host_sources = [veda_sources]
++  if with_gallium_virgl
++    host_args += '-DVR_VTEST'
++    host_deps += [driver_virgl, dep_libdrm]
++    host_sources += files(veda_dir / 'drm' / 'xf86drm.c')
++  endif
 +  shared_library(
 +    'vgallium',
-+    veda_sources,
++    host_sources,
 +    include_directories : veda_includes,
-+    c_args : ['-DVR_EXPORTS', '-DVR_SOFTPIPE'],
++    c_args : host_args,
 +    gnu_symbol_visibility : 'hidden',
-+    link_with : [libgallium, libws_null],
-+    dependencies : [idep_nir, idep_mesautil, driver_softpipe],
++    link_with : [libgallium, libws_null, libgalliumvl_stub],
++    dependencies : host_deps,
 +    name_prefix : '',
 +  )
 +else
-+  # The renderer service, for Veda (x86_64-veda-gcc): softpipe, and iris
-+  # for Intel's GPUs.
++  # The driver VM's renderer, with its toolchain (Linux on musl, static):
++  # softpipe and the GPUs' drivers, around the program's Rust half, which
++  # serves the gpu protocol (-Dveda-renderer-lib).
 +  veda_args = ['-DVR_SOFTPIPE']
-+  veda_deps = [idep_nir, idep_mesautil, driver_softpipe]
++  veda_deps = [idep_nir, idep_mesautil, driver_softpipe, dep_libdrm]
 +  if with_gallium_iris
 +    veda_args += '-DVR_IRIS'
 +    veda_deps += [driver_iris, idep_xmlconfig]
 +  endif
++  if with_gallium_virgl
++    veda_args += '-DVR_VIRGL'
++    veda_deps += driver_virgl
++  endif
++  rust = get_option('veda-renderer-lib')
 +  executable(
 +    'renderer',
-+    [veda_sources, files(veda_dir / 'src' / 'main.c', veda_dir / 'drm' / 'xf86drm.c')],
++    [veda_sources, files(veda_dir / 'decoder' / 'main.c', veda_dir / 'drm' / 'xf86drm.c')],
 +    include_directories : veda_includes,
 +    c_args : veda_args,
-+    # BLAKE3's assembly marks its stack note for Linux only.
-+    link_args : ['-Wl,-z,noexecstack'],
-+    link_with : [libgallium, libws_null],
++    # Without video: its helpers' stand-ins (virgl's video calls them).
++    link_with : [libgallium, libws_null, libgalliumvl_stub],
 +    dependencies : veda_deps,
++    # The Rust half needs an unwinder (GCC's, as the toolchain names it).
++    link_args : ['-static-pie', rust, '-lunwind'],
++    link_depends : rust,
 +  )
 +endif
 --- a/src/intel/blorp/meson.build
@@ -332,32 +353,3 @@
  endif
  if with_intel_hasvk or with_intel_vk or with_gallium_crocus or with_gallium_iris or with_intel_tools
    subdir('perf')
---- a/src/util/detect_os.h
-+++ b/src/util/detect_os.h
-@@ -21,6 +21,16 @@
- #endif
- 
- /*
-+ * Veda: musl over Veda's POSIX layer, which carries out Linux's system
-+ * calls. Linux, as far as Mesa is concerned.
-+ */
-+#if defined(__veda__)
-+#define DETECT_OS_VEDA 1
-+#define DETECT_OS_LINUX 1
-+#define DETECT_OS_POSIX 1
-+#endif
-+
-+/*
-  * Android defines __linux__, so DETECT_OS_LINUX and DETECT_OS_POSIX will
-  * also be defined.
-  */
-@@ -125,6 +135,9 @@
- #ifndef DETECT_OS_LINUX
- #define DETECT_OS_LINUX 0
- #endif
-+#ifndef DETECT_OS_VEDA
-+#define DETECT_OS_VEDA 0
-+#endif
- #ifndef DETECT_OS_NETBSD
- #define DETECT_OS_NETBSD 0
- #endif

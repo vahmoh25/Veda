@@ -1,6 +1,6 @@
-//! Running in Veda (feature `veda`): contexts on the host's GPU through the
-//! `gpu` service (the virtio-gpu driver), or with the software renderer on
-//! every CPU.
+//! Running in Veda (feature `veda`): contexts on the GPU through the `gpu`
+//! service (Veda's renderer, in the driver VM), or with the software
+//! renderer on every CPU.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -36,13 +36,13 @@ pub fn software_context(config: Config) -> Context {
     Context::new(Box::new(SoftBackend::new(Box::new(pool))), config)
 }
 
-/// A context on the host's GPU if there is one (a virtio-gpu device with
-/// 3D support), with the software renderer otherwise.
+/// A context on the GPU if there is one (the `gpu` service), with the
+/// software renderer otherwise.
 pub fn context(config: Config) -> Context {
     gpu_context(config).unwrap_or_else(|| software_context(config))
 }
 
-/// A context on the host's GPU, if there is one.
+/// A context on the GPU, if there is one.
 pub fn gpu_context(config: Config) -> Option<Context> {
     backend_context(GpuTransport::connect()?, config)
 }
@@ -81,11 +81,11 @@ fn backend_context(t: GpuTransport, config: Config) -> Option<Context> {
 /// Shared memory to ask for: staging for a full-HD frame and then some,
 /// and the query results.
 const SHARED: u64 = 16 * 1024 * 1024 + 16 * 1024;
-/// Programs started with the system may connect before the driver has
+/// Programs started with the system may connect before the renderer has
 /// registered: this long after boot, they wait for it a little.
 const BOOT_NS: u64 = 60_000_000_000;
 const BOOT_WAIT_NS: u64 = 5_000_000_000;
-/// How long a call to the driver may take before it counts as hung.
+/// How long a call to the renderer may take before it counts as hung.
 const CALL_NS: u64 = 10_000_000_000;
 
 /// A virgl context through the `gpu` service.

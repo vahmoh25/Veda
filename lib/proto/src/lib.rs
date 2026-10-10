@@ -14,7 +14,6 @@ pub mod block;
 pub mod display;
 pub mod displaydev;
 pub mod fs;
-pub mod gem;
 pub mod gpu;
 pub mod init;
 pub mod input;

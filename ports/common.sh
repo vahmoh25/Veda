@@ -47,7 +47,8 @@ quiet() {
 	fi
 }
 
-# Unpacks port NAME into $SRC/NAME and applies its patch, if it has one.
+# Unpacks port NAME into $SRC/NAME and applies its patch, if it has one;
+# with `upstream`, as its authors released it (the patch is for Veda).
 unpack() {
 	local name=$1 version archive dir
 	version=$(port "$name" version)
@@ -58,7 +59,7 @@ unpack() {
 	tar -xf "$archive" -C "$dir.tmp"
 	mv "$dir.tmp/$name-$version" "$dir"
 	rmdir "$dir.tmp"
-	if [ -f "$PORTS/$name/veda.patch" ]; then
+	if [ "${2:-}" != upstream ] && [ -f "$PORTS/$name/veda.patch" ]; then
 		(cd "$dir" && patch -p1 --batch --forward --quiet < "$PORTS/$name/veda.patch")
 	fi
 }

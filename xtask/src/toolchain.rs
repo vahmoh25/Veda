@@ -33,12 +33,10 @@ pub fn root() -> PathBuf {
     }
 }
 
-/// Whether the `cross toolchain` or the `native toolchain` has been built,
-/// or Mesa configured for the `renderer`.
+/// Whether the `cross toolchain` or the `native toolchain` has been built.
 pub fn built(what: &str) -> bool {
     match what {
         "cross toolchain" => cross_gcc().is_some(),
-        "renderer" => mesa_build().join("build.ninja").is_file(),
         _ => root().join("native").join("system").join("bin").join("gcc").is_file(),
     }
 }
@@ -69,7 +67,7 @@ fn cross_tool(name: &str) -> PathBuf {
 
 /// The symbols the POSIX layer gives the C library (and, for the `veda_`
 /// ones, C programs: `<veda/ipc.h>`); all else in it stays private.
-const POSIX_LAYER_EXPORTS: [&str; 22] = [
+const POSIX_LAYER_EXPORTS: [&str; 21] = [
     "__veda_syscall",
     "__veda_init",
     "__veda_spawn",
@@ -89,7 +87,6 @@ const POSIX_LAYER_EXPORTS: [&str; 22] = [
     "veda_vmo_create",
     "veda_vmo_map",
     "veda_vmo_unmap",
-    "veda_dmabuf_fd",
     "veda_event_create",
     "veda_object_signal",
 ];
@@ -169,69 +166,6 @@ pub fn refresh_posix_layer() -> Result {
         }
     }
     Ok(())
-}
-
-/// Mesa's build directories, which `ports/build.sh` configures: for Veda,
-/// and for this machine (the renderer as a library, for the OpenGL ES
-/// tests).
-fn mesa_build() -> PathBuf {
-    root().join("build").join("mesa")
-}
-
-fn mesa_host_build() -> PathBuf {
-    root().join("build").join("mesa-host")
-}
-
-/// Runs ninja for `target` in a build directory of Mesa's (showing its
-/// output only if it fails).
-fn ninja(dir: &Path, target: &str) -> Result {
-    let log = dir.join("ninja.log.txt");
-    let mut sh = shell()?;
-    sh.arg("-c").arg(format!(
-        "ninja -C '{}' '{}' > '{}' 2>&1 || {{ tail -n 40 '{}'; exit 1; }}",
-        dir.display(),
-        target,
-        log.display(),
-        log.display()
-    ));
-    util::run(&mut sh)
-}
-
-/// Veda's renderer service (`services/renderer` on Mesa's Gallium), up to
-/// date and stripped; None if Mesa has not been configured
-/// (`cargo xtask toolchain`).
-pub fn renderer() -> Result<Option<Vec<u8>>> {
-    let dir = mesa_build();
-    if !dir.join("build.ninja").is_file() {
-        return Ok(None);
-    }
-    refresh_posix_layer()?;
-    let exe = dir.join("src").join("gallium").join("targets").join("veda").join("renderer");
-    // ninja does not see the C library: the program is linked again when
-    // it has changed.
-    let libc = root().join("cross").join("sysroot").join("system").join("lib").join("libc.a");
-    if exe.is_file() && !is_newer(&exe, &[&libc]) {
-        std::fs::remove_file(&exe).map_err(|e| format!("removing {}: {e}", exe.display()))?;
-    }
-    util::status("Building", "the renderer (Mesa)");
-    ninja(&dir, "src/gallium/targets/veda/renderer")?;
-    let stripped = root().join("build").join("renderer");
-    if !is_newer(&stripped, &[&exe]) {
-        util::run(Command::new(cross_tool("strip")).arg("-o").arg(&stripped).arg(&exe))?;
-    }
-    Ok(Some(util::read(&stripped)?))
-}
-
-/// The renderer as a library on softpipe for this machine
-/// (`vgallium.so`), up to date; None if Mesa has not been configured for it.
-pub fn vgallium() -> Result<Option<PathBuf>> {
-    let dir = mesa_host_build();
-    if !dir.join("build.ninja").is_file() {
-        return Ok(None);
-    }
-    util::status("Building", "the renderer on softpipe for the host (Mesa)");
-    ninja(&dir, "src/gallium/targets/veda/vgallium.so")?;
-    Ok(Some(dir.join("src").join("gallium").join("targets").join("veda").join("vgallium.so")))
 }
 
 /// How each C test program is linked: once at a fixed address, as GCC links
@@ -364,10 +298,9 @@ impl Port {
     }
 }
 
-/// The ports the toolchain is built from, and Mesa, which `ports/build.sh`
-/// configures for the renderer.
+/// The ports the toolchain is built from.
 fn ports() -> Result<Vec<Port>> {
-    ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl", "mesa"].iter().map(|p| Port::named(p)).collect()
+    ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl"].iter().map(|p| Port::named(p)).collect()
 }
 
 pub fn sha256_of(path: &Path) -> Result<String> {
@@ -377,11 +310,20 @@ pub fn sha256_of(path: &Path) -> Result<String> {
 }
 
 /// Downloads a port's source archive into `downloads` unless it is there,
-/// and checks it against the SHA-256 the port pins.
+/// and checks it against the SHA-256 the port pins. An archive the other
+/// build (the C toolchain's, or the driver VM's Linux) has is copied.
 pub fn fetch(port: &Port, downloads: &Path) -> Result {
     let archive = port.archive(downloads);
     if archive.is_file() && sha256_of(&archive)? == port.sha256 {
         return Ok(());
+    }
+    for other in [root().join("downloads"), crate::linux::root().join("downloads")] {
+        let copy = port.archive(&other);
+        if other != downloads && copy.is_file() && sha256_of(&copy)? == port.sha256 {
+            std::fs::create_dir_all(downloads).map_err(|e| format!("{e}"))?;
+            std::fs::copy(&copy, &archive).map_err(|e| format!("copying {}: {e}", copy.display()))?;
+            return Ok(());
+        }
     }
     util::status("Downloading", &port.url);
     std::fs::create_dir_all(archive.parent().unwrap()).map_err(|e| format!("{e}"))?;
@@ -401,9 +343,8 @@ pub fn fetch(port: &Port, downloads: &Path) -> Result {
 }
 
 /// The programs the build needs from the system: compilers and GNU tools,
-/// meson and ninja for Mesa, and curl for the downloads (`docs/C.md` names
-/// the packages).
-const BUILD_TOOLS: [&str; 10] = ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "meson", "ninja", "curl"];
+/// and curl for the downloads (`docs/C.md` names the packages).
+const BUILD_TOOLS: [&str; 8] = ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "curl"];
 
 /// The shell that runs `ports/build.sh`, once the build tools are there.
 fn shell() -> Result<Command> {

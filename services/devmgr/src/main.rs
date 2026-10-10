@@ -75,8 +75,6 @@ const DRIVERS: &[DriverMatch] = &[
     DriverMatch { vendor: 0x1AF4, devices: &[0x1052], driver: "virtio-input" },
     // virtio 1.0 sound
     DriverMatch { vendor: 0x1AF4, devices: &[0x1059], driver: "virtio-snd" },
-    // virtio 1.0 GPU: 3D on the host's GPU (QEMU's virtio-gpu-gl)
-    DriverMatch { vendor: 0x1AF4, devices: &[0x1050], driver: "virtio-gpu" },
     // Intel 82801AA AC'97 audio (QEMU's AC97).
     DriverMatch { vendor: 0x8086, devices: &[0x2415], driver: "ac97" },
     // Intel's HD Audio controllers since Skylake: with an audio DSP beside
@@ -131,27 +129,12 @@ const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
     (0x04, 0x03, 0x80, "hda"),
 ];
 
-/// QEMU's standard VGA, which tests may have played by `flipsim`, a
-/// display that flips (rather than left to the firmware's framebuffer).
-const FLIPSIM_DEVICE: (u16, u16) = (0x1234, 0x1111);
-
 /// Disk drivers. A live system (started with `live`) starts none of them:
 /// it runs from memory and never touches the computer's disks.
 const DISK_DRIVERS: [&str; 2] = ["virtio-blk", "ahci"];
 
-/// Programs started beside a driver, with their arguments: the renderer,
-/// which serves applications' OpenGL ES (`gpu`) on Mesa's iris, over the
-/// engines `intel-gpu` serves (`gem`). It waits for them a while, and
-/// leaves if they do not come.
-const COMPANIONS: &[(&str, &str, &[&str])] = &[("intel-gpu", "renderer", &["iris"])];
-
 /// The driver for a device, if any.
 fn driver_for(info: &DeviceInfo) -> Option<&'static str> {
-    // Intel's integrated graphics: the GPUs the display driver knows, from
-    // its own table.
-    if info.vendor == vigpu::device::VENDOR && vigpu::device::platform(info.device).is_some() {
-        return Some("intel-gpu");
-    }
     DRIVERS.iter().find(|m| m.vendor == info.vendor && m.devices.contains(&info.device)).map(|m| m.driver).or_else(
         || {
             CLASS_DRIVERS
@@ -355,16 +338,6 @@ fn start_driver(boot: &initrd::Archive<'static>, driver: &str, args: &[String], 
         driver, info.vendor, info.device, info.bus, info.slot, info.function
     );
     Some(ours)
-}
-
-/// Starts the programs that go with `driver` ([`COMPANIONS`]).
-fn start_companions(boot: &initrd::Archive<'static>, driver: &str) {
-    for &(_, program, args) in COMPANIONS.iter().filter(|(d, ..)| *d == driver) {
-        let args: Vec<String> = args.iter().map(|&a| a.into()).collect();
-        if start_program(boot, program, &args, Vec::new()).is_some() {
-            println!("started {} {} beside {}", program, args.join(" "), driver);
-        }
-    }
 }
 
 /// Starts `bin/NAME.exe` from the system image with the registry and
@@ -590,9 +563,6 @@ fn main() -> i32 {
         Manager { config: ConfigSpace::new(ports), io, mmio, dma, pci, acpi, gpio: RefCell::new(Gpio::default()) };
     let args = vrt::env::args();
     let live = args.iter().any(|a| a == "live");
-    // Tests: QEMU's standard VGA as a display that flips (`flipsim`, or
-    // `flipsim=N` for one that goes away after N flips).
-    let flipsim = args.iter().find(|a| *a == "flipsim" || a.starts_with("flipsim="));
     // Tests: the driver VM (`drivervm`, `drivervm.NAME=VALUE`).
     let drivervm: Vec<String> =
         args.iter().filter(|a| *a == "drivervm" || a.starts_with("drivervm.")).cloned().collect();
@@ -632,13 +602,10 @@ fn main() -> i32 {
             guest.push((a, info));
             continue;
         }
-        let (driver, driver_args) = match flipsim {
-            Some(option) if (info.vendor, info.device) == FLIPSIM_DEVICE => ("flipsim", alloc::vec![option.clone()]),
-            _ => match driver_for(&info) {
-                Some("xhci") => ("xhci", lend.clone()),
-                Some(driver) => (driver, Vec::new()),
-                None => continue,
-            },
+        let (driver, driver_args) = match driver_for(&info) {
+            Some("xhci") => ("xhci", lend.clone()),
+            Some(driver) => (driver, Vec::new()),
+            None => continue,
         };
         if live && DISK_DRIVERS.contains(&driver) {
             println!(
@@ -651,7 +618,6 @@ fn main() -> i32 {
         if let Some(ch) = start_driver(&boot, driver, &driver_args, &info) {
             bound.insert(next, Bound { address: a, info, channel: ch, acpi: below, guest: false });
             next += 1;
-            start_companions(&boot, driver);
         }
     }
 

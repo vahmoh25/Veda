@@ -3,10 +3,15 @@
 //! * `cargo xtask linux` builds its kernel from `ports/linux` (first zlib
 //!   and elfutils' libelf, from `ports/zlib` and `ports/elfutils`, for the
 //!   kernel's build tool objtool): `target/linux/bzImage`.
+//!   It also builds a cross toolchain for the guest's programs in C and C++
+//!   (`target/linux/toolchain`, for Linux on musl) and configures Mesa's
+//!   build with it for the renderer, and for this machine (`vgallium.so`,
+//!   the renderer's decoder on softpipe, for the OpenGL ES tests).
 //! * Once it is built, every image build also builds the guest's programs
-//!   (`guest/`: Rust for Linux on musl, static) and packs them into the
-//!   initial RAM file system the kernel starts with, with the firmware its
-//!   drivers load (`ports/linux/firmware.txt`). Both go into the system
+//!   (`guest/`: Rust for Linux on musl, static; the renderer, Mesa's build
+//!   around its Rust half) and packs them into the initial RAM file system
+//!   the kernel starts with, with the firmware its drivers load
+//!   (`ports/linux/firmware.txt`). Both go into the system
 //!   image (`linux/bzImage`, `linux/initramfs.cpio`), where `drivervm`
 //!   finds them.
 
@@ -34,8 +39,10 @@ const GUEST_PROGRAMS: &[(&str, &str, &str)] = &[
     ("guest-usb", "usbip", "bin/usbip"),
 ];
 
-/// Tools the kernel's build runs, beyond a C compiler.
-const BUILD_TOOLS: [&str; 10] = ["gcc", "make", "flex", "bison", "bc", "perl", "tar", "xz", "patch", "curl"];
+/// Tools the build runs: the kernel's, beyond a C compiler; GCC's (m4, and
+/// the GMP, MPFR and MPC it links with); meson and ninja for Mesa.
+const BUILD_TOOLS: [&str; 14] =
+    ["gcc", "g++", "make", "m4", "flex", "bison", "bc", "perl", "tar", "xz", "patch", "curl", "meson", "ninja"];
 
 /// Where the guest's kernel is built (`$VEDA_LINUX` overrides it).
 pub fn root() -> PathBuf {
@@ -51,6 +58,36 @@ pub fn root() -> PathBuf {
 /// Whether the guest's kernel has been built.
 pub fn built() -> bool {
     root().join("bzImage").is_file()
+}
+
+/// Mesa's build directories, which `ports/linux/build.sh` configures: for
+/// the guest (the renderer), and for this machine (the renderer's decoder
+/// as a library, for the OpenGL ES tests).
+fn mesa_build() -> PathBuf {
+    root().join("build").join("mesa")
+}
+
+fn mesa_host_build() -> PathBuf {
+    root().join("build").join("mesa-host")
+}
+
+/// The renderer's Rust half (`guest/renderer`), a static library that
+/// Mesa's build links the program around, built.
+fn renderer_lib() -> Result<PathBuf> {
+    util::run(util::cargo().args(["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]))?;
+    Ok(util::target_dir().join(GUEST_TARGET).join("release").join("librenderer.a"))
+}
+
+/// The renderer's decoder on softpipe for this machine (`vgallium.so`), up
+/// to date; None if Mesa has not been configured for it.
+pub fn vgallium() -> Result<Option<PathBuf>> {
+    let dir = mesa_host_build();
+    if !dir.join("build.ninja").is_file() {
+        return Ok(None);
+    }
+    util::status("Building", "the renderer on softpipe for the host (Mesa)");
+    util::ninja(&dir, "src/gallium/targets/veda/vgallium.so")?;
+    Ok(Some(dir.join("src").join("gallium").join("targets").join("veda").join("vgallium.so")))
 }
 
 /// Whether the driver VM can run in this machine's QEMU: its Linux is
@@ -104,16 +141,18 @@ pub fn command(args: &[String]) -> Result {
     tools()?;
     let started = std::time::Instant::now();
     let downloads = root().join("downloads");
-    for name in ["zlib", "elfutils", "linux"] {
+    for name in ["zlib", "elfutils", "linux", "binutils", "gcc", "musl", "mesa"] {
         toolchain::fetch(&Port::named(name)?, &downloads)?;
     }
     firmware()?;
+    let lib = renderer_lib()?;
     let ports = util::workspace_root().join("ports");
     util::run(
         Command::new("bash")
             .arg(ports.join("linux").join("build.sh"))
             .env("VEDA_PORTS", &ports)
             .env("VEDA_LINUX", root())
+            .env("VEDA_RENDERER_LIB", &lib)
             .env("JOBS", jobs.to_string()),
     )?;
     util::status("Finished", format!("the driver VM's Linux in {:.0} s", started.elapsed().as_secs_f32()));
@@ -128,7 +167,7 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     }
     util::status("Building", format!("the driver VM's programs ({GUEST_TARGET})"));
     let mut cmd = util::cargo();
-    cmd.args(["build", "--release", "--target", GUEST_TARGET]);
+    cmd.args(["build", "--release", "--target", GUEST_TARGET, "--package", "guest-renderer"]);
     for (package, ..) in GUEST_PROGRAMS {
         cmd.args(["--package", package]);
     }
@@ -142,6 +181,17 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     archive.device("dev/console", 5, 1);
     for (_, binary, path) in GUEST_PROGRAMS {
         archive.file(path, 0o755, &util::read(&bin.join(binary))?);
+    }
+    // The renderer: Mesa's build links its decoder and drivers around the
+    // Rust half just built (once `cargo xtask linux` has configured it).
+    if mesa_build().join("build.ninja").is_file() {
+        util::status("Building", "the driver VM's renderer (Mesa)");
+        util::ninja(&mesa_build(), "src/gallium/targets/veda/renderer")?;
+        let exe = mesa_build().join("src").join("gallium").join("targets").join("veda").join("renderer");
+        let stripped = root().join("build").join("renderer");
+        let strip = root().join("toolchain").join("bin").join("x86_64-linux-musl-strip");
+        util::run(Command::new(strip).arg("-o").arg(&stripped).arg(&exe))?;
+        archive.file("bin/renderer", 0o755, &util::read(&stripped)?);
     }
     let mut directories = std::collections::BTreeSet::new();
     for (name, file) in firmware()? {

@@ -111,10 +111,6 @@ uint64_t veda_now_ns(void);
 int veda_vmo_create(uint64_t size, veda_handle_t *vmo);
 int veda_vmo_map(veda_handle_t vmo, uint64_t offset, uint64_t size, uint32_t flags, void **addr);
 int veda_vmo_unmap(void *addr, uint64_t size);
-/* A dma-buf file descriptor for a memory object, whose handle moves into
- * it: what the GPU's render node imports (DRM_IOCTL_PRIME_FD_TO_HANDLE).
- * Returns the descriptor. */
-int veda_dmabuf_fd(veda_handle_t vmo);
 
 /* Events, and the signals of objects. */
 int veda_event_create(veda_handle_t *event);

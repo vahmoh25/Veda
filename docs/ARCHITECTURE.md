@@ -17,7 +17,7 @@ that communicate over kernel channels.
  │                agent (the voice agent) · netd · wlan                     │
  │ Drivers        ps2 · xhci (USB) · hda (sound) · virtio-snd · ac97 ·      │
  │                virtio-input · virtio-blk · ahci · virtio-net · e1000 ·   │
- │                virtio-gpu (3D) · intel-gpu (display, 3D) · pci           │
+ │                pci · the driver VM (Linux's: GPUs, displays, Wi-Fi …)    │
  ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
  │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
  ├──────────────────────────────────────────────────────────────────────────┤
@@ -364,8 +364,9 @@ driver.
   system start the screen shows the startup sequence instead (see
   [Boot](#boot)) until the desktop has drawn itself and dissolved in.
 * **On the GPU** (`gpu.rs`). Where a display flips and the GPU can draw
-  into its pictures (on a PC with Intel graphics: `intel-gpu` and the
-  renderer on iris), the GPU composes every frame with OpenGL ES (`vgl`),
+  into its pictures (Linux's drivers of both in the driver VM: `kms`, and
+  the renderer on Mesa's driver of the GPU), the GPU composes every frame
+  with OpenGL ES (`vgl`),
   straight into the picture the display shows next, as modern window
   systems do. Each window is a texture, brought up to date where its
   client drew; shadows, borders, rounded corners and the startup
@@ -385,7 +386,7 @@ driver.
 * **The screen** (`screen.rs`). Frames go into the framebuffer the
   firmware left, written in place and paced by a 60 Hz timer, until a
   display driver that can flip attaches (`displaydev`; see
-  [Display](#display-driversintel-gpu)). From then on each frame goes into
+  [Displays and GPUs](#displays-and-gpus)). From then on each frame goes into
   one of the driver's pictures that is not on the screen; the compositor
   asks for it, the driver shows it from the next vertical blank, and the
   next frame is composed once it is shown. So the screen never shows a
@@ -411,57 +412,29 @@ driver.
   the desktop. Alt+Tab shows the window switcher (live thumbnails), Alt+F4
   closes, and tapping Super sends `StartMenuKey` to the shell.
 
-## Display (`drivers/intel-gpu`)
+## Displays and GPUs
 
 Drawing into the picture the screen is showing tears, and frames paced by
 a timer drift against the screen's own rhythm: what looks smooth in a
 virtual machine's window, whose host shows whole frames, judders on a
-laptop's panel. On Intel's integrated graphics of Tiger Lake to Raptor
-Lake (display versions 12 and 13: Iris Xe and UHD Graphics), `intel-gpu`
-gives the window system flips.
+laptop's panel. Displays and GPUs are Linux's, in
+[the driver VM](DRIVERVM.md), as are their drivers' quirks and firmware:
 
-* **Takeover.** It keeps the mode the firmware set (no mode setting, link
-  training, clocks or watermarks) and takes over the picture plane 1 shows
-  on every pipe that is on, if that picture is plain: linear, 32 bits a
-  pixel, unrotated, shown from its first pixel, the same on every pipe
-  (where the plane sits and whether a scaler fits it to the panel stay as
-  the firmware set them). Anything else stays the firmware's
-  framebuffer's. It logs every pipe as it found it: the mode, scaling,
-  panel self refresh, the planes (`dmesg intel-gpu`).
-* **Pictures.** Two, in physically contiguous write-combining memory: the
-  display engine does not look into the processor's caches, so what the
-  compositor writes goes to memory, and the kernel writes back the lines
-  it zeroed the memory through. They are mapped into the GPU's global
-  address table (GGTT) where nothing is scanned out: in unused entries if
-  there are any, never over the firmware's framebuffer, other planes or
-  cursors.
-* **Flips.** A flip writes `PLANE_SURF` on every pipe showing the picture;
-  the display engine takes the new picture at the start of the next
-  vertical blank, and `PLANE_SURFLIVE` says when it has. While flips come
-  the display engine interrupts at each vertical blank (MSI, through the
-  GPU's master and display interrupt controls, as Linux's i915 has them);
-  without interrupts the driver watches the frame counter. A completion
-  says when its vertical blank began (from the line being scanned out)
-  and how long the screen takes for a frame (measured at the start).
-* **Faults.** The pipe latches faults without interrupting: should plane 1
-  fail to read a picture (unmapped memory, an IOMMU the firmware left
-  on), or the pipe keep running short of pixels, the driver shows the
-  firmware's framebuffer again and leaves the screen to it, and the
-  compositor draws in place.
-* If the compositor goes away, the driver shows the firmware's
-  framebuffer again, which a restarted compositor draws into, and
-  attaches to the next one.
+* **Displays.** `kms` (`guest/kms`) drives, through Linux's KMS, the
+  display whose memory holds the firmware's framebuffer (a laptop with two
+  GPUs has outputs on both), and attaches it to the window system through
+  `displaydev`: the compositor draws into pictures of Veda's memory, which
+  Linux's driver shows as they are (dma-bufs of the VMOs) and flips at the
+  vertical blank, the flips' times on Veda's clock. Until it attaches, and
+  whenever the driver VM is gone, the compositor draws into the
+  firmware's framebuffer.
+* **GPUs.** The renderer (`guest/renderer`) carries out applications'
+  OpenGL ES command streams on Mesa's Gallium driver of the GPU, over the
+  GPU's Linux driver (see below).
 
-What the driver knows of the hardware is `vigpu` (`lib/igpu`): register
-offsets and fields as i915 names them, the device ids it lists, and the
-logic of the takeover, the address table, flips, interrupts and the flip
-loop itself (`scanout`: the driver only waits and calls in). The host
-tests run it against a simulated display engine (`lib/boardsim`), time
-passing as they say, which notes what a driver must not do: change a
-plane's setup, scan out unmapped memory, remap the firmware's entries. Under QEMU, `flipsim`
-stands in for the hardware (QEMU's VGA, played as a display that flips at
-the vertical blank), so that the GUI scripts cover the compositor's side
-(`tests/ui/flips*.vts`).
+Under QEMU, the driver VM gets QEMU's VGA (Linux's bochs driver) and, for
+3D, a virtio-gpu (Linux's virtio_gpu, Mesa's virgl), whose virglrenderer
+renders on the host's GPU; `tests/ui/drivervm-*.vts` cover both.
 
 ## The desktop shell (`apps/shell`)
 
@@ -526,7 +499,7 @@ The window system cooperates: a game's window is opaque, so the compositor
 copies its rows and skips everything underneath, and the scheduler starts
 the pool's workers on different CPUs at once.
 
-## OpenGL ES and the GPU (`lib/glsl`, `lib/gl`, `drivers/virtio-gpu`)
+## OpenGL ES and the GPU (`lib/glsl`, `lib/gl`, `guest/renderer`)
 
 Applications get OpenGL ES 3.0, with GLSL ES 1.00 and 3.00, from `vgl`,
 in pure Rust. *Prism* (`apps/prism`) shows it off: a reflective knot under
@@ -551,8 +524,8 @@ simulated with transform feedback.
   tiles in parallel, running fragment shaders on 16 lanes at a time (four
   2x2 quads): 4x multisampling, every ES 3.0 format, ETC2, exact sRGB.
 * **The GPU renderer** (`vgl::virgl`) speaks virglrenderer's protocol,
-  which QEMU's 3D virtio-gpu replays with the host's OpenGL (ANGLE on
-  Direct3D 11 on Windows). State objects are made once per distinct state
+  which Veda's renderer carries out on the GPU (below), and which
+  virglrenderer replays with a host's OpenGL in vgl's host tests. State objects are made once per distinct state
   and cached, draws set only what changed, data moves through a staging
   buffer shared with the device, in command order, and presenting blits
   the frame (resolved, flipped and scaled) into an image the window's
@@ -585,97 +558,44 @@ simulated with transform feedback.
   (hosts find stencil-only attachments incomplete), whose depth draws
   ignore: a test without its attachment is turned off, as OpenGL ES has
   it pass.
-* **The driver** (`virtio-gpu`) owns the device and serves the `gpu`
-  protocol: each connection gets a virgl context of its own, resources
-  with handles the driver assigns (a context can name only its own), a
-  block of DMA memory for commands, staging and query results, and
-  fences that signal through that memory and an event, without a call.
-  It bounds what each client allocates, and all clients together, and
-  frees what a client leaves behind.
-  It never takes the scanout: under QEMU the device is also the display
-  (`virtio-vga-gl`), whose VGA side keeps showing the framebuffer the
-  firmware set up.
-
-* **The renderer** (`services/renderer`, C) serves the same protocol
-  where there is no virtio-gpu: it carries the commands out itself, on
-  one of Mesa's Gallium drivers (`ports/mesa`), so applications cannot
-  tell it from the virtio-gpu driver. Its decoder takes virgl's commands
-  straight to Gallium's calls, checking every word first (a client can
-  fail its own context, never the renderer), with Gallium's state cache
-  (`cso_context`) between it and the driver, so that a client deleting an
-  object leaves nothing behind that the driver still uses. Commands are
-  copied out of the shared memory before they are decoded. Its `main` is
-  a Veda service written in C, on `<veda/ipc.h>`. It renders on softpipe
-  (`run=renderer`) or on iris, Intel's driver (`run=renderer:iris`).
+* **The renderer** (`guest/renderer`) serves the `gpu` protocol from the
+  driver VM: each connection gets a context and a block of Veda's memory
+  shared with it (commands, staging, query results, the fence word), and
+  its commands are carried out on one of Mesa's Gallium drivers, over the
+  GPU's Linux driver: iris on i915 or xe (Intel's GPUs), virgl on
+  virtio-gpu (QEMU's, which renders on the host's GPU), or softpipe
+  (`drivervm.renderer=softpipe`, for tests). The program is Mesa's build
+  of the decoder (`decoder/`, C) around its Rust half, which serves the
+  protocol over the bridge; `cargo xtask linux` builds Mesa for the guest
+  with a toolchain of its own (`ports/linux/build.sh`). The decoder takes
+  virgl's commands straight to Gallium's calls, checking every word first
+  (a client can fail its own context, never the renderer), with Gallium's
+  state cache (`cso_context`) between it and the driver, so that a client
+  deleting an object leaves nothing behind that the driver still uses.
+  Commands are copied out of the shared memory before they are decoded.
   Formats are virgl's, which OpenGL hosts take: 24-bit depth with stencil
   is `S8_UINT_Z24_UNORM`, depth in the upper bits as
   `GL_UNSIGNED_INT_24_8` packs it. iris has depth only in the lower bits
   (`Z24_UNORM_S8_UINT`), so on iris the renderer keeps those formats that
   way round and turns each texel round when it is copied in or out
   (`VR_DEPTH_LOW=1` makes it do so on softpipe too, for the host's tests).
-  When a context is destroyed it unbinds the views it bound on the driver
-  first: softpipe cannot be destroyed with views bound.
+  A buffer may be bound anywhere later, whatever it was made for, and
+  drivers are told so, but virgl, whose host takes a buffer for one use
+  and lets it serve them all; a cube map's faces are moved one at a time,
+  as Mesa's OpenGL moves them.
   It also draws into memory it is given (`gpu::import`): a display's
   picture, which the compositor makes a render target of
   (`renderbuffer_storage_external`, as `glEGLImageTargetRenderbufferStorageOES`
-  makes one of a display's buffer). On iris the memory becomes a dma-buf
-  (`veda_dmabuf_fd`), which iris imports as Linux's would, linear, through
-  the render node (`PRIME_FD_TO_HANDLE`, then `gem::import`); softpipe
-  draws into it as the renderer maps it, through a window system of the
-  renderer's own (`device.c`). The virtio-gpu driver cannot (its host
-  draws into memory of its own).
-
-* **iris** reaches the GPU as on Linux, through i915's render node,
-  `/dev/dri/renderD128`, which the POSIX layer carries out
-  (`lib/posix/src/drm.rs`, with a small libdrm of Veda's own in
-  `services/renderer/drm`). What i915 keeps per open file the layer
-  keeps: handles of buffers, syncobjs, contexts and address spaces, and
-  each buffer's last uses; queries are answered from what the GPU's
-  driver says of the GPU. The driver does what the GPU needs done, over
-  the `gem` protocol (`lib/proto/src/gem.rs`): buffers (memory objects
-  the client maps), address spaces, contexts made when first submitted
-  to, and submissions, numbered per engine. A page every client maps
-  holds each engine's last completed number, and an event says when they
-  move, so waiting takes no call. The bookkeeping, including buffers
-  that must stay bound until the GPU is done with them, is
-  `vigpu::gem`, whatever the GPU underneath, and the service around it
-  (clients, sessions, the fence page) is `vgem` (`lib/gem`). `gemsim`
-  serves the protocol with it as an Alder Lake GPU that runs nothing, so
-  that iris starts, compiles shaders and submits frames under QEMU
-  (`tests/ui/iris.vts`, and systest's checks of the render node,
-  `tests/c/drm.c`) through the same service loop as the hardware's.
-
-* **The GPU's engines** (`intel-gpu`, beside the display) serve `gem` on
-  Intel's Gfx12 GPUs (Tiger Lake to Raptor Lake: Iris Xe and UHD
-  Graphics), on the render and copy engines, as Linux's i915 drives them
-  with execlists (`vigpu::render`, with `gt`, `lrc` and `ppgtt`). Bringing
-  them up takes forcewake and keeps it, resets the engines, sets the GT
-  and each engine up (workarounds, PAT, MOCS, the registers user batches
-  may write), then runs a golden context on each engine: the image the
-  engine saves of it is what every context starts from. Address spaces
-  are four-level page tables; a context is an image and a ring, mapped in
-  a range of the global table set aside before the display's pictures
-  are placed. Submissions go to an engine one at a time and end by
-  writing their number into the engine's status page, which the driver
-  looks at every millisecond while the GPU has work (the engines'
-  interrupts stay off: the GPU's one interrupt is the display's). A
-  submission still running after 4 s is lost, its engine reset and its
-  context banned, as i915 does; Mesa makes another. The GT runs at its
-  highest frequency while it has work and at its lowest once idle.
-  Memory a client imports (the display's pictures, which the compositor
-  has the GPU draw into) is mapped uncached, as i915 maps what the display
-  engine scans out: the display engine does not look in the last-level
-  cache, and iris draws into imported buffers uncached too.
-  devmgr starts the renderer on iris beside `intel-gpu` (it waits for
-  `gem` a while, and leaves if the engines do not come up). The host
-  tests drive all of it against a model of the GT (`lib/boardsim`: page
-  walks, rings, batches, hangs and resets).
+  makes one of a display's buffer). For a GPU the memory becomes a dma-buf
+  of the VMO (the bridge's), which its driver imports as Linux's would,
+  linear, and reaches through the IOMMU; softpipe draws into it as the
+  renderer maps it, through a window system of the renderer's own
+  (`device.c`). virgl cannot (its host draws into memory of its own).
 
 `vgl::veda::context` renders on the GPU when the `gpu` service exists and
-in software on every CPU otherwise (VirtualBox, and PCs without Intel's
-Gfx12 graphics). Under QEMU the difference is large: Prism runs at about
-1 frame a second in software, and at 55 at its full resolution on the
-GPU.
+in software on every CPU otherwise. Under QEMU the difference is large:
+Prism runs at about 1 frame a second in software, and at 75 at 1024x640 on
+the host's GPU through the driver VM.
 
 The virgl renderer is tested on the host: `vgl::virgl::host` calls
 virglrenderer as QEMU does, on OpenGL contexts made as QEMU makes them,
@@ -684,11 +604,13 @@ and runs the whole `vgl` test suite on the host's GPU
 renders through EGL on a GPU's render node (GBM), on desktop OpenGL as
 QEMU does and on OpenGL ES (`VGL_TEST_HOST=gles`). Prism's scene,
 rendered both ways, must look the same to within the GPU's rounding. The
-suite also runs through the renderer's decoder on softpipe
-(`VGL_TEST_BACKEND=gallium`, `vgl::virgl::gallium`, which loads the
-decoder built with Mesa as `vgallium.so`);
-where softpipe falls short of a GPU (no multisampling, points an eighth
-of a pixel off, depth filtered before it is compared) the tests say so.
+suite also runs through the renderer's decoder (`VGL_TEST_BACKEND=gallium`,
+`vgl::virgl::gallium`, which loads the decoder built with Mesa for the
+host as `vgallium.so`): on softpipe, where it falls short of a GPU (no
+multisampling, points an eighth of a pixel off, depth filtered before it
+is compared) the tests say so; and on Mesa's virgl over virglrenderer's
+test server (`VGL_GALLIUM_DEVICE=virgl`), as the driver VM's renderer
+renders under QEMU.
 
 ## Audio
 
@@ -748,7 +670,7 @@ of a pixel off, depth filtered before it is compared) the tests say so.
   many buffers the controller completed, and how fast each of its
   position counters moved (`dmesg hda`). HDMI and DisplayPort codecs are
   left alone: their audio needs the graphics driver to set the display's
-  link up for it, and `intel-gpu` keeps the firmware's mode as it is.
+  link up for it, which is Linux's, in the driver VM.
 * **Speaker amplifiers.** Many laptops since 2021 drive their speakers
   with Cirrus Logic CS35L41 amplifiers: the codec sends them its output
   over I2S, but they are set up over SPI or I2C, and play nothing until
@@ -854,31 +776,31 @@ policy, the wake word) are in `vagent`, tested on the host. See
   over a simulated cable, the Wi-Fi simulator, and the TLS client against
   a rustls server and real certificate chains.
 * Simulated machines (`lib/boardsim`): hardware no emulator has, such as
-  a laptop's speaker amplifiers and Intel's display engine, as firmware
-  descriptions shaped like the real firmware's and models of the chips,
-  wired as on the real board. Veda's own code (the ACPI interpreter, the
-  GPIO pads, the SPI controller, the amplifiers' sequences and their DSP
-  firmware, with the real firmware files; the display driver's takeover,
-  address table, flips and interrupts) runs against them through the same
-  traits it uses on the hardware, and the models note what a driver does
-  wrong (two devices selected at once, a protected register written while
-  locked, an amplifier powered without its clock, a DSP started with its
-  memory protection closed, a gain above 4.5 dB without the DSP's
-  protection, a plane's setup changed, unmapped memory scanned out). They
-  cannot show that the real chips behave like their models, or how
-  anything sounds or looks: the real machine stays the final check.
+  a laptop's speaker amplifiers, as firmware descriptions shaped like the
+  real firmware's and models of the chips, wired as on the real board.
+  Veda's own code (the ACPI interpreter, the GPIO pads, the SPI
+  controller, the amplifiers' sequences and their DSP firmware, with the
+  real firmware files) runs against them through the same traits it uses
+  on the hardware, and the models note what a driver does wrong (two
+  devices selected at once, a protected register written while locked, an
+  amplifier powered without its clock, a DSP started with its memory
+  protection closed, a gain above 4.5 dB without the DSP's protection).
+  They cannot show that the real chips behave like their models, or how
+  anything sounds: the real machine stays the final check.
 * GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
   mouse, keyboard, waits on log lines, screenshots — and fail on panics.
   The sound cards' scripts also check QEMU's recording of the output for
   dropouts, and `hda-speakers.vts` gives the HD Audio driver a stand-in
   for a laptop's amplifier driver (`speakertest`) that answers slowly.
-  `flips.vts` gives the window system a display that flips (`flipsim`,
-  QEMU's VGA played as one) and compares screenshots of the desktop before
-  and after a window came and went, in both of its pictures;
-  `flips-driver-gone.vts` has that driver go away during the startup
-  sequence, and `flips-restart.vts` the window system restart while it is
-  attached. `flips-gpu.vts` has the GPU compose: the renderer on softpipe
-  draws every frame into `flipsim`'s pictures, slowly, under emulation.
+  `drivervm-display.vts` gives the window system a display that flips
+  (QEMU's VGA, which Linux drives in the driver VM) and compares
+  screenshots of the desktop before and after a window came and went, in
+  both of its pictures; `drivervm-display-crash.vts` has Linux crash
+  under it, and `drivervm-display-restart.vts` the window system restart
+  while it is attached. `drivervm-compose.vts` has the GPU compose: the
+  renderer on softpipe draws every frame into its pictures, slowly, under
+  emulation; `drivervm-gpu.vts` renders Prism on the host's GPU through
+  QEMU's virtio-gpu, given to the driver VM.
 * The agent's scripts (`tests/agent/*.vts`) with a stand-in for Deepgram on
   the host and a test microphone fed from the host; `tests/real/` talks to
   the real Deepgram.
@@ -903,11 +825,10 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
 | `lib/virtio` | virtio device access shared by the drivers |
 | `lib/hda`, `lib/usb`, `lib/cs35l41`, `lib/spi` | what the HD Audio, USB, speaker amplifier and SPI drivers know that touches no hardware |
-| `lib/igpu` | Intel's integrated graphics for the display driver: registers, device ids, takeover, address table, flips, interrupts, the flip loop |
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `lib/hv`, `lib/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the virtual APIC, `cpuid`, the guests' platform and boot protocol, the bridge's ABI; VT-d's tables and structures |
-| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`alsa`, `net`, `wifi`, `kms`, `usbip`), `airlink` (QEMU's virtual radio as Linux's), and its tests |
-| `lib/boardsim` | simulated machines for host tests: firmware descriptions and models of chips no emulator has |
+| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`alsa`, `net`, `wifi`, `kms`, `usbip`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests |
+| `lib/boardsim` | simulated machines for host tests: firmware descriptions and models of chips no emulator has (a laptop's speaker amplifiers) |
 | `lib/splash` | the boot splash's picture, which the boot loader and the window system draw alike |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
@@ -916,7 +837,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/agent` | the voice agent's logic: the Deepgram protocol, tools, prompt, memory, approval policy, wake word |
 | `lib/wlan`, `lib/radiolink` | IEEE 802.11 (frames, RSN, handshakes, SAE, station and access point), and the virtual radio's link format |
 | `third_party/` | vendored crates with documented patches (smoltcp) |
-| `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; Linux for the driver VM (with zlib and elfutils for its build) |
+| `ports/` | third-party software built from source with Veda's patches: GCC, binutils, GMP, MPFR, MPC and musl; for the driver VM, Linux (with zlib and elfutils for its build), a toolchain of its own (the same GCC, binutils and musl, unpatched) and Mesa |
 | `services/`, `drivers/`, `apps/` | system services, drivers and applications (the games included) |
 | `tests/` | in-system tests, C and C++ test programs (`tests/c`) and GUI automation scripts |
 | `tools/` | host programs: media generators, `airsim` (the simulated Wi-Fi environment) |

@@ -560,9 +560,10 @@ fn renders_into_memory_it_is_given() {
     soft.bind_renderbuffer(gl::RENDERBUFFER, rb);
     soft.renderbuffer_storage_external(gl::RENDERBUFFER, gl::RGB8, w, h, &memory);
     assert_eq!(soft.get_error(), gl::INVALID_OPERATION);
-    // Veda's renderer draws into it (a display's picture).
+    // Veda's renderer draws into it (a display's picture), on softpipe here
+    // (virgl's host takes no memory from outside).
     if !on_softpipe() {
-        std::println!("skipped: only Veda's renderer (VGL_TEST_BACKEND=gallium) draws into memory it is given");
+        std::println!("skipped: only Veda's renderer on softpipe draws into memory it is given here");
         return;
     }
     let mut c = virgl_context(Config { width: 1, height: 1, ..Config::default() }).unwrap();

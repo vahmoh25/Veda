@@ -11,7 +11,6 @@ vacpi = { workspace = true }
 vgpio = { workspace = true }
 vspi = { workspace = true }
 vcs35l41 = { workspace = true }
-vigpu = { workspace = true }
 
 [lints]
 workspace = true

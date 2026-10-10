@@ -10,7 +10,7 @@
 //! the fixed-function state, the framebuffer.
 //!
 //! Two back ends implement it: the software renderer ([`crate::soft`]) and
-//! the virtio-gpu/virgl renderer, which runs on the host's GPU.
+//! the virgl renderer ([`crate::virgl`]), which runs on the GPU.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;

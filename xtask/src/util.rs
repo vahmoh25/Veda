@@ -91,6 +91,31 @@ pub fn find_on_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file())
 }
 
+/// Runs ninja for `target` in the build directory `dir` (one of Mesa's),
+/// showing its output only if it fails.
+pub fn ninja(dir: &Path, target: &str) -> Result {
+    let log = dir.join("ninja.log.txt");
+    let file = std::fs::File::create(&log).map_err(|e| format!("{}: {e}", log.display()))?;
+    let out = file.try_clone().map_err(|e| format!("{}: {e}", log.display()))?;
+    let status = Command::new("ninja")
+        .arg("-C")
+        .arg(dir)
+        .arg(target)
+        .stdout(out)
+        .stderr(file)
+        .status()
+        .map_err(|e| format!("running ninja: {e}"))?;
+    if status.success() {
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    for line in &lines[lines.len().saturating_sub(40)..] {
+        eprintln!("{line}");
+    }
+    Err(format!("building {target} failed (log: {})", log.display()))
+}
+
 /// Prints a status line in the style of cargo.
 pub fn status(verb: &str, msg: impl std::fmt::Display) {
     eprintln!("\x1b[1;32m{verb:>12}\x1b[0m {msg}");

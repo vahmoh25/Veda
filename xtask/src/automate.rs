@@ -39,7 +39,6 @@
 //! usb net                          # QEMU's USB network adapter (CDC Ethernet) on the xHCI controller
 //! requires c-toolchain             # only with the C test programs (`cargo xtask toolchain`); `test` skips it otherwise
 //! requires native-toolchain        # only with GCC in the image (the same)
-//! requires renderer                # only with Veda's renderer in the image (Mesa, the same)
 //! requires drivervm                # only with the driver VM's Linux in the image (`cargo xtask linux`), with
 //!                                  # KVM's nested virtualization (kvm_intel nested=1)
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
@@ -405,13 +404,11 @@ pub fn needs_mic(script: &str) -> bool {
 
 /// The part of the C toolchain a script needs (`requires c-toolchain`: the
 /// C test programs the cross compiler builds; `requires native-toolchain`:
-/// GCC in the image; `requires renderer`: Veda's renderer, on Mesa), as
-/// [`crate::toolchain::built`] names it.
+/// GCC in the image), as [`crate::toolchain::built`] names it.
 pub fn needs_toolchain(script: &str) -> Option<&'static str> {
     script.lines().map(words).find_map(|w| match w.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["requires", "c-toolchain", ..] => Some("cross toolchain"),
         ["requires", "native-toolchain", ..] => Some("native toolchain"),
-        ["requires", "renderer", ..] => Some("renderer"),
         _ => None,
     })
 }

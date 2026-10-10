@@ -18,7 +18,6 @@ vproto = { workspace = true }
 initrd = { workspace = true }
 vacpi = { workspace = true }
 vgpio = { workspace = true }
-vigpu = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

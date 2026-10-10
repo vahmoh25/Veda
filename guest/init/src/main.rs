@@ -4,8 +4,10 @@
 //! Veda's log) how Linux came up, and starts Veda's drivers for Linux that
 //! the guest's devices need (`alsa` for sound cards, `net` for Ethernet
 //! cards, `wifi` for Wi-Fi radios and `airlink` for QEMU's virtual one,
-//! `kms` for displays; with `veda.usb`, `usbip` for the USB devices Veda
-//! lends), again if they end.
+//! `kms` for displays and `renderer` for their GPUs; with `veda.usb`,
+//! `usbip` for the USB devices Veda lends), again if they end. With
+//! `veda.renderer=softpipe` the renderer renders on softpipe, for tests,
+//! whatever the devices.
 //! Then it runs the programs the kernel's command line names
 //! (`veda.run=bridgetest,...`, from `/bin`, one after the other) and stays:
 //! the first program may never end. With `veda.poweroff` it powers the
@@ -19,14 +21,16 @@ use std::time::Duration;
 /// Veda's drivers for Linux, the PCI classes (their first bytes, as sysfs
 /// gives them) of the functions each serves (multimedia devices, Ethernet
 /// cards, other network cards (Wi-Fi's), the communication controllers
-/// whose ports QEMU's virtual radio is on, and displays), and whether USB
-/// devices Veda lends may be its (network adapters, Wi-Fi adapters).
+/// whose ports QEMU's virtual radio is on, and displays with their GPUs),
+/// and whether USB devices Veda lends may be its (network adapters, Wi-Fi
+/// adapters).
 const DRIVERS: &[(&str, &[&str], bool)] = &[
     ("alsa", &["0x04"], false),
     ("net", &["0x0200"], true),
     ("wifi", &["0x0280", "0x0780"], true),
     ("airlink", &["0x0780"], false),
     ("kms", &["0x03"], false),
+    ("renderer", &["0x03"], false),
 ];
 
 /// Whether the guest has a PCI function of one of `classes`.
@@ -40,12 +44,12 @@ fn has_class(classes: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-/// Runs driver `name` (from `/bin`) on a thread of its own, and again a
-/// second after it ends.
-fn keep_running(name: &'static str) {
+/// Runs driver `name` (from `/bin`, with `args`) on a thread of its own,
+/// and again a second after it ends.
+fn keep_running(name: &'static str, args: &'static [&'static str]) {
     std::thread::spawn(move || {
         loop {
-            match Command::new(format!("/bin/{name}")).status() {
+            match Command::new(format!("/bin/{name}")).args(args).status() {
                 Ok(status) => println!("veda: {name} ended ({status}); starting it again"),
                 Err(e) => {
                     println!("veda: cannot run {name}: {e}");
@@ -78,16 +82,20 @@ fn main() {
         })
         .unwrap_or_default();
     println!("veda: Linux {} is up, processors {}, {} KiB of memory", release.trim(), cpus.trim(), memory);
-    let usb = cmdline.split_whitespace().any(|o| o == "veda.usb");
+    let options: Vec<&str> = cmdline.split_whitespace().collect();
+    let usb = options.contains(&"veda.usb");
     if usb {
-        keep_running("usbip");
+        keep_running("usbip", &[]);
+    }
+    let softpipe = options.contains(&"veda.renderer=softpipe");
+    if softpipe {
+        keep_running("renderer", &["softpipe"]);
     }
     for &(name, classes, over_usb) in DRIVERS {
-        if has_class(classes) || (usb && over_usb) {
-            keep_running(name);
+        if (has_class(classes) || (usb && over_usb)) && !(softpipe && name == "renderer") {
+            keep_running(name, &[]);
         }
     }
-    let options: Vec<&str> = cmdline.split_whitespace().collect();
     if let Some(seconds) = options.iter().find_map(|o| o.strip_prefix("veda.crash=")?.parse().ok()) {
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(seconds));

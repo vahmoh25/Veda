@@ -8,7 +8,7 @@
 //!   compiled by [`vglsl`].
 //! * A [`backend::Backend`] renders: [`soft`], a multi-threaded software
 //!   renderer that runs the shaders on a SIMD interpreter, or [`virgl`],
-//!   which sends the work to the host's GPU through virtio-gpu.
+//!   which sends the work to the GPU through Veda's renderer.
 //! * [`format`] knows OpenGL ES's pixel formats and converts between them.
 //!
 //! Differences from the C API, as in WebGL 2: vertex and index data always

@@ -1,26 +1,26 @@
-//! The GPU protocol: 3D rendering on the host's GPU through virtio-gpu.
+//! The GPU protocol: 3D rendering on the GPU.
 //!
-//! The virtio-gpu driver serves it when the device has 3D ("virgl")
-//! support. Each connection gets a virgl context of its own: the client
-//! (an OpenGL ES implementation, `vgl`) creates resources (buffers,
-//! textures) and submits command streams in virglrenderer's protocol; the
-//! host turns them into OpenGL calls. Contexts are isolated from each
-//! other: a context names resources by handles the driver assigned to it,
-//! and the host resolves only resources attached to that context.
+//! Veda's renderer serves it, in the driver VM (`guest/renderer`), on
+//! Mesa's Gallium driver of the GPU over the GPU's Linux driver. Each
+//! connection gets a context of its own: the client (an OpenGL ES
+//! implementation, `vgl`) creates resources (buffers, textures) and submits
+//! command streams in virglrenderer's protocol, which the renderer carries
+//! out on Gallium. Contexts are isolated from each other: a context names
+//! resources by handles the renderer assigned to it, and resolves only its
+//! own.
 //!
-//! [`gpu::open`] gives the client the host's capabilities and a block of
-//! memory shared with the driver and the device:
+//! [`gpu::open`] gives the client the renderer's capabilities and a block of
+//! memory shared with it:
 //!
 //! * the command area, where [`gpu::submit`] takes commands from;
-//! * the shared area, which resources may use as their guest storage (the
+//! * the shared area, which resources may use as their storage (the
 //!   client's staging buffer and query results);
 //! * the fence word: the number of the last fence that signaled, which the
-//!   driver updates (and signals the session's event) as fences signal.
+//!   renderer updates (and signals the session's event) as fences signal.
 //!   Waiting for a fence needs no call: wait for the event until the word
 //!   reaches it.
 //!
-//! The renderer (`services/renderer`) serves the protocol too, on a PC's
-//! own GPU, and can render into memory it is given ([`gpu::import`]): the
+//! The renderer can render into memory it is given ([`gpu::import`]): the
 //! display's pictures, into which the compositor draws its frames.
 
 use alloc::string::String;
@@ -73,7 +73,7 @@ message! {
 message! {
     /// A connection's context, as [`gpu::open`] sets it up.
     pub struct Session {
-        /// The host's capability set 2 (`struct virgl_caps_v2`).
+        /// The renderer's capability set 2 (`struct virgl_caps_v2`).
         pub caps: Bytes,
         /// The shared memory.
         pub memory: Vmo,
@@ -87,13 +87,13 @@ message! {
         pub fence_offset: u64,
         /// Signaled whenever a fence signals.
         pub fences: Event,
-        /// The host's renderer, for display.
+        /// The renderer's name (its GPU's), for display.
         pub renderer: String,
     }
 }
 
 protocol! {
-    /// 3D rendering contexts on the host's GPU.
+    /// 3D rendering contexts on the GPU.
     pub mod gpu = "gpu" {
         /// Creates this connection's context, with `shared` bytes of shared
         /// memory (the driver may give less, at least 1 MiB).
@@ -104,8 +104,8 @@ protocol! {
         2 => fn create(spec: ResourceSpec, backing_offset: u64, backing_len: u64) -> Result<u32, GpuError>;
         3 => fn destroy(resource: u32) -> ();
         /// Runs `words` 32-bit words of commands from the start of the
-        /// command area. Replies once the host has executed them, as far as
-        /// guest memory goes (the GPU may still be busy with them).
+        /// command area. Replies once the renderer has executed them, as far
+        /// as the shared memory goes (the GPU may still be busy with them).
         4 => fn submit(words: u32) -> Result<(), GpuError>;
         /// Queues a fence after everything submitted. Replies at once with
         /// its number; it signals when the GPU has done that work.

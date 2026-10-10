@@ -1,9 +1,0 @@
-[package]
-name = "vigpu"
-description = "Intel integrated graphics (Tiger Lake to Raptor Lake: Iris Xe and UHD) for Veda's driver: the display engine's registers, the picture the firmware leaves, the GPU's address table, flips and vertical blank interrupts; the GT's render and copy engines behind the GEM model (page tables, contexts, execlists)"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[lints]
-workspace = true

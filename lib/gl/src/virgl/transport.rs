@@ -1,8 +1,8 @@
-//! How the renderer reaches virglrenderer.
+//! How the renderer reaches what carries its commands out.
 //!
-//! In Veda, through the `gpu` service (the virtio-gpu driver), which owns
-//! the device and gives each client a virgl context of its own; in host
-//! tests, by calling the library directly. Either way the renderer sees
+//! In Veda, through the `gpu` service (Veda's renderer, in the driver VM),
+//! which gives each client a context of its own; in host tests, by calling
+//! virglrenderer or the renderer's decoder directly. Either way it sees
 //! the same thing: a context to submit command streams to, resources it
 //! creates by description, and a block of memory both sides read and write
 //! (the staging area transfers go through, and query results).

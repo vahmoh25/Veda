@@ -234,20 +234,6 @@ pub extern "C" fn veda_vmo_unmap(addr: *mut c_void, size: u64) -> c_int {
     done(call(nr::VM_UNMAP, [vabi::INVALID_HANDLE as usize, addr as usize, size as usize, 0, 0, 0]))
 }
 
-/// A dma-buf descriptor for a memory object, whose handle moves into it:
-/// what the render node imports (`PRIME_FD_TO_HANDLE`), as Linux's takes a
-/// dma-buf's. Returns the descriptor (close-on-exec).
-#[unsafe(no_mangle)]
-pub extern "C" fn veda_dmabuf_fd(vmo: RawHandle) -> c_int {
-    // SAFETY: the caller gives its handle up.
-    let vmo = vrt::object::Vmo::from_handle(unsafe { Handle::from_raw(vmo) });
-    let desc = crate::fd::Description::new(crate::fd::Object::Dmabuf(vmo), crate::linux::o::RDWR);
-    match crate::fd::insert(desc, true, 0) {
-        Ok(fd) => fd,
-        Err(_) => fail(Error::LimitReached),
-    }
-}
-
 /// Creates an event (signaled with `VEDA_SIGNALED`).
 ///
 /// # Safety

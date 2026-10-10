@@ -56,14 +56,14 @@ impl QemuInstall {
     }
 
     /// Whether this QEMU has the 3D virtio-gpu (built with virglrenderer):
-    /// it lists `virtio-vga-gl` among its devices.
+    /// it lists `virtio-gpu-gl-pci` among its devices.
     pub fn has_gl_gpu(&self) -> bool {
         static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *HAS.get_or_init(|| {
             std::process::Command::new(&self.binary)
                 .args(["-device", "help"])
                 .output()
-                .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("\"virtio-vga-gl\""))
+                .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("\"virtio-gpu-gl-pci\""))
         })
     }
 }
@@ -299,20 +299,20 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd.args(["-drive", &flash(vars, false)]);
     // The display, at 00:01.0 (where `-vga std` puts it, before any other
     // device takes it), named so that the tablet can be bound to it (see
-    // `-display` below). With a GPU it is virtio-vga-gl: a standard VGA
-    // that is also virtio-gpu with virgl, whose virglrenderer runs on the
-    // host's OpenGL, and needs an OpenGL display
-    // backend, a window or an offscreen one. The firmware and Veda show the
-    // picture through its VGA side, as with plain VGA; the `virtio-gpu`
-    // driver uses only the 3D side and never takes the scanout. Not VGA
-    // beside a separate virtio-gpu-gl-pci: the firmware drives that one
-    // itself, as a second display, and resets it at boot's end, and such a
-    // reset (from a vCPU thread, which waits for QEMU's main loop) now and
-    // then deadlocks QEMU when the device has OpenGL.
+    // `-display` below): QEMU's standard VGA, whose memory holds the
+    // firmware's framebuffer, and which Linux's bochs driver drives in the
+    // driver VM. With a GPU, a virtio-gpu with virgl beside it, whose
+    // virglrenderer runs on the host's OpenGL and needs an OpenGL display
+    // backend (a window or an offscreen one): its render node is the
+    // renderer's in the driver VM, while the screen stays the VGA's, which
+    // QEMU can take screenshots of (not of a GPU's scanouts). It is at
+    // 00:10.0, so that the other devices are where they are with it or
+    // without it.
     let gpu = cfg.gpu.unwrap_or_else(|| install.has_gl_gpu());
-    let display = format!("id={DISPLAY_ID},addr=0x1");
-    let display = if gpu { virtio(cfg, &format!("virtio-vga-gl,{display}")) } else { format!("VGA,{display}") };
-    cmd.args(["-vga", "none", "-device", &display]);
+    cmd.args(["-vga", "none", "-device", &format!("VGA,id={DISPLAY_ID},addr=0x1")]);
+    if gpu {
+        cmd.args(["-device", &virtio(cfg, "virtio-gpu-gl-pci,id=gpu0,addr=0x10")]);
+    }
     // In a window, the tablet is bound to the display: the window's pointer
     // is then absolute from power-on, not only once the guest's driver has
     // started (see `-display` below).
@@ -402,8 +402,16 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         // absolute from power-on, and a click before the guest's driver
         // runs grabs nothing.
         cmd.args(["-display", if gpu { "gtk,gl=on" } else { "gtk" }]);
+    } else if gpu {
+        // Headless, on the GPU of the first render node, or of the one
+        // `VEDA_RENDERNODE` names (`/dev/dri/renderD129`).
+        let display = match std::env::var("VEDA_RENDERNODE") {
+            Ok(node) if !node.is_empty() => format!("egl-headless,rendernode={node}"),
+            _ => String::from("egl-headless"),
+        };
+        cmd.args(["-display", &display]);
     } else {
-        cmd.args(["-display", if gpu { "egl-headless" } else { "none" }]);
+        cmd.args(["-display", "none"]);
     }
     match &cfg.serial_file {
         Some(path) => cmd.args(["-serial", &format!("file:{}", path.display())]),

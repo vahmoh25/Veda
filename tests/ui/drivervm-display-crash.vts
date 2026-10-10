@@ -1,0 +1,22 @@
+# Linux crashes while it drives the display (QEMU's VGA, as in
+# drivervm-display.vts), soon after the startup sequence: the compositor
+# goes on drawing in place, into its pictures and the firmware's
+# framebuffer, devmgr starts a new driver VM, and its display driver
+# attaches to the compositor again, which shows the desktop through it.
+requires drivervm
+iommu
+gpu off
+boot-cmdline "drivervm drivervm.devices=1234:1111 drivervm.crash=4"
+fail-on "PANIC"
+wait-serial "compositor: bochs-drm (Linux) attached" 120
+wait-serial "compositor: desktop shown after" 120
+wait-serial "veda: crashing, as asked" 60
+wait-serial "compositor: bochs-drm (Linux) went away" 30
+wait-serial "started drivervm again" 30
+wait-serial-count "compositor: bochs-drm (Linux) attached" 2 60
+wait 3
+move 0.5 0.98
+wait 0.5
+move 0.1 0.98
+wait 1
+shot target/veda/drivervm-display-crash.png

@@ -1,10 +1,11 @@
-//! The virgl renderer: OpenGL ES on the host's GPU.
+//! The virgl renderer: OpenGL ES on the GPU.
 //!
-//! virtio-gpu's 3D mode ("virgl") gives the guest a Gallium-shaped view of
-//! the host's OpenGL: the guest creates resources and state objects, sends
-//! TGSI shaders and draws, and virglrenderer on the host replays them with
-//! OpenGL (or OpenGL ES, under ANGLE on Windows). [`Backend`] already has
-//! Gallium's shape, so this is mostly translation:
+//! virgl's protocol gives its client a Gallium-shaped view of a GPU: the
+//! client creates resources and state objects, sends TGSI shaders and
+//! draws, and Veda's renderer carries them out on Mesa's Gallium driver of
+//! the GPU (and virglrenderer, in host tests, replays them with OpenGL or
+//! OpenGL ES). [`Backend`] already has Gallium's shape, so this is mostly
+//! translation:
 //!
 //! * Resources are host resources. Data moves through a staging buffer in
 //!   memory both sides share (`COPY_TRANSFER3D`), in command order, so an
@@ -944,28 +945,11 @@ impl VirglBackend {
     }
 }
 
-/// The host renderer's name for people. ANGLE calls itself "ANGLE (vendor,
-/// device backend, driver)", which the capability set cuts at 64 bytes: keep
-/// the device.
-fn tidy_renderer(s: &str) -> alloc::string::String {
-    if let Some(inner) = s.strip_prefix("ANGLE (")
-        && let Some(device) = inner.split(", ").nth(1)
-    {
-        let device = device.find(" Direct3").map_or(device, |i| &device[..i]);
-        // And its PCI id, "(0x000046A6)".
-        let device = match device.rfind(" (0x") {
-            Some(i) if device.ends_with(')') => &device[..i],
-            _ => device,
-        };
-        return alloc::format!("{} via ANGLE", device.trim());
-    }
-    s.into()
-}
-
 /// What the front end may use, from the host's limits.
 fn caps_for(h: &HostCaps) -> Caps {
-    let name: &'static str =
-        Box::leak(alloc::format!("virtio-gpu: {}", tidy_renderer(h.renderer_name())).into_boxed_str());
+    // The renderer's name: Mesa's driver of the GPU's ("softpipe", "Mesa
+    // Intel(R) Graphics (ADL GT2)", "virgl (...)" under QEMU).
+    let name: &'static str = Box::leak(alloc::string::String::from(h.renderer_name()).into_boxed_str());
     let max_2d = h.max_texture_2d_size.clamp(2048, 16384);
     let renders = |f: u32| h.can_render(f);
     Caps {
@@ -1159,18 +1143,5 @@ impl Backend for VirglBackend {
             self.lost = true;
         }
         true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn renderer_names_are_tidied() {
-        let angle = "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x000046A6) Direct3";
-        assert_eq!(super::tidy_renderer(angle), "Intel(R) Iris(R) Xe Graphics via ANGLE");
-        assert_eq!(
-            super::tidy_renderer("AMD Radeon RX 6600 (radeonsi, navi23)"),
-            "AMD Radeon RX 6600 (radeonsi, navi23)"
-        );
     }
 }

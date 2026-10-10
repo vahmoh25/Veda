@@ -14,10 +14,12 @@
 //!
 //! Linux's driver sets the mode itself: the compositor's screen
 //! (`displaydev::screen`), in the mode of that size the display prefers,
-//! from the compositor's first frame on. The compositor checks that the
-//! display is the one it draws on by the host's addresses of the device's
-//! memory, where the firmware's framebuffer was: the monitor writes them on
-//! the kernel's command line (`veda.device=`).
+//! from the compositor's first frame on. The display is the one the
+//! compositor draws on, whose memory holds the firmware's framebuffer (a
+//! machine may have more GPUs with outputs): the card whose device has it
+//! at the host's address of one of its BARs, which the monitor writes on
+//! the kernel's command line (`veda.device=`), and the compositor checks
+//! again.
 
 mod drm;
 
@@ -90,10 +92,11 @@ fn host_addresses(location: &str) -> Vec<u64> {
         .unwrap_or_default()
 }
 
-/// The first card with a connected output: the card, its output, and its
-/// PCI location. Looks again until there is one (a monitor may be
-/// connected later), saying once why it waits.
-fn find_card() -> (Card, Output, String) {
+/// The card of the display whose memory holds the firmware's framebuffer
+/// (at `framebuffer`; any card without one), with a connected output: the
+/// card, its output, and its PCI location. Looks again until there is one
+/// (a monitor may be connected later), saying once why it waits.
+fn find_card(framebuffer: u64) -> (Card, Output, String) {
     let start = Instant::now();
     let mut said = false;
     loop {
@@ -112,10 +115,15 @@ fn find_card() -> (Card, Output, String) {
                 }
             };
             let location = link_name(format!("/sys/class/drm/{c}/device")).unwrap_or_default();
+            let location = location.trim_start_matches("0000:").to_string();
+            if framebuffer != 0 && !host_addresses(&location).contains(&framebuffer) {
+                why.push(format!("{c} ({}): not the screen", card.driver));
+                continue;
+            }
             match card.outputs() {
                 Ok(mut outputs) if !outputs.is_empty() => {
                     let output = outputs.remove(0);
-                    return (card, output, location.trim_start_matches("0000:").to_string());
+                    return (card, output, location);
                 }
                 Ok(_) => why.push(format!("{c} ({}): nothing connected", card.driver)),
                 Err(e) => why.push(format!("{c} ({}): {e}", card.driver)),
@@ -324,9 +332,6 @@ fn serve(d: &mut Display, s: &Session) -> io::Result<()> {
 }
 
 fn main() {
-    let (card, output, location) = find_card();
-    println!("kms: {} at pci {location}, connector {} on CRTC {}", card.driver, output.connector, output.crtc);
-    let mut card_output = Some((card, output));
     let mut display: Option<Display> = None;
     loop {
         let client = match vproto::connect(protocol::NAME) {
@@ -349,7 +354,8 @@ fn main() {
                     idle();
                 }
             };
-            let (card, output) = card_output.take().expect("the card");
+            let (card, output, location) = find_card(screen.framebuffer);
+            println!("kms: {} at pci {location}, connector {} on CRTC {}", card.driver, output.connector, output.crtc);
             match Display::new(card, output, &location, screen) {
                 Ok(d) => {
                     let how = if matches!(d.shows, Shows::Pictures(_)) { "shown as they are" } else { "copied" };

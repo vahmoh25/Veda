@@ -1,0 +1,40 @@
+# The compositor's frames drawn by a GPU (1280x800): Veda's renderer in the
+# driver VM serves the `gpu` protocol on softpipe (for want of a GPU) and
+# draws into the pictures of the display Linux drives (QEMU's VGA, as in
+# drivervm-display.vts), as Mesa's driver of a PC's GPU draws into them.
+# The GPU is set up once the display has attached, its drawing is checked,
+# and from then on it draws every frame: the startup sequence and the
+# desktop. What a picture lacks of the screen is copied from the other: the
+# desktop shows the same from either. softpipe is slow under emulation
+# (seconds for a frame of the whole screen), so the script waits long.
+requires drivervm
+iommu
+gpu off
+boot-cmdline "drivervm drivervm.devices=1234:1111 drivervm.renderer=softpipe"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+fail-on "frames stay with the processor"
+fail-on "frames are drawn by the processor from now on"
+fail-on "memory to render into refused"
+wait-serial "compositor: bochs-drm (Linux) attached" 120
+wait-serial "renderer: serving gpu on softpipe" 60
+wait-serial "compositor: frames are drawn by the GPU (softpipe) from now on" 120
+wait-serial "drawn by the GPU (softpipe))" 400
+wait 30
+# The desktop, the pointer where the taskbar (below 0.94) has no button:
+# the picture on the screen, then the other one and the first again (each
+# move of the pointer is a frame).
+move 0.1 0.98
+wait 30
+shot target/veda/drivervm-compose-1-desktop.png
+move 0.15 0.98
+wait 20
+shot target/veda/drivervm-compose-2-desktop.png
+move 0.2 0.98
+wait 20
+shot target/veda/drivervm-compose-3-desktop.png
+expect-same target/veda/drivervm-compose-1-desktop.png target/veda/drivervm-compose-2-desktop.png 0 0 1 0.93
+expect-same target/veda/drivervm-compose-1-desktop.png target/veda/drivervm-compose-3-desktop.png 0 0 1 0.93
+reject-serial "stopped answering"
+reject-serial "bochs-drm (Linux) went away"
+reject-serial "cannot have the screen"

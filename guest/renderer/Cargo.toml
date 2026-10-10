@@ -1,0 +1,25 @@
+[package]
+name = "guest-renderer"
+description = "Veda's renderer in the driver VM: OpenGL ES command streams on Mesa's Gallium drivers, over the GPU's Linux driver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The program's Rust half, which serves the `gpu` protocol. Mesa's build
+# links it with the decoder (decoder/), its libdrm (drm/) and the Gallium
+# drivers into the program (ports/mesa: src/gallium/targets/veda).
+[lib]
+name = "renderer"
+path = "src/lib.rs"
+crate-type = ["staticlib"]
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+
+[lints]
+workspace = true

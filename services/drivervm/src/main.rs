@@ -25,8 +25,9 @@
 //! and for tests `run=PROGRAM,...` (programs of the guest's `/bin` its
 //! `init` runs), `poweroff` (once they are done) and `crash=SECONDS`
 //! (Linux crashes that long after it starts: devmgr passes it to the first
-//! run only). With `usb=...` (the USB devices lent to the guest), the
-//! guest's USB/IP host takes them.
+//! run only), `renderer=softpipe` (the guest's renderer renders on
+//! softpipe, whatever the devices). With `usb=...` (the USB devices lent to
+//! the guest), the guest's USB/IP host takes them.
 
 #![no_std]
 #![no_main]
@@ -73,6 +74,7 @@ fn config() -> Config {
             Some(("cmdline", v)) => c.cmdline.push_str(&alloc::format!(" {}", v.replace(',', " "))),
             Some(("run", v)) => c.cmdline.push_str(&alloc::format!(" veda.run={v}")),
             Some(("crash", v)) => c.cmdline.push_str(&alloc::format!(" veda.crash={v}")),
+            Some(("renderer", v)) => c.cmdline.push_str(&alloc::format!(" veda.renderer={v}")),
             Some(("usb", _)) => c.cmdline.push_str(" veda.usb"),
             None if arg == "poweroff" => c.cmdline.push_str(" veda.poweroff"),
             _ => {}

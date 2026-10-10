@@ -1,0 +1,24 @@
+# The renderer in the driver VM: an OpenGL ES 3.0 program (Prism) renders
+# through Veda's renderer, which runs in Linux, on Mesa's softpipe here (for
+# want of a GPU; on a PC, on the GPU's own driver). The renderer serves the
+# `gpu` protocol, so Prism takes it for a GPU, and its frames keep coming.
+requires drivervm
+iommu
+gpu off
+boot-cmdline "drivervm drivervm.renderer=softpipe"
+boot-cmdline "run=prism"
+fail-on "PANIC"
+fail-on "renderer: commands refused"
+fail-on "renderer: a resource refused"
+fail-on "cannot render on the GPU"
+fail-on "rendering stops"
+fail-on "link: "
+fail-on "shader:"
+wait-serial "renderer: serving gpu on softpipe" 90
+wait-serial "softpipe (OpenGL ES 3.0 Veda)" 90
+wait 8
+shot target/veda/drivervm-renderer-1.png
+wait-serial " fps, render " 60
+key s
+wait 4
+shot target/veda/drivervm-renderer-2-no-shadows.png

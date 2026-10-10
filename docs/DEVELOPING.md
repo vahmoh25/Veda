@@ -52,23 +52,27 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
 
 * The serial console (kernel log plus every program's `println!`) is saved
   to `target/veda/serial.log` by `shot`/`script`/`test`.
-* QEMU's display is also a 3D GPU (`virtio-vga-gl`: VGA plus virtio-gpu
-  with virgl) when its build has one, as distributions' do (on Debian and
-  Ubuntu with `qemu-system-modules-opengl`): the window then uses
-  `-display gtk,gl=on` (the host's desktop OpenGL), and headless runs
-  `-display egl-headless` (the host's EGL). `--no-gpu` makes it plain VGA
-  and `--gpu` insists on the GPU.
-  OpenGL ES programs render on it through the `virtio-gpu` driver, on a
-  PC with Intel's Iris Xe (Tiger Lake to Raptor Lake) through the
-  renderer on iris and `intel-gpu`, and in software elsewhere.
+* QEMU's display is its standard VGA, and beside it a 3D GPU
+  (`virtio-gpu-gl-pci`: virtio-gpu with virgl) when its build has one, as
+  distributions' do (on Debian and Ubuntu with `qemu-system-modules-opengl`):
+  the window then uses `-display gtk,gl=on` (the host's desktop OpenGL),
+  and headless runs `-display egl-headless` (the host's EGL, on the GPU of
+  the first render node, or of the one `VEDA_RENDERNODE` names, such as
+  `/dev/dri/renderD129`). `--no-gpu` leaves the GPU out and `--gpu` insists
+  on it. OpenGL ES programs render on it through Veda's renderer when the
+  driver VM has it (`drivervm.devices=1af4:1050`, as
+  `tests/ui/drivervm-gpu.vts` gives it), and in software otherwise.
 * Where QEMU has the 3D GPU, `cargo xtask test` also runs the OpenGL ES
   tests on the host's GPU, through the system's virglrenderer
   (`libvirglrenderer1` on Debian and Ubuntu), which QEMU runs: on desktop
   OpenGL, as QEMU renders, and on OpenGL ES, through EGL on the GPU of the
   first render node, as headless QEMU takes it (`VGL_TEST_RENDERNODE`
   names another).
-  Once the C toolchain is built, the tests also run through Veda's
-  renderer on softpipe.
+  Once the driver VM's Linux is built (`cargo xtask linux`, which builds
+  Mesa for the host too), the tests also run through Veda's renderer: on
+  softpipe, and on Mesa's virgl over virglrenderer's test server
+  (`virgl_test_server`, in `virgl-server` on Debian and Ubuntu), as the
+  driver VM's renderer renders under QEMU.
   `PRISM_SIZE=960x600 PRISM_SHOT=soft.png PRISM_GPU_SHOT=gpu.png cargo test
   -p prism-scene` saves Prism's frame as both renderers draw it.
 * QEMU's window (GTK) takes the pointer as absolute from power-on: the
@@ -115,28 +119,16 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   on the kernel command line (`--cmdline`, or the `BOOT.CFG` of an image)
   leaves the sound out; the scripts that check a recording of the sound
   output, or feed it back into the microphone, boot with it.
-* On a PC with Intel's integrated graphics (Tiger Lake to Raptor Lake),
-  `dmesg intel-gpu` shows the display engine as the firmware left it
-  (every pipe's mode, scaling, panel self refresh and planes), whether the
-  driver took the picture over or why not, where its pictures went in the
-  GPU's address space, the screen's measured rate, and whether vertical
-  blank interrupts come; `dmesg compositor` shows the driver attaching.
-  Lines starting `GT:` are the GPU's engines: their execution units,
-  timestamp clock and frequencies, whether their golden contexts ran (or
-  the engine's state if not), the frequency the GT ran at when it was
-  first busy, and any hang; `dmesg renderer` shows the renderer serving
-  `gpu` on Mesa Intel. Its logic is tested on the host against a
-  simulated display engine and a model of the GT (`cargo test -p
-  vboardsim`). QEMU has no display that flips, so tests
-  give it one: `flipsim` (`drivers/flipsim`) plays QEMU's VGA as one,
-  copying the picture asked for into the video memory at each vertical
-  blank. `devmgr` starts it for the VGA when the kernel command line has
-  `flipsim` (`flipsim=N`: it goes away after N flips, as a crashed driver
-  would), and a script that boots with it says `gpu off` (plain VGA rather
-  than the 3D GPU). `expect-same A.png B.png [left top right bottom]`
-  fails unless two screenshots are alike, pixel for pixel, in a region
-  (fractions of the screen): `tests/ui/flips.vts` checks with it that a
-  window that came and went left nothing behind in either picture.
+* Displays and GPUs are Linux's, in the driver VM: `dmesg drivervm` shows
+  what `kms` and the renderer say (the display it drives, whether it
+  shows the compositor's pictures as they are or copies them; the GPU the
+  renderer serves `gpu` on), and `dmesg compositor` the display attaching.
+  QEMU's VGA is a display that flips once Linux drives it, which the
+  tests give the driver VM (`drivervm.devices=1234:1111`).
+  `expect-same A.png B.png [left top right bottom]` fails unless two
+  screenshots are alike, pixel for pixel, in a region (fractions of the
+  screen): `tests/ui/drivervm-display.vts` checks with it that a window
+  that came and went left nothing behind in either picture.
   Screenshots that a script saves under `target/veda/` go to `$VEDA_OUT`
   when that is set.
 * `--sound hda` gives QEMU the ICH9's HD Audio controller with QEMU's

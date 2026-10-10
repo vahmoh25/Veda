@@ -118,14 +118,7 @@ the registry's, made by the POSIX layer (`lib/posix/src/native.rs`); every
 call returns 0 or a count, or a negative Veda error number. A program
 speaks a protocol by writing its messages itself: a 12-byte header (method,
 transaction, request or response), then the values in order, as the
-header describes. Veda's renderer (`services/renderer/src/main.c`) serves
-the `gpu` protocol so.
-
-**The GPU's render node**, `/dev/dri/renderD128`, is Linux's i915
-interface, as Mesa's iris driver uses it: its ioctls, buffers mapped with
-`mmap`, and syncobjs (`lib/posix/src/drm.rs`; `tests/c/drm.c` checks it).
-It opens where a GPU driver serves the `gem` protocol, and is not there
-otherwise (`ENOENT`).
+header describes.
 
 **The Terminal** runs a program on a fresh socket pair: the program's
 descriptors 0, 1 and 2 are one end, the window keeps the other. The
@@ -208,11 +201,7 @@ The build needs the distribution's packages; on Debian and Ubuntu:
 
 ```text
 sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmpc-dev
-sudo apt install meson ninja-build python3-mako python3-yaml python3-packaging
 ```
-
-The second line is for Mesa (the renderer's Gallium; `ports/mesa`), whose
-build is meson's.
 
 ### The ports
 

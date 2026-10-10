@@ -95,7 +95,12 @@ impl driver_protocol::Server for DriverLink<'_> {
             return Err(DisplayDevError::Denied);
         }
         let r = self.screen.rect();
-        Ok(displaydev::ScreenMode { width: r.w as u32, height: r.h as u32, rgbx: self.screen.rgb() })
+        Ok(displaydev::ScreenMode {
+            width: r.w as u32,
+            height: r.h as u32,
+            rgbx: self.screen.rgb(),
+            framebuffer: self.framebuffer,
+        })
     }
 }
 
@@ -208,11 +213,14 @@ fn main() -> i32 {
         let now = vrt::time::now_ns();
         comp.screen.check(now);
         // A driver that flips gives pictures the GPU may draw into: it is
-        // set up for them (once for each driver's).
+        // set up for them (once for each driver's), and no longer for the
+        // pictures of a driver that went away.
         if let Some(driver) = comp.screen.driver()
             && comp.gpu_tried != Some(driver)
         {
             comp.gpu_tried = Some(driver);
+            comp.gpu_ready = None;
+            comp.drop_gpu("another display driver attached");
             comp.gpu_setup = comp.screen.pictures().and_then(gpu::Pending::start);
         }
         let mut deadline = vabi::DEADLINE_INFINITE;

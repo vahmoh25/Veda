@@ -1,14 +1,16 @@
 //! Veda's renderer on the host, for tests (`VGL_TEST_BACKEND=gallium`):
 //! the decoder that carries out virgl command streams on a Gallium driver
-//! (`services/renderer`), built with Mesa as `vgallium.so` around softpipe,
-//! Mesa's reference rasterizer. In Veda
-//! the same decoder runs the PC's GPU for the `gpu` service's clients;
-//! here the tests call it directly, a device and context of its own for
-//! each of theirs.
+//! (`guest/renderer`), built with Mesa as `vgallium.so` around softpipe,
+//! Mesa's reference rasterizer. In the driver VM the same decoder runs the
+//! GPU for the `gpu` service's clients; here the tests call it directly, a
+//! device and context of its own for each of theirs.
 //!
 //! `VGL_GALLIUM_DLL` names the library; by default it is where Mesa's build
-//! for this machine leaves it (`cargo xtask toolchain` configures that
-//! build, `cargo xtask test` brings the library up to date).
+//! for this machine leaves it (`cargo xtask linux` configures that build,
+//! `cargo xtask test` brings the library up to date). With
+//! `VGL_GALLIUM_DEVICE=virgl` the decoder renders on virgl, over
+//! virglrenderer's test server (`virgl_test_server`, at `VTEST_SOCKET_NAME`),
+//! as the driver VM's renderer does under QEMU, rather than on softpipe.
 
 use std::boxed::Box;
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -25,7 +27,7 @@ use crate::virgl::{Lost, ResourceArgs, Transport};
 type Device = *mut c_void;
 type Ctx = *mut c_void;
 
-/// The library's functions (`services/renderer/src/renderer.h`).
+/// The library's functions (`guest/renderer/decoder/renderer.h`).
 struct Lib {
     device_create: unsafe extern "C" fn() -> Device,
     device_destroy: unsafe extern "C" fn(Device),
@@ -50,7 +52,7 @@ fn dll_path() -> String {
     std::env::var("VGL_GALLIUM_DLL").unwrap_or_else(|_| {
         String::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../target/toolchain/build/mesa-host/src/gallium/targets/veda/vgallium.so"
+            "/../../target/linux/build/mesa-host/src/gallium/targets/veda/vgallium.so"
         ))
     })
 }
@@ -67,7 +69,11 @@ fn lib() -> Option<&'static Lib> {
                 return None;
             }
             Some(Lib {
-                device_create: sym(m, "vr_device_create_softpipe"),
+                device_create: if std::env::var("VGL_GALLIUM_DEVICE").is_ok_and(|d| d == "virgl") {
+                    sym(m, "vr_device_create_vtest")
+                } else {
+                    sym(m, "vr_device_create_softpipe")
+                },
                 device_destroy: sym(m, "vr_device_destroy"),
                 device_caps: sym(m, "vr_device_caps"),
                 context_create: sym(m, "vr_context_create"),

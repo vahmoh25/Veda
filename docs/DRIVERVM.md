@@ -1,17 +1,18 @@
 # The driver VM
 
-Veda drives the devices it depends on itself — disks, keyboards and mice,
-the screen it starts on — and takes the rest from Linux: the GPU, audio,
-Wi-Fi, Bluetooth, cameras, and the thousands of devices Linux has drivers
-for. Linux runs in a virtual machine of Veda's own, *the driver VM*, which
-gets those devices; its drivers serve Veda's services through the same
-protocols Veda's own drivers speak. A driver that crashes, hangs or is
-compromised takes down a virtual machine that Veda restarts, never Veda.
+Veda drives only what it cannot do without — the disks it starts from —
+and takes everything else from Linux: GPUs and displays, audio, networks,
+Wi-Fi, Bluetooth, USB, input, cameras, and the thousands of devices Linux
+has drivers for ([Status](#status) says how far that has come). Linux runs
+in a virtual machine of Veda's own, *the driver VM*, which gets those
+devices; its drivers serve Veda's services through the same protocols
+Veda's own drivers speak. A driver that crashes, hangs or is compromised
+takes down a virtual machine that Veda restarts, never Veda.
 
 ```
  ┌──────────────────────────────────────────────────────────────────────────┐
- │ Veda: services (audio, compositor, netd, wlan…)   native drivers (disks, │
- │       speak audiodev, displaydev, netdev, gpu…     input, firmware fb)   │
+ │ Veda: services (audio, compositor, netd, wlan…)   native drivers: the    │
+ │       speak audiodev, displaydev, netdev, gpu…     disks                 │
  │                     │                                                    │
  │             drivervm (the monitor: memory, processors, hypercalls,       │
  │             the bridge, the registry the guest sees, devices it gets)    │
@@ -20,7 +21,7 @@ compromised takes down a virtual machine that Veda restarts, never Veda.
  ╞═════════════════════│════════════════════════════════════════════════════╡
  │ Linux (the guest)   │                                                    │
  │   programs: Veda's drivers for Linux (vrt over /dev/veda): ALSA →        │
- │   audiodev, KMS → displaydev, Mesa → gpu, netdev/nl80211 → netdev, …    │
+ │   audiodev, KMS → displaydev, Mesa → gpu, nl80211 → wlanphy, …          │
  │   kernel: Linux's drivers (i915/xe, amdgpu, snd-hda/SOF, iwlwifi, mt76,  │
  │   btusb…) + the Veda platform (console, bridge, PCI, processors)         │
  └──────────────────────────────────────────────────────────────────────────┘
@@ -143,8 +144,8 @@ Each one came from what the alternatives would cost.
 | Monitor | `services/drivervm` | the machine, its hypercalls, its PCI functions, the bridge, the narrowed registry |
 | Guest kernel | `ports/linux` | Linux with the Veda platform: `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`, `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c` |
 | Guest runtime | `lib/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
-| Guest programs | `guest/` | `init`; Veda's drivers for Linux (`alsa`, `net`, `wifi`, `kms`, `usbip`); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`; what they share (`sys`: system calls, network interfaces; `netlink`) |
-| Build | `xtask/src/linux.rs`, `ports/linux/build.sh` | `cargo xtask linux`; the initramfs, with the firmware of `ports/linux/firmware.txt`; the image's `linux/` |
+| Guest programs | `guest/` | `init`; Veda's drivers for Linux (`alsa`, `net`, `wifi`, `kms`, `usbip`) and its renderer (`renderer`: C and Rust); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`; what they share (`sys`: system calls, network interfaces; `netlink`) |
+| Build | `xtask/src/linux.rs`, `ports/linux/build.sh` | `cargo xtask linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `ports/linux/firmware.txt`; the image's `linux/` |
 
 ### The platform
 
@@ -305,8 +306,11 @@ make none itself.
 
 **Display** (`guest/kms`). A display Linux drives (KMS) is attached to
 Veda's compositor as the screen it flips (`displaydev`), as Veda's own
-display drivers attach theirs. Linux's driver sets the mode itself — the
-compositor's screen, which it asks for (`displaydev::screen`) — from the
+display drivers attach theirs: the one whose memory holds the firmware's
+framebuffer (a machine may have more GPUs with outputs), at the host's
+address of one of its BARs, which the monitor writes on Linux's command
+line (`veda.device=`) and the compositor tells (`displaydev::screen`).
+Linux's driver sets the mode itself — the compositor's screen — from the
 compositor's first frame on. The compositor draws into pictures of Veda's
 memory, which the driver hands it, and Linux shows them as they are:
 imported as dma-bufs (the bridge maps each into the guest; a display engine
@@ -316,6 +320,26 @@ import gets each picture copied into a buffer of its own before the flip.
 Flips are page flips at the vertical blank; their events' timestamps, on
 Linux's monotonic clock, become Veda's (both follow the TSC), so the
 compositor times its frames by the display's real blanks.
+
+**GPU** (`guest/renderer`). Veda's applications reach the GPU through
+`gpu`, the renderer's protocol, in which their OpenGL ES (`vgl`) sends
+virgl's commands; the renderer serves it from the guest, on Mesa's
+Gallium driver of the GPU over the GPU's Linux driver, on its render node:
+iris on i915 or xe, virgl on virtio-gpu (QEMU's, whose virglrenderer
+renders on the host's GPU), softpipe when asked (`drivervm.renderer=softpipe`,
+for tests). Each connection gets a context and a block of Veda's memory
+shared with it, which the renderer maps through the bridge; the decoder
+(`decoder/`, C) checks every command before Gallium's calls carry it out,
+and a context's fences signal through the shared memory and an event.
+The compositor's pictures reach a GPU's driver as dma-bufs of their VMOs
+(the bridge's, as for `kms`), which it renders into through the IOMMU, so
+the GPU composes the screen in place; softpipe renders into them mapped,
+and virgl not at all (its host renders into memory of its own), so that
+under QEMU the compositor composes on the processor. The program is
+Mesa's build: the decoder and the drivers around the Rust half, which
+serves the protocol (Rust and C++ linked statically, on musl, with the
+guest's toolchain). GPU memory is the guest's, which Linux's driver
+allocates.
 
 **USB** (`guest/usb`, binary `usbip`). The USB devices Veda lends
 (`drivervm.usb=VID:PID,...`) come from the controller's driver
@@ -385,10 +409,15 @@ where Veda stands:
    generic layer inside Linux gives the lowest common denominator
    (LeVasseur); forwarding a GPU's API reaches 12–86% of native, while
    forwarding its kernel interface (ChromeOS's DRM native contexts)
-   reaches 99% on Qualcomm's GPUs. Veda cuts at its own driver protocols, which are
-   asynchronous and share memory (decision 1). For GPUs the plan is the
-   same cut: Mesa's own drivers in Veda over a transport of Veda's (Mesa
-   keeps it apart, in `vdrm`), the kernel's interface in the guest.
+   reaches 99% on Qualcomm's GPUs. Veda cuts at its own driver protocols,
+   which are asynchronous and share memory (decision 1). For GPUs that is
+   `gpu`: Veda's OpenGL ES (`vgl`) already sends the renderer its
+   commands (virgl's, close to Gallium's), so the API crosses one boundary
+   either way, and the renderer runs in the guest, on Mesa's own driver of
+   the GPU over its kernel driver, with nothing between them. Forwarding
+   the kernel interface instead would have kept Mesa in Veda and needed
+   Veda's work for every family of GPUs (its kernel interface, its Mesa
+   driver ported); this way a GPU Linux and Mesa drive needs none.
 2. **What the guest writes is hostile.** Xen's backends were taken over
    through values they read twice from shared rings
    ([XSA-155](https://xenbits.xen.org/xsa/advisory-155.html)), and its
@@ -470,29 +499,27 @@ where Veda stands:
 | Devices: IOMMU (DMA and interrupt remapping), PCI given to the guest | done (`tests/ui/iommu.vts`, `tests/ui/drivervm-pci.vts`) |
 | Audio: ALSA → `audiodev` (playback and recording) | done (`tests/ui/drivervm-audio.vts`, `drivervm-mic.vts`) |
 | Network and Wi-Fi: Linux's cards → `netdev`, nl80211 → `wlanphy` (managed radios) | done (`tests/ui/drivervm-net.vts`, `drivervm-wifi.vts`, `drivervm-wifi-recovery.vts`) |
-| Display: KMS → `displaydev`, the compositor's pictures shown as they are | done (`tests/ui/drivervm-display.vts`) |
-| GPU: Mesa in Veda (the renderer), the GPU's kernel interface in the guest (native contexts) | designed (below); needs a GPU to test on |
+| Display: KMS → `displaydev`, the compositor's pictures shown as they are; Veda's own display drivers gone | done (`tests/ui/drivervm-display.vts`, `drivervm-display-restart.vts`, `drivervm-display-crash.vts`) |
+| GPU: the renderer in the guest, on Mesa's Gallium drivers over Linux's (virgl under QEMU; iris; softpipe); Veda's own GPU drivers gone | done (`tests/ui/drivervm-gpu.vts`, `drivervm-renderer.vts`, `drivervm-compose.vts`); Intel's integrated GPUs next (below) |
 | USB devices lent over the bridge: network adapters; Bluetooth adapters (Linux's stack, no service of Veda's yet) | done (`tests/ui/drivervm-usb.vts`); isochronous transfers later |
 | Restart and device reset | done (`tests/ui/drivervm-restart.vts`); hangs, suspend later |
 
-**GPUs.** The cut is the GPU's kernel interface (lesson 1): Mesa's
-hardware drivers run in Veda's renderer, as iris does over `gem` with
-Veda's own Intel driver, and the driver VM serves that interface over its
-kernel driver — for Intel GPUs Veda does not drive, `gem` over Linux's
-i915; for AMD's, an `amdgpu` interface over Linux's amdgpu, with Mesa's
-radeonsi in the renderer. What it needs is in place: buffers are VMOs of
-Veda's, which the guest imports into its driver as dma-bufs (as `kms`
-imports pictures; the GPU reaches them through the IOMMU), and a server in
-the guest waits on Linux's files and Veda's objects at once (watches),
-which turns its driver's fences (sync files) into the protocol's. The
-servers themselves come with a GPU to test them on: QEMU has none of those
-interfaces, and the PC this was built on cannot give its GPUs to QEMU.
+**GPUs.** Linux's driver and Mesa's drive a GPU whole in the guest (lesson
+1): the guest's Linux has i915 and virtio-gpu, and its Mesa iris, virgl
+and softpipe; AMD's and NVIDIA's (amdgpu and radeonsi, nouveau and NVK)
+come in with their firmware. Under QEMU the path is tested on the host's
+GPU, through virtio-gpu given to the guest; what QEMU cannot give is a
+PC's GPU. Intel's integrated GPUs come with ties to the firmware that the
+guest needs too (lesson 7): memory reserved for them (an RMRR, which keeps
+a device the host's for now), their OpRegion (the panel's description,
+VBT) and stolen memory, and their place at 00:02.0. GPU memory is the
+guest's: a GPU needs a driver VM with the memory for it.
 
 ## Testing
 
-`cargo xtask linux` builds the guest's kernel; every image built afterwards
-includes the guest. Under QEMU, Veda
-runs its guests on the processor's VMX, which KVM gives it nested
+`cargo xtask linux` builds the guest's kernel, its toolchain and Mesa;
+every image built afterwards includes the guest. Under QEMU, Veda runs its
+guests on the processor's VMX, which KVM gives it nested
 (`kvm_intel nested=1`); scripts that need it say `requires drivervm` and
 boot with `drivervm` on the kernel command line (`drivervm.run=PROGRAM`,
 `drivervm.poweroff`, `drivervm.memory=MIB`, `drivervm.cpus=N`,
@@ -504,7 +531,13 @@ function (`net wifi`, `drivervm.devices=1af4:1043`), which `airlink` makes
 Linux's. `usb net` gives QEMU's machine a USB network adapter, which
 `drivervm.usb=0525:a4a2` lends to the guest; `drivervm.crash=SECONDS` has
 Linux crash once, that long after it started, for the tests of the
-restart. The logic that touches no hardware
+restart. The display and the GPU are QEMU's VGA (`1234:1111`) and its
+virtio-gpu (`1af4:1050`, with `gpu on`; `VEDA_RENDERNODE` names the host's
+GPU it renders on, such as `/dev/dri/renderD129`), and
+`drivervm.renderer=softpipe` has the renderer render on softpipe without
+a GPU. The renderer's decoder is tested on the host too, through vgl's
+tests (on softpipe, and on Mesa's virgl over virglrenderer's test
+server). The logic that touches no hardware
 (`vhv`: the APIC, `cpuid`, the boot protocol, a function's configuration
 space; `viommu`: the DMAR table, the units' structures) is unit-tested on
 the host.

@@ -430,7 +430,9 @@ impl Screen {
     // ---- the display driver ------------------------------------------------
 
     /// A display driver on connection `key` hands its pictures over; the
-    /// firmware's framebuffer is at `framebuffer` (physical address).
+    /// firmware's framebuffer is at `framebuffer` (physical address). It
+    /// takes the place of one that went away (whose pictures were drawn
+    /// into in place, for the one it may have left on the screen).
     pub(crate) fn attach(
         &mut self,
         key: u64,
@@ -438,7 +440,7 @@ impl Screen {
         link: Link,
         framebuffer: u64,
     ) -> Result<(), DisplayDevError> {
-        if self.flips.is_some() {
+        if self.flips.as_ref().is_some_and(|f| !f.lost) {
             return Err(DisplayDevError::Busy);
         }
         let (width, height) = (self.back.width as u32, self.back.height as u32);

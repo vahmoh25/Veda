@@ -101,6 +101,9 @@ message! {
         pub height: u32,
         /// Red in the low byte of each pixel (otherwise blue).
         pub rgbx: bool,
+        /// Where the firmware's framebuffer is (physical address; 0: none):
+        /// the display to drive is the one whose memory it is in.
+        pub framebuffer: u64,
     }
 }
 

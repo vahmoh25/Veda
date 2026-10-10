@@ -39,12 +39,10 @@ members = [
     "lib/hda",
     "lib/acpi",
     "lib/cs35l41",
+    "lib/boardsim",
     "lib/gpio",
     "lib/spi",
-    "lib/boardsim",
     "lib/splash",
-    "lib/igpu",
-    "lib/gem",
     "lib/glsl",
     "lib/gl",
     "lib/hv",
@@ -79,7 +77,6 @@ members = [
     "drivers/virtio-input",
     "drivers/ps2",
     "drivers/virtio-blk",
-    "drivers/virtio-gpu",
     "drivers/virtio-net",
     "drivers/vwifi",
     "drivers/e1000",
@@ -87,9 +84,6 @@ members = [
     "drivers/xhci",
     "drivers/hda",
     "drivers/lpss-spi",
-    "drivers/intel-gpu",
-    "drivers/flipsim",
-    "drivers/gemsim",
     "tests/systest",
     "tests/nettest",
     "tests/testmic",
@@ -106,6 +100,7 @@ members = [
     "guest/airlink",
     "guest/kms",
     "guest/usb",
+    "guest/renderer",
 ]
 # Vendored third-party crates are path dependencies, not members (their own
 # tests and dev-dependencies stay out of this workspace). See third_party/.
@@ -158,8 +153,6 @@ vusb = { path = "lib/usb" }
 vhda = { path = "lib/hda" }
 vacpi = { path = "lib/acpi" }
 vcs35l41 = { path = "lib/cs35l41" }
-vigpu = { path = "lib/igpu" }
-vgem = { path = "lib/gem" }
 vgpio = { path = "lib/gpio" }
 vspi = { path = "lib/spi" }
 vsplash = { path = "lib/splash" }

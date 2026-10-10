@@ -155,12 +155,12 @@ the voice pipeline, consent, memory and how the agent is tested.
   *Starfall* (a space shooter), rendered by the `v3d` software 3D engine.
 * **3D graphics.** OpenGL ES 3.0 with GLSL ES 1.00 and 3.00 (`vgl`,
   `vglsl`), every call checked as the specification requires. It renders
-  on the host's GPU through QEMU's 3D virtio-gpu, on Intel's Iris Xe
-  through Mesa's iris driver (Tiger Lake to Raptor Lake), or with a
-  multi-threaded software renderer where there is neither. *Prism* shows
-  it off: a reflective knot, shadow-mapped crystals drawn with instancing,
-  and a fountain of sparks simulated with transform feedback, at 55
-  frames a second under QEMU.
+  on the GPU through Veda's renderer in the driver VM, on Mesa's driver of
+  the GPU over Linux's (Intel's iris; under QEMU, virgl on the host's
+  GPU), or with a multi-threaded software renderer where there is none.
+  *Prism* shows it off: a reflective knot, shadow-mapped crystals drawn
+  with instancing, and a fountain of sparks simulated with transform
+  feedback, at 75 frames a second under QEMU.
 * **C, and GCC inside Veda.** Write a C program in the Terminal or the
   Text Editor, compile it with GCC 16 and run it, in an emulator or on a
   PC alike. C programs are static ELF executables on the musl C library,
@@ -268,12 +268,10 @@ cargo xtask run --live
 ```
 
 On real hardware the desktop appears in the screen mode the firmware
-provides (1920x1080, or the largest below it). On Intel's integrated
-graphics of the last generations (Tiger Lake to Raptor Lake: Iris Xe and
-UHD Graphics) a display driver shows every frame whole, flipped at the
-screen's vertical blank, so animations run as smoothly as in a virtual
-machine; elsewhere the window system draws into the firmware's
-framebuffer. USB keyboards, mice and
+provides (1920x1080, or the largest below it), drawn into the firmware's
+framebuffer; with the driver VM, Linux's display driver shows every frame
+whole, flipped at the screen's vertical blank, so animations run as
+smoothly as in a virtual machine. USB keyboards, mice and
 hubs work on the USB 3 (xHCI) controllers that PCs have had since about
 2012, as do PS/2 keyboards and mice; other USB devices, the stick
 included, are left alone. Sound plays on HD Audio, the sound hardware of
@@ -475,12 +473,12 @@ The serial console (kernel log plus every program's output) is saved to
 | `lib/agent/` | the agent's logic: Deepgram protocol, functions, instructions, wake word, echo gate, memory, configuration |
 | `boot/` | `vboot`, the UEFI bootloader |
 | `kernel/` | `vkernel`, the microkernel |
-| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `posix` (the POSIX layer under the C library), `elf` (ELF executables), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `hda` (HD Audio codecs and their routes), `igpu` (Intel's display engine), `hv` and `iommu` (the hypervisor's and the IOMMU's logic), `text`, `math`, ... |
+| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `posix` (the POSIX layer under the C library), `elf` (ELF executables), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `hda` (HD Audio codecs and their routes), `hv` and `iommu` (the hypervisor's and the IOMMU's logic), `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor) |
-| `drivers/` | `ps2`, `virtio-input`, `xhci` (USB 3 controllers: hubs, keyboards, mice; devices lent to the driver VM), `virtio-blk`, `ahci` (SATA), `hda` (Intel HD Audio), `virtio-snd`, `ac97` (AC'97 sound), `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio), `virtio-gpu` (3D on the host's GPU), `intel-gpu` (Intel's integrated graphics: frames flipped at the vertical blank, and the GPU's engines for OpenGL ES), `flipsim` (a display that flips, for tests), `gemsim` (an Intel GPU that runs nothing, for tests) |
+| `drivers/` | `ps2`, `virtio-input`, `xhci` (USB 3 controllers: hubs, keyboards, mice; devices lent to the driver VM), `virtio-blk`, `ahci` (SATA), `hda` (Intel HD Audio), `virtio-snd`, `ac97` (AC'97 sound), `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
 | `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `racer` (*Velocity*) and `starfall` |
 | `ports/` | the C toolchain built from source: GCC, binutils, GMP, MPFR, MPC and musl, each an upstream release and Veda's patch; and Linux for the driver VM |
-| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`alsa`, `net`, `wifi`, `kms`, `usbip`), `airlink` (QEMU's virtual radio as Linux's), and its tests |
+| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`alsa`, `net`, `wifi`, `kms`, `usbip`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests |
 | `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), C and C++ test programs (`c/`), GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
 | `third_party/` | vendored crates with Veda patches (smoltcp) |

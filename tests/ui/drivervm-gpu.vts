@@ -1,0 +1,30 @@
+# The GPU through Linux's driver: QEMU's virtio-gpu (3D on this machine's
+# GPU) goes to the driver VM, with the display (QEMU's VGA), where Linux's
+# virtio_gpu and bochs drive them. Veda's renderer renders on the GPU
+# through Mesa's virgl, so an OpenGL ES 3.0 program (Prism) renders on it
+# and its frames keep coming, and Veda's display driver for Linux shows the
+# compositor's frames on the display, the one whose memory holds the
+# firmware's framebuffer.
+requires drivervm
+iommu
+gpu on
+boot-cmdline "drivervm drivervm.devices=1234:1111,1af4:1050"
+boot-cmdline "run=prism"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+fail-on "renderer: commands refused"
+fail-on "renderer: a resource refused"
+fail-on "cannot render on the GPU"
+fail-on "rendering stops"
+fail-on "link: "
+fail-on "shader:"
+wait-serial "goes to the driver VM" 60
+wait-serial "renderer: serving gpu on virgl" 90
+wait-serial "compositor: bochs-drm (Linux) attached" 90
+wait-serial "(OpenGL ES 3.0 Veda)" 90
+wait-serial " fps, render " 60
+wait 5
+shot target/veda/drivervm-gpu-1.png
+key s
+wait 4
+shot target/veda/drivervm-gpu-2-no-shadows.png

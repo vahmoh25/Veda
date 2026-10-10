@@ -278,11 +278,6 @@ fn build_system(o: &Options) -> Result<System> {
     for (name, exe) in toolchain::c_tests()? {
         initrd.add(&format!("tests/c/{name}"), exe);
     }
-    // The renderer: OpenGL ES on Mesa's Gallium drivers (once Mesa is
-    // configured, by `cargo xtask toolchain`).
-    if let Some(exe) = toolchain::renderer()? {
-        initrd.add("bin/renderer.exe", exe);
-    }
     // The C toolchain (`cargo xtask toolchain`): gcc, as, ld, the C library
     // and its headers, as /system has them.
     toolchain::relink_native()?;
@@ -583,7 +578,6 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vacpi", &[]),
     ("vcs35l41", &[]),
     ("vgpio", &[]),
-    ("vigpu", &[]),
     ("vboardsim", &[]),
     ("vsplash", &[]),
     ("vglsl", &[]),
@@ -606,8 +600,10 @@ fn test(o: &Options) -> Result {
         }
         util::run(&mut cmd)?;
     }
-    // And through Veda's renderer, on softpipe, where it has been built.
-    if let Some(dll) = toolchain::vgallium()? {
+    // And through Veda's renderer, where it has been built: on softpipe,
+    // and on virgl over virglrenderer's test server, as the driver VM's
+    // renderer renders under QEMU.
+    if let Some(dll) = linux::vgallium()? {
         // As OpenGL hosts keep depth, then as iris does (VR_DEPTH_LOW).
         for (depth, how) in [("0", ""), ("1", ", depth kept as on iris")] {
             util::status("Testing", format!("OpenGL ES through Veda's renderer (Mesa's softpipe{how})"));
@@ -617,6 +613,37 @@ fn test(o: &Options) -> Result {
                 .env("VGL_GALLIUM_DLL", &dll)
                 .env("VR_DEPTH_LOW", depth);
             util::run(&mut cmd)?;
+        }
+        if let Some(server) = util::find_on_path("virgl_test_server") {
+            util::status("Testing", "OpenGL ES through Veda's renderer (Mesa's virgl, on virglrenderer)");
+            let socket = util::out_dir().join("vtest.sock");
+            let _ = std::fs::remove_file(&socket);
+            std::fs::create_dir_all(util::out_dir()).map_err(|e| e.to_string())?;
+            let mut run = std::process::Command::new(server);
+            run.args(["--multi-clients", "--socket-path"]).arg(&socket);
+            // On the GPU the other tests of the host's GPU take.
+            if let Some(node) = std::env::var_os("VGL_TEST_RENDERNODE") {
+                run.arg("--rendernode").arg(node);
+            }
+            let mut server = run
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| format!("starting virgl_test_server: {e}"))?;
+            let started = std::time::Instant::now();
+            while !socket.exists() && started.elapsed() < std::time::Duration::from_secs(10) {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let mut cmd = util::cargo();
+            cmd.args(["test", "--quiet", "--package", "vgl"])
+                .env("VGL_TEST_BACKEND", "gallium")
+                .env("VGL_GALLIUM_DEVICE", "virgl")
+                .env("VGL_GALLIUM_DLL", &dll)
+                .env("VTEST_SOCKET_NAME", &socket);
+            let result = util::run(&mut cmd);
+            let _ = server.kill();
+            let _ = server.wait();
+            result?;
         }
     }
     if virgl {
