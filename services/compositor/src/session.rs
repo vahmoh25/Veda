@@ -308,6 +308,16 @@ impl display::Server for Session<'_> {
         Ok(())
     }
 
+    fn desktop_ready(&mut self) -> Result<(), DisplayError> {
+        if !self.is_shell() {
+            return Err(DisplayError::Denied);
+        }
+        if let Some(s) = &mut self.comp.startup {
+            s.clear();
+        }
+        Ok(())
+    }
+
     fn close_window(&mut self, id: u32) -> Result<(), DisplayError> {
         if !self.is_shell() {
             return Err(DisplayError::Denied);

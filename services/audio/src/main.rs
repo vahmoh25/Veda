@@ -4,7 +4,9 @@
 //!   applications open playback streams backed by shared rings, pause,
 //!   flush and adjust them, and set the master volume.
 //! * Registers `audiodev` ([`vproto::audio::audiodev`]): a sound driver
-//!   attaches its output device and receives the ring the mixer fills.
+//!   attaches its output device and receives the ring the mixer fills;
+//!   devmgr says whether one is coming, which the status tells (the
+//!   startup sound waits for it).
 //! * Mixes every playing stream into the device format (see [`mixer`]).
 //!   Without a device, audio is consumed silently in real time so that
 //!   applications behave the same on machines without sound hardware.
@@ -23,6 +25,7 @@ mod capture;
 mod mixer;
 
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use vabi::signals;
@@ -52,7 +55,10 @@ const MAX_CLIENTS: usize = 48;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Client,
-    Driver,
+    /// `audiodev`; devmgr's (or a driver it started) or not.
+    Driver {
+        devmgr: bool,
+    },
 }
 
 struct Service {
@@ -63,6 +69,8 @@ struct Service {
     attached: Option<u64>,
     /// The driver connection whose input device is attached.
     input_attached: Option<u64>,
+    /// The sound card devmgr said is coming, and on which connection.
+    coming: Option<(u64, String)>,
     next_key: u64,
 }
 
@@ -70,6 +78,8 @@ struct ClientSession<'a> {
     mixer: &'a mut Mixer,
     capture: &'a mut Capture,
     owner: u64,
+    /// No output device is attached, but one is coming.
+    coming: bool,
 }
 
 impl audio::Server for ClientSession<'_> {
@@ -108,6 +118,7 @@ impl audio::Server for ClientSession<'_> {
 
     fn status(&mut self) -> AudioStatus {
         let mut s = self.mixer.status();
+        s.coming = self.coming;
         s.input_device = self.capture.device_name().into();
         s.input_rate = self.capture.device_rate();
         s.input_channels = self.capture.device_channels();
@@ -154,6 +165,10 @@ struct DriverSession<'a> {
     capture: &'a mut Capture,
     attached: bool,
     input_attached: bool,
+    /// The connection, and whether it is devmgr's.
+    key: u64,
+    devmgr: bool,
+    coming: &'a mut Option<(u64, String)>,
 }
 
 impl audiodev::Server for DriverSession<'_> {
@@ -176,16 +191,35 @@ impl audiodev::Server for DriverSession<'_> {
         self.input_attached = true;
         Ok(link)
     }
+
+    fn expect(&mut self, device: Option<String>) -> Result<(), AudioError> {
+        if !self.devmgr {
+            return Err(AudioError::Denied);
+        }
+        match &device {
+            Some(device) => println!("a sound card is coming ({})", device),
+            None if self.coming.is_some() => println!("no sound card is coming any more"),
+            None => {}
+        }
+        *self.coming = device.map(|d| (self.key, d));
+        Ok(())
+    }
 }
 
 impl Service {
     fn accept(&mut self, listener: &Channel, kind: Kind) {
-        while let Some(ch) = vproto::accept(listener) {
+        while let Some((ch, who)) = vproto::accept_with_identity(listener) {
             let clients = self.conns.values().filter(|(k, _)| *k == Kind::Client).count();
             if kind == Kind::Client && clients >= MAX_CLIENTS {
                 println!("too many clients; refusing a connection");
                 continue;
             }
+            // devmgr starts the drivers with its own registry channel: they
+            // speak as devmgr.
+            let kind = match kind {
+                Kind::Driver { .. } => Kind::Driver { devmgr: who.service && who.name == "devmgr" },
+                Kind::Client => Kind::Client,
+            };
             self.conns.insert(self.next_key, (kind, ch));
             self.next_key += 1;
         }
@@ -199,15 +233,23 @@ impl Service {
             let Ok(msg) = ch.read() else { return };
             let reply = match kind {
                 Kind::Client => audio::dispatch(
-                    &mut ClientSession { mixer: &mut self.mixer, capture: &mut self.capture, owner: key },
+                    &mut ClientSession {
+                        mixer: &mut self.mixer,
+                        capture: &mut self.capture,
+                        owner: key,
+                        coming: self.coming.is_some() && self.attached.is_none(),
+                    },
                     msg,
                 ),
-                Kind::Driver => {
+                Kind::Driver { devmgr } => {
                     let mut s = DriverSession {
                         mixer: &mut self.mixer,
                         capture: &mut self.capture,
                         attached: false,
                         input_attached: false,
+                        key,
+                        devmgr,
+                        coming: &mut self.coming,
                     };
                     let r = audiodev::dispatch(&mut s, msg);
                     if s.attached {
@@ -238,7 +280,10 @@ impl Service {
                 self.capture.close_owner(key);
                 self.mixer.set_reference_wanted(self.capture.wants_reference());
             }
-            Kind::Driver => {
+            Kind::Driver { .. } => {
+                if self.coming.as_ref().is_some_and(|(k, _)| *k == key) {
+                    self.coming = None;
+                }
                 if self.attached == Some(key) {
                     self.attached = None;
                     self.mixer.detach();
@@ -273,7 +318,7 @@ impl Service {
             for (key, observed) in ready {
                 match key {
                     KEY_AUDIO_LISTENER => self.accept(&audio_listener, Kind::Client),
-                    KEY_DEV_LISTENER => self.accept(&dev_listener, Kind::Driver),
+                    KEY_DEV_LISTENER => self.accept(&dev_listener, Kind::Driver { devmgr: false }),
                     KEY_SPACE => {
                         if let Some(ev) = self.mixer.space_event() {
                             let _ = ev.clear();
@@ -325,6 +370,7 @@ fn main() -> i32 {
             conns: BTreeMap::new(),
             attached: None,
             input_attached: None,
+            coming: None,
             next_key: FIRST_CONN,
         };
         svc.run(audio_listener, dev_listener)

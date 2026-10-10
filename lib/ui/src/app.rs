@@ -230,7 +230,8 @@ impl Host {
                 WindowEvent::CloseRequested {}
                 | WindowEvent::WindowsChanged {}
                 | WindowEvent::StartMenuKey {}
-                | WindowEvent::AgentKey {} => unhandled.push(ev.clone()),
+                | WindowEvent::AgentKey {}
+                | WindowEvent::Appearing {} => unhandled.push(ev.clone()),
                 WindowEvent::FrameDone { .. } => {}
                 WindowEvent::Configure { .. } => {}
                 _ => self.input.apply(&ev),

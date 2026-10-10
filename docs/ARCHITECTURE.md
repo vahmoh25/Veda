@@ -52,21 +52,37 @@ that communicate over kernel channels.
    restarted compositor through the registry, which queues connections
    until a service registers again.
 
-**The startup sequence.** The loader's splash stays on the screen while the
-kernel and the services start. The window system takes it over without a
-seam, drawing the same picture through `vsplash` (`lib/splash`) pixel for
-pixel, and brings it to life (`services/compositor/src/startup.rs`): a soft
-light gathers around the ring and breathes, with a glint going round while
-the system works, and the name and the tagline ("The agentic-native
-operating system") rise into view. Once the shell's desktop and taskbar
-have each presented a frame, and the splash has been up for at least
-1.8 s, the ring swells and fades, the words lift away and the desktop
-dissolves in, in under a second (`compositor: desktop shown after N ms`
-says when, and at what frame rate). Meanwhile the shell plays the startup
-sound, `/system/sounds/startup.wav` (composed by `tools/musicgen`), as soon
-as a sound device is attached. `init` asks for the sequence (`splash`) and
-the sound (`startup`) only at system start: a window system or shell
-restarted after a crash shows the desktop at once, and quietly.
+**The startup sequence.** The loader's splash stays on the screen, as it
+is, while the kernel, the services and the drivers start: the window
+system draws nothing until the screen its frames go to from then on has
+the splash. Where the display is the driver VM's (devmgr gave the display
+controller whose memory holds the firmware's framebuffer to Linux, and
+tells the window system so: `displaydev::expect`), that is once Linux's
+driver shows its first picture, the splash as the loader painted it, set
+up under the still picture (on a PC's panel the driver keeps the link
+the firmware set, so the panel does not even blink); without a driver
+coming, at once, on the firmware's framebuffer. Then the window system
+brings it to life, without a seam (it draws the same picture through
+`vsplash`, `lib/splash`, pixel for pixel, and the GPU's shaders from the
+same arithmetic; `services/compositor/src/startup.rs`): a soft light
+gathers around the ring and breathes, with a glint going round while the
+system works, and the name and the tagline ("The agentic-native operating
+system") rise into view. Once the shell's desktop and taskbar have each
+presented a frame, the splash has been alive for at least 1.8 s, and the
+shell has the startup sound ready (`display::desktop_ready`: the sound
+card is attached, or none is coming, as devmgr tells the audio service;
+the window system waits for that 3 s at most), the ring swells and fades,
+the words lift away and the desktop dissolves in, in under a second, and
+the startup sound, `/system/sounds/startup.wav` (composed by
+`tools/musicgen`), starts with it: the shell holds it in a paused stream
+and starts it when told the desktop appears (`WindowEvent::Appearing`).
+So the desktop appears on its final screen, with its sound and its
+devices there. The splash's gradient is dark and steps only a few dozen
+times from top to bottom in each colour; it is dithered (an 8x8 ordered
+pattern) so that it shows no bands. `init` asks for the sequence
+(`splash`) and the sound (`startup`) only at system start: a window
+system or shell restarted after a crash shows the desktop at once, and
+quietly.
 
 The live system (`cargo xtask iso`) starts the same way from a USB stick or
 a disc. Its image is a hybrid ISO 9660 image: the boot files in the ISO 9660

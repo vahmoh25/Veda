@@ -102,6 +102,14 @@ impl driver_protocol::Server for DriverLink<'_> {
             framebuffer: self.framebuffer,
         })
     }
+
+    fn expect(&mut self, device: Option<String>) -> Result<(), DisplayDevError> {
+        if !self.trusted {
+            return Err(DisplayDevError::Denied);
+        }
+        self.screen.expect(self.key, device);
+        Ok(())
+    }
 }
 
 fn main() -> i32 {
@@ -186,8 +194,9 @@ fn main() -> i32 {
         gpu_setup: None,
         gpu_tried: None,
     };
-    // At system start (not after a restart), the boot splash comes to
-    // life and dissolves into the desktop once it has drawn itself.
+    // At system start (not after a restart), the boot splash stays as it
+    // is until the screen has it, then comes to life and dissolves into the
+    // desktop once it has drawn itself.
     if vrt::env::args().iter().any(|a| a == "splash") {
         let fonts = (title_font, regular_font);
         comp.startup = Some(Startup::new(width, height, &mut comp.decor.text, fonts, vrt::time::now_ns()));
@@ -223,9 +232,16 @@ fn main() -> i32 {
             comp.drop_gpu("another display driver attached");
             comp.gpu_setup = comp.screen.pictures().and_then(gpu::Pending::start);
         }
+        // The held splash comes to life once the screen has it.
+        if let Some(s) = &mut comp.startup {
+            s.release(now, comp.screen.settled());
+        }
         let mut deadline = vabi::DEADLINE_INFINITE;
+        if let Some(t) = comp.startup.as_ref().and_then(|s| s.deadline()) {
+            deadline = t;
+        }
         if comp.wants_frame() {
-            deadline = comp.screen.next_frame(comp.last_frame).max(now);
+            deadline = deadline.min(comp.screen.next_frame(comp.last_frame).max(now));
         }
         if let Some(t) = comp.screen.timeout() {
             deadline = deadline.min(t);

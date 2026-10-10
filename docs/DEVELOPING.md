@@ -116,10 +116,18 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   `expect-audio-gapless` fails if that sound drops out while it plays
   (digital silence over 20 ms between the first sound and the last),
   which is what a driver that falls behind sounds like.
-* The startup sequence ends with `compositor: desktop shown after N ms
-  (F frames, R a second; ...)`, counted from the window system's start: how
-  long the splash stayed (at least 1.8 s, then until the desktop has drawn
-  itself), how smoothly it ran, and where its frames went: into the
+* At the start, `devmgr: coming: the display's driver: ...; sound: ...`
+  says what the window system and the audio service wait for (the devices
+  given to the driver VM, or `none`), and `compositor: the splash comes to
+  life (held N ms)` when the display's driver showed its first picture
+  (or `... did not show its first picture in 20 s` if it never did). The
+  sequence then logs `compositor: the desktop appears (N ms after the
+  splash came to life)` (with `the shell did not say the desktop may
+  appear` first if the startup sound was not ready in time), and ends with
+  `compositor: desktop shown after N ms (H ms held; F frames, R a second;
+  ...)`, counted from the window system's start: how long the splash
+  stayed (held still, then alive at least 1.8 s and until the desktop has
+  drawn itself), how smoothly it ran, and where its frames went: into the
   firmware's framebuffer, or flipped by a display driver, with how many
   flips over how many vertical blanks (as many as there were blanks: not
   a frame missed), and whether the GPU or the processor drew them. Where
@@ -130,8 +138,9 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   splash in N ms; ...`, with the framebuffer's memory type: firmware
   leaves it uncached, and the loader paints it write-combining).
   `shell: startup sound: playing` says
-  the sound started, or why not. `tests/ui/startup.vts` checks both, and
-  that the sound reaches the recording. Its look is in
+  the sound started (as the desktop appeared), or why not.
+  `tests/ui/startup.vts` checks both, and that the sound reaches the
+  recording. Its look is in
   `services/compositor/src/startup.rs` (timings, colours, the tagline);
   the sound is `tools/musicgen/src/songs/startup.rs`. `startup-sound=off`
   on the kernel command line (`--cmdline`, or the `BOOT.CFG` of an image)

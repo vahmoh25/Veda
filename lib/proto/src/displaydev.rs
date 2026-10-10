@@ -43,6 +43,16 @@
 //! (all of them, not knowing which one the screen shows); if the
 //! compositor goes away, the driver shows the firmware's framebuffer again
 //! and attaches to the next compositor.
+//!
+//! # What is coming
+//!
+//! At the system's start the screen shows the boot loader's splash, and
+//! the compositor leaves it as it is until the screen its frames go to
+//! from then on has it: the driver's first picture, if a driver is coming
+//! for the display, which only `devmgr` knows ([`displaydev::expect`]: the
+//! display controller whose memory holds the firmware's framebuffer went to
+//! a driver, the driver VM's Linux's). So the splash never moves on a
+//! screen a driver is about to take over, nor goes dark meanwhile.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -147,6 +157,12 @@ protocol! {
         /// The screen the compositor draws on: what a driver that sets the
         /// display's mode itself sets before it attaches.
         2 => fn screen() -> Result<ScreenMode, DisplayDevError>;
+        /// (devmgr) Whether a driver is coming for the display the
+        /// firmware's framebuffer is on, and the device's name (for the
+        /// log): said once the devices are known, and again if that changes
+        /// (the driver VM failed for good). It holds while the connection
+        /// is open.
+        3 => fn expect(device: Option<String>) -> Result<(), DisplayDevError>;
     }
 }
 

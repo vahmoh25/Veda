@@ -717,7 +717,8 @@ impl Shell {
         let now = vrt::time::now_ns();
         let Shell { model, desktop_host, desktop, taskbar_host, taskbar, start, calendar, volume, wifi, notes, .. } =
             self;
-        desktop_host.pump(|ui| desktop.update(ui, model));
+        let desktop_events = desktop_host.pump(|ui| desktop.update(ui, model));
+        let appearing = desktop_events.iter().any(|e| matches!(e, WindowEvent::Appearing {}));
         let mut windows_changed = false;
         for ev in taskbar_host.pump(|ui| taskbar.update(ui, model)) {
             match ev {
@@ -775,6 +776,9 @@ impl Shell {
         notes.pump(model);
         if windows_changed {
             self.refresh_windows();
+        }
+        if appearing && let Some(s) = &mut self.startup {
+            s.appearing(self.audio.as_ref(), now);
         }
     }
 
@@ -1083,7 +1087,9 @@ impl Shell {
         }
     }
 
-    /// Plays the startup sound once a sound device is there.
+    /// Readies the startup sound once a sound card is there, saying then
+    /// that the desktop may appear, and closes its stream once it has
+    /// played (it plays as the desktop appears: `pump`).
     fn play_startup_sound(&mut self) {
         if self.startup.is_none() {
             return;
@@ -1092,10 +1098,20 @@ impl Shell {
             self.refresh_audio();
         }
         if let Some(s) = &mut self.startup {
-            s.poll(self.audio.as_ref(), self.vfs.as_ref(), vrt::time::now_ns());
-            if s.done() {
+            if s.poll(self.audio.as_ref(), self.vfs.as_ref(), vrt::time::now_ns()) {
+                self.desktop_may_appear();
+            }
+            if self.startup.as_ref().is_some_and(|s| s.done()) {
                 self.startup = None;
             }
+        }
+    }
+
+    /// Tells the window system that what comes with the desktop's first
+    /// appearance is ready: the startup sequence may dissolve into it.
+    fn desktop_may_appear(&self) {
+        if let Ok(Err(e)) = self.display.desktop_ready() {
+            println!("the window system does not take the desktop's appearance from the shell: {:?}", e);
         }
     }
 }
@@ -1279,6 +1295,10 @@ fn main() -> i32 {
     };
     shell.refresh_windows();
     shell.refresh_audio();
+    // Nothing comes with the desktop but the startup sound.
+    if shell.startup.is_none() {
+        shell.desktop_may_appear();
+    }
     println!("desktop ready ({}x{}, {} apps)", screen.w, screen.h, shell.model.apps.len());
     shell.run()
 }

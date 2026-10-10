@@ -70,6 +70,8 @@ enumeration! {
         TooManyStreams = 4,
         /// A device is already attached.
         Busy = 5,
+        /// Only devmgr may say what is coming.
+        Denied = 6,
     }
 }
 
@@ -81,6 +83,7 @@ impl core::fmt::Display for AudioError {
             AudioError::NoMemory => "out of memory",
             AudioError::TooManyStreams => "too many streams",
             AudioError::Busy => "device already attached",
+            AudioError::Denied => "only devmgr may say that",
         })
     }
 }
@@ -221,6 +224,9 @@ message! {
         /// is no sound hardware and audio is consumed silently in real
         /// time).
         pub device: String,
+        /// No output device is attached yet, but one is coming: `devmgr`
+        /// gave a sound card to its driver ([`audiodev::expect`]).
+        pub coming: bool,
         pub rate: u32,
         pub channels: u32,
         /// Frames per device period.
@@ -326,6 +332,10 @@ protocol! {
         /// Attaches an input (capture) device. `format.max_periods` is
         /// unused.
         2 => fn attach_input(format: DeviceFormat) -> Result<InputLink, AudioError>;
+        /// (devmgr) Whether a sound card's driver is starting, and the
+        /// card's name (for the log): its output device is coming. It holds
+        /// while the connection is open.
+        3 => fn expect(device: Option<String>) -> Result<(), AudioError>;
     }
 }
 

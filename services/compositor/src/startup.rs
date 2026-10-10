@@ -1,14 +1,25 @@
 //! The startup sequence.
 //!
 //! The boot loader's splash (the gradient and the ring, `vsplash`) is on
-//! the screen when the window system starts. It takes the picture over
-//! without a seam (its first frame is the loader's, pixel for pixel) and
-//! brings it to life while the system starts: a soft light gathers around
-//! the ring and breathes, a brighter glint going round it while the system
-//! works, and the name and the tagline rise into view below. Once the
-//! desktop has drawn itself, and the splash has been seen long enough not
-//! to be a flash, the ring swells and fades, the words lift away and the
-//! desktop dissolves in.
+//! the screen when the window system starts, and stays as it is while the
+//! system starts its drivers: nothing is drawn until the screen frames go
+//! to from then on has it (`Screen::settled`). Where a driver is coming for
+//! the display (the driver VM's Linux's), that is once the driver shows its
+//! first picture, the splash as the loader painted it; otherwise the
+//! firmware's framebuffer, at once. So the splash never moves on a screen a
+//! driver is about to take over (which would freeze it), and a display
+//! that has to be set up anew is set up under a still picture.
+//!
+//! Then the window system brings the splash to life, without a seam (its
+//! first frame is the loader's, pixel for pixel): a soft light gathers
+//! around the ring and breathes, a brighter glint going round it while the
+//! system works, and the name and the tagline rise into view below. Once
+//! the desktop has drawn itself, the splash has been seen long enough not
+//! to be a flash, and the shell has what comes with the desktop's first
+//! appearance (its startup sound, `display::desktop_ready`), the ring
+//! swells and fades, the words lift away and the desktop dissolves in, the
+//! shell told as it does (`WindowEvent::Appearing`): the sound starts with
+//! it.
 //!
 //! Until then windows are composed as usual into the back buffer, but the
 //! screen shows the splash layer, redrawn where it moves. During the
@@ -33,6 +44,10 @@ use crate::gpu::{Gpu, Slot, Splash};
 use crate::screen::Screen;
 
 const MS: u64 = 1_000_000;
+/// The loader's splash waits this long at most for the screen frames go
+/// to (a driver that is coming but does not show its first picture): then
+/// the sequence goes on, on whatever screen there is.
+const HOLD: u64 = 20_000 * MS;
 /// The light gathers around the ring; then the name, then the tagline,
 /// rise into view.
 const GLOW_IN: (u64, u64) = (0, 600 * MS);
@@ -45,6 +60,10 @@ const RISE: f32 = 12.0;
 const MIN_SPLASH: u64 = 1800 * MS;
 /// Without a desktop after this long, the screen is shown as it is.
 const MAX_SPLASH: u64 = 20_000 * MS;
+/// Once the desktop has drawn itself and the splash has been seen long
+/// enough, how long the shell may take still to have what comes with the
+/// desktop (its startup sound, waiting for the sound card's driver).
+const SHELL_WAIT: u64 = 3_000 * MS;
 /// The dissolve, and its parts: the words lift away, the light swells and
 /// fades, the ring swells and fades, the desktop comes in.
 const REVEAL: u64 = 950 * MS;
@@ -173,15 +192,48 @@ fn draw_line(t: &mut Text, (font, size): (usize, f32), line: &str, color: Color,
     bitmap
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
+    /// The loader's splash is on the screen as it is: nothing is drawn.
+    Hold,
+    /// Coming to life (since `started`).
     Splash,
     /// Dissolving into the desktop since then.
     Reveal(u64),
 }
 
+/// What the sequence waits for, as it is now.
+#[derive(Clone, Copy)]
+pub(crate) struct Progress {
+    /// The screen frames go to from now on has the splash
+    /// (`Screen::settled`).
+    pub(crate) settled: bool,
+    /// The desktop has drawn itself.
+    pub(crate) drawn: bool,
+}
+
+/// How the sequence moved on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Moved {
+    No,
+    /// It came to life.
+    Started,
+    /// The desktop began to appear.
+    Appearing,
+    /// It is over (logged): the composed screen is to be shown as it is
+    /// from now on.
+    Over,
+}
+
 pub(crate) struct Startup {
+    /// When the sequence was made, and when it came to life.
+    created: u64,
     started: u64,
     phase: Phase,
+    /// The shell has what comes with the desktop's appearance.
+    cleared: bool,
+    /// Since when only that has been waited for.
+    waiting_for_shell: Option<u64>,
     /// The splash as the screen shows it.
     layer: Bitmap,
     ring: Ring,
@@ -247,8 +299,11 @@ impl Startup {
             region = region.union(&Rect::new(r.x, r.y - LIFT as i32 - 1, r.w, r.h + (RISE + LIFT) as i32 + 2));
         }
         Startup {
+            created: now,
             started: now,
-            phase: Phase::Splash,
+            phase: Phase::Hold,
+            cleared: false,
+            waiting_for_shell: None,
             layer,
             ring,
             around,
@@ -268,33 +323,100 @@ impl Startup {
         &self.layer
     }
 
-    /// The sequence at `now` (`ready`: the desktop has drawn itself): how
-    /// the splash looks, and how far the desktop has come in (0 to 1).
-    /// `None` once it is over (logged, with `how` frames were made): the
-    /// composed screen is to be shown as it is from then on.
-    fn advance(&mut self, now: u64, ready: bool, how: &dyn Fn() -> String) -> Option<(Look, f32)> {
-        let t = now.saturating_sub(self.started);
-        if matches!(self.phase, Phase::Splash) && ((ready && t >= MIN_SPLASH) || t >= MAX_SPLASH) {
-            if !ready {
-                println!("no desktop after {} s; showing the screen as it is", t / 1_000_000_000);
-            }
-            self.phase = Phase::Reveal(now);
-        }
+    /// Moves the sequence on to `now` as `progress` lets it.
+    pub(crate) fn advance(&mut self, now: u64, progress: Progress, how: &dyn Fn() -> String) -> Moved {
         match self.phase {
-            Phase::Splash => Some((self.splash(t), 0.0)),
-            Phase::Reveal(start) => {
-                let r = now - start;
-                if r >= REVEAL {
-                    println!(
-                        "desktop shown after {} ms ({} frames, {} a second; {})",
-                        t / MS,
-                        self.frames,
-                        self.frames as u64 * 1_000_000_000 / t.max(1),
-                        how()
-                    );
-                    return None;
+            Phase::Hold => {
+                if !self.release(now, progress.settled) {
+                    return Moved::No;
                 }
-                Some((self.reveal(t, r), ease_in_out(progress(r, DESKTOP_IN))))
+                Moved::Started
+            }
+            Phase::Splash => {
+                let t = now.saturating_sub(self.started);
+                let ready = progress.drawn && t >= MIN_SPLASH;
+                if ready {
+                    self.waiting_for_shell.get_or_insert(now);
+                }
+                let waited = self.waiting_for_shell.is_some_and(|since| now >= since + SHELL_WAIT);
+                if !((ready && (self.cleared || waited)) || t >= MAX_SPLASH) {
+                    return Moved::No;
+                }
+                if !progress.drawn {
+                    println!("no desktop after {} s; showing the screen as it is", t / 1_000_000_000);
+                } else if !self.cleared {
+                    println!("the shell did not say the desktop may appear; it appears all the same");
+                }
+                println!("the desktop appears ({} ms after the splash came to life)", t / MS);
+                self.phase = Phase::Reveal(now);
+                Moved::Appearing
+            }
+            Phase::Reveal(start) => {
+                if now.saturating_sub(start) < REVEAL {
+                    return Moved::No;
+                }
+                let t = now.saturating_sub(self.started);
+                println!(
+                    "desktop shown after {} ms ({} ms held; {} frames, {} a second; {})",
+                    now.saturating_sub(self.created) / MS,
+                    self.started.saturating_sub(self.created) / MS,
+                    self.frames,
+                    self.frames as u64 * 1_000_000_000 / t.max(1),
+                    how()
+                );
+                Moved::Over
+            }
+        }
+    }
+
+    /// Brings the held splash to life once the screen frames go to from
+    /// now on has it (`settled`), or after [`HOLD`] all the same: whether
+    /// it did.
+    pub(crate) fn release(&mut self, now: u64, settled: bool) -> bool {
+        if self.phase != Phase::Hold {
+            return false;
+        }
+        if !settled && now < self.created + HOLD {
+            return false;
+        }
+        if settled {
+            println!("the splash comes to life (held {} ms)", now.saturating_sub(self.created) / MS);
+        } else {
+            println!(
+                "the display's driver did not show its first picture in {} s; the splash comes to life",
+                HOLD / 1_000_000_000
+            );
+        }
+        self.phase = Phase::Splash;
+        self.started = now;
+        true
+    }
+
+    /// Whether the loader's splash is held, as it is.
+    pub(crate) fn holding(&self) -> bool {
+        self.phase == Phase::Hold
+    }
+
+    /// When the hold ends without the screen, while it holds.
+    pub(crate) fn deadline(&self) -> Option<u64> {
+        self.holding().then_some(self.created + HOLD)
+    }
+
+    /// The shell has what comes with the desktop's appearance.
+    pub(crate) fn clear(&mut self) {
+        self.cleared = true;
+    }
+
+    /// How the splash looks at `now`, and how far the desktop has come in
+    /// (0 to 1).
+    fn look(&self, now: u64) -> (Look, f32) {
+        let t = now.saturating_sub(self.started);
+        match self.phase {
+            Phase::Hold => (self.splash(0), 0.0),
+            Phase::Splash => (self.splash(t), 0.0),
+            Phase::Reveal(start) => {
+                let r = now.saturating_sub(start);
+                (self.reveal(t, r), ease_in_out(progress(r, DESKTOP_IN)))
             }
         }
     }
@@ -310,11 +432,14 @@ impl Startup {
         self.region
     }
 
-    /// Draws the sequence's next frame on the screen; `ready`: the desktop
-    /// has drawn itself. False once the sequence is over: the composed
-    /// screen is to be shown as it is from then on.
-    pub(crate) fn frame(&mut self, screen: &mut Screen, now: u64, ready: bool, how: &dyn Fn() -> String) -> bool {
-        let Some((look, desktop)) = self.advance(now, ready, how) else { return false };
+    /// Draws the sequence's frame at `now` on the screen: nothing while the
+    /// loader's splash is held (a driver's first picture is the layer, as
+    /// it is, where it is stale).
+    pub(crate) fn frame(&mut self, screen: &mut Screen, now: u64) {
+        if self.holding() {
+            return;
+        }
+        let (look, desktop) = self.look(now);
         self.paint(&look);
         let alpha = (desktop * 256.0) as u32;
         if alpha == 0 {
@@ -324,21 +449,12 @@ impl Startup {
             screen.flush_mixed(&self.layer, alpha, all);
         }
         self.frames += 1;
-        true
     }
 
-    /// Draws the sequence's next frame with the GPU, within `clip`: the
-    /// splash, over the desktop the caller drew while it comes in. As
-    /// [`Startup::frame`] otherwise.
-    pub(crate) fn frame_gpu(
-        &mut self,
-        g: &mut Gpu,
-        clip: Rect,
-        now: u64,
-        ready: bool,
-        how: &dyn Fn() -> String,
-    ) -> bool {
-        let Some((look, desktop)) = self.advance(now, ready, how) else { return false };
+    /// Draws the sequence's frame at `now` with the GPU, within `clip`:
+    /// the splash, over the desktop the caller drew while it comes in.
+    pub(crate) fn frame_gpu(&mut self, g: &mut Gpu, clip: Rect, now: u64) {
+        let (look, desktop) = self.look(now);
         let ring = self.ring.scaled((look.scale * 256.0) as i32, 256);
         let above = 1.0 - desktop;
         let splash = Splash {
@@ -375,7 +491,6 @@ impl Startup {
             g.image(t, Rect::new(0, 0, t.w, t.h), at, opacity * above, false, None);
         }
         self.frames += 1;
-        true
     }
 
     /// While the system starts.

@@ -28,6 +28,11 @@
 //! that stopped answering is waited for still: once it carries out the
 //! flip it was given up at, frames are flipped again. Its first flip sets
 //! the display's mode, which may take seconds; the others take a frame.
+//!
+//! Whether a driver is coming at all, devmgr says (`displaydev::expect`):
+//! until the screen is settled (the driver's first picture is on it, or
+//! none is coming), the startup sequence leaves the loader's splash as it
+//! is (`startup`).
 
 use alloc::format;
 use alloc::string::String;
@@ -154,6 +159,17 @@ fn rate(period: u64) -> String {
     format!("{}.{:02}", millihertz / 1000, millihertz % 1000 / 10)
 }
 
+/// What devmgr said is coming for the display (`displaydev::expect`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Coming {
+    /// Nothing said yet.
+    Unknown,
+    /// A driver, for the device named; said on connection `key`.
+    Driver { key: u64, device: String },
+    /// No driver: the firmware's framebuffer is the screen.
+    Nothing,
+}
+
 /// The screen and the back buffer frames are composed into.
 pub(crate) struct Screen {
     pub(crate) back: Bitmap,
@@ -167,6 +183,7 @@ pub(crate) struct Screen {
     written: Damage,
     /// The time the last frame was composed for.
     clock: u64,
+    coming: Coming,
 }
 
 impl Screen {
@@ -179,6 +196,7 @@ impl Screen {
             flips: None,
             written: Damage::new(),
             clock: 0,
+            coming: Coming::Unknown,
         }
     }
 
@@ -439,6 +457,34 @@ impl Screen {
 
     // ---- the display driver ------------------------------------------------
 
+    /// devmgr says on connection `key` whether a driver is coming for the
+    /// display, for `device`.
+    pub(crate) fn expect(&mut self, key: u64, device: Option<String>) {
+        let coming = match device {
+            Some(device) => Coming::Driver { key, device },
+            None => Coming::Nothing,
+        };
+        if coming == self.coming {
+            return;
+        }
+        match &coming {
+            Coming::Driver { device, .. } => println!("the display's driver is coming ({})", device),
+            _ => println!("no driver is coming for the display"),
+        }
+        self.coming = coming;
+    }
+
+    /// Whether the screen frames go to from now on has them: a driver's,
+    /// once its first picture is on it (or it stopped answering: then
+    /// every picture has them); the firmware's framebuffer, if no driver
+    /// is coming.
+    pub(crate) fn settled(&self) -> bool {
+        match &self.flips {
+            Some(f) => f.lost || f.shown.is_some(),
+            None => self.coming == Coming::Nothing,
+        }
+    }
+
     /// A display driver on connection `key` hands its pictures over; the
     /// firmware's framebuffer is at `framebuffer` (physical address). It
     /// takes the place of one that went away (whose pictures were drawn
@@ -574,8 +620,13 @@ impl Screen {
         }
     }
 
-    /// Connection `key` closed: if it was the driver's, it went away.
+    /// Connection `key` closed: if it was the driver's, it went away; if it
+    /// was devmgr's, what it said no longer holds.
     pub(crate) fn detach(&mut self, key: u64) {
+        if matches!(&self.coming, Coming::Driver { key: k, .. } if *k == key) {
+            println!("devmgr went away: no driver is coming for the display");
+            self.coming = Coming::Nothing;
+        }
         if let Some(f) = &mut self.flips
             && f.key == key
             && (!f.lost || f.late.is_some())

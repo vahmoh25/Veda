@@ -26,6 +26,13 @@
 //! it off (Linux crashed, or the monitor did), devmgr resets its devices
 //! and starts it again, waiting longer each time it fails soon after
 //! starting, and giving up after a few such failures.
+//!
+//! At the system's start the window system and the audio service wait for
+//! what the driver VM brings: the display the firmware's framebuffer is on
+//! (the boot splash stays still until its driver shows it), and sound (the
+//! startup sound plays as the desktop appears). Only devmgr knows whether
+//! those are coming, so it tells them ([`Coming`]), and tells them again
+//! should the driver VM give up.
 
 #![no_std]
 #![no_main]
@@ -50,6 +57,8 @@ use vacpi::name::Path;
 use vacpi::resource::Resource as FirmwareResource;
 use vacpi::value::Value;
 use vipc::WaitSet;
+use vproto::audio::audiodev;
+use vproto::displaydev::displaydev;
 use vproto::pci::{
     AcpiDevice, AcpiResource, DeviceInfo, HostBridge, InterruptLine, IntxLine, MsiAddress, OpRegion, PciError,
     ReservedMemory, pcidev,
@@ -686,6 +695,83 @@ const DRIVERVM_MAX_FAILURES: u32 = 5;
 /// drivervm's exit code when Linux powered the machine off.
 const DRIVERVM_POWERED_OFF: i64 = 0;
 
+/// How long telling the window system or the audio service what is coming
+/// may take: they answer at once, but may not have started yet (what they
+/// are told reaches them when they do).
+const TELL_NS: u64 = 200_000_000;
+
+/// What the window system and the audio service wait for at the system's
+/// start: the driver of the display the firmware's framebuffer is on (the
+/// display controller whose memory holds it), and of a sound card. Both
+/// are the driver VM's (Veda has drivers for neither), each named by its
+/// device for the log.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct Coming {
+    screen: Option<String>,
+    sound: Option<String>,
+}
+
+impl Coming {
+    /// What `devices`, the driver VM's, bring, the firmware's framebuffer
+    /// at `framebuffer` (0: none).
+    fn of(devices: &[GuestDevice], framebuffer: u64) -> Coming {
+        let name = |d: &GuestDevice| {
+            alloc::format!(
+                "{:04x}:{:04x} at {:02x}:{:02x}.{}",
+                d.info.vendor,
+                d.info.device,
+                d.address.bus,
+                d.address.slot,
+                d.address.function
+            )
+        };
+        let holds_framebuffer = |d: &GuestDevice| {
+            framebuffer != 0
+                && d.info.bars.iter().any(|b| !b.io && framebuffer >= b.address && framebuffer - b.address < b.size)
+        };
+        // Audio devices and HD Audio controllers, with a DSP or not.
+        let sound = |d: &GuestDevice| d.info.class == 0x04 && matches!(d.info.subclass, 0x01 | 0x03);
+        Coming {
+            screen: devices.iter().find(|d| d.info.class == 0x03 && holds_framebuffer(d)).map(name),
+            sound: devices.iter().find(|d| sound(d)).map(name),
+        }
+    }
+}
+
+/// The window system's and the audio service's connections, on which
+/// devmgr said what is coming: it holds while they are open.
+struct Told {
+    display: displaydev::Client,
+    audio: audiodev::Client,
+    said: Option<Coming>,
+}
+
+impl Told {
+    fn new() -> Option<Told> {
+        let display = displaydev::Client::new(vproto::connect(displaydev::NAME).ok()?);
+        let audio = audiodev::Client::new(vproto::connect(audiodev::NAME).ok()?);
+        display.set_timeout(TELL_NS);
+        audio.set_timeout(TELL_NS);
+        Some(Told { display, audio, said: None })
+    }
+
+    /// Says what is coming, unless it was said already.
+    fn say(&mut self, coming: &Coming) {
+        if self.said.as_ref() == Some(coming) {
+            return;
+        }
+        let device = |d: &Option<String>| String::from(d.as_deref().unwrap_or("none"));
+        println!("coming: the display's driver: {}; sound: {}", device(&coming.screen), device(&coming.sound));
+        if let Err(e) = self.display.expect(coming.screen.clone()) {
+            println!("the window system has not heard what is coming yet ({}); it will", e);
+        }
+        if let Err(e) = self.audio.expect(coming.sound.clone()) {
+            println!("the audio service has not heard what is coming yet ({}); it will", e);
+        }
+        self.said = Some(coming.clone());
+    }
+}
+
 /// The driver VM: the devices it gets, and its process, which is started
 /// again when it ends without Linux having powered the machine off.
 struct DriverVm {
@@ -787,6 +873,15 @@ impl DriverVm {
         }
     }
 
+    /// What it brings, while it runs or is to run again (nothing, once it
+    /// is off for good).
+    fn coming(&self, framebuffer: u64) -> Coming {
+        if self.process.is_none() && self.next_start_ns.is_none() {
+            return Coming::default();
+        }
+        Coming::of(&self.devices, framebuffer)
+    }
+
     /// Whether its monitor runs: the kernel says a process has ended
     /// before it closes its handles, the channels of its devices among
     /// them.
@@ -874,6 +969,7 @@ fn main() -> i32 {
     let machine = boot_info();
     let acpi = machine.as_ref().and_then(|m| Acpi::load(&mmio, m, config.clone()));
     let platform = machine.map_or(0, |m| m.platform);
+    let framebuffer = machine.map_or(0, |m| m.framebuffer_phys);
     let Ok(gpio_mmio) = mmio.duplicate() else {
         println!("cannot keep the MMIO resource for GPIO");
         return 1;
@@ -996,6 +1092,13 @@ fn main() -> i32 {
         }
     }
 
+    // The window system and the audio service wait for what it brings.
+    let mut told = Told::new();
+    let coming = |vm: &Option<DriverVm>| vm.as_ref().map(|vm| vm.coming(framebuffer)).unwrap_or_default();
+    if let Some(t) = &mut told {
+        t.say(&coming(&vm));
+    }
+
     /// The driver VM's process, among the channels.
     const DRIVERVM: u64 = u64::MAX;
     loop {
@@ -1031,6 +1134,9 @@ fn main() -> i32 {
                 if let Some(vm) = vm.as_mut() {
                     vm.ended(&mgr.config);
                 }
+                if let Some(t) = &mut told {
+                    t.say(&coming(&vm));
+                }
                 continue;
             }
             if k & gpio::KEYS != 0 {
@@ -1054,12 +1160,15 @@ fn main() -> i32 {
             if let Some(b) = bound.remove(&k) {
                 if b.guest {
                     match vm.as_mut() {
-                        Some(vm) if vm.running() => {
-                            vm.turned_down(b.address);
+                        Some(v) if v.running() => {
+                            v.turned_down(b.address);
                             println!(
                                 "the driver VM did not take {:04x}:{:04x}; it stays the host's",
                                 b.info.vendor, b.info.device
                             );
+                            if let Some(t) = &mut told {
+                                t.say(&coming(&vm));
+                            }
                         }
                         _ => println!(
                             "the driver VM let go of {:04x}:{:04x}; it reaches nothing",

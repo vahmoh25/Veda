@@ -501,6 +501,7 @@ impl Mixer {
         };
         AudioStatus {
             device: self.device_name().into(),
+            coming: false,
             rate: self.rate,
             channels: self.channels as u32,
             period_frames: period,

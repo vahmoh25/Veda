@@ -197,6 +197,9 @@ union! {
         11 => StartMenuKey {},
         /// (Shell) the user pressed Super+Space: the agent.
         12 => AgentKey {},
+        /// (Shell, to its desktop) the startup sequence dissolves into the
+        /// desktop from the frame about to be shown: it appears.
+        13 => Appearing {},
     }
 }
 
@@ -237,5 +240,11 @@ protocol! {
         /// Shell only: maximises, restores or snaps any window (see
         /// [`arrangement`]), bringing it to the front.
         24 => fn arrange_window(id: u32, arrangement: u32) -> Result<(), DisplayError>;
+        /// (Shell) what comes with the desktop's first appearance is ready
+        /// (the startup sound, or none): the startup sequence dissolves
+        /// into the desktop once it has drawn itself and the splash has
+        /// been seen long enough (telling it [`WindowEvent::Appearing`]).
+        /// Without it, it waits a little, then dissolves all the same.
+        25 => fn desktop_ready() -> Result<(), DisplayError>;
     }
 }

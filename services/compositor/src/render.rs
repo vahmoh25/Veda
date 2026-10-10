@@ -9,11 +9,12 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use vgfx::{Canvas, Damage, Rect};
-use vproto::display::WindowEvent;
+use vproto::display::{WindowEvent, WindowKind};
 use vrt::println;
 
 use crate::decor;
 use crate::gpu::{Gpu, Slot};
+use crate::startup::{Moved, Progress};
 use crate::state::{Compositor, Drag};
 use crate::window::{AnimKind, Window};
 
@@ -44,7 +45,7 @@ impl Compositor {
     // ---- rendering ---------------------------------------------------------
 
     pub(crate) fn animating(&self) -> bool {
-        self.startup.is_some() || self.windows.values().any(|w| w.anim.is_some())
+        self.startup.as_ref().is_some_and(|s| !s.holding()) || self.windows.values().any(|w| w.anim.is_some())
     }
 
     /// Whether a frame is to be composed (when the screen is ready for one).
@@ -75,6 +76,7 @@ impl Compositor {
         for id in finished_close {
             self.destroy_window(id);
         }
+        self.advance_startup(now);
         self.take_gpu();
         if self.gpu.is_some() && !self.screen.flipping() {
             self.drop_gpu("the display no longer flips");
@@ -91,6 +93,28 @@ impl Compositor {
             self.send(id, WindowEvent::FrameDone { shown: b });
         }
         self.last_frame = real;
+    }
+
+    /// Moves the startup sequence on to `now`: the shell is told as the
+    /// desktop appears, and once the sequence is over the whole screen is
+    /// composed anew, the desktop alone.
+    fn advance_startup(&mut self, now: u64) {
+        let Some(mut s) = self.startup.take() else { return };
+        let progress = Progress { settled: self.screen.settled(), drawn: self.desktop_drawn() };
+        match s.advance(now, progress, &|| self.describe()) {
+            Moved::Appearing => {
+                if let Some(desktop) = self.windows.iter().find(|(_, w)| w.kind == WindowKind::Desktop) {
+                    self.send(*desktop.0, WindowEvent::Appearing {});
+                }
+            }
+            Moved::Over => {
+                let screen = self.screen_rect();
+                self.damage.add(screen);
+                return;
+            }
+            Moved::No | Moved::Started => {}
+        }
+        self.startup = Some(s);
     }
 
     /// Where frames go, and (where a driver flips them) who draws them, for
@@ -166,16 +190,8 @@ impl Compositor {
             w.upload.clear();
             w.upload_all = true;
         }
-        if self.startup.is_some() {
-            let ready = self.desktop_ready();
-            let how = self.describe();
-            if let Some(s) = &mut self.startup
-                && !s.frame(&mut self.screen, now, ready, &|| how.clone())
-            {
-                // Over: from now on the composed screen, as it is.
-                self.startup = None;
-                self.screen.flush(screen);
-            }
+        if let Some(s) = &mut self.startup {
+            s.frame(&mut self.screen, now);
         }
         self.screen.end_frame(real);
     }
@@ -209,8 +225,6 @@ impl Compositor {
         }
         let clip = region.rects().iter().fold(Rect::default(), |a, r| if a.is_empty() { *r } else { a.union(r) });
         let desktop = startup.is_none_or(|(revealing, _)| revealing);
-        let how = self.describe();
-        let ready = self.desktop_ready();
         let started = vrt::time::now_ns();
         let mut g = self.gpu.take().expect("composing with the GPU");
         if let Some(from) = shown
@@ -222,12 +236,8 @@ impl Compositor {
         if !clip.is_empty() && desktop {
             self.draw_scene(&mut g, clip, now);
         }
-        if let Some(s) = &mut self.startup
-            && !s.frame_gpu(&mut g, clip, now, ready, &|| how.clone())
-        {
-            // Over: this frame showed the desktop alone, all of it (the
-            // splash came in as it was revealed), as frames will from now on.
-            self.startup = None;
+        if let Some(s) = &mut self.startup {
+            s.frame_gpu(&mut g, clip, now);
         }
         self.screen.gpu_wrote(clip);
         let fence = g.end();

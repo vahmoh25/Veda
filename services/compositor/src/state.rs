@@ -168,7 +168,7 @@ impl Compositor {
 
     /// Whether the desktop has drawn itself: the shell's desktop window and
     /// its panels (the taskbar) have each presented a frame.
-    pub(crate) fn desktop_ready(&self) -> bool {
+    pub(crate) fn desktop_drawn(&self) -> bool {
         let Some(desktop) = self.windows.values().find(|w| w.kind == WindowKind::Desktop) else { return false };
         desktop.current.is_some()
             && self
