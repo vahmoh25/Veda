@@ -503,7 +503,12 @@ atomic modesetting: one of the size of the compositor's screen if the
 display has one; else the display's own (a laptop's panel has no other),
 the display engine scaling the compositor's pictures to it as their
 proportions allow, in its middle (the driver checks with Linux's that it
-can, before it attaches). The compositor draws into pictures of Veda's
+can, before it attaches). The link to the display carries 8 bits a
+colour, as many as the pictures have (the connector's `max bpc`): that is
+how a PC's firmware drives its panel, and Linux's driver keeps what the
+firmware set where it can, changing only the picture shown, so the panel
+does not go dark meanwhile (a deeper link would set its mode anew, a
+second or two of black). The compositor draws into pictures of Veda's
 memory, which the driver hands it, and Linux shows them as they are:
 imported as dma-bufs (the bridge maps each into the guest; a display engine
 reads it through the IOMMU without snooping the processor's caches, so the

@@ -331,6 +331,16 @@ pub struct Scanout {
     pub at: Place,
 }
 
+/// A property of a KMS object: its name, id and value.
+struct Property {
+    name: String,
+    id: u32,
+    value: u64,
+}
+
+/// As many bits a colour as Veda's pictures have, for a display's link.
+const PICTURE_BPC: u64 = 8;
+
 /// A page flip that completed: the request's own number, and the
 /// vertical blank it happened at (Linux's monotonic clock, ns).
 pub struct Flipped {
@@ -514,12 +524,19 @@ impl Card {
         let plane = self.primary_plane(output)?;
         let blob = self.mode_blob(mode)?;
         let mut commit = Commit::default();
-        let connector = self.property_ids(output.connector, OBJECT_CONNECTOR)?;
+        let connector = self.properties(output.connector, OBJECT_CONNECTOR)?;
         commit.set(output.connector, &connector, "CRTC_ID", output.crtc as u64)?;
-        let crtc = self.property_ids(output.crtc, OBJECT_CRTC)?;
+        // The link carries as many bits a colour as the pictures have: more
+        // would show nothing more, and a PC's firmware drives its panel so,
+        // which the driver then keeps, changing only what the display shows
+        // (no mode set of the panel, which goes dark meanwhile).
+        if connector.iter().any(|p| p.name == "max bpc" && p.value > PICTURE_BPC) {
+            commit.set(output.connector, &connector, "max bpc", PICTURE_BPC)?;
+        }
+        let crtc = self.properties(output.crtc, OBJECT_CRTC)?;
         commit.set(output.crtc, &crtc, "MODE_ID", blob as u64)?;
         commit.set(output.crtc, &crtc, "ACTIVE", 1)?;
-        let planes = self.property_ids(plane, OBJECT_PLANE)?;
+        let planes = self.properties(plane, OBJECT_PLANE)?;
         let Scanout { fb, size: (width, height), at } = scanout;
         for (name, value) in [
             ("FB_ID", fb as u64),
@@ -557,10 +574,8 @@ impl Card {
             if p.possible_crtcs & (1 << output.crtc_index) == 0 {
                 continue;
             }
-            let primary = self
-                .properties(id, OBJECT_PLANE)?
-                .iter()
-                .any(|(name, _, value)| name == "type" && *value == PLANE_TYPE_PRIMARY);
+            let primary =
+                self.properties(id, OBJECT_PLANE)?.iter().any(|p| p.name == "type" && p.value == PLANE_TYPE_PRIMARY);
             if primary {
                 return Ok(id);
             }
@@ -568,9 +583,8 @@ impl Card {
         Err(io::Error::other("its CRTC has no primary plane"))
     }
 
-    /// The properties of object `id` (of `kind`): their names, ids and
-    /// values.
-    fn properties(&self, id: u32, kind: u32) -> io::Result<Vec<(String, u32, u64)>> {
+    /// The properties of object `id` (of `kind`).
+    fn properties(&self, id: u32, kind: u32) -> io::Result<Vec<Property>> {
         let mut count = ObjProperties { obj_id: id, obj_type: kind, ..ObjProperties::default() };
         self.call(MODE_OBJ_GETPROPERTIES, &mut count)?;
         let mut ids = vec![0u32; count.count_props as usize];
@@ -590,14 +604,9 @@ impl Card {
             let mut p = GetProperty { prop_id: prop, ..GetProperty::default() };
             self.call(MODE_GETPROPERTY, &mut p)?;
             let end = p.name.iter().position(|&b| b == 0).unwrap_or(p.name.len());
-            out.push((String::from_utf8_lossy(&p.name[..end]).into_owned(), prop, value));
+            out.push(Property { name: String::from_utf8_lossy(&p.name[..end]).into_owned(), id: prop, value });
         }
         Ok(out)
-    }
-
-    /// The ids of object `id`'s properties, by name.
-    fn property_ids(&self, id: u32, kind: u32) -> io::Result<Vec<(String, u32)>> {
-        Ok(self.properties(id, kind)?.into_iter().map(|(name, prop, _)| (name, prop)).collect())
     }
 
     /// A property blob holding `mode` (for a CRTC's `MODE_ID`).
@@ -655,12 +664,13 @@ struct Commit {
 }
 
 impl Commit {
-    /// Sets `object`'s property `name` (one of `ids`, its own) to `value`.
-    fn set(&mut self, object: u32, ids: &[(String, u32)], name: &str, value: u64) -> io::Result<()> {
-        let prop = ids
+    /// Sets `object`'s property `name` (one of `properties`, its own) to
+    /// `value`.
+    fn set(&mut self, object: u32, properties: &[Property], name: &str, value: u64) -> io::Result<()> {
+        let prop = properties
             .iter()
-            .find(|(n, _)| n == name)
-            .map(|&(_, id)| id)
+            .find(|p| p.name == name)
+            .map(|p| p.id)
             .ok_or_else(|| io::Error::other(format!("no property {name} on object {object}")))?;
         match self.objects.iter_mut().find(|(o, _)| *o == object) {
             Some((_, props)) => props.push((prop, value)),
