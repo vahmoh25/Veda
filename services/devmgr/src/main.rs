@@ -36,6 +36,7 @@ mod placement;
 
 use alloc::collections::BTreeMap;
 use alloc::collections::btree_map::Entry;
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
@@ -211,7 +212,8 @@ struct GuestDevice {
 }
 
 struct Manager {
-    config: ConfigSpace,
+    /// Shared with the ACPI interpreter, which reads it for the firmware.
+    config: Rc<ConfigSpace>,
     io: Resource,
     irq: Resource,
     mmio: Resource,
@@ -782,11 +784,12 @@ fn main() -> i32 {
         println!("no system image to load drivers from");
         return 1;
     };
+    let config = Rc::new(ConfigSpace::new(ports));
     let machine = boot_info();
-    let acpi = machine.as_ref().and_then(|m| Acpi::load(&mmio, m));
+    let acpi = machine.as_ref().and_then(|m| Acpi::load(&mmio, m, config.clone()));
     let platform = machine.map_or(0, |m| m.platform);
     let mgr = Manager {
-        config: ConfigSpace::new(ports),
+        config,
         io,
         irq,
         mmio,

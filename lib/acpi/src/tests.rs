@@ -3,35 +3,57 @@ use alloc::vec;
 use alloc::vec::Vec;
 use std::collections::BTreeMap;
 
-use crate::Memory;
 use crate::aml::{Error, Namespace, Object};
 use crate::asm::*;
-use crate::device::{self, eisa_id};
+use crate::device::{self, ResourcesError, eisa_id};
 use crate::name::{NameString, Path};
 use crate::resource::{self, Gpio, Resource, Spi};
 use crate::value::Value;
+use crate::{Memory, PciFunction};
 
-/// Firmware memory: bytes at given addresses, nothing elsewhere.
+/// Firmware memory: bytes at given addresses, nothing elsewhere; and the
+/// configuration space of given PCI functions (zeros but what is put).
 #[derive(Default)]
-struct Ram(BTreeMap<u64, u8>);
+struct Ram {
+    memory: BTreeMap<u64, u8>,
+    pci: BTreeMap<PciFunction, [u8; 256]>,
+}
 
 impl Ram {
     fn put(&mut self, address: u64, bytes: &[u8]) {
         for (i, &b) in bytes.iter().enumerate() {
-            self.0.insert(address + i as u64, b);
+            self.memory.insert(address + i as u64, b);
         }
+    }
+
+    /// `bytes` at `offset` in the configuration space of function
+    /// `bus:device.function` of segment 0.
+    fn put_pci(&mut self, (bus, device, function): (u8, u8, u8), offset: usize, bytes: &[u8]) {
+        let space = self.pci.entry(PciFunction { segment: 0, bus, device, function }).or_insert([0; 256]);
+        space[offset..offset + bytes.len()].copy_from_slice(bytes);
     }
 }
 
 impl Memory for Ram {
     fn read(&self, address: u64, buf: &mut [u8]) -> bool {
         for (i, b) in buf.iter_mut().enumerate() {
-            match self.0.get(&(address + i as u64)) {
+            match self.memory.get(&(address + i as u64)) {
                 Some(&v) => *b = v,
                 None => return false,
             }
         }
         true
+    }
+
+    fn read_pci(&self, function: PciFunction, offset: u16, buf: &mut [u8]) -> bool {
+        let at = offset as usize;
+        match self.pci.get(&function).and_then(|space| space.get(at..at + buf.len())) {
+            Some(bytes) => {
+                buf.copy_from_slice(bytes);
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -469,6 +491,149 @@ fn pci_interrupts_in_apic_mode() {
 }
 
 #[test]
+fn a_root_bridges_windows_from_the_host_bridge_and_the_firmwares_variables() {
+    // As an Alder Lake laptop's firmware has them: the root bridge's _CRS
+    // sizes its bus range by the host bridge's PCIEXBAR, read through a
+    // PCI_Config region of the device at _ADR 0 below it (00:00.0), and
+    // takes its memory windows from the firmware's variables, emptying the
+    // 64-bit one when there is none.
+    let template = cat(&[&word_bus_number(0, 0xFF), &dword_memory(0, 0xDFFF_FFFF), &qword_memory(0x1_0000, 0x1_FFFF)]);
+    let create = |op: u8, offset: u64, field: &str| cat(&[&[op], &nm("BUF0"), &int(offset), &nm(field)]);
+    let (word, dword, qword) = (0x8B, 0x8A, 0x8F);
+    let shift_right = |a: &[u8], b: &[u8], target: &[u8]| binary(0x7A, a, b, target);
+    let minus = |a: &[u8], n: u64| binary(0x74, a, &int(n), &[0]);
+    let buses = shift_right(&[LOCAL0], &int(20), &[0]);
+    let crs = method(
+        "_CRS",
+        0,
+        &cat(&[
+            &shift_right(&int(0x1000_0000), &nm("^MC.PXSZ"), &[LOCAL0]),
+            &create(word, 10, "PBMX"),
+            &store(&minus(&buses, 2), &nm("PBMX")),
+            &create(word, 14, "PBLN"),
+            &store(&minus(&buses, 1), &nm("PBLN")),
+            &create(dword, 26, "M1MN"),
+            &create(dword, 30, "M1MX"),
+            &create(dword, 38, "M1LN"),
+            &store(&nm("M32L"), &nm("M1LN")),
+            &store(&nm("M32B"), &nm("M1MN")),
+            &store(&minus(&add(&nm("M1MN"), &nm("M1LN")), 1), &nm("M1MX")),
+            &if_(&lequal(&nm("M64L"), &int(0)), &cat(&[&create(qword, 80, "MSLN"), &store(&int(0), &nm("MSLN"))])),
+            &else_(&cat(&[
+                &create(qword, 56, "M2MN"),
+                &create(qword, 64, "M2MX"),
+                &create(qword, 80, "M2LN"),
+                &store(&nm("M64L"), &nm("M2LN")),
+                &store(&nm("M64B"), &nm("M2MN")),
+                &store(&minus(&add(&nm("M2MN"), &nm("M2LN")), 1), &nm("M2MX")),
+            ])),
+            &ret(&nm("BUF0")),
+        ]),
+    );
+    let dsdt = cat(&[
+        &region("SANV", 0, &int(0x5000), &int(0x18)),
+        &field("SANV", 0, &[("M32B", 32), ("M32L", 32), ("M64B", 64), ("M64L", 64)]),
+        &scope(
+            "\\_SB",
+            &device(
+                "PC00",
+                &cat(&[
+                    &name("_HID", &eisa("PNP0A08")),
+                    &name("_CID", &eisa("PNP0A03")),
+                    &name("_ADR", &int(0)),
+                    &device(
+                        "MC",
+                        &cat(&[
+                            &name("_ADR", &int(0)),
+                            &region("HBUS", 2, &int(0), &int(0x100)),
+                            &field("HBUS", 3, &[("", 0x60 * 8), ("PXEN", 1), ("PXSZ", 3)]),
+                        ]),
+                    ),
+                    &name("BUF0", &resource_template(&template)),
+                    &crs,
+                ]),
+            ),
+        ),
+    ]);
+    let mut ram = Ram::default();
+    // The windows Linux finds on the laptop, where the firmware keeps them.
+    ram.put(0x5000, &0x6880_0000u32.to_le_bytes());
+    ram.put(0x5004, &0x5780_0000u32.to_le_bytes());
+    ram.put(0x5008, &0x40_0000_0000u64.to_le_bytes());
+    ram.put(0x5010, &0x40_0000_0000u64.to_le_bytes());
+    // PCIEXBAR on, 128 MiB: 128 buses.
+    ram.put_pci((0, 0, 0), 0x60, &[0x03]);
+    let mut ns = Namespace::new();
+    ns.load(&dsdt, &ram).unwrap();
+    let root = path("\\_SB.PC00");
+    assert_eq!(
+        device::pci_root_windows(&ns, &root, &ram),
+        Ok(vec![0x6880_0000..0xC000_0000, 0x40_0000_0000..0x80_0000_0000])
+    );
+    let r = device::resources(&ns, &root, &ram).unwrap();
+    assert_eq!(r[0], Resource::Window { kind: 2, min: 0, max: 0x7E, translation: 0, length: 0x7F });
+    // No 64-bit window: the firmware empties it, which leaves it out.
+    ram.put(0x5010, &0u64.to_le_bytes());
+    let low = 0x6880_0000..0xC000_0000;
+    assert_eq!(device::pci_root_windows(&ns, &root, &ram), Ok(Vec::from([low])));
+    // Without the host bridge's registers, the windows are not known.
+    assert_eq!(
+        device::pci_root_windows(&ns, &root, &crate::NoMemory),
+        Err(ResourcesError::Aml(Error::PciConfig(PciFunction::default(), 0x60)))
+    );
+}
+
+#[test]
+fn configuration_space_below_bridges() {
+    // A PCI_Config region is the configuration space of the function at
+    // the _ADR of the device it is in, on its root bridge's bus (_BBN), or
+    // on the secondary bus of the bridge it is below; one in the root
+    // bridge's own scope is the root's. The tables' conditions read them
+    // as they load.
+    let id = |r: &str, f: &str| cat(&[&region(r, 2, &int(0), &int(0x100)), &field(r, 2, &[(f, 16)])]);
+    let dsdt = scope(
+        "\\_SB",
+        &device(
+            "PC10",
+            &cat(&[
+                &name("_HID", &eisa("PNP0A08")),
+                &name("_BBN", &int(0x10)),
+                &id("OWNC", "RVID"),
+                &device(
+                    "RP01",
+                    &cat(&[
+                        &name("_ADR", &int(0x001C_0000)),
+                        &id("RPCS", "BVID"),
+                        &device(
+                            "PXSX",
+                            &cat(&[&name("_ADR", &int(0)), &id("PCFG", "DVID"), &method("VEND", 0, &ret(&nm("DVID")))]),
+                        ),
+                    ]),
+                ),
+                &if_(&lequal(&nm("\\_SB.PC10.RP01.PXSX.DVID"), &int(0x3333)), &device("SEEN", &name("_ADR", &int(1)))),
+                &device("RP02", &cat(&[&name("_ADR", &int(0x001D_0000)), &id("RPCS", "BVID")])),
+            ]),
+        ),
+    );
+    let mut ram = Ram::default();
+    ram.put_pci((0x10, 0, 0), 0, &[0x11, 0x11]);
+    // The root port: a bridge to bus 0x13.
+    ram.put_pci((0x10, 0x1C, 0), 0, &[0x22, 0x22]);
+    ram.put_pci((0x10, 0x1C, 0), 0x0E, &[0x01]);
+    ram.put_pci((0x10, 0x1C, 0), 0x19, &[0x13]);
+    ram.put_pci((0x13, 0, 0), 0, &[0x33, 0x33]);
+    let mut ns = Namespace::new();
+    ns.load(&dsdt, &ram).unwrap();
+    assert_eq!(eval(&ns, "\\_SB.PC10.RVID", &ram), Ok(Value::Integer(0x1111)));
+    assert_eq!(eval(&ns, "\\_SB.PC10.RP01.BVID", &ram), Ok(Value::Integer(0x2222)));
+    assert_eq!(eval(&ns, "\\_SB.PC10.RP01.PXSX.VEND", &ram), Ok(Value::Integer(0x3333)));
+    assert!(ns.get(&path("\\_SB.PC10.SEEN")).is_some());
+    // A function the machine does not have.
+    let rp02 = PciFunction { segment: 0, bus: 0x10, device: 0x1D, function: 0 };
+    assert_eq!(eval(&ns, "\\_SB.PC10.RP02.BVID", &ram), Err(Error::PciConfig(rp02, 0)));
+}
+
+#[test]
 fn integers_are_32_bits_under_a_revision_1_dsdt() {
     let aml = method("ONES", 0, &ret(&[0xFF]));
     let mut data = vec![0u8; 36];
@@ -534,77 +699,4 @@ fn tables_from_the_rsdp() {
     assert_eq!(names, [*b"FACP", *b"SSDT", *b"DSDT"]);
     assert!(tables.iter().all(|t| t.checksum_ok()));
     assert_eq!(crate::tables::load(&ram, 0x200).unwrap_err(), crate::tables::TableError::NoRsdp);
-}
-
-/// Loads a machine's own tables, dumped as `<signature>[-n].dat` files in
-/// the directory `VEDA_ACPI_DUMP` names, and evaluates every device. Run
-/// with `cargo test -p vacpi -- --ignored`.
-#[test]
-#[ignore]
-fn a_machines_tables() {
-    let Ok(dir) = std::env::var("VEDA_ACPI_DUMP") else { return };
-    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).collect();
-    files.sort();
-    let mut ns = Namespace::new();
-    // Firmware variables read as zeros.
-    struct Zeros;
-    impl Memory for Zeros {
-        fn read(&self, _address: u64, buf: &mut [u8]) -> bool {
-            buf.fill(0);
-            true
-        }
-    }
-    let load = |ns: &mut Namespace, f: &std::path::Path| {
-        let data = std::fs::read(f).unwrap();
-        let table = crate::tables::Table { address: 0, data };
-        let r = ns.load_table(&table, &Zeros);
-        std::println!("{}: {:?}", f.display(), r.err());
-    };
-    for f in files.iter().filter(|f| f.file_name().unwrap().to_string_lossy().starts_with("DSDT")) {
-        load(&mut ns, f);
-    }
-    for f in files.iter().filter(|f| {
-        f.file_name().unwrap().to_string_lossy().starts_with("SSD")
-            && !f.file_name().unwrap().to_string_lossy().starts_with("SSDT")
-    }) {
-        load(&mut ns, f);
-    }
-    let devices: Vec<Path> = ns.devices().cloned().collect();
-    let (mut ok, mut failed) = (0, 0);
-    for d in &devices {
-        let id = device::identify(&ns, d, &Zeros);
-        match device::resources(&ns, d, &Zeros) {
-            Ok(_) | Err(device::ResourcesError::None) => ok += 1,
-            Err(e) => {
-                failed += 1;
-                std::println!("{} ({:?}): {}", d, id.hid, e);
-            }
-        }
-    }
-    for (s, e) in &ns.skip_reasons {
-        std::println!("skipped in {}: {}", s, e);
-    }
-    std::println!(
-        "{} devices: {} fine, {} with _CRS failing; {} conditional blocks skipped",
-        devices.len(),
-        ok,
-        failed,
-        ns.skipped
-    );
-    // As devmgr finds the SPI controller at 00:1e.3: the root bridge by
-    // its ids, then the child whose _ADR is the function's.
-    let roots: Vec<Path> = devices
-        .iter()
-        .filter(|d| device::ids(&ns, d, &Zeros).iter().any(|i| i == "PNP0A08" || i == "PNP0A03"))
-        .cloned()
-        .collect();
-    let bus = ns.evaluate_child(&roots[0], "_BBN", &Zeros).and_then(Result::ok);
-    let companion = device::children(&ns, &roots[0]).into_iter().find(|d| {
-        ns.evaluate_child(d, "_ADR", &Zeros).and_then(Result::ok).and_then(|v| v.as_integer()) == Some(0x001E_0003)
-    });
-    std::println!("roots {:?} (bus {:?}); 00:1e.3 is {:?}", roots, bus, companion);
-    for p in ["\\_SB.PC00.SPI1", "\\_SB.PC00.SPI1.SPK1", "\\_SB.GPI0", "\\_SB.PC00.HDAS"] {
-        let p = path(p);
-        std::println!("{}: {:?} {:?}", p, device::identify(&ns, &p, &Zeros), device::resources(&ns, &p, &Zeros));
-    }
 }

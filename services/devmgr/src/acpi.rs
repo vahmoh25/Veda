@@ -3,30 +3,37 @@
 //! they use, for their drivers. A driver only learns about the devices
 //! below its own PCI function.
 
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use core::ops::Range;
 
 use vabi::{KernelBootInfo, cache_policy, map_flags};
-use vacpi::Memory;
 use vacpi::aml::Namespace;
 use vacpi::device::{self, Described, Identity, ResourcesError};
 use vacpi::name::Path;
 use vacpi::resource::Resource as AcpiResource;
 use vacpi::tables;
+use vacpi::{Memory, PciFunction};
 use vrt::object::{Resource, Vmo};
 use vrt::println;
+
+use crate::pci::{Address, ConfigSpace};
 
 const PAGE: u64 = 4096;
 
 /// Firmware memory, mapped as it is first read: the ACPI tables and the
 /// firmware's variables. The tables, and what the kernel reported as the
 /// firmware's ACPI memory, are RAM and are mapped cached; anything else
-/// AML reads (device registers) uncached.
+/// AML reads (device registers) uncached. And PCI configuration space, as
+/// devmgr reads it (the host bridge's registers, which a root bridge's
+/// `_CRS` may size its windows by).
 pub struct FirmwareMemory {
     mmio: Resource,
     ram: Vec<(u64, u64)>,
     windows: RefCell<Vec<Window>>,
+    config: Rc<ConfigSpace>,
 }
 
 struct Window {
@@ -38,10 +45,10 @@ struct Window {
 }
 
 impl FirmwareMemory {
-    fn new(mmio: Resource, boot: &KernelBootInfo) -> FirmwareMemory {
+    fn new(mmio: Resource, boot: &KernelBootInfo, config: Rc<ConfigSpace>) -> FirmwareMemory {
         let n = (boot.acpi_memory_count as usize).min(boot.acpi_memory.len());
         let ram = boot.acpi_memory[..n].iter().map(|r| (r[0], r[1])).collect();
-        FirmwareMemory { mmio, ram, windows: RefCell::new(Vec::new()) }
+        FirmwareMemory { mmio, ram, windows: RefCell::new(Vec::new()), config }
     }
 
     fn is_ram(&self, start: u64, end: u64) -> bool {
@@ -104,6 +111,18 @@ impl Memory for FirmwareMemory {
         let cached = address.checked_add(buf.len() as u64).is_some_and(|end| self.is_ram(address, end));
         self.read_as(address, buf, cached)
     }
+
+    /// Through the configuration ports: segment 0, the first 256 bytes.
+    fn read_pci(&self, f: PciFunction, offset: u16, buf: &mut [u8]) -> bool {
+        if f.segment != 0 || f.device > 31 || f.function > 7 || offset as usize + buf.len() > 256 {
+            return false;
+        }
+        let a = Address { bus: f.bus, slot: f.device, function: f.function };
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = self.config.read(a, offset + i as u16, 1) as u8;
+        }
+        true
+    }
 }
 
 /// The tables themselves, which are always in RAM.
@@ -124,12 +143,12 @@ pub struct Acpi {
 
 impl Acpi {
     /// Reads and loads the firmware's tables. Logs what it found.
-    pub fn load(mmio: &Resource, boot: &KernelBootInfo) -> Option<Acpi> {
+    pub fn load(mmio: &Resource, boot: &KernelBootInfo, config: Rc<ConfigSpace>) -> Option<Acpi> {
         if boot.acpi_rsdp == 0 {
             println!("acpi: the firmware has no ACPI tables");
             return None;
         }
-        let memory = FirmwareMemory::new(mmio.duplicate().ok()?, boot);
+        let memory = FirmwareMemory::new(mmio.duplicate().ok()?, boot, config);
         let tables = match tables::load(&Tables(&memory), boot.acpi_rsdp) {
             Ok(t) => t,
             Err(e) => {
@@ -175,42 +194,29 @@ impl Acpi {
         device::pci_companion(&self.ns, &self.roots, (bus, slot, function), &self.memory)
     }
 
-    /// The memory the firmware reserves for the motherboard (the resources
-    /// of its `PNP0C01` and `PNP0C02` devices), which no BAR may be placed
-    /// over.
-    pub fn motherboard_memory(&self) -> Vec<core::ops::Range<u64>> {
+    /// The memory the firmware reserves for the motherboard (that its
+    /// `PNP0C01` and `PNP0C02` devices use), which no BAR may be placed
+    /// over. Logs what of it is not known.
+    pub fn motherboard_memory(&self) -> Vec<Range<u64>> {
         let mut reserved = Vec::new();
-        for d in self.ns.devices() {
-            let ids = device::ids(&self.ns, d, &self.memory);
-            if !ids.iter().any(|i| i == "PNP0C01" || i == "PNP0C02") {
-                continue;
-            }
-            for r in self.resources(d).unwrap_or_default() {
-                match r {
-                    AcpiResource::Memory { base, length, .. } if length > 0 => reserved.push(base..base + length),
-                    AcpiResource::Window { kind: 0, min, max, .. } if max > min => reserved.push(min..max + 1),
-                    _ => {}
-                }
+        for r in device::motherboard_memory(&self.ns, &self.memory) {
+            match r.memory {
+                Ok(m) => reserved.extend(m),
+                Err(e) => println!("acpi: {}: {}: what it reserves for the motherboard is not known", r.device, e),
             }
         }
         reserved
     }
 
-    /// The memory windows of the PCI root bridge of bus `bus` (end
-    /// exclusive), above the legacy area below 1 MiB; none if no root
-    /// bridge has that bus.
-    pub fn pci_root_windows(&self, bus: u8) -> Vec<core::ops::Range<u64>> {
+    /// The memory windows of the PCI root bridge of bus `bus` (see
+    /// [`device::pci_root_windows`]); none if no root bridge has that bus,
+    /// or its `_CRS` fails (which it logs).
+    pub fn pci_root_windows(&self, bus: u8) -> Vec<Range<u64>> {
         let Some((_, root)) = self.roots.iter().find(|(b, _)| *b == bus) else { return Vec::new() };
-        self.resources(root)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|r| match r {
-                AcpiResource::Window { kind: 0, min, max, translation: 0, .. } if min >= 0x10_0000 && max > min => {
-                    Some(min..max + 1)
-                }
-                _ => None,
-            })
-            .collect()
+        device::pci_root_windows(&self.ns, root, &self.memory).unwrap_or_else(|e| {
+            println!("acpi: {}: {}: its windows are not known", root, e);
+            Vec::new()
+        })
     }
 
     /// Where INTx `pin` (1 to 4) of the functions in `slot` of root bus

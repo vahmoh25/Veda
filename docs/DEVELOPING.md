@@ -50,6 +50,7 @@ cargo xtask run --no-iommu     # QEMU without its IOMMU: no device goes to the d
 cargo xtask run --cmdline "drivervm=off"    # ... or no driver VM at all
 cargo xtask script tests/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
 cargo xtask script tests/ui/drivervm-unplaced.vts   # ... and its xHCI, their BARs left unplaced for devmgr to place
+cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo cp -r /sys/firmware/acpi/tables target/acpi)
 cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 stack, against airsim's networks
 ```
 
@@ -172,10 +173,18 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   them, the first power transitions (`speakers on`, `speakers off`) and
   any error an amplifier latched; `hda: speaker amplifiers found` shows
   the sound driver reached them (`hda: no speaker amplifiers' driver is
-  running` that it did not). `cargo test -p vacpi -- --ignored` loads a
-  machine's tables dumped as `<signature>[-n].dat` files into the
-  directory `VEDA_ACPI_DUMP` names, and evaluates every device's
-  resources. Before a real machine, `cargo test -p vboardsim` runs the
+  running` that it did not). Before booting a machine, `cargo xtask acpi
+  DIR` shows what devmgr makes of its ACPI tables, on the host, with the
+  interpreter devmgr runs: copy them first (`sudo cp -r
+  /sys/firmware/acpi/tables DIR`, under Linux). It lists the PCI root
+  bridges' windows (where devmgr places BARs the firmware left unplaced),
+  what the motherboard reserves, and for each function on a root bus its
+  ACPI device, its INTx route and the devices below it, with anything
+  that could not be evaluated. The firmware's variables, which Linux does
+  not show, read as zeros (so devices they enable may be missing), but
+  those given with `--set NAME=VALUE`; PCI configuration space comes from
+  `DIR/pci/BB:DD.F` files (`/sys/bus/pci/devices/*/config`; all of it as
+  root), else from this machine. `cargo test -p vboardsim` runs the
   amplifier path (the firmware's description, devmgr's GPIO pads, the SPI
   controller, both amplifiers and their DSPs, with the firmware files in
   `assets/firmware`) against a simulated Zenbook Pro 16X.

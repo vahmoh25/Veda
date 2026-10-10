@@ -205,9 +205,12 @@ has ended and left its stack, which is how thread libraries join threads.
   evaluates its objects with a small AML interpreter: integer, string,
   buffer and package operations, buffer fields, control flow, method
   calls, and the fields of firmware memory regions (the firmware's
-  settings, which decide what exists and where). It changes nothing:
-  what a method stores lasts only for that evaluation, and it reads no I/O
-  ports, PCI configuration space or embedded controller. Definitions
+  settings, which decide what exists and where) and of PCI configuration
+  space (the registers of the function at the `_ADR` of the device a
+  region is in, on its root bridge's bus or below its bridges, as ACPICA
+  finds it: an Intel PC's root bridge sizes its windows by its host
+  bridge's). It changes nothing: what a method stores lasts only for that
+  evaluation, and it reads no I/O ports or embedded controller. Definitions
   inside an `If` outside any method exist only when their condition holds
   (that is how a board leaves out what its settings turn off); a region
   whose address depends on a later table is placed when first read, and a
@@ -215,9 +218,9 @@ has ended and left its stack, which is how thread libraries join threads.
   naming interrupt link devices) is evaluated again once they are, as
   ACPICA does. Every evaluation is bounded. The tables and the firmware's
   ACPI memory are mapped cached, anything else AML reads uncached. On the
-  laptop this was written for, all of a 480 KiB DSDT and fifteen SSDTs
-  load (`cargo test -p vacpi -- --ignored` loads a machine's dumped
-  tables).
+  laptop this was written for, all of a 480 KiB DSDT and sixteen SSDTs
+  load, every conditional definition with them; `cargo xtask acpi` shows
+  what devmgr makes of a machine's tables, on the host.
 * **The IOMMU.** Where the firmware describes one (VT-d), the kernel
   remaps every interrupt: a device's MSI raises an entry that names the
   device, so no other can raise it, and the compatibility format is

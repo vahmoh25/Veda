@@ -12,13 +12,13 @@
 //!
 //! **Evaluating** reads a name or runs a method with a small interpreter:
 //! integer, string, buffer and package operations, buffer fields, control
-//! flow, method calls, and the fields of `SystemMemory` regions, read
-//! through [`Memory`]. It changes nothing outside itself: stores to the
-//! namespace's names and fields are kept for the rest of that evaluation
-//! only, and what would act on the machine (`Notify`, `Sleep`, `Acquire`)
-//! does nothing. Regions in other address spaces (I/O ports, PCI
-//! configuration space, the embedded controller) are not read. Every
-//! evaluation is bounded in steps and in call depth.
+//! flow, method calls, and the fields of `SystemMemory` and `PCI_Config`
+//! regions, read through [`Memory`]. It changes nothing outside itself:
+//! stores to the namespace's names and fields are kept for the rest of that
+//! evaluation only, and what would act on the machine (`Notify`, `Sleep`,
+//! `Acquire`) does nothing. Regions in other address spaces (I/O ports, the
+//! embedded controller) are not read. Every evaluation is bounded in steps
+//! and in call depth.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -29,10 +29,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::Memory;
 use crate::name::{NameSeg, NameString, Path};
 use crate::tables::Table;
 use crate::value::{Place, Value};
+use crate::{Memory, PciFunction};
 
 /// Steps one evaluation may take (a loop that never ends stops here).
 const MAX_STEPS: u32 = 1_000_000;
@@ -63,6 +63,9 @@ pub enum Error {
     Type(&'static str),
     /// Firmware memory that could not be read.
     Memory(u64),
+    /// A PCI function's configuration space that could not be read (at
+    /// this offset).
+    PciConfig(PciFunction, u16),
     /// Too many steps, or calls nested too deep.
     Limit,
     DivideByZero,
@@ -78,6 +81,9 @@ impl fmt::Display for Error {
             Error::NoSuchName(p) => write!(f, "no object {}", p),
             Error::Type(what) => write!(f, "{} expected", what),
             Error::Memory(a) => write!(f, "firmware memory at {:#x} cannot be read", a),
+            Error::PciConfig(function, offset) => {
+                write!(f, "the configuration space of PCI function {} cannot be read at {:#x}", function, offset)
+            }
             Error::Limit => f.write_str("the evaluation took too long"),
             Error::DivideByZero => f.write_str("division by zero"),
         }
@@ -829,11 +835,13 @@ struct Evaluator<'n> {
     /// The namespace's names and fields as this evaluation has stored to
     /// them (the firmware's own are never written).
     written: BTreeMap<Path, Value>,
+    /// The PCI functions of the `PCI_Config` regions read so far.
+    pci: BTreeMap<Path, PciFunction>,
 }
 
 impl<'n> Evaluator<'n> {
     fn new(ns: &'n Namespace, memory: &'n dyn Memory) -> Evaluator<'n> {
-        Evaluator { ns, memory, steps: 0, depth: 0, written: BTreeMap::new() }
+        Evaluator { ns, memory, steps: 0, depth: 0, written: BTreeMap::new(), pci: BTreeMap::new() }
     }
 
     fn tick(&mut self) -> Result<(), Error> {
@@ -965,7 +973,7 @@ impl<'n> Evaluator<'n> {
         }
     }
 
-    /// Reads a field of a `SystemMemory` region.
+    /// Reads a field of a `SystemMemory` or a `PCI_Config` region.
     fn read_field(&mut self, f: &Frame, field: &Field) -> Result<Value, Error> {
         let FieldUnit::Region(region) = &field.unit else {
             return Err(Error::Unsupported("reading an index or bank field"));
@@ -974,9 +982,8 @@ impl<'n> Evaluator<'n> {
             return Err(Error::NoSuchName(region.clone()));
         };
         match space {
-            0 => {}
+            0 | 2 => {}
             1 => return Err(Error::Unsupported("reading I/O ports")),
-            2 => return Err(Error::Unsupported("reading PCI configuration space")),
             3 => return Err(Error::Unsupported("reading the embedded controller")),
             _ => return Err(Error::Unsupported("reading this address space")),
         }
@@ -998,10 +1005,99 @@ impl<'n> Evaluator<'n> {
         }
         let mut bytes = vec![0u8; (last - first) as usize];
         let address = base.wrapping_add(first);
-        if !self.memory.read(address, &mut bytes) {
+        if space == 2 {
+            // An offset in the function's configuration space (4 KiB).
+            let function = self.pci_function(f, region)?;
+            let offset = u16::try_from(address)
+                .ok()
+                .filter(|&o| o as usize + bytes.len() <= 0x1000)
+                .ok_or(Error::Type("a field inside configuration space"))?;
+            if !self.memory.read_pci(function, offset, &mut bytes) {
+                return Err(Error::PciConfig(function, offset));
+            }
+        } else if !self.memory.read(address, &mut bytes) {
             return Err(Error::Memory(address));
         }
         bits_of(&bytes, field.bit_offset - first * 8, field.bit_width)
+    }
+
+    /// The PCI function whose configuration space the `PCI_Config` region
+    /// at `region` is, as ACPI has it (and ACPICA finds it): the one at the
+    /// `_ADR` of the device the region is in, on the bus of the PCI root
+    /// bridge above it (its `_SEG` and `_BBN`, 0 without them), or of the
+    /// last PCI-to-PCI bridge between the two (the secondary bus its
+    /// configuration space holds).
+    fn pci_function(&mut self, f: &Frame, region: &Path) -> Result<PciFunction, Error> {
+        if let Some(&function) = self.pci.get(region) {
+            return Ok(function);
+        }
+        // Finding it evaluates the devices' objects, which could read such
+        // a region in turn: bounded as calls are.
+        if self.depth >= MAX_DEPTH {
+            return Err(Error::Limit);
+        }
+        self.depth += 1;
+        let found = self.find_pci_function(f, region);
+        self.depth -= 1;
+        let function = found?;
+        self.pci.insert(region.clone(), function);
+        Ok(function)
+    }
+
+    fn find_pci_function(&mut self, f: &Frame, region: &Path) -> Result<PciFunction, Error> {
+        // The devices the region is in up to the root bridge, nearest first.
+        let mut devices = Vec::new();
+        let mut root = None;
+        let mut at = region.parent();
+        while let Some(p) = at {
+            if matches!(self.object(f, &p), Some(Object::Device)) {
+                if ["_HID", "_CID"].iter().any(|id| self.child_value(&p, id).is_some_and(|v| is_pci_root_id(&v))) {
+                    root = Some(p);
+                    break;
+                }
+                devices.push(p.clone());
+            }
+            at = p.parent();
+        }
+        let mut function = PciFunction::default();
+        if let Some(root) = &root {
+            function.segment = self.child_integer(root, "_SEG").unwrap_or(0) as u16;
+            function.bus = self.child_integer(root, "_BBN").unwrap_or(0) as u8;
+            if devices.is_empty() {
+                // A region of the root bridge's own.
+                set_pci_address(&mut function, self.child_integer(root, "_ADR").unwrap_or(0));
+            }
+        }
+        // From the root bridge down to the region's device: a bridge between
+        // them (its header type 1, or 2 for CardBus) puts the devices below
+        // it on its secondary bus.
+        let mut bus = function.bus;
+        for (i, d) in devices.iter().enumerate().rev() {
+            let Some(adr) = self.child_integer(d, "_ADR") else { continue };
+            set_pci_address(&mut function, adr);
+            function.bus = bus;
+            if i > 0 && matches!(self.config_byte(function, 0x0E)? & 0x7F, 1 | 2) {
+                bus = self.config_byte(function, 0x19)?;
+            }
+        }
+        Ok(function)
+    }
+
+    /// The value of `device`'s object `name` (`_ADR`) in this evaluation,
+    /// if it has one that evaluates.
+    fn child_value(&mut self, device: &Path, name: &str) -> Option<Value> {
+        let path = device.join(name)?;
+        self.ns.get(&path)?;
+        self.read_name(&mut Frame::new(device.clone(), Vec::new()), &path).ok()
+    }
+
+    fn child_integer(&mut self, device: &Path, name: &str) -> Option<u64> {
+        self.child_value(device, name).and_then(|v| v.as_integer())
+    }
+
+    fn config_byte(&self, function: PciFunction, offset: u16) -> Result<u8, Error> {
+        let mut b = [0u8];
+        if self.memory.read_pci(function, offset, &mut b) { Ok(b[0]) } else { Err(Error::PciConfig(function, offset)) }
     }
 
     fn read_place(&self, f: &Frame, place: &Place) -> Value {
@@ -1883,6 +1979,24 @@ fn reference_target(v: Value, run: bool) -> Result<Target, Error> {
         _ if !run => Ok(Target::None),
         _ => Err(Error::Type("a reference")),
     }
+}
+
+/// `PNP0A03` or `PNP0A08`, a PCI root bridge's id, as a compressed EISA
+/// id or a string, or among a package of ids (`_CID`).
+fn is_pci_root_id(v: &Value) -> bool {
+    match v {
+        Value::Integer(i) => matches!(*i, 0x030A_D041 | 0x080A_D041),
+        Value::String(s) => s == "PNP0A03" || s == "PNP0A08",
+        Value::Package(ids) => ids.iter().any(is_pci_root_id),
+        _ => false,
+    }
+}
+
+/// A PCI `_ADR`: the device in the high word, the function in the low one
+/// (`0xFFFF` for every function, which no configuration space is).
+fn set_pci_address(function: &mut PciFunction, adr: u64) {
+    function.device = (adr >> 16) as u8;
+    function.function = (adr & 0xFFFF).min(0xFF) as u8;
 }
 
 /// Bits `[bit, bit + width)` of `bytes`: an integer up to 64 bits, else a

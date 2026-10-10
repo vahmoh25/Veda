@@ -14,6 +14,7 @@
 //! the bridge's window to grow. A BAR that stays unplaced is given to no
 //! driver.
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::ops::Range;
 
@@ -52,8 +53,9 @@ pub fn place(config: &ConfigSpace, functions: &[Address], acpi: Option<&Acpi>) {
     taken.extend(acpi.motherboard_memory());
     // The largest first: their alignment is the hardest to find.
     unplaced.sort_by_key(|(_, bar)| core::cmp::Reverse(bar.size));
+    let mut buses: BTreeMap<u8, Vec<Range<u64>>> = BTreeMap::new();
     for (a, bar) in unplaced {
-        let windows = acpi.pci_root_windows(a.bus);
+        let windows = buses.entry(a.bus).or_insert_with(|| acpi.pci_root_windows(a.bus));
         if windows.is_empty() {
             println!(
                 "pci {:02x}:{:02x}.{}: BAR {} unplaced by the firmware, and no root bridge's window for it: left out",

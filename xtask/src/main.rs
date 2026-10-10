@@ -2,6 +2,7 @@
 //!
 //! Run `cargo xtask help` for the list of commands.
 
+mod acpi;
 mod acpitest;
 mod agentsim;
 mod airsim;
@@ -48,6 +49,11 @@ COMMANDS:
     linux       Build the Linux kernel of the driver VM from ports/linux (see
                 docs/DRIVERVM.md; --jobs N); later builds put it in the image, with the
                 guest's programs
+    acpi DIR    What devmgr makes of a PC's ACPI tables, worked out on the host: DIR
+                holds them as Linux has them (sudo cp -r /sys/firmware/acpi/tables DIR);
+                the firmware's variables read as zeros but those given with
+                --set NAME=VALUE; PCI configuration space comes from DIR/pci, or from
+                this machine
     clean       Remove build outputs
     doctor      Check that the required tools are installed
     help        Show this message
@@ -998,6 +1004,7 @@ fn main() -> ExitCode {
                 .and_then(|text| parse_options(opts).and_then(|o| script(&o, &text))),
             None => Err("usage: cargo xtask script FILE [options]".into()),
         },
+        "acpi" => acpi::command(rest),
         "toolchain" => toolchain::command(rest),
         "linux" => linux::command(rest),
         "clean" => util::run(util::cargo().arg("clean")),

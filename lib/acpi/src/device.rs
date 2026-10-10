@@ -6,6 +6,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
+use core::ops::Range;
 
 use crate::Memory;
 use crate::aml::{self, Namespace};
@@ -147,6 +148,51 @@ pub fn pci_roots(ns: &Namespace, memory: &dyn Memory) -> Vec<(u8, Path)> {
         }
     }
     roots
+}
+
+/// The memory windows PCI root bridge `root` forwards to its buses (end
+/// exclusive): the memory ranges its `_CRS` produces, but empty ones (the
+/// firmware's way of leaving one out) and translated ones, above the legacy
+/// area below 1 MiB.
+pub fn pci_root_windows(ns: &Namespace, root: &Path, memory: &dyn Memory) -> Result<Vec<Range<u64>>, ResourcesError> {
+    Ok(resources(ns, root, memory)?
+        .into_iter()
+        .filter_map(|r| match r {
+            Resource::Window { kind: 0, min, max, translation: 0, length } if length > 0 && min >= 0x10_0000 => {
+                (max > min).then_some(min..max.checked_add(1)?)
+            }
+            _ => None,
+        })
+        .collect())
+}
+
+/// The memory a motherboard device reserves (end exclusive), or why its
+/// `_CRS` failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reserved {
+    pub device: Path,
+    pub memory: Result<Vec<Range<u64>>, ResourcesError>,
+}
+
+/// The memory the firmware reserves for the motherboard, where no BAR may
+/// go: what each of its `PNP0C01` and `PNP0C02` devices uses.
+pub fn motherboard_memory(ns: &Namespace, memory: &dyn Memory) -> Vec<Reserved> {
+    let ranges = |r: Resource| match r {
+        Resource::Memory { base, length, .. } if length > 0 => Some(base..base.checked_add(length)?),
+        Resource::Window { kind: 0, min, max, length, .. } if length > 0 && max > min => Some(min..max.checked_add(1)?),
+        _ => None,
+    };
+    ns.devices()
+        .filter(|d| ids(ns, d, memory).iter().any(|i| i == "PNP0C01" || i == "PNP0C02"))
+        .map(|d| {
+            let memory = match resources(ns, d, memory) {
+                Ok(r) => Ok(r.into_iter().filter_map(ranges).collect()),
+                Err(ResourcesError::None) => Ok(Vec::new()),
+                Err(e) => Err(e),
+            };
+            Reserved { device: d.clone(), memory }
+        })
+        .collect()
 }
 
 /// The device that describes PCI function `bus:slot.function`: the root
