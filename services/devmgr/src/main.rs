@@ -77,7 +77,7 @@ const DRIVERS: &[DriverMatch] = &[
     DriverMatch { vendor: 0x1AF4, devices: &[0x1059], driver: "virtio-snd" },
     // virtio 1.0 GPU: 3D on the host's GPU (QEMU's virtio-gpu-gl)
     DriverMatch { vendor: 0x1AF4, devices: &[0x1050], driver: "virtio-gpu" },
-    // Intel 82801AA AC'97 audio (QEMU's AC97, VirtualBox's ICH AC97).
+    // Intel 82801AA AC'97 audio (QEMU's AC97).
     DriverMatch { vendor: 0x8086, devices: &[0x2415], driver: "ac97" },
     // Intel's HD Audio controllers since Skylake: with an audio DSP beside
     // them (laptops with digital microphones, mostly) they call themselves
@@ -99,8 +99,7 @@ const DRIVERS: &[DriverMatch] = &[
     // virtio console (transitional and modern): under QEMU, the virtual
     // Wi-Fi radio is a named port of it
     DriverMatch { vendor: 0x1AF4, devices: &[0x1003, 0x1043], driver: "vwifi" },
-    // Intel PRO/1000: 82540EM (QEMU e1000, VirtualBox), 82545EM (VMware),
-    // 82574L (QEMU e1000e)
+    // Intel PRO/1000: 82540EM (QEMU e1000), 82545EM, 82574L (QEMU e1000e)
     DriverMatch { vendor: 0x8086, devices: &[0x100E, 0x100F, 0x10D3], driver: "e1000" },
     // The SPI controllers of Intel's chipsets since Cannon Lake (LPSS), for
     // the devices the firmware places on them: a laptop's speaker
@@ -122,7 +121,7 @@ const DRIVERS: &[DriverMatch] = &[
 /// Drivers for whole device classes: (class, subclass, programming
 /// interface, driver). Consulted when no vendor/device entry matches.
 const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
-    // SATA controllers in AHCI mode (VirtualBox, QEMU q35, most PCs)
+    // SATA controllers in AHCI mode (QEMU q35, most PCs)
     (0x01, 0x06, 0x01, "ahci"),
     // USB 3 (xHCI) controllers: USB keyboards, mice and hubs
     (0x0C, 0x03, 0x30, "xhci"),

@@ -238,9 +238,9 @@ has ended and left its stack, which is how thread libraries join threads.
 
 ## Storage
 
-* `virtio-blk` (QEMU) and `ahci` (SATA disks: VirtualBox, QEMU's q35
-  controller, most PCs) serve each disk through the `block` protocol under
-  the name `block/<serial>`, so clients find a disk by its serial number
+* `virtio-blk` (QEMU) and `ahci` (SATA disks: QEMU's q35 controller, most
+  PCs) serve each disk through the `block` protocol under the name
+  `block/<serial>`, so clients find a disk by its serial number
   whatever the controller. `devmgr` matches drivers by vendor and device,
   and AHCI controllers by their PCI class. The live system starts neither
   (see Boot).
@@ -284,7 +284,7 @@ has ended and left its stack, which is how thread libraries join threads.
 ## USB
 
 * `xhci` drives USB 3 (xHCI) host controllers, which PCs have had since
-  about 2012 (and QEMU's `qemu-xhci` and VirtualBox's USB controller).
+  about 2012 (and QEMU's `qemu-xhci`).
   `devmgr` starts it for the PCI class of such controllers. It takes the
   controller over from the firmware (which stops the firmware's emulation
   of a PS/2 keyboard), moves the ports that Intel 7 to 9 series chipsets
@@ -680,16 +680,13 @@ GPU.
 The virgl renderer is tested on the host: `vgl::virgl::host` calls
 virglrenderer as QEMU does, on OpenGL contexts made as QEMU makes them,
 and runs the whole `vgl` test suite on the host's GPU
-(`VGL_TEST_BACKEND=virgl`). On Windows it loads the virglrenderer and
-ANGLE that QEMU's Windows build ships, and renders on ANGLE and on the
-host's desktop OpenGL (`VGL_TEST_HOST=desktop`, through WGL, as QEMU's
-window uses it); on Linux it loads the system's virglrenderer and renders
-through EGL on a GPU's render node (GBM), on desktop OpenGL as QEMU does
-and on OpenGL ES (`VGL_TEST_HOST=gles`). Prism's scene, rendered both
-ways, must look the same to within the GPU's rounding. The suite also
-runs through the renderer's decoder on softpipe
+(`VGL_TEST_BACKEND=virgl`): it loads the system's virglrenderer and
+renders through EGL on a GPU's render node (GBM), on desktop OpenGL as
+QEMU does and on OpenGL ES (`VGL_TEST_HOST=gles`). Prism's scene,
+rendered both ways, must look the same to within the GPU's rounding. The
+suite also runs through the renderer's decoder on softpipe
 (`VGL_TEST_BACKEND=gallium`, `vgl::virgl::gallium`, which loads the
-decoder built with Mesa as `vgallium.dll`, on Linux `vgallium.so`);
+decoder built with Mesa as `vgallium.so`);
 where softpipe falls short of a GPU (no multisampling, points an eighth
 of a pixel off, depth filtered before it is compared) the tests say so.
 

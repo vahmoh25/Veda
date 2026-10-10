@@ -12,8 +12,7 @@ Everything is written from scratch in Rust and lives in this repository:
 the UEFI bootloader, a capability-based microkernel, the drivers, the
 system services, the window system, the toolkit and the applications. A
 few mature crates provide the TCP/IP engine, TLS and cryptography
-(smoltcp, rustls, RustCrypto). Veda runs on x86-64 PCs, in QEMU and
-VirtualBox.
+(smoltcp, rustls, RustCrypto). Veda runs on x86-64 PCs and in QEMU.
 
 ![The Veda desktop, with the agent's window open](docs/images/desktop.png)
 
@@ -172,8 +171,8 @@ the voice pipeline, consent, memory and how the agent is tested.
   (`ports/`), and a cross compiler builds C and C++ programs for Veda on
   the development machine. See [C on Veda](docs/C.md).
 * **Tooling.** One command builds a bootable disk image and runs it in
-  QEMU or VirtualBox; scripted, headless runs drive the GUI and the agent
-  and check screenshots and logs.
+  QEMU; scripted, headless runs drive the GUI and the agent and check
+  screenshots and logs.
 
 ## Screenshots
 
@@ -189,36 +188,27 @@ the voice pipeline, consent, memory and how the agent is tested.
 
 All screenshots are taken in QEMU by `cargo xtask script docs/screenshots.vts`
 (the agent talking to the stand-in for Deepgram).
-Veda also runs in VirtualBox (see below).
 
 ## Quick start
 
 ### Requirements
 
-Veda is built on an x64 PC with Windows 10 or 11, or with Linux.
+Veda is built on an x64 PC with Linux.
 
 * [Rust](https://rustup.rs) (stable). `rust-toolchain.toml` makes rustup
-  install the extra targets on first use.
-* A linker for the user-space programs, which are PE executables. On
-  Windows, the Microsoft linker: Visual Studio 2022 or the Visual Studio
-  Build Tools with the MSVC build tools (`link.exe`), which the Rust
-  installer offers to set up. On Linux, LLVM's linker, which comes with
-  Rust (`rust-lld`).
-* [QEMU](https://www.qemu.org/download/) and the OVMF UEFI firmware, which
-  QEMU for Windows includes. On Linux, the distribution's packages (on
-  Debian and Ubuntu `qemu-system-x86`, `qemu-system-gui`,
-  `qemu-system-modules-opengl` and `ovmf`), and access to `/dev/kvm`
-  (members of the `kvm` group have it), with which QEMU runs Veda on the
-  processor's hardware virtualization. And/or
-  [VirtualBox](https://www.virtualbox.org/) 7.1 or newer (no Extension
-  Pack needed).
+  install the extra targets on first use. The user-space programs are PE
+  executables, which LLVM's linker that comes with Rust (`rust-lld`) links.
+* [QEMU](https://www.qemu.org/download/) and the OVMF UEFI firmware: the
+  distribution's packages (on Debian and Ubuntu `qemu-system-x86`,
+  `qemu-system-gui`, `qemu-system-modules-opengl` and `ovmf`), and access
+  to `/dev/kvm` (members of the `kvm` group have it), with which QEMU runs
+  Veda on the processor's hardware virtualization.
 * For the agent: a [Deepgram](https://deepgram.com) API key, entered in
   Veda's Settings.
-* For C and GCC in the image (optional): build tools for the toolchain,
-  which `cargo xtask toolchain` builds once: on Windows
-  [MSYS2](https://www.msys2.org) with a few packages, on Linux the
-  distribution's (see [C on Veda](docs/C.md#the-toolchain)).
-* For the driver VM (optional, on Linux): the Linux kernel's build tools,
+* For C and GCC in the image (optional): the distribution's build tools,
+  for the toolchain `cargo xtask toolchain` builds once (see
+  [C on Veda](docs/C.md#the-toolchain)).
+* For the driver VM (optional): the Linux kernel's build tools,
   for `cargo xtask linux`, and KVM's nested virtualization
   (`kvm_intel nested=1`), on which QEMU gives Veda the processor's VMX (see
   [the driver VM](docs/DRIVERVM.md#testing)).
@@ -256,46 +246,6 @@ This also starts `airsim`, a simulated Wi-Fi environment whose networks
 ("Veda Home", "Veda WPA3", ...; password `veda-wifi`) lead to the
 Internet. `--net both` adds the wired card. See `cargo xtask help` for all
 commands and options.
-
-### VirtualBox
-
-Every command takes `--vm virtualbox` to use VirtualBox instead of QEMU,
-with the same options:
-
-```bash
-cargo xtask run --vm virtualbox
-```
-
-xtask creates (and on every run updates) a VirtualBox machine named
-"Veda" whose disks are the same images QEMU uses, so builds need no
-conversion and the home directory is shared between the two. VirtualBox
-uses the CPU's hardware virtualization (as QEMU does on Linux, with KVM;
-on Windows QEMU emulates the CPU in software). The machine is closer to a
-real PC: SATA disks, an Intel PRO/1000 network card, PS/2 keyboard and
-mouse, AC'97 sound with the host's speakers and microphone (Windows must
-allow VirtualBox to use the microphone, in Settings → Privacy). Click into
-the window to use the mouse; the right **Ctrl** key releases it.
-
-On a high-DPI display under Windows the window enlarges the screen as
-QEMU's does, by the whole part of the display scaling (2x at 250%), or
-less if the window would not fit on the screen. `--scale` sets the factor
-(`--scale 2.5` matches other programs at 250%; whole numbers look
-sharpest) and `--resolution` gives Veda a larger desktop:
-
-```bash
-cargo xtask run --vm virtualbox --resolution 1600x1000 --scale 2
-```
-
-To put Veda on your real network (your router's DHCP and DNS, the real
-Internet) through the host's network adapter, Wi-Fi included:
-
-```bash
-cargo xtask run --vm virtualbox --net bridged
-```
-
-`shot`, `script` and `test` work with `--vm virtualbox` too; scripts that
-need QEMU (the simulated Wi-Fi, and on Linux the mouse, which xtask moves
-in VirtualBox on Windows only) are skipped.
 
 ### A real PC, from a USB stick
 
@@ -351,7 +301,7 @@ cargo xtask run --sound hda
    for its name.
 
 Veda hears you through your PC's microphone and answers through its
-speakers, under QEMU and VirtualBox alike.
+speakers, under QEMU too.
 
 Things to ask:
 
@@ -534,7 +484,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), C and C++ test programs (`c/`), GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
 | `third_party/` | vendored crates with Veda patches (smoltcp) |
-| `xtask/` | the build system: cross-compilation, disk image, QEMU and VirtualBox, automation, the stand-in for Deepgram |
+| `xtask/` | the build system: cross-compilation, disk image, QEMU, automation, the stand-in for Deepgram |
 | `assets/` | fonts, application manifests, and firmware for laptop speaker amplifiers |
 | `docs/` | documentation, the README's screenshots, and the icon and social preview (`docs/icon/`) |
 

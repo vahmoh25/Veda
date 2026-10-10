@@ -490,8 +490,8 @@ interfaces, and the PC this was built on cannot give its GPUs to QEMU.
 
 ## Testing
 
-`cargo xtask linux` builds the guest's kernel (on Linux; Windows needs WSL
-for it); every image built afterwards includes the guest. Under QEMU, Veda
+`cargo xtask linux` builds the guest's kernel; every image built afterwards
+includes the guest. Under QEMU, Veda
 runs its guests on the processor's VMX, which KVM gives it nested
 (`kvm_intel nested=1`); scripts that need it say `requires drivervm` and
 boot with `drivervm` on the kernel command line (`drivervm.run=PROGRAM`,

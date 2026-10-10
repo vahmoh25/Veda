@@ -1,5 +1,5 @@
 //! `ahci` — the driver for SATA disks behind an AHCI controller: the disk
-//! controller of VirtualBox, of QEMU's q35 machine and of most PCs.
+//! controller of QEMU's q35 machine and of most PCs.
 //!
 //! Like `virtio-blk`, every disk is served as the `block` protocol under the
 //! name `block/<serial>` (`vproto::block::service_name`), so the file system

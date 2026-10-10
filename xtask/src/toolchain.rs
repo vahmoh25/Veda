@@ -12,8 +12,7 @@
 //! Everything lives under `target/toolchain` (`$VEDA_TOOLCHAIN` overrides
 //! it): `downloads/` (the verified source archives), `src/` (unpacked and
 //! patched), `build/`, `cross/` and `native/`. The GNU packages are built
-//! with `ports/build.sh` under a Unix shell: MSYS2 on Windows
-//! (`$VEDA_MSYS2`, by default `C:\msys64`).
+//! with `ports/build.sh`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,15 +58,13 @@ pub fn status() -> std::result::Result<String, String> {
 
 /// The cross compiler, if it has been built.
 pub fn cross_gcc() -> Option<PathBuf> {
-    let exe = if cfg!(windows) { ".exe" } else { "" };
-    let gcc = root().join("cross").join("bin").join(format!("{TARGET}-gcc{exe}"));
+    let gcc = root().join("cross").join("bin").join(format!("{TARGET}-gcc"));
     gcc.is_file().then_some(gcc)
 }
 
 /// A tool of the cross toolchain (`ld`, `objcopy`, `ar`, ...).
 fn cross_tool(name: &str) -> PathBuf {
-    let exe = if cfg!(windows) { ".exe" } else { "" };
-    root().join("cross").join("bin").join(format!("{TARGET}-{name}{exe}"))
+    root().join("cross").join("bin").join(format!("{TARGET}-{name}"))
 }
 
 /// The symbols the POSIX layer gives the C library (and, for the `veda_`
@@ -186,17 +183,16 @@ fn mesa_host_build() -> PathBuf {
 }
 
 /// Runs ninja for `target` in a build directory of Mesa's (showing its
-/// output only if it fails). The generators it runs are meson's, which is
-/// MSYS2's own and says so unless MSYSTEM agrees.
+/// output only if it fails).
 fn ninja(dir: &Path, target: &str) -> Result {
     let log = dir.join("ninja.log.txt");
     let mut sh = shell()?;
     sh.arg("-c").arg(format!(
-        "MSYSTEM=MSYS ninja -C '{}' '{}' > '{}' 2>&1 || {{ tail -n 40 '{}'; exit 1; }}",
-        mixed(dir),
+        "ninja -C '{}' '{}' > '{}' 2>&1 || {{ tail -n 40 '{}'; exit 1; }}",
+        dir.display(),
         target,
-        mixed(&log),
-        mixed(&log)
+        log.display(),
+        log.display()
     ));
     util::run(&mut sh)
 }
@@ -227,17 +223,15 @@ pub fn renderer() -> Result<Option<Vec<u8>>> {
 }
 
 /// The renderer as a library on softpipe for this machine
-/// (`vgallium.dll`, on Linux `vgallium.so`), up to date; None if Mesa has
-/// not been configured for it.
+/// (`vgallium.so`), up to date; None if Mesa has not been configured for it.
 pub fn vgallium() -> Result<Option<PathBuf>> {
     let dir = mesa_host_build();
     if !dir.join("build.ninja").is_file() {
         return Ok(None);
     }
-    let name = if cfg!(windows) { "vgallium.dll" } else { "vgallium.so" };
     util::status("Building", "the renderer on softpipe for the host (Mesa)");
-    ninja(&dir, &format!("src/gallium/targets/veda/{name}"))?;
-    Ok(Some(dir.join("src").join("gallium").join("targets").join("veda").join(name)))
+    ninja(&dir, "src/gallium/targets/veda/vgallium.so")?;
+    Ok(Some(dir.join("src").join("gallium").join("targets").join("veda").join("vgallium.so")))
 }
 
 /// How each C test program is linked: once at a fixed address, as GCC links
@@ -294,8 +288,8 @@ fn native_layer_note() -> PathBuf {
 
 /// The native toolchain's programs are C programs too, with the POSIX layer
 /// linked in: when it has changed since they were linked, links them again
-/// (`ports/build.sh` redoes only that). Without MSYS2 it says so and leaves
-/// them as they are.
+/// (`ports/build.sh` redoes only that). Without the build tools it says so
+/// and leaves them as they are.
 pub fn relink_native() -> Result {
     let object = posix_layer_object();
     if !built("native toolchain") || !object.is_file() {
@@ -406,42 +400,22 @@ pub fn fetch(port: &Port, downloads: &Path) -> Result {
     std::fs::rename(&partial, &archive).map_err(|e| format!("{e}"))
 }
 
-/// The programs the build needs from the system where MSYS2 does not
-/// provide them: compilers and GNU tools, meson and ninja for Mesa, and
-/// curl for the downloads (`docs/C.md` names the packages).
+/// The programs the build needs from the system: compilers and GNU tools,
+/// meson and ninja for Mesa, and curl for the downloads (`docs/C.md` names
+/// the packages).
 const BUILD_TOOLS: [&str; 10] = ["gcc", "g++", "make", "m4", "bison", "flex", "patch", "meson", "ninja", "curl"];
 
-/// The Unix shell that runs `ports/build.sh`: MSYS2's on Windows.
+/// The shell that runs `ports/build.sh`, once the build tools are there.
 fn shell() -> Result<Command> {
-    if !cfg!(windows) {
-        let missing: Vec<&str> = BUILD_TOOLS.into_iter().filter(|t| util::find_on_path(t).is_none()).collect();
-        return match missing.as_slice() {
-            [] => Ok(Command::new("bash")),
-            [tool] => Err(format!("{tool} is missing: install it from the distribution's packages (see docs/C.md)")),
-            [tools @ .., last] => Err(format!(
-                "{} and {last} are missing: install them from the distribution's packages (see docs/C.md)",
-                tools.join(", ")
-            )),
-        };
+    let missing: Vec<&str> = BUILD_TOOLS.into_iter().filter(|t| util::find_on_path(t).is_none()).collect();
+    match missing.as_slice() {
+        [] => Ok(Command::new("bash")),
+        [tool] => Err(format!("{tool} is missing: install it from the distribution's packages (see docs/C.md)")),
+        [tools @ .., last] => Err(format!(
+            "{} and {last} are missing: install them from the distribution's packages (see docs/C.md)",
+            tools.join(", ")
+        )),
     }
-    let msys = std::env::var_os("VEDA_MSYS2").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\msys64"));
-    let bash = msys.join("usr").join("bin").join("bash.exe");
-    if !bash.is_file() {
-        return Err(format!(
-            "MSYS2 was not found at {} (set VEDA_MSYS2). Install it from https://www.msys2.org, then in its \
-             UCRT64 shell: pacman -S make m4 bison flex texinfo diffutils patch mingw-w64-ucrt-x86_64-gcc",
-            msys.display()
-        ));
-    }
-    let mut cmd = Command::new(bash);
-    // A login shell of the UCRT64 environment, in the current directory.
-    cmd.env("MSYSTEM", "UCRT64").env("CHERE_INVOKING", "1").arg("-l");
-    Ok(cmd)
-}
-
-/// A path as both Windows and MSYS2 programs read it (`C:/x/y`).
-pub fn mixed(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/")
 }
 
 /// `cargo xtask toolchain [--jobs N]`.
@@ -466,10 +440,10 @@ pub fn command(args: &[String]) -> Result {
     // cross linker exists.
     let library = posix_library()?;
     let script = util::workspace_root().join("ports").join("build.sh");
-    sh.arg(mixed(&script))
-        .env("VEDA_PORTS", mixed(&util::workspace_root().join("ports")))
-        .env("VEDA_TOOLCHAIN", mixed(&root()))
-        .env("VEDA_POSIX_LIB", mixed(&library))
+    sh.arg(&script)
+        .env("VEDA_PORTS", util::workspace_root().join("ports"))
+        .env("VEDA_TOOLCHAIN", root())
+        .env("VEDA_POSIX_LIB", &library)
         .env("VEDA_POSIX_EXPORTS", POSIX_LAYER_EXPORTS.join(" "))
         .env("JOBS", jobs.to_string());
     util::run(&mut sh)?;

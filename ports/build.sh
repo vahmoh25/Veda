@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds Veda's C toolchain from the ports in this directory. `cargo xtask
-# toolchain` runs it (under MSYS2 on Windows) after downloading and
+# toolchain` runs it after downloading and
 # verifying the sources; see xtask/src/toolchain.rs and docs/C.md.
 #
 # Environment:
@@ -29,26 +29,6 @@ POSIX_LIB=${VEDA_POSIX_LIB:?}
 POSIX_EXPORTS=${VEDA_POSIX_EXPORTS:?}
 JOBS=${JOBS:-$(nproc)}
 
-case "$(uname -s)" in
-MINGW*|MSYS*|UCRT*|CLANG*)
-	# Paths arrive as C:/x (tar would take "C:" for a host name).
-	PORTS=$(cygpath -u "$PORTS")
-	ROOT=$(cygpath -u "$ROOT")
-	POSIX_LIB=$(cygpath -u "$POSIX_LIB")
-	# Paths in the definitions GCC compiles in are Veda's: MSYS2 must not
-	# turn them into Windows paths.
-	export MSYS2_ARG_CONV_EXCL="-DNATIVE_SYSTEM_HEADER_DIR=;-DLOCAL_INCLUDE_DIR="
-	# The host tools stand alone, without MSYS2's libraries.
-	HOST_LDFLAGS=-static
-	# Native paths for the programs that keep them.
-	native_path() { cygpath -m "$1"; }
-	;;
-*)
-	HOST_LDFLAGS=
-	native_path() { printf '%s\n' "$1"; }
-	;;
-esac
-
 DOWNLOADS=$ROOT/downloads
 SRC=$ROOT/src
 BUILD=$ROOT/build
@@ -66,13 +46,6 @@ BUILD_TRIPLE=$(gcc -dumpmachine)
 # log, port, stage, quiet and unpack.
 source "$PORTS/common.sh"
 
-# The sources of port NAME, relative to the current directory: GCC's build
-# tools are programs of the build machine, and on Windows they cannot open
-# the /c/... paths a configure run from an absolute path writes into files.
-src() {
-	realpath --relative-to="$PWD" "$SRC/$1"
-}
-
 for p in binutils gcc gmp mpfr mpc musl; do
 	eval "stage_src_$p() { unpack $p; }"
 	stage "src_$p" "$PORTS/$p/port.toml" "$PORTS/$p/veda.patch"
@@ -89,13 +62,12 @@ BINUTILS_OPTIONS=(
 stage_binutils_cross() {
 	local b=$BUILD/binutils-cross
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
-	quiet configure.log "$(src binutils)/configure" --target=$TARGET --prefix="$(native_path "$CROSS")" \
-		--with-sysroot="$(native_path "$SYSROOT")" "${BINUTILS_OPTIONS[@]}" \
-		MAKEINFO=true LDFLAGS="$HOST_LDFLAGS"
+	quiet configure.log "$SRC/binutils/configure" --target=$TARGET --prefix="$CROSS" \
+		--with-sysroot="$SYSROOT" "${BINUTILS_OPTIONS[@]}" MAKEINFO=true
 	quiet make.log make -j"$JOBS" MAKEINFO=true
 	quiet install.log make install MAKEINFO=true
 }
-stage binutils_cross src_binutils @BINUTILS_OPTIONS @HOST_LDFLAGS @ROOT
+stage binutils_cross src_binutils @BINUTILS_OPTIONS @ROOT
 
 # GCC's limits.h wraps the C library's only if it sees it: the headers
 # come first.
@@ -124,15 +96,14 @@ GCC_OPTIONS=(
 stage_gcc_cross() {
 	local b=$BUILD/gcc-cross
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
-	quiet configure.log "$(src gcc)/configure" --target=$TARGET --prefix="$(native_path "$CROSS")" \
-		--with-sysroot="$(native_path "$SYSROOT")" --enable-languages=c,c++ "${GCC_OPTIONS[@]}" \
-		MAKEINFO=true LDFLAGS="$HOST_LDFLAGS"
+	quiet configure.log "$SRC/gcc/configure" --target=$TARGET --prefix="$CROSS" \
+		--with-sysroot="$SYSROOT" --enable-languages=c,c++ "${GCC_OPTIONS[@]}" MAKEINFO=true
 	quiet make-gcc.log make -j"$JOBS" all-gcc MAKEINFO=true
 	quiet install-gcc.log make install-gcc MAKEINFO=true
 	quiet make-libgcc.log make -j"$JOBS" all-target-libgcc MAKEINFO=true
 	quiet install-libgcc.log make install-target-libgcc MAKEINFO=true
 }
-stage gcc_cross src_gcc binutils_cross musl_headers @GCC_OPTIONS @HOST_LDFLAGS @ROOT
+stage gcc_cross src_gcc binutils_cross musl_headers @GCC_OPTIONS @ROOT
 
 # Position-independent code, as systems built on musl have it, so that the
 # one libc.a links both fixed-address and position-independent
@@ -140,21 +111,9 @@ stage gcc_cross src_gcc binutils_cross musl_headers @GCC_OPTIONS @HOST_LDFLAGS @
 stage_musl() {
 	local b=$BUILD/musl
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
-	quiet configure.log env CC=$TARGET-gcc "$(src musl)/configure" --target=$TARGET --prefix=/system \
+	quiet configure.log env CC=$TARGET-gcc "$SRC/musl/configure" --target=$TARGET --prefix=/system \
 		--syslibdir=/system/lib --disable-shared --enable-static CFLAGS=-fPIE
-	# The list of objects for libc.a is longer than a Windows command line:
-	# ar reads it from a file.
-	cat > ar-rsp <<-'EOF'
-	#!/bin/sh
-	rsp=$(mktemp)
-	for a in "$@"; do printf '%s\n' "$a"; done > "$rsp"
-	x86_64-veda-ar "@$rsp"
-	s=$?
-	rm -f "$rsp"
-	exit $s
-	EOF
-	chmod +x ar-rsp
-	quiet make.log make -j"$JOBS" AR="$PWD/ar-rsp"
+	quiet make.log make -j"$JOBS"
 	quiet install.log make DESTDIR="$SYSROOT" install
 }
 stage musl src_musl gcc_cross
@@ -209,7 +168,7 @@ stage_host_deps() {
 		# GMP 6.3's configure checks are not C23, GCC's default since 15
 		# (`void g(){}` called with arguments): C17 for GMP.
 		[ $p = gmp ] && extra+=(CC="$TARGET-gcc -std=gnu17" CC_FOR_BUILD="gcc -std=gnu17")
-		quiet configure.log "$(src $p)/configure" --host=$TARGET --build="$BUILD_TRIPLE" --prefix="$DEPS" \
+		quiet configure.log "$SRC/$p/configure" --host=$TARGET --build="$BUILD_TRIPLE" --prefix="$DEPS" \
 			--disable-shared --enable-static "${extra[@]}" MAKEINFO=true
 		quiet make.log make -j"$JOBS" MAKEINFO=true
 		quiet install.log make install MAKEINFO=true
@@ -220,7 +179,7 @@ stage host_deps src_gmp src_mpfr src_mpc musl @ROOT
 stage_binutils_native() {
 	local b=$BUILD/binutils-native
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
-	quiet configure.log "$(src binutils)/configure" --build="$BUILD_TRIPLE" --host=$TARGET --target=$TARGET \
+	quiet configure.log "$SRC/binutils/configure" --build="$BUILD_TRIPLE" --host=$TARGET --target=$TARGET \
 		--prefix=/system --with-lib-path=/system/lib --disable-install-libbfd "${BINUTILS_OPTIONS[@]}" \
 		MAKEINFO=true
 	quiet make.log make -j"$JOBS" MAKEINFO=true
@@ -235,8 +194,8 @@ stage binutils_native src_binutils binutils_cross musl @BINUTILS_OPTIONS
 stage_gcc_native() {
 	local b=$BUILD/gcc-native
 	rm -rf "$b" && mkdir -p "$b" && cd "$b"
-	quiet configure.log "$(src gcc)/configure" --build="$BUILD_TRIPLE" --host=$TARGET --target=$TARGET \
-		--prefix=/system --with-build-sysroot="$(native_path "$SYSROOT")" \
+	quiet configure.log "$SRC/gcc/configure" --build="$BUILD_TRIPLE" --host=$TARGET --target=$TARGET \
+		--prefix=/system --with-build-sysroot="$SYSROOT" \
 		--with-gmp="$DEPS" --with-mpfr="$DEPS" --with-mpc="$DEPS" --enable-languages=c "${GCC_OPTIONS[@]}" \
 		MAKEINFO=true LDFLAGS="-Wl,-z,stack-size=$((64 << 20))"
 	quiet make-gcc.log make -j"$JOBS" all-gcc MAKEINFO=true
@@ -298,10 +257,8 @@ stage native binutils_native gcc_native posix_layer
 # Veda's renderer (services/renderer) carries out OpenGL ES command streams
 # on Mesa's Gallium drivers. The stage configures Mesa's build (meson) for
 # Veda and for this machine: the renderer as a library on softpipe
-# (vgallium.dll, on Linux vgallium.so), which the OpenGL ES tests use.
-# `cargo xtask` builds them (ninja) when it needs them. On Windows meson is
-# MSYS2's own (not UCRT64's), and says so unless MSYSTEM agrees; a cross
-# file has it build for Windows itself rather than for MSYS2.
+# (vgallium.so), which the OpenGL ES tests use.
+# `cargo xtask` builds them (ninja) when it needs them.
 eval "stage_src_mesa() { unpack mesa; }"
 stage src_mesa "$PORTS/mesa/port.toml" "$PORTS/mesa/veda.patch"
 
@@ -331,30 +288,11 @@ stage_mesa() {
 	endian = 'little'
 	EOF
 	rm -rf "$BUILD/mesa" "$BUILD/mesa-host"
-	MSYSTEM=MSYS quiet "$BUILD/mesa-setup.log" meson setup "$BUILD/mesa" "$SRC/mesa" \
+	quiet "$BUILD/mesa-setup.log" meson setup "$BUILD/mesa" "$SRC/mesa" \
 		--cross-file "$BUILD/mesa-veda.cross" "${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" \
 		-Dgallium-drivers=softpipe,iris -Dintel-elk=false
-	local host=()
-	case "$(uname -s)" in
-	MINGW*|MSYS*|UCRT*|CLANG*)
-		cat > "$BUILD/mesa-host.cross" <<-EOF
-		[binaries]
-		c = '$(command -v gcc)'
-		cpp = '$(command -v g++)'
-		ar = '$(command -v ar)'
-		strip = '$(command -v strip)'
-		windres = '$(command -v windres)'
-		[host_machine]
-		system = 'windows'
-		cpu_family = 'x86_64'
-		cpu = 'x86_64'
-		endian = 'little'
-		EOF
-		host=(--cross-file "$BUILD/mesa-host.cross")
-		;;
-	esac
-	MSYSTEM=MSYS quiet "$BUILD/mesa-host-setup.log" meson setup "$BUILD/mesa-host" "$SRC/mesa" \
-		"${host[@]}" "${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" -Dgallium-drivers=softpipe
+	quiet "$BUILD/mesa-host-setup.log" meson setup "$BUILD/mesa-host" "$SRC/mesa" \
+		"${MESA_OPTIONS[@]}" -Dveda-renderer="$renderer" -Dgallium-drivers=softpipe
 }
 stage mesa src_mesa gcc_cross musl @MESA_OPTIONS
 

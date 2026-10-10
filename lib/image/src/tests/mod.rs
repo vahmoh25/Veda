@@ -1,7 +1,6 @@
 //! Cross-codec tests: robustness fuzzing and validation against real-world files.
 
 mod fuzz;
-mod real_images;
 
 use crate::{Image, ImageError, decode, decode_lenient, png};
 

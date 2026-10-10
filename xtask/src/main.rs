@@ -13,8 +13,6 @@ mod qemu;
 mod qmp;
 mod toolchain;
 mod util;
-mod vbox;
-mod vboxctl;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -42,8 +40,8 @@ COMMANDS:
                 and the agent's in tests/agent)
     toolchain   Build the C toolchain (GCC, binutils, musl) from ports/: a cross
                 compiler for this machine and the native one the image installs in
-                /system (needs build tools: MSYS2 on Windows; see docs/C.md; --jobs N)
-    linux       Build the Linux kernel of the driver VM from ports/linux (on Linux; see
+                /system (needs build tools; see docs/C.md; --jobs N)
+    linux       Build the Linux kernel of the driver VM from ports/linux (see
                 docs/DRIVERVM.md; --jobs N); later builds put it in the image, with the
                 guest's programs
     clean       Remove build outputs
@@ -59,10 +57,6 @@ BUILD OPTIONS:
     --skip PROGRAM      Leave a program out of the image (repeatable)
 
 RUN OPTIONS:
-    --vm HYPERVISOR     qemu (default) or virtualbox (run, shot, script, test)
-    --scale FACTOR      VirtualBox: how much the window enlarges the screen, such as 2 or
-                        250% (default on Windows: the whole part of the display scaling, as
-                        QEMU's window has it, lowered if the window would not fit; else 1)
     --smp N             Number of virtual CPUs (default 4)
     --memory MiB        Guest RAM in MiB (default 1024)
     --headless          No display window (serial console only)
@@ -71,23 +65,20 @@ RUN OPTIONS:
     --gpu, --no-gpu     Give QEMU's machine a 3D GPU (virtio-gpu with virgl, rendering on the
                         host's GPU) or not (default: if this QEMU has one)
     --no-audio          Do not attach a sound device
-    --sound CARD        The sound card: virtio (QEMU's default), ac97 (VirtualBox's default) or
-                        hda (Intel HD Audio, as most PCs have)
+    --sound CARD        The sound card: virtio (default), ac97 or hda (Intel HD Audio, as most
+                        PCs have)
     --serial FILE       Write the serial console to FILE instead of the terminal
     --gdb               Wait for a debugger on localhost:1234
     --qemu-arg ARG      Pass ARG through to QEMU (repeatable)
     --fresh-home        Start with a new home directory (deletes target/veda/home.img)
-    --net MODE          Network: ethernet (default, the hypervisor's NAT), wifi (QEMU: the
-                        virtual Wi-Fi radio and the airsim access points), both (QEMU),
-                        bridged (VirtualBox: the host's real network), or none
-    --nic MODEL         Model of the wired card (QEMU: virtio-net-pci (default), e1000, e1000e;
-                        VirtualBox: e1000 (82540EM, default), 82545EM, virtio)
-    --bridge ADAPTER    VirtualBox host adapter for --net bridged (default: the first connected)
+    --net MODE          Network: ethernet (default, QEMU's NAT), wifi (the virtual Wi-Fi radio
+                        and the airsim access points), both, or none
+    --nic MODEL         Model of the wired card: virtio-net-pci (default), e1000, e1000e
     --disk-bus BUS      How QEMU attaches the disks: virtio (default) or ahci (SATA)
-    --input DEVICES     Keyboard and pointer: standard (default; QEMU: PS/2 keyboard and virtio
-                        tablet, VirtualBox: PS/2) or usb (on the xHCI controller; QEMU: a
-                        keyboard and a tablet behind a hub, and a mouse)
-    --live              Boot the live system (iso) from a USB stick, as a PC would (QEMU)
+    --input DEVICES     Keyboard and pointer: standard (default: PS/2 keyboard and virtio
+                        tablet) or usb (on the xHCI controller: a keyboard and a tablet behind
+                        a hub, and a mouse)
+    --live              Boot the live system (iso) from a USB stick, as a PC would
 
 SHOT OPTIONS:
     --wait SECS         Seconds to wait before the screenshot (default 10)
@@ -118,19 +109,8 @@ struct Options {
     skip: Vec<String>,
     /// `run`: start with a new, empty home directory.
     fresh_home: bool,
-    /// The hypervisor for `run`, `shot`, `script` and `test`.
-    hypervisor: Hypervisor,
-    /// VirtualBox: the window's scale (`None`: from the host's display).
-    scale: Option<f64>,
     /// `run`, `shot`, `script`: boot the live system from a USB stick.
     live: bool,
-}
-
-/// Which hypervisor runs Veda.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Hypervisor {
-    Qemu,
-    VirtualBox,
 }
 
 fn parse_options(args: &[String]) -> Result<Options> {
@@ -147,8 +127,6 @@ fn parse_options(args: &[String]) -> Result<Options> {
         generate: true,
         skip: Vec::new(),
         fresh_home: false,
-        hypervisor: Hypervisor::Qemu,
-        scale: None,
         live: false,
     };
     let mut it = args.iter();
@@ -190,15 +168,6 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--no-generate" => o.generate = false,
             "--skip" => o.skip.push(value(arg)?),
             "--fresh-home" => o.fresh_home = true,
-            "--vm" => {
-                o.hypervisor = match value(arg)?.to_ascii_lowercase().as_str() {
-                    "qemu" => Hypervisor::Qemu,
-                    "virtualbox" | "vbox" => Hypervisor::VirtualBox,
-                    v => return Err(format!("unknown hypervisor '{v}' (qemu, virtualbox)")),
-                }
-            }
-            "--scale" => o.scale = parse_scale(&value(arg)?)?,
-            "--bridge" => o.vm.bridge_adapter = Some(value(arg)?),
             "--net" => {
                 let v = value(arg)?;
                 o.vm.net = qemu::NetMode::parse(&v).ok_or(format!("unknown network mode '{v}'"))?;
@@ -224,21 +193,6 @@ fn resolution_size(v: &str) -> Option<(u32, u32)> {
     let (w, h) = v.split_once(['x', 'X'])?;
     let (w, h) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
     (w >= 640 && h >= 480).then_some((w, h))
-}
-
-/// A `--scale` value: `auto`, a factor (`2`, `2.5`) or a percentage (`250%`).
-fn parse_scale(v: &str) -> Result<Option<f64>> {
-    if v.eq_ignore_ascii_case("auto") {
-        return Ok(None);
-    }
-    let (number, divisor) = match v.strip_suffix('%') {
-        Some(percent) => (percent, 100.0),
-        None => (v, 1.0),
-    };
-    match number.trim().parse::<f64>().map(|n| n / divisor) {
-        Ok(scale) if (0.5..=4.0).contains(&scale) => Ok(Some(scale)),
-        _ => Err(format!("--scale expects a factor from 0.5 to 4, such as 2 or 250%, or auto (not '{v}')")),
-    }
 }
 
 /// Host tools that generate media into `target/generated` at build time,
@@ -462,18 +416,6 @@ fn iso(o: &Options) -> Result {
 }
 
 fn run(o: &Options) -> Result {
-    if o.hypervisor == Hypervisor::VirtualBox {
-        if o.live {
-            return Err("--live boots the live system in QEMU (--vm qemu)".into());
-        }
-        return run_vbox(o);
-    }
-    if o.vm.net == qemu::NetMode::Bridged {
-        return Err("bridged networking needs VirtualBox (--vm virtualbox)".into());
-    }
-    if o.scale.is_some() {
-        return Err("--scale is for VirtualBox (--vm virtualbox); QEMU's window zooms from its View menu".into());
-    }
     let install = qemu::QemuInstall::locate()?;
     let mut vm = o.vm.clone();
     let disk = if o.live {
@@ -513,28 +455,6 @@ fn run(o: &Options) -> Result {
     util::run(&mut cmd)
 }
 
-/// `run` with VirtualBox: the same build, the same disks, a VirtualBox
-/// machine configured from the options.
-fn run_vbox(o: &Options) -> Result {
-    let vbox = vbox::VBox::locate()?;
-    util::status("Using", format!("VirtualBox {}", vbox.version()?));
-    let disk = build(o)?;
-    let home = util::out_dir().join("home.img");
-    qemu::prepare_home_disk(&home, o.fresh_home)?;
-    let serial = o.vm.serial_file.clone().unwrap_or_else(|| util::out_dir().join("serial-vbox.log"));
-    let _ = std::fs::remove_file(&serial);
-    // The window enlarges the screen as QEMU's does on a high-DPI display.
-    let (width, height) = resolution_size(&o.resolution).unwrap_or((1280, 800));
-    let scale = o.vm.display.then(|| o.scale.unwrap_or_else(|| vbox::auto_scale(width, height)));
-    vbox.configure(&o.vm, &disk, Some(&home), &serial, &o.resolution, scale)?;
-    if let Some(scale) = scale {
-        util::status("Display", format!("{}, shown at {:.0}% (--resolution, --scale)", o.resolution, scale * 100.0));
-    }
-    vbox.start(!o.vm.display)?;
-    util::status("Running", format!("VirtualBox machine \"{}\" (Ctrl+C powers it off)", vbox.name()));
-    vbox::follow(&vbox, &serial, o.vm.serial_file.is_none())
-}
-
 /// Boots headless and runs an automation script (see `automate.rs`).
 fn script(o: &Options, script: &str) -> Result {
     script_on(o, script, None)
@@ -544,10 +464,7 @@ fn script(o: &Options, script: &str) -> Result {
 /// Only the boot configuration differs between scripts, so test runs build
 /// the system once and just write a new disk image for each script.
 fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
-    let install = match o.hypervisor {
-        Hypervisor::Qemu => Some(qemu::QemuInstall::locate()?),
-        Hypervisor::VirtualBox => None,
-    };
+    let install = qemu::QemuInstall::locate()?;
     let mut o = o.clone();
     // The test microphone's address goes on the command line.
     let mic = if automate::needs_mic(script) { Some(mic::MicServer::start()?) } else { None };
@@ -567,9 +484,6 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     }
     let o = &o;
     let live = o.live || automate::live(script);
-    if live && o.hypervisor == Hypervisor::VirtualBox {
-        return Err("the live system boots in QEMU (--vm qemu)".into());
-    }
     let disk = if live {
         let iso = live_iso();
         match system {
@@ -595,15 +509,6 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     vm.allow_reboot = script.lines().any(|l| l.trim() == "reset");
     if let Some(net) = automate::net_mode(script)? {
         vm.net = net;
-    }
-    match o.hypervisor {
-        Hypervisor::Qemu if vm.net == qemu::NetMode::Bridged || automate::needs_virtualbox(script) => {
-            return Err("this script needs VirtualBox (--vm virtualbox)".into());
-        }
-        Hypervisor::VirtualBox if let Some(why) = automate::needs_qemu(script) => {
-            return Err(format!("this script needs QEMU ({why})"));
-        }
-        _ => {}
     }
     if let Some(card) = automate::sound_card(script) {
         vm.sound = card;
@@ -632,11 +537,7 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
         qemu::prepare_home_disk(&home, true)?;
         vm.home_disk = Some(home);
     }
-    let hv = match &install {
-        Some(install) => automate::Hypervisor::Qemu(install),
-        None => automate::Hypervisor::VirtualBox { resolution: &o.resolution },
-    };
-    let log = automate::run_script(&hv, &disk, vm, script, mic, agent)?;
+    let log = automate::run_script(&install, &disk, vm, script, mic, agent)?;
     println!("--- serial log (tail) ---\n{}", automate::tail(&log, 40));
     Ok(())
 }
@@ -694,21 +595,14 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
 
 fn test(o: &Options) -> Result {
     util::status("Testing", "library unit tests on the host");
-    // Tests of OpenGL ES on the host's GPU drive the virglrenderer QEMU
-    // runs, where it has one: on Windows the one QEMU's builds ship, which
-    // they load from QEMU's directory; on Linux the system's, which QEMU's
-    // 3D GPU is built on.
-    let qemu = qemu::QemuInstall::locate().ok();
-    let virgl_dir = qemu.as_ref().and_then(|q| q.virglrenderer_dir());
-    let virgl = virgl_dir.is_some() || (cfg!(target_os = "linux") && qemu.as_ref().is_some_and(|q| q.has_gl_gpu()));
+    // Tests of OpenGL ES on the host's GPU drive the system's virglrenderer,
+    // which QEMU's 3D GPU is built on, where QEMU has one.
+    let virgl = qemu::QemuInstall::locate().is_ok_and(|q| q.has_gl_gpu());
     for (package, features) in HOST_TESTED {
         let mut cmd = util::cargo();
         cmd.args(["test", "--quiet", "--package", package]);
         if !features.is_empty() {
             cmd.args(["--features", &features.join(",")]);
-        }
-        if let Some(dir) = &virgl_dir {
-            cmd.env("VEDA_QEMU_DIR", dir);
         }
         util::run(&mut cmd)?;
     }
@@ -726,23 +620,13 @@ fn test(o: &Options) -> Result {
         }
     }
     if virgl {
-        // On Windows on ANGLE, as headless QEMU renders, and on the host's
-        // desktop OpenGL, as QEMU's window does. On Linux QEMU renders on
-        // desktop OpenGL either way, and on OpenGL ES with `gl=es`.
-        let hosts: &[(&str, &str)] = if cfg!(windows) {
-            &[("angle", "ANGLE"), ("desktop", "desktop OpenGL")]
-        } else {
-            &[("desktop", "desktop OpenGL"), ("gles", "OpenGL ES")]
-        };
-        for (host, what) in hosts {
+        // QEMU renders on desktop OpenGL, and on OpenGL ES with `gl=es`.
+        for (host, what) in [("desktop", "desktop OpenGL"), ("gles", "OpenGL ES")] {
             util::status("Testing", format!("OpenGL ES on the host's GPU (QEMU's virglrenderer on {what})"));
             let mut cmd = util::cargo();
             cmd.args(["test", "--quiet", "--package", "vgl"])
                 .env("VGL_TEST_BACKEND", "virgl")
                 .env("VGL_TEST_HOST", host);
-            if let Some(dir) = &virgl_dir {
-                cmd.env("VEDA_QEMU_DIR", dir);
-            }
             util::run(&mut cmd)?;
         }
     }
@@ -750,8 +634,7 @@ fn test(o: &Options) -> Result {
     let started = std::time::Instant::now();
     let system = build_system(o)?;
     util::status("Built", format!("the system in {:.1}s", started.elapsed().as_secs_f32()));
-    let hv_name = if o.hypervisor == Hypervisor::VirtualBox { "VirtualBox" } else { "QEMU" };
-    util::status("Testing", format!("integration tests inside Veda ({hv_name})"));
+    util::status("Testing", "integration tests inside Veda");
     let mut o = o.clone();
     o.cmdline = format!("{} systest", o.cmdline).trim().to_string();
     // The last test restarts the window system; give the desktop a moment
@@ -777,12 +660,6 @@ fn test(o: &Options) -> Result {
         for path in scripts {
             let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
             let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
-            if o.hypervisor == Hypervisor::VirtualBox
-                && let Some(why) = automate::needs_qemu(&text)
-            {
-                util::status("Skipping", format!("GUI script {name} (needs QEMU: {why})"));
-                continue;
-            }
             if let Some(what) = automate::needs_toolchain(&text)
                 && !toolchain::built(what)
             {
@@ -831,11 +708,7 @@ fn doctor() -> Result {
             }),
         );
     }
-    if cfg!(windows) {
-        check("msvc linker", vbuild::find_msvc().map(|m| m.link.display().to_string()));
-    } else {
-        check("linker", rust_lld().map(|p| p.display().to_string()));
-    }
+    check("linker", rust_lld().map(|p| p.display().to_string()));
     match qemu::QemuInstall::locate() {
         Ok(q) => {
             check("qemu", Ok(q.binary.display().to_string()));
@@ -845,14 +718,12 @@ fn doctor() -> Result {
     }
     // QEMU emulates the processor where it cannot use KVM, which works but
     // is several times slower.
-    if cfg!(target_os = "linux") {
-        match std::fs::OpenOptions::new().read(true).write(true).open("/dev/kvm") {
-            Ok(_) => println!("  [ok]   kvm: /dev/kvm"),
-            Err(e) => println!(
-                "  [--]   kvm: /dev/kvm: {e} (QEMU emulates the processor instead, several times slower; \
-                 members of the kvm group can use it)"
-            ),
-        }
+    match std::fs::OpenOptions::new().read(true).write(true).open("/dev/kvm") {
+        Ok(_) => println!("  [ok]   kvm: /dev/kvm"),
+        Err(e) => println!(
+            "  [--]   kvm: /dev/kvm: {e} (QEMU emulates the processor instead, several times slower; \
+             members of the kvm group can use it)"
+        ),
     }
     match toolchain::status() {
         Ok(v) => println!("  [ok]   c toolchain: {v}"),
@@ -865,8 +736,8 @@ fn doctor() -> Result {
     if ok { Ok(()) } else { Err("some checks failed".into()) }
 }
 
-/// The linker of user-space programs off Windows (`components::USER_LINKER`):
-/// LLVM's, which comes with Rust's toolchain, beside the host's libraries.
+/// The linker of user-space programs (`components::USER_LINKER`): LLVM's,
+/// which comes with Rust's toolchain, beside the host's libraries.
 fn rust_lld() -> Result<PathBuf> {
     let out = std::process::Command::new("rustc")
         .args(["--print", "target-libdir"])

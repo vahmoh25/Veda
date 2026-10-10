@@ -323,7 +323,7 @@ sleep between events.
   it, as loudspeakers next to a microphone would (`tests/agent/echo.vts`).
   To see how a real machine echoes, a script with `audio host` plays
   through the host's loudspeakers and records its microphone instead
-  (QEMU or VirtualBox; not part of the tests, it is audible).
+  (not part of the tests: it is audible).
 * `tests/real/agent-deepgram.vts` and `tests/real/agent-wake.vts` talk to
   the real Deepgram with the key in `$DEEPGRAM_API_KEY` (typed into
   Settings by `type-env`, so it appears in neither scripts nor logs); `say`

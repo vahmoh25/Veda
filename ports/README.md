@@ -50,8 +50,8 @@ up; `posix_spawn` asks the layer to start the program.
 OpenGL ES command streams of applications on Mesa's Gallium drivers, is a
 target of Mesa's build: `src/gallium/targets/veda`, compiling the sources
 the `veda-renderer` option names, makes the renderer service for Veda and,
-for the machine that builds it, `vgallium.dll` (on Linux `vgallium.so`:
-the renderer on softpipe) for the OpenGL ES tests. Gallium's own state
+for the machine that builds it, `vgallium.so` (the renderer on softpipe)
+for the OpenGL ES tests. Gallium's own state
 handling is built without any OpenGL API (`with_gfx_compute`), and
 `src/util/detect_os.h` counts Veda as Linux: its POSIX layer carries out
 Linux's system calls. iris, Intel's driver, is built with the renderer's

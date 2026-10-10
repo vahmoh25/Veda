@@ -2,9 +2,7 @@
 //!
 //! * `cargo xtask linux` builds its kernel from `ports/linux` (first zlib
 //!   and elfutils' libelf, from `ports/zlib` and `ports/elfutils`, for the
-//!   kernel's build tool objtool): `target/linux/bzImage`. The kernel is
-//!   built on Linux (on Windows, in WSL): its build needs a case-sensitive
-//!   file system and Linux's own tools.
+//!   kernel's build tool objtool): `target/linux/bzImage`.
 //! * Once it is built, every image build also builds the guest's programs
 //!   (`guest/`: Rust for Linux on musl, static) and packs them into the
 //!   initial RAM file system the kernel starts with, with the firmware its
@@ -83,9 +81,6 @@ pub fn status() -> std::result::Result<String, String> {
 }
 
 fn tools() -> Result {
-    if !cfg!(target_os = "linux") {
-        return Err("the driver VM's Linux builds on Linux (on Windows, in WSL)".into());
-    }
     let missing: Vec<&str> = BUILD_TOOLS.into_iter().filter(|t| util::find_on_path(t).is_none()).collect();
     if missing.is_empty() {
         Ok(())

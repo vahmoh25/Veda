@@ -8,8 +8,8 @@
 //!   "hello from the host", for a test server on the host machine (QEMU's
 //!   NAT makes the host reachable at the gateway address, 10.0.2.2).
 //! * `nettest lan`: the online checks, after checking that the address came
-//!   from a real network rather than a hypervisor's NAT (VirtualBox
-//!   `--net bridged`), plus TCP over IPv6 when there is a global address.
+//!   from a real network rather than a hypervisor's NAT (a PC's own), plus
+//!   TCP over IPv6 when there is a global address.
 //! * `nettest ipv6`: TCP over IPv6 to example.com.
 //! * `nettest https`: HTTPS requests with `vtls`: `GET /` from example.com
 //!   (expects 200 and the page) and `GET /v1/projects` from
@@ -81,9 +81,7 @@ fn wifi(e: wifi::WifiError) -> String {
 }
 
 /// TCP over IPv6 to example.com, when the machine has a global IPv6
-/// address. Reported but never a failure: many networks have no IPv6, and
-/// VirtualBox's bridge over a Wi-Fi adapter carries IPv4 only (it learns
-/// guests' addresses from ARP and DHCP).
+/// address. Reported but never a failure: many networks have no IPv6.
 fn check_ipv6_internet() -> Check {
     match ipv6_tcp(true) {
         Ok(s) => Ok(s),

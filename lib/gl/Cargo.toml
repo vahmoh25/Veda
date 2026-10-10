@@ -10,7 +10,7 @@ license.workspace = true
 # a worker thread per CPU.
 veda = ["dep:vrt", "dep:vabi", "dep:vproto"]
 # Host tests of programs using OpenGL ES: the virgl renderer on the host's
-# GPU, through the virglrenderer QEMU runs (Windows and Linux).
+# GPU, through the virglrenderer QEMU runs.
 host-virgl = []
 
 [dependencies]

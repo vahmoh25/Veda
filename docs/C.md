@@ -179,7 +179,7 @@ and wakes a waiter on, once the thread has left its stack).
    `ports/*/port.toml` pins (their GPG signatures were checked against the
    GNU and musl keys when they were pinned);
 2. builds the POSIX layer for `x86_64-unknown-none`;
-3. runs `ports/build.sh` (under MSYS2 on Windows) to unpack and patch the
+3. runs `ports/build.sh` to unpack and patch the
    sources and build, in `target/toolchain`:
    * `cross/` — the cross toolchain for this machine: `x86_64-veda-gcc`,
      `x86_64-veda-g++` with the C++ library (libstdc++), and the binutils,
@@ -190,8 +190,8 @@ and wakes a waiter on, once the thread has left its stack).
      on this machine, to run on Veda, making programs for Veda), binutils,
      GMP, MPFR and MPC, the C library and its headers.
 
-The first build takes about an hour and a half on a recent PC with
-Windows, and a quarter of an hour with Linux; later ones rebuild what
+The first build takes about a quarter of an hour on a recent PC; later
+ones rebuild what
 changed (each stage keeps a fingerprint of what went into it, and where: a
 toolchain directory that has moved is built again). When the
 POSIX layer changes, `cargo xtask build` puts the new one into the C
@@ -204,23 +204,15 @@ toolchain exists, and says so when it does not. The image grows by about
 80 MB with it, which Veda keeps in memory; compiling is comfortable in
 QEMU's default 1 GiB.
 
-On Windows the build needs MSYS2 (`C:\msys64`, or `VEDA_MSYS2`) with:
-
-```text
-pacman -S make m4 bison flex texinfo diffutils patch mingw-w64-ucrt-x86_64-gcc
-pacman -S meson ninja python-mako python-yaml python-packaging
-```
-
-On Linux it needs the distribution's packages; on Debian and Ubuntu:
+The build needs the distribution's packages; on Debian and Ubuntu:
 
 ```text
 sudo apt install build-essential m4 bison flex curl libgmp-dev libmpfr-dev libmpc-dev
 sudo apt install meson ninja-build python3-mako python3-yaml python3-packaging
 ```
 
-On both, the second line is for Mesa (the renderer's Gallium;
-`ports/mesa`), whose build is meson's. On Windows, the cross toolchain's
-programs are linked statically and run without MSYS2.
+The second line is for Mesa (the renderer's Gallium; `ports/mesa`), whose
+build is meson's.
 
 ### The ports
 

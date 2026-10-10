@@ -18,9 +18,14 @@ rustflags = [
     "--cfg", "curve25519_dalek_backend=\"serial\"",
 ]
 
+# Veda's user-space programs are PE executables, linked by LLVM's linker in
+# the Microsoft linker's flavour, which Rust ships (see lib/build).
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+
 # Programs of the driver VM's Linux guest (guest/): their Veda runtime makes
 # its system calls through the bridge (see lib/rt/src/guest.rs), and they
-# link statically with Rust's own linker on any host.
+# link statically with Rust's own linker.
 [target.x86_64-unknown-linux-musl]
 linker = "rust-lld"
 rustflags = ["--cfg", "veda_guest"]

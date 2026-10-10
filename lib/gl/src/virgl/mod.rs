@@ -30,9 +30,9 @@ pub mod caps;
 mod draw;
 mod feedback;
 pub mod formats;
-#[cfg(all(any(windows, target_os = "linux"), any(test, feature = "host-virgl")))]
+#[cfg(all(target_os = "linux", any(test, feature = "host-virgl")))]
 pub mod gallium;
-#[cfg(all(any(windows, target_os = "linux"), any(test, feature = "host-virgl")))]
+#[cfg(all(target_os = "linux", any(test, feature = "host-virgl")))]
 pub mod host;
 mod ops;
 mod protocol;

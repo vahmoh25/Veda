@@ -18,13 +18,9 @@ cargo xtask script tests/ui/about-interaction.vts   # scripted GUI test
 cargo xtask test               # host unit tests + in-system integration tests
 cargo xtask test --ui          # ... plus every GUI script in tests/ui
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
-cargo xtask run --vm virtualbox            # the same in VirtualBox (VM "Veda")
-cargo xtask run --vm virtualbox --net bridged   # ... on the host's real network
-cargo xtask run --vm virtualbox --resolution 1600x1000 --scale 2   # larger desktop, window at 2x
-cargo xtask test --ui --vm virtualbox      # the test suite in VirtualBox
-cargo xtask run --disk-bus ahci             # QEMU with SATA disks (as VirtualBox has)
-cargo xtask run --sound ac97   # QEMU with an AC'97 sound card (as VirtualBox has)
-cargo xtask run --sound hda    # Intel HD Audio, as most PCs have (also --vm virtualbox)
+cargo xtask run --disk-bus ahci             # QEMU with SATA disks
+cargo xtask run --sound ac97   # QEMU with an AC'97 sound card
+cargo xtask run --sound hda    # Intel HD Audio, as most PCs have
 cargo xtask script tests/ui/hda.vts         # HD Audio: music plays and reaches the recording
 cargo xtask run --input usb    # USB keyboard, tablet (behind a hub) and mouse, no PS/2
 cargo xtask script tests/ui/usb-input.vts   # USB input, with devices plugged in and out
@@ -38,17 +34,16 @@ cargo xtask script tests/ui/flips.vts      # the window system's flips, on a sta
 cargo xtask script tests/ui/flips-gpu.vts  # ... its frames drawn by a GPU (the renderer on softpipe; slow)
 cargo xtask script tests/ui/flips-iris.vts # ... the pictures offered to iris on a stand-in GPU that runs nothing
 cargo xtask script tests/ui/prism.vts      # OpenGL ES: Prism renders (on the GPU if QEMU has one)
-VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (Windows: ANGLE; Linux: desktop OpenGL)
-VGL_TEST_HOST=desktop VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on Windows on its desktop OpenGL
-VGL_TEST_HOST=gles VGL_TEST_BACKEND=virgl cargo test -p vgl      # ... on Linux on OpenGL ES
-VGL_TEST_RENDERNODE=/dev/dri/renderD129 VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on Linux on another GPU
-VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mesa's softpipe (vgallium.dll, .so on Linux)
+VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (desktop OpenGL)
+VGL_TEST_HOST=gles VGL_TEST_BACKEND=virgl cargo test -p vgl      # ... on OpenGL ES
+VGL_TEST_RENDERNODE=/dev/dri/renderD129 VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on another GPU
+VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mesa's softpipe (vgallium.so)
 VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl   # ... with depth kept as on iris (lower 24 bits)
 cargo xtask script tests/ui/renderer.vts   # Prism through the renderer service (softpipe) in Veda
 cargo xtask script tests/ui/iris.vts       # ... on iris (Intel's driver), with a stand-in Intel GPU that runs nothing
 cargo xtask toolchain          # build the C toolchain from ports/ (GCC, binutils, musl; Mesa configured) -> target/toolchain
 cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
-cargo xtask linux              # build the driver VM's Linux from ports/linux (on Linux) -> target/linux/bzImage
+cargo xtask linux              # build the driver VM's Linux from ports/linux -> target/linux/bzImage
 cargo xtask run --cmdline "drivervm"        # ... and boot with it (needs KVM's nested virtualization)
 cargo xtask run --iommu        # QEMU with an Intel IOMMU (interrupt remapping too)
 cargo xtask script tests/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
@@ -58,33 +53,26 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
 * The serial console (kernel log plus every program's `println!`) is saved
   to `target/veda/serial.log` by `shot`/`script`/`test`.
 * QEMU's display is also a 3D GPU (`virtio-vga-gl`: VGA plus virtio-gpu
-  with virgl) when its build has one, as QEMU's Windows build does (with
-  ANGLE) and Linux distributions' do (on Debian and Ubuntu with
-  `qemu-system-modules-opengl`): the window then uses `-display gtk,gl=on`
-  (the host's desktop OpenGL), and headless runs `-display egl-headless`
-  (ANGLE on Windows, the host's EGL on Linux). `--no-gpu` makes it plain
-  VGA and `--gpu` insists on the GPU.
+  with virgl) when its build has one, as distributions' do (on Debian and
+  Ubuntu with `qemu-system-modules-opengl`): the window then uses
+  `-display gtk,gl=on` (the host's desktop OpenGL), and headless runs
+  `-display egl-headless` (the host's EGL). `--no-gpu` makes it plain VGA
+  and `--gpu` insists on the GPU.
   OpenGL ES programs render on it through the `virtio-gpu` driver, on a
   PC with Intel's Iris Xe (Tiger Lake to Raptor Lake) through the
-  renderer on iris and `intel-gpu`, and in software elsewhere
-  (VirtualBox).
+  renderer on iris and `intel-gpu`, and in software elsewhere.
 * Where QEMU has the 3D GPU, `cargo xtask test` also runs the OpenGL ES
-  tests on the host's GPU, through the virglrenderer QEMU runs. On
-  Windows that is the one QEMU ships, on ANGLE and on the host's desktop
-  OpenGL, as headless QEMU and its window render (`VEDA_QEMU_DIR` says
-  where, if not with the QEMU xtask finds). On Linux it is the system's
-  (`libvirglrenderer1` on Debian and Ubuntu), on desktop OpenGL, as QEMU
-  renders, and on OpenGL ES, through EGL on the GPU of the first render
-  node, as headless QEMU takes it (`VGL_TEST_RENDERNODE` names another).
+  tests on the host's GPU, through the system's virglrenderer
+  (`libvirglrenderer1` on Debian and Ubuntu), which QEMU runs: on desktop
+  OpenGL, as QEMU renders, and on OpenGL ES, through EGL on the GPU of the
+  first render node, as headless QEMU takes it (`VGL_TEST_RENDERNODE`
+  names another).
   Once the C toolchain is built, the tests also run through Veda's
   renderer on softpipe.
   `PRISM_SIZE=960x600 PRISM_SHOT=soft.png PRISM_GPU_SHOT=gpu.png cargo test
   -p prism-scene` saves Prism's frame as both renderers draw it.
 * QEMU's window (GTK) takes the pointer as absolute from power-on: the
-  tablet is bound to the display, so a click never grabs the mouse. On
-  Windows, QEMU deadlocks if it holds a grab (Ctrl+Alt+G takes one) when
-  one of Veda's pointer drivers starts: the window stops responding, at
-  boot on the splash screen.
+  tablet is bound to the display, so a click never grabs the mouse.
 * `--cmdline "run=NAME"` makes `init` start `/system/bin/NAME.exe` after the
   system services, which is the quickest way to test an application.
 * `cargo xtask iso` writes a hybrid ISO image (`xtask/src/image/iso9660.rs`)
@@ -97,7 +85,7 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   (`tests/ui/live-usb.vts`); `--out FILE` writes it elsewhere.
 * `--input usb` replaces QEMU's PS/2 controller and virtio tablet with
   USB devices on an xHCI controller: a hub with a keyboard and a tablet,
-  and a mouse (in VirtualBox: a USB keyboard and tablet). Scripts ask for
+  and a mouse. Scripts ask for
   it with an `input usb` line, and plug devices in and out with `qmp`
   commands (`qmp device_add '{"driver":"usb-kbd","bus":"xhci.0","port":"2.3","id":"kbd2"}'`
   and `qmp device_del '{"id":"kbd2"}'`); the driver logs each device it
@@ -153,8 +141,7 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   when that is set.
 * `--sound hda` gives QEMU the ICH9's HD Audio controller with QEMU's
   codec (`hda-output` when recording to a WAV file, `hda-duplex`, with a
-  line input, otherwise), and VirtualBox its HD Audio with an emulated
-  SigmaTel STAC9221, which runs at 44.1 kHz. When the driver finds a
+  line input, otherwise). When the driver finds a
   codec it cannot play through, it logs every widget of it (`dmesg hda`
   in the Terminal shows them), which is what a fix for that codec needs.
   When sound plays wrongly on a real PC, the same log has the converters'
@@ -197,29 +184,10 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
 * The agent's scripts (`tests/agent/`) talk to a stand-in for Deepgram
   that xtask starts on the host, and feed the agent's microphone from the
   host (`testmic`). The scripts in `tests/real/` talk to the real Deepgram
-  with the key in `DEEPGRAM_API_KEY` (in PowerShell
-  `$env:DEEPGRAM_API_KEY = "..."`, in a Unix shell
-  `export DEEPGRAM_API_KEY=...`); they type it into Settings with
+  with the key in `DEEPGRAM_API_KEY` (`export DEEPGRAM_API_KEY=...`);
+  they type it into Settings with
   `type-env`, so it is in neither the script nor the logs. See
   [The agent](AGENT.md#testing).
-* With `--vm virtualbox`, xtask creates the VirtualBox machine "Veda"
-  (files in `target/veda/vbox`) on first use and updates it from the
-  options on every run. Its disks are VMDK descriptors (`veda.vmdk`,
-  `home.vmdk`) that point at the raw images, so VirtualBox and QEMU use the
-  same files (not at the same time). The serial console goes to
-  `target/veda/serial-vbox.log` and the terminal; Ctrl+C powers the
-  machine off. On Windows the window enlarges the screen by the whole part
-  of the host's display scaling, as QEMU's window (GTK) does, lowered until
-  the window fits on the screen, and opens in the middle of the screen when
-  the resolution or the scale changes; `--scale 2` or `--scale 250%` chooses
-  the factor and `--scale 1` shows the screen pixel for pixel. Resolutions
-  missing from the firmware's list become a custom video mode. Inside the
-  window, View > Virtual Screen changes the scale, Host+F switches to full
-  screen and Host+C to scaled mode, whose window can be resized freely.
-  Scripts drive VirtualBox through `VBoxManage` (keys as PS/2 scan codes,
-  screenshots) and its COM API (the mouse, through a helper PowerShell
-  process, so on Windows only); `test` skips scripts that need QEMU's
-  simulated Wi-Fi, and on Linux those that use the mouse.
 * With `--net wifi`, xtask builds and starts `airsim` (the simulated Wi-Fi
   environment) next to QEMU; it logs to `target/veda/airsim.log` and
   prints its control port, which takes commands such as `ap home off`,
@@ -237,11 +205,8 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   help while a component is being worked on).
 * Several builds can run concurrently if each uses its own directories:
   set `CARGO_TARGET_DIR` (cargo output) and `VEDA_OUT` (disk image, serial
-  log, screenshots) to private paths, e.g. in PowerShell
-  `$env:CARGO_TARGET_DIR="target/agent-x"; $env:VEDA_OUT="target/agent-x/veda"`,
-  in a Unix shell `export CARGO_TARGET_DIR=target/agent-x VEDA_OUT=target/agent-x/veda`.
-  With `--vm virtualbox`, each output directory also gets its own machine
-  (here "Veda-target-agent-x-veda").
+  log, screenshots) to private paths, e.g.
+  `export CARGO_TARGET_DIR=target/agent-x VEDA_OUT=target/agent-x/veda`.
   Paths in automation scripts (`shot FILE`) are relative to the repository.
 
 ## The system image

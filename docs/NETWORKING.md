@@ -63,7 +63,7 @@ out, and a system call only when the other side is asleep.
 | `services/wlan` | the Wi-Fi service (`wlan` and `wlanphy` protocols) |
 | `lib/wlan` | `vwlan`: IEEE 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, saved-network format, connection policy |
 | `drivers/virtio-net` | virtio network card driver |
-| `drivers/e1000` | Intel PRO/1000 driver: 82540EM (QEMU `e1000`, VirtualBox), 82545EM (VMware), 82574L (QEMU `e1000e`) |
+| `drivers/e1000` | Intel PRO/1000 driver: 82540EM (QEMU `e1000`), 82545EM, 82574L (QEMU `e1000e`) |
 | `drivers/vwifi` | the virtual Wi-Fi radio (virtio-console port) |
 | `lib/radiolink` | `vradiolink`: the message format between `vwifi` (or `airlink`) and `airsim` |
 | `guest/net`, `guest/wifi`, `guest/airlink` | in the driver VM: Linux's Ethernet cards as `netdev` devices; Linux's Wi-Fi radios as managed radios; QEMU's virtual radio as one of Linux's (mac80211_hwsim) |
@@ -144,9 +144,8 @@ out, and a system call only when the other side is asleep.
 
 ### The virtual radio and `airsim`
 
-QEMU cannot emulate a Wi-Fi adapter, and a Windows host cannot pass its own
-adapter through. Under QEMU the radio is therefore a virtio-serial port
-named `org.veda.wlan.0` whose other end is **airsim**
+QEMU cannot emulate a Wi-Fi adapter. Under QEMU the radio is therefore a
+virtio-serial port named `org.veda.wlan.0` whose other end is **airsim**
 (`tools/airsim`), a host program that simulates the radio medium and a set
 of access points built on `vwlan`'s access point state machine. airsim
 bridges the access points to a QEMU user-mode network (NAT) through a hub
@@ -231,53 +230,6 @@ joins every kind of network through it, and
 does. airsim's radio then hears every channel (radio link version 2's
 `LISTEN`), each frame with its own, and Linux keeps what is on its
 channel.
-
-The simulated environment needs QEMU (VirtualBox has no virtio-serial
-port).
-
-## Real networks (VirtualBox)
-
-```bash
-cargo xtask run --vm virtualbox --net bridged
-```
-
-bridges Veda's network card (VirtualBox's Intel PRO/1000, driven by
-`e1000`) to a host adapter (`--bridge NAME`, by default the first one
-connected, preferring a wired one), so Veda is a machine on your real
-network: it gets its address, gateway and DNS server from your router by
-DHCP and reaches the Internet through it. This works over the host's Wi-Fi
-too (VirtualBox translates MAC addresses there); the host's adapter does
-the Wi-Fi part. For Veda itself to run Wi-Fi against a real router, it
-needs a radio of its own: a USB Wi-Fi adapter passed through to the
-virtual machine, with drivers for the USB controller and the adapter's
-chip.
-
-On a Windows host, the host's network adapter may merge received TCP
-segments into one frame (receive segment coalescing), and VirtualBox
-passes these on to the bridged guest: frames several times the MTU long,
-carrying the first segment's TCP checksum. `e1000` accepts long frames,
-puts together frames spread over several receive buffers and sets the
-checksum of merged ones again (the host checked every segment before
-merging them). Dropping them, as it once did, made every download crawl
-through retransmissions.
-
-To check it from inside Veda:
-
-```bash
-cargo xtask script tests/real/bridged.vts --vm virtualbox
-```
-
-On this machine (bridged over the laptop's Wi-Fi) Veda got
-192.168.1.124/24 from the router, DNS through it, and passed the DNS, UDP,
-TCP, HTTP and ping checks. It also gets a global IPv6 address from the
-router, but VirtualBox's bridge over a Wi-Fi adapter only learns guests'
-IPv4 addresses (from ARP and DHCP), so IPv6 traffic beyond the link does
-not come back; the check reports it without failing. Veda's IPv6 itself
-reaches the Internet: through QEMU's NAT, `run=nettest:ipv6` connects to
-example.com over IPv6. A wired adapter has no such limitation.
-
-The default `--net ethernet` uses VirtualBox's NAT (10.0.2.15, gateway
-10.0.2.2), which passes the host's DNS server to Veda.
 
 ## Using the network
 

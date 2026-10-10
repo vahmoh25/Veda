@@ -1,7 +1,7 @@
 //! Veda's renderer on the host, for tests (`VGL_TEST_BACKEND=gallium`):
 //! the decoder that carries out virgl command streams on a Gallium driver
-//! (`services/renderer`), built with Mesa as `vgallium.dll` (on Linux
-//! `vgallium.so`) around softpipe, Mesa's reference rasterizer. In Veda
+//! (`services/renderer`), built with Mesa as `vgallium.so` around softpipe,
+//! Mesa's reference rasterizer. In Veda
 //! the same decoder runs the PC's GPU for the `gpu` service's clients;
 //! here the tests call it directly, a device and context of its own for
 //! each of theirs.
@@ -48,17 +48,10 @@ unsafe impl Sync for Lib {}
 
 fn dll_path() -> String {
     std::env::var("VGL_GALLIUM_DLL").unwrap_or_else(|_| {
-        #[cfg(windows)]
-        let built = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            r"\..\..\target\toolchain\build\mesa-host\src\gallium\targets\veda\vgallium.dll"
-        );
-        #[cfg(not(windows))]
-        let built = concat!(
+        String::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../target/toolchain/build/mesa-host/src/gallium/targets/veda/vgallium.so"
-        );
-        String::from(built)
+        ))
     })
 }
 

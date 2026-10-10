@@ -28,21 +28,20 @@
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
 //! nic e1000                        # QEMU model of the wired card for this run, applied before boot
 //! sound ac97                       # the sound card for this run (virtio, ac97 or hda), applied before boot
-//! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot (QEMU)
+//! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
-//! qmp device_del '{"id":"kbd2"}'   # a QMP command, such as plugging USB devices in and out (QEMU)
+//! qmp device_del '{"id":"kbd2"}'   # a QMP command, such as plugging USB devices in and out
 //! audio host                       # the host's loudspeakers and microphone instead of a WAV file (echo on real hardware)
 //! audio silent                     # QEMU's silent sound system: the output is not recorded, the input records silence
 //! expect-audio                     # fail unless the recorded sound output holds more than silence
 //! expect-audio-gapless [20]        # fail if it drops out (digital silence over 20 ms between its first and last sound)
 //! iommu                            # QEMU's IOMMU (interrupt remapping too), applied before boot
 //! usb net                          # QEMU's USB network adapter (CDC Ethernet) on the xHCI controller
-//! requires qemu                    # only for QEMU (or `virtualbox`); `test` skips it elsewhere
 //! requires c-toolchain             # only with the C test programs (`cargo xtask toolchain`); `test` skips it otherwise
 //! requires native-toolchain        # only with GCC in the image (the same)
 //! requires renderer                # only with Veda's renderer in the image (Mesa, the same)
-//! requires drivervm                # only with the driver VM's Linux in the image (`cargo xtask linux`), under QEMU
-//!                                  # with nested virtualization (KVM's kvm_intel nested=1)
+//! requires drivervm                # only with the driver VM's Linux in the image (`cargo xtask linux`), with
+//!                                  # KVM's nested virtualization (kvm_intel nested=1)
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
 //! air-expect "list" "1 joined"     # fail unless the simulator's answer contains the text
 //! air-wait "list" "1 joined" 60    # wait until it does (timeout in s)
@@ -84,110 +83,66 @@ use crate::mic::{self, MicServer};
 use crate::qemu::{self, InputDevices, NetMode, QemuInstall, VmConfig};
 use crate::qmp::Qmp;
 use crate::util::{self, Result};
-use crate::vboxctl;
 
-/// Where a script runs.
-pub enum Hypervisor<'a> {
-    Qemu(&'a QemuInstall),
-    /// VirtualBox, with the screen resolution the image boots with.
-    VirtualBox {
-        resolution: &'a str,
-    },
-}
-
-/// The machine a script drives.
-pub enum Machine {
-    Qemu { child: Child, qmp: Qmp },
-    VirtualBox(vboxctl::Control),
+/// The machine a script drives: QEMU, through QMP.
+pub struct Machine {
+    child: Child,
+    qmp: Qmp,
 }
 
 impl Machine {
     pub fn screenshot(&mut self, path: &Path) -> Result {
-        match self {
-            Machine::Qemu { qmp, .. } => qmp.screenshot(path),
-            Machine::VirtualBox(c) => c.screenshot(path),
-        }
+        self.qmp.screenshot(path)
     }
 
     pub fn move_mouse(&mut self, fx: f64, fy: f64) -> Result {
-        match self {
-            Machine::Qemu { qmp, .. } => qmp.move_mouse(fx, fy),
-            Machine::VirtualBox(c) => c.move_mouse(fx, fy),
-        }
+        self.qmp.move_mouse(fx, fy)
     }
 
     pub fn mouse_button(&mut self, button: &str, down: bool) -> Result {
-        match self {
-            Machine::Qemu { qmp, .. } => qmp.mouse_button(button, down),
-            Machine::VirtualBox(c) => c.mouse_button(button, down),
-        }
+        self.qmp.mouse_button(button, down)
     }
 
     pub fn send_keys(&mut self, combo: &str) -> Result {
-        match self {
-            Machine::Qemu { qmp, .. } => qmp.send_keys(combo),
-            Machine::VirtualBox(c) => c.send_keys(combo),
-        }
+        self.qmp.send_keys(combo)
     }
 
     pub fn key_event(&mut self, key: &str, down: bool) -> Result {
-        match self {
-            Machine::Qemu { qmp, .. } => qmp.key_event(key, down),
-            Machine::VirtualBox(c) => c.key_event(key, down),
-        }
+        self.qmp.key_event(key, down)
     }
 
     pub fn type_text(&mut self, text: &str) -> Result {
-        match self {
-            Machine::Qemu { qmp, .. } => qmp.type_text(text),
-            Machine::VirtualBox(c) => c.type_text(text),
-        }
+        self.qmp.type_text(text)
     }
 
     /// Plugs in or unplugs the wired card's cable.
     pub fn set_wired_link(&mut self, up: bool) -> Result {
-        match self {
-            Machine::Qemu { qmp, .. } => {
-                let name = qemu::WIRED_NIC_ID;
-                qmp.execute("set_link", &format!("{{\"name\":\"{name}\",\"up\":{up}}}")).map(|_| ())
-            }
-            Machine::VirtualBox(c) => c.vbox().set_link(up),
-        }
+        let name = qemu::WIRED_NIC_ID;
+        self.qmp.execute("set_link", &format!("{{\"name\":\"{name}\",\"up\":{up}}}")).map(|_| ())
     }
 
     fn reset(&mut self) -> Result {
-        match self {
-            Machine::Qemu { qmp, .. } => qmp.execute("system_reset", "{}").map(|_| ()),
-            Machine::VirtualBox(c) => c.reset(),
-        }
+        self.qmp.execute("system_reset", "{}").map(|_| ())
     }
 
     /// Why the machine stopped, if it did.
     fn stopped(&mut self) -> Option<String> {
-        match self {
-            Machine::Qemu { child, .. } => match child.try_wait() {
-                Ok(Some(status)) => Some(format!("QEMU exited ({status})")),
-                _ => None,
-            },
-            Machine::VirtualBox(c) => (!c.vbox().is_running()).then(|| "the VirtualBox machine stopped".into()),
+        match self.child.try_wait() {
+            Ok(Some(status)) => Some(format!("QEMU exited ({status})")),
+            _ => None,
         }
     }
 
     fn finish(&mut self) {
-        match self {
-            Machine::Qemu { child, qmp } => {
-                qmp.quit();
-                let start = Instant::now();
-                while start.elapsed() < Duration::from_secs(5) {
-                    if let Ok(Some(_)) = child.try_wait() {
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                let _ = child.kill();
+        self.qmp.quit();
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
             }
-            Machine::VirtualBox(c) => c.finish(),
+            std::thread::sleep(Duration::from_millis(50));
         }
+        let _ = self.child.kill();
     }
 }
 
@@ -205,26 +160,12 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn start(hv: &Hypervisor, disk: &Path, mut vm: VmConfig) -> Result<Self> {
+    pub fn start(install: &QemuInstall, disk: &Path, mut vm: VmConfig) -> Result<Self> {
         let out = util::out_dir();
         let serial_log = out.join("serial.log");
         let _ = std::fs::remove_file(&serial_log);
         // Kernel panics print "PANIC", user-space panics "panicked at".
         let fail_patterns = vec!["PANIC".into(), "panicked at".into()];
-        let install = match hv {
-            Hypervisor::Qemu(install) => *install,
-            Hypervisor::VirtualBox { resolution } => {
-                let vbox = crate::vbox::VBox::locate()?;
-                vbox.configure(&vm, disk, vm.home_disk.as_deref(), &serial_log, resolution, None)?;
-                vbox.start(true)?;
-                let (w, h) = resolution
-                    .split_once('x')
-                    .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
-                    .unwrap_or((1280, 800));
-                let m = Machine::VirtualBox(vboxctl::Control::new(vbox, (w, h)));
-                return Ok(Session { m, serial_log, fail_patterns, since: 0, sim: None });
-            }
-        };
         let port = {
             let l = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
             l.local_addr().map_err(|e| e.to_string())?.port()
@@ -245,7 +186,7 @@ impl Session {
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
         let child = cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?;
         let qmp = Qmp::connect(port, Duration::from_secs(20))?;
-        Ok(Session { m: Machine::Qemu { child, qmp }, serial_log, fail_patterns, since: 0, sim })
+        Ok(Session { m: Machine { child, qmp }, serial_log, fail_patterns, since: 0, sim })
     }
 
     fn serial_bytes(&self) -> Vec<u8> {
@@ -437,34 +378,6 @@ pub fn gpu(script: &str) -> Result<Option<bool>> {
     Ok(gpu)
 }
 
-/// Why a script can only run under QEMU, if it can: the simulated Wi-Fi
-/// (virtio-serial and airsim), QEMU's 82574L card, the live system's USB
-/// stick, QMP commands, the choice of display (`gpu`), or `requires qemu`.
-pub fn needs_qemu(script: &str) -> Option<&'static str> {
-    for w in script.lines().map(words) {
-        match w.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-            ["net", "wifi" | "both", ..] => return Some("simulated Wi-Fi"),
-            ["nic", "e1000e", ..] => return Some("the 82574L card"),
-            ["nic", "igb", ..] => return Some("the 82576 card"),
-            ["air" | "air-expect" | "air-wait", ..] => return Some("the Wi-Fi simulator"),
-            ["live", ..] => return Some("the live system's USB stick"),
-            ["qmp", ..] => return Some("QMP commands"),
-            ["gpu", ..] => return Some("the choice of QEMU's display"),
-            ["iommu", ..] => return Some("QEMU's IOMMU"),
-            ["usb", "net", ..] => return Some("QEMU's USB network adapter"),
-            ["requires", "qemu", ..] => return Some("marked as QEMU only"),
-            ["requires", "drivervm", ..] => return Some("the driver VM (nested virtualization)"),
-            // VirtualBox's mouse is moved through its COM API, from
-            // PowerShell (see `vboxctl`).
-            ["move" | "click" | "double-click" | "drag" | "mouse-down" | "mouse-up", ..] if !cfg!(windows) => {
-                return Some("the mouse, which xtask moves in VirtualBox on Windows only");
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 /// Whether a script starts with the agent asleep (`agent-asleep`) rather
 /// than in a conversation.
 pub fn agent_asleep(script: &str) -> bool {
@@ -513,11 +426,6 @@ pub fn needs_drivervm(script: &str) -> bool {
     script.lines().map(words).any(|w| w.len() >= 2 && w[0] == "requires" && w[1] == "drivervm")
 }
 
-/// Whether a script says `requires virtualbox`.
-pub fn needs_virtualbox(script: &str) -> bool {
-    script.lines().map(words).any(|w| w.len() >= 2 && w[0] == "requires" && w[1] == "virtualbox")
-}
-
 /// The sound card a script asks for with `sound` (`virtio` or `ac97`).
 pub fn sound_card(script: &str) -> Option<String> {
     script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "sound")).find_map(|w| w.get(1).cloned())
@@ -554,14 +462,14 @@ impl Session {
 
 /// Runs an automation script against a fresh VM booted from `disk`.
 pub fn run_script(
-    hv: &Hypervisor,
+    install: &QemuInstall,
     disk: &Path,
     vm: VmConfig,
     script: &str,
     mic: Option<MicServer>,
     mut agent: Option<AgentSim>,
 ) -> Result<String> {
-    let mut s = Session::start(hv, disk, vm)?;
+    let mut s = Session::start(install, disk, vm)?;
     let mic_ref = || mic.as_ref().ok_or_else(|| "this run has no test microphone".to_string());
     let mut agent_result = String::new();
     let mut agent_mark = 0usize;
@@ -647,10 +555,7 @@ pub fn run_script(
                 "qmp" => {
                     let command = w.get(1).ok_or("missing command")?;
                     let arguments = w.get(2).map_or("{}", String::as_str);
-                    match &mut s.m {
-                        Machine::Qemu { qmp, .. } => qmp.execute(command, arguments).map(|_| ()).map_err(ctx)?,
-                        Machine::VirtualBox(_) => return Err(ctx("qmp needs QEMU".into())),
-                    }
+                    s.m.qmp.execute(command, arguments).map(|_| ()).map_err(ctx)?;
                 }
                 "air" => {
                     let line = w.get(1).ok_or("missing command")?;

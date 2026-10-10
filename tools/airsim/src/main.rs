@@ -28,7 +28,7 @@ mod packet;
 mod tests;
 mod world;
 
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -126,28 +126,17 @@ fn radio_thread(addr: SocketAddr, events: Sender<Event>, hold: Hold) {
                 if events.send(Event::RadioUp(writer)).is_err() {
                     return;
                 }
+                // `radio drop` shuts the socket down, which ends the read.
                 let mut stream = stream;
-                // Wake up regularly: on Windows, shutting the socket down from
-                // another thread does not interrupt a blocked read, so a
-                // `radio drop` is noticed here.
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
                 let mut buf = vec![0u8; 16384];
                 loop {
                     match stream.read(&mut buf) {
-                        Ok(0) => break,
+                        Ok(0) | Err(_) => break,
                         Ok(n) => {
                             if events.send(Event::RadioData(buf[..n].to_vec())).is_err() {
                                 return;
                             }
                         }
-                        Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                            let held =
-                                hold.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|t| Instant::now() < t);
-                            if held {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
                     }
                 }
                 drop(stream);
@@ -181,9 +170,6 @@ fn wired_thread(socket: UdpSocket, remote: SocketAddr, events: Sender<Event>) {
                 }
             }
             Ok(_) => {}
-            // Windows reports an ICMP "port unreachable" for an earlier
-            // send (QEMU not listening yet) as an error on the next receive.
-            Err(e) if e.kind() == ErrorKind::ConnectionReset => {}
             Err(_) => std::thread::sleep(Duration::from_millis(50)),
         }
     }

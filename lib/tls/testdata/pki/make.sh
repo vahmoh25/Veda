@@ -7,8 +7,6 @@
 # the tests check them at 2026-06-01. The private keys are test keys, stored
 # as DER (SEC1 for ECDSA, PKCS#8 for Ed25519, PKCS#1 for RSA).
 set -e
-# Git Bash would turn "/CN=..." into a Windows path.
-export MSYS_NO_PATHCONV=1
 NB=20260101000000Z
 NA=20360101000000Z
 NAME=test.veda.local

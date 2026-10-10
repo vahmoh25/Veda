@@ -13,23 +13,13 @@ pub struct QemuInstall {
 }
 
 impl QemuInstall {
-    /// Finds QEMU via `$QEMU`, `PATH` or well-known install locations, and the
-    /// OVMF firmware via `$OVMF_CODE`/`$OVMF_VARS`, QEMU's data directory or
-    /// where Linux distributions install it.
+    /// Finds QEMU via `$QEMU` or `PATH`, and the OVMF firmware via
+    /// `$OVMF_CODE`/`$OVMF_VARS`, QEMU's data directory or where Linux
+    /// distributions install it.
     pub fn locate() -> Result<Self> {
         let binary = std::env::var_os("QEMU")
             .map(PathBuf::from)
             .or_else(|| util::find_on_path("qemu-system-x86_64"))
-            .or_else(|| {
-                [
-                    r"C:\Program Files\qemu\qemu-system-x86_64.exe",
-                    "/usr/bin/qemu-system-x86_64",
-                    "/opt/homebrew/bin/qemu-system-x86_64",
-                ]
-                .iter()
-                .map(PathBuf::from)
-                .find(|p| p.is_file())
-            })
             .ok_or("QEMU not found: install it or set the QEMU environment variable")?;
 
         let qemu_dir = binary.parent().unwrap_or(Path::new("."));
@@ -54,8 +44,8 @@ impl QemuInstall {
             .iter()
             .flat_map(|d| pairs.iter().map(move |(code, vars)| (d.join(code), d.join(vars))))
             .find(|(code, vars)| code.is_file() && vars.is_file());
-        let missing = "the OVMF firmware was not found: install it (QEMU for Windows includes it; on Linux \
-                       it is the ovmf or edk2-ovmf package) or set OVMF_CODE and OVMF_VARS";
+        let missing = "the OVMF firmware was not found: install it (the ovmf or edk2-ovmf package) or set \
+                       OVMF_CODE and OVMF_VARS";
         let ovmf_code = std::env::var_os("OVMF_CODE")
             .map(PathBuf::from)
             .or_else(|| found.as_ref().map(|(code, _)| code.clone()))
@@ -63,15 +53,6 @@ impl QemuInstall {
         let ovmf_vars_template =
             std::env::var_os("OVMF_VARS").map(PathBuf::from).or_else(|| found.map(|(_, vars)| vars)).ok_or(missing)?;
         Ok(QemuInstall { binary, ovmf_code, ovmf_vars_template })
-    }
-
-    /// The directory of the virglrenderer library this QEMU runs, which the
-    /// OpenGL ES tests can drive directly (Windows builds, which ship it
-    /// with ANGLE).
-    pub fn virglrenderer_dir(&self) -> Option<PathBuf> {
-        let dir = self.binary.parent()?;
-        (cfg!(windows) && dir.join("libvirglrenderer-1.dll").is_file() && dir.join("libEGL.dll").is_file())
-            .then(|| dir.to_path_buf())
     }
 
     /// Whether this QEMU has the 3D virtio-gpu (built with virglrenderer):
@@ -101,10 +82,6 @@ pub enum NetMode {
     Wifi,
     /// Both the wired card and the Wi-Fi radio.
     Both,
-    /// The wired card bridged to a host network adapter (VirtualBox only):
-    /// Veda joins the host's real network (its router's DHCP, DNS and
-    /// Internet).
-    Bridged,
 }
 
 impl NetMode {
@@ -114,13 +91,12 @@ impl NetMode {
             "ethernet" | "wired" | "user" => Some(NetMode::Ethernet),
             "wifi" | "wi-fi" | "wireless" => Some(NetMode::Wifi),
             "both" => Some(NetMode::Both),
-            "bridged" | "bridge" => Some(NetMode::Bridged),
             _ => None,
         }
     }
 
     pub fn wired(self) -> bool {
-        matches!(self, NetMode::Ethernet | NetMode::Both | NetMode::Bridged)
+        matches!(self, NetMode::Ethernet | NetMode::Both)
     }
 
     pub fn wireless(self) -> bool {
@@ -144,8 +120,7 @@ pub struct WifiPorts {
 pub enum DiskBus {
     /// virtio-blk (QEMU's default here).
     Virtio,
-    /// SATA disks on the machine's AHCI controller (as in VirtualBox and most
-    /// PCs).
+    /// SATA disks on the machine's AHCI controller (as most PCs have).
     Ahci,
 }
 
@@ -162,12 +137,10 @@ impl DiskBus {
 /// The keyboard and pointing devices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputDevices {
-    /// QEMU: a PS/2 keyboard and the virtio tablet; VirtualBox: a PS/2
-    /// keyboard and mouse.
+    /// A PS/2 keyboard and the virtio tablet.
     Standard,
-    /// USB devices on the xHCI controller, as most PCs have. QEMU: a
-    /// keyboard and a tablet behind a hub, and a mouse; VirtualBox: a
-    /// keyboard and a tablet.
+    /// USB devices on the xHCI controller, as most PCs have: a keyboard and
+    /// a tablet behind a hub, and a mouse.
     Usb,
 }
 
@@ -189,8 +162,8 @@ pub struct VmConfig {
     /// Show a window (`false` = headless).
     pub display: bool,
     pub audio: bool,
-    /// The sound card: `virtio` (QEMU's default here), `ac97` (VirtualBox's
-    /// default) or `hda` (Intel HD Audio).
+    /// The sound card: `virtio` (the default), `ac97` or `hda` (Intel HD
+    /// Audio).
     pub sound: String,
     /// Record guest audio to this WAV file instead of playing it.
     pub audio_wav: Option<PathBuf>,
@@ -219,12 +192,8 @@ pub struct VmConfig {
     pub allow_reboot: bool,
     /// The network connection.
     pub net: NetMode,
-    /// Model of the wired card (`None`: the hypervisor's default, virtio-net
-    /// for QEMU and the Intel 82540EM for VirtualBox).
+    /// Model of the wired card (`None`: virtio-net).
     pub nic_model: Option<String>,
-    /// VirtualBox: the host adapter to bridge to (`None`: the first one
-    /// connected).
-    pub bridge_adapter: Option<String>,
     /// Ports for the Wi-Fi radio and its NAT link (required when `net`
     /// includes Wi-Fi).
     pub wifi: Option<WifiPorts>,
@@ -262,7 +231,6 @@ impl Default for VmConfig {
             allow_reboot: false,
             net: NetMode::Ethernet,
             nic_model: None,
-            bridge_adapter: None,
             wifi: None,
             gpu: None,
             iommu: false,
@@ -321,15 +289,9 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     if cfg.iommu {
         cmd.args(["-device", "intel-iommu,intremap=on,eim=on"]);
     }
-    // Prefer hardware virtualisation when the host offers it; fall back to
-    // the TCG emulator (multi-threaded, one host thread per vCPU) otherwise.
-    if cfg!(windows) {
-        cmd.args(["-accel", "whpx,kernel-irqchip=off", "-accel", "tcg,thread=multi"]);
-    } else if cfg!(target_os = "linux") {
-        cmd.args(["-accel", "kvm", "-accel", "tcg,thread=multi"]);
-    } else {
-        cmd.args(["-accel", "tcg,thread=multi"]);
-    }
+    // KVM when the host offers it; otherwise the TCG emulator
+    // (multi-threaded, one host thread per vCPU).
+    cmd.args(["-accel", "kvm", "-accel", "tcg,thread=multi"]);
     cmd.args(["-cpu", "max"]);
     cmd.args(["-smp", &cfg.cpus.to_string()]);
     cmd.args(["-m", &format!("{}M", cfg.memory_mib)]);
@@ -339,7 +301,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     // device takes it), named so that the tablet can be bound to it (see
     // `-display` below). With a GPU it is virtio-vga-gl: a standard VGA
     // that is also virtio-gpu with virgl, whose virglrenderer runs on the
-    // host's OpenGL (ANGLE on Windows), and needs an OpenGL display
+    // host's OpenGL, and needs an OpenGL display
     // backend, a window or an offscreen one. The firmware and Veda show the
     // picture through its VGA side, as with plain VGA; the `virtio-gpu`
     // driver uses only the 3D side and never takes the scanout. Not VGA
@@ -404,7 +366,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         match &cfg.audio_wav {
             _ if cfg.audio_silent => cmd.args(["-audiodev", "none,id=audio0"]),
             Some(wav) => cmd.args(["-audiodev", &format!("wav,id=audio0,path={}", wav.display())]),
-            None => cmd.args(["-audiodev", if cfg!(windows) { "dsound,id=audio0" } else { "sdl,id=audio0" }]),
+            None => cmd.args(["-audiodev", "sdl,id=audio0"]),
         };
         // With the host's sound system the card also has an input stream:
         // the host's microphone (with the silent one, silence). Recorded
@@ -435,17 +397,10 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(wifi_args(cfg, &p));
     }
     if cfg.display {
-        // When the guest's tablet driver starts, QEMU tells its window the
-        // pointer has become absolute, on the vCPU thread. On Windows a
-        // window's grab of the mouse, set or released from that thread,
-        // waits for the window's own thread, which waits for the vCPU: QEMU
-        // deadlocks early in Veda's boot (seen with QEMU 11.1). SDL grabs
-        // the mouse then if the pointer is over the window, so not SDL. GTK
-        // releases a grab then, and grabs at a click in the window while the
-        // pointer is relative, as it is from power-on until that driver
-        // starts; which is why the tablet is bound to the display: the
-        // window's pointer is absolute from the start, and a click before
-        // the driver runs grabs nothing.
+        // GTK, whose window grabs the mouse at a click while the pointer is
+        // relative; the tablet is bound to the display, so the pointer is
+        // absolute from power-on, and a click before the guest's driver
+        // runs grabs nothing.
         cmd.args(["-display", if gpu { "gtk,gl=on" } else { "gtk" }]);
     } else {
         cmd.args(["-display", if gpu { "egl-headless" } else { "none" }]);
