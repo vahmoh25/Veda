@@ -2,6 +2,7 @@
 //! enumeration, and resetting a function.
 
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use vproto::pci::{Bar, DeviceInfo};
 use vrt::object::IoPorts;
@@ -25,6 +26,23 @@ const PMCSR_D3HOT: u32 = 0b11;
 const PMCSR_NO_SOFT_RESET: u32 = 1 << 3;
 const COMMAND_DECODE: u32 = 0b11;
 const COMMAND_BUS_MASTER: u32 = 1 << 2;
+
+/// A memory BAR, as sized; address 0 where the firmware placed it nowhere.
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryBar {
+    pub index: u8,
+    pub address: u64,
+    pub size: u64,
+    pub is64: bool,
+}
+
+/// Where the firmware placed a function (`ConfigSpace::placement`).
+#[derive(Debug, Clone, Copy)]
+pub struct Placement {
+    bars: [u32; 6],
+    /// Its power management capability.
+    pm: Option<u16>,
+}
 
 pub struct ConfigSpace {
     ports: IoPorts,
@@ -156,8 +174,110 @@ impl ConfigSpace {
             function: a.function,
             irq_line: irq as u8,
             irq_pin: (irq >> 8) as u8,
-            bars: if header == 0 { self.bars(a) } else { Vec::new() },
+            // A BAR the firmware placed nowhere (and devmgr could not
+            // place) is no driver's.
+            bars: if header == 0 { self.bars(a).into_iter().filter(|b| b.address != 0).collect() } else { Vec::new() },
         }
+    }
+
+    /// Whether the function is a PCI-to-PCI bridge.
+    pub fn is_bridge(&self, a: Address) -> bool {
+        self.read(a, 0x0E, 1) & 0x7F == 1
+    }
+
+    /// The memory a bridge forwards to its side: its memory window and its
+    /// prefetchable one (end exclusive), those it has open.
+    pub fn bridge_windows(&self, a: Address) -> Vec<Range<u64>> {
+        let mut windows = Vec::new();
+        let (base, limit) = (self.read(a, 0x20, 2) as u64, self.read(a, 0x22, 2) as u64);
+        let (start, end) = ((base & 0xFFF0) << 16, ((limit & 0xFFF0) << 16) + 0x10_0000);
+        if start < end {
+            windows.push(start..end);
+        }
+        let (base, limit) = (self.read(a, 0x24, 2) as u64, self.read(a, 0x26, 2) as u64);
+        let (base_hi, limit_hi) =
+            if base & 0xF == 1 { (self.read32(a, 0x28) as u64, self.read32(a, 0x2C) as u64) } else { (0, 0) };
+        let start = (base_hi << 32) | ((base & 0xFFF0) << 16);
+        let end = ((limit_hi << 32) | ((limit & 0xFFF0) << 16)) + 0x10_0000;
+        if start < end {
+            windows.push(start..end);
+        }
+        windows
+    }
+
+    /// The function's memory BARs, sized, those the firmware left unplaced
+    /// (at 0) among them.
+    pub fn memory_bars(&self, a: Address) -> Vec<MemoryBar> {
+        if self.read(a, 0x0E, 1) & 0x7F != 0 {
+            return Vec::new();
+        }
+        self.bars(a)
+            .into_iter()
+            .filter(|b| !b.io)
+            .map(|b| {
+                let is64 = (self.read32(a, 0x10 + 4 * b.index as u16) >> 1) & 0b11 == 0b10;
+                MemoryBar { index: b.index, address: b.address, size: b.size, is64 }
+            })
+            .collect()
+    }
+
+    /// Takes the function's memory BARs out of where the firmware placed
+    /// them, and its memory decoding off: as a firmware that places them
+    /// nowhere leaves it (for tests).
+    pub fn forget_placement(&self, a: Address) {
+        let command = self.read(a, 0x04, 2);
+        self.write(a, 0x04, 2, command & !0b10);
+        for bar in self.memory_bars(a) {
+            self.set_bar(a, bar.index, 0, bar.is64);
+        }
+    }
+
+    /// Places memory BAR `index` at `address`.
+    pub fn set_bar(&self, a: Address, index: u8, address: u64, is64: bool) {
+        let at = 0x10 + 4 * index as u16;
+        self.write32(a, at, address as u32);
+        if is64 {
+            self.write32(a, at + 4, (address >> 32) as u32);
+        }
+    }
+
+    /// Where the firmware placed the function: its BARs, as their registers
+    /// read (to put back when it loses them).
+    pub fn placement(&self, a: Address) -> Placement {
+        let mut bars = [0u32; 6];
+        for (i, b) in bars.iter_mut().enumerate() {
+            *b = self.read32(a, 0x10 + 4 * i as u16);
+        }
+        Placement { bars, pm: self.capability(a, CAP_POWER_MANAGEMENT) }
+    }
+
+    /// The function's power state (0 for D0 to 3 for D3hot), if it has the
+    /// power management capability.
+    pub fn power_state(&self, a: Address) -> Option<u32> {
+        self.capability(a, CAP_POWER_MANAGEMENT).map(|at| self.read(a, at + PMCSR, 2) & PMCSR_STATE)
+    }
+
+    /// A driver's write of `value` (`width` bytes) at `offset`. A function
+    /// woken from D3hot to D0 resets, unless it says it does not (No Soft
+    /// Reset), and its BARs with it: once it is awake (10 ms), they are
+    /// put back where the firmware placed them (`placement`). True if they
+    /// had to be.
+    pub fn driver_write(&self, a: Address, placement: &Placement, offset: u16, width: u8, value: u32) -> bool {
+        let wakes = placement.pm.is_some_and(|at| {
+            offset == at + PMCSR && value & PMCSR_STATE == 0 && self.read(a, at + PMCSR, 2) & PMCSR_STATE == PMCSR_D3HOT
+        });
+        self.write(a, offset, width, value);
+        if !wakes {
+            return false;
+        }
+        sleep(Duration::from_millis(10));
+        let lost = (0..6).any(|i| self.read32(a, 0x10 + 4 * i as u16) != placement.bars[i]);
+        if lost {
+            for (i, &bar) in placement.bars.iter().enumerate() {
+                self.write32(a, 0x10 + 4 * i as u16, bar);
+            }
+        }
+        lost
     }
 
     /// Where capability `id` is in the function's list, if it has it.

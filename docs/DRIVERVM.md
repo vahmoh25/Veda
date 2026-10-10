@@ -298,6 +298,15 @@ does not get yet (GPIO connections, an SPI bus) is left out, and said.
 Linux's intel-lpss, i2c-designware and i2c-hid-acpi then drive the
 controllers and devices as on the PC.
 
+**Power states.** The guest puts its functions to sleep and wakes them as
+Linux does on a PC (runtime power management), and a firmware may leave
+some asleep (D3hot), as a laptop's does its serial bus controllers. A
+function woken to D0 resets, unless it says it does not (No Soft Reset),
+and its BARs with it; the guest puts back the BARs it sees, which are the
+platform's, not the function's. So devmgr, which carries out the guest's
+write of the function's power state, puts its BARs back where the firmware
+placed them once it is awake.
+
 **Errors.** The errors a function signals become the host's system
 errors, which a PC may turn into NMIs, and an NMI stops Veda: a given
 function reports none. The monitor turns its SERR# enable and its PCI

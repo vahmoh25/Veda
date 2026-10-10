@@ -175,6 +175,44 @@ impl Acpi {
         device::pci_companion(&self.ns, &self.roots, (bus, slot, function), &self.memory)
     }
 
+    /// The memory the firmware reserves for the motherboard (the resources
+    /// of its `PNP0C01` and `PNP0C02` devices), which no BAR may be placed
+    /// over.
+    pub fn motherboard_memory(&self) -> Vec<core::ops::Range<u64>> {
+        let mut reserved = Vec::new();
+        for d in self.ns.devices() {
+            let ids = device::ids(&self.ns, d, &self.memory);
+            if !ids.iter().any(|i| i == "PNP0C01" || i == "PNP0C02") {
+                continue;
+            }
+            for r in self.resources(d).unwrap_or_default() {
+                match r {
+                    AcpiResource::Memory { base, length, .. } if length > 0 => reserved.push(base..base + length),
+                    AcpiResource::Window { kind: 0, min, max, .. } if max > min => reserved.push(min..max + 1),
+                    _ => {}
+                }
+            }
+        }
+        reserved
+    }
+
+    /// The memory windows of the PCI root bridge of bus `bus` (end
+    /// exclusive), above the legacy area below 1 MiB; none if no root
+    /// bridge has that bus.
+    pub fn pci_root_windows(&self, bus: u8) -> Vec<core::ops::Range<u64>> {
+        let Some((_, root)) = self.roots.iter().find(|(b, _)| *b == bus) else { return Vec::new() };
+        self.resources(root)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|r| match r {
+                AcpiResource::Window { kind: 0, min, max, translation: 0, .. } if min >= 0x10_0000 && max > min => {
+                    Some(min..max + 1)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Where INTx `pin` (1 to 4) of the functions in `slot` of root bus
     /// `bus` goes (see [`device::pci_interrupt`]).
     pub fn pci_interrupt(&self, bus: u8, slot: u8, pin: u8) -> Option<device::IntxRoute> {

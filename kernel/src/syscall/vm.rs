@@ -61,6 +61,11 @@ pub fn vmo_create_physical(res: RawHandle, paddr: usize, size: usize, cache: usi
     if size == 0 || !r.permits(resource_kind::MMIO, paddr as u64, size as u64) {
         return Err(Error::AccessDenied);
     }
+    // Devices' and the firmware's memory, never the kernel's RAM.
+    if crate::mm::phys::overlaps_ram(paddr as u64, size as u64) {
+        crate::kwarn!("vmo: refused a physical VMO over RAM ({:#x}, {} bytes)", paddr, size);
+        return Err(Error::AccessDenied);
+    }
     let cache = match cache {
         cache_policy::WRITE_BACK => Cache::WriteBack,
         cache_policy::WRITE_COMBINING => Cache::WriteCombining,

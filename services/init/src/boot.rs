@@ -99,17 +99,18 @@ pub fn start_service(init: &mut Init, name: &str, at_boot: bool) {
     // kernel command line. A live system (`live`, booted from a USB stick)
     // tells the file system and the device manager to leave the computer's
     // disks alone; tests ask the device manager for the driver VM
-    // (`drivervm`, with its options as `drivervm.NAME=VALUE`). At system
-    // start the window system plays the startup sequence (`splash`) and the
-    // shell the startup sound (`startup`, unless `startup-sound=off`);
-    // started again, they do neither.
+    // (`drivervm`, with its options as `drivervm.NAME=VALUE`) and give it
+    // options of its own (`devmgr.NAME=VALUE`). At system start the window
+    // system plays the startup sequence (`splash`) and the shell the
+    // startup sound (`startup`, unless `startup-sound=off`); started again,
+    // they do neither.
     let cmdline = cmdline(init);
     let has = |option: &str| cmdline.split_whitespace().any(|a| a == option);
     let args: Vec<alloc::string::String> = match name {
         "agent" => cmdline.split_whitespace().filter(|a| a.starts_with("agent.")).map(Into::into).collect(),
         "devmgr" => cmdline
             .split_whitespace()
-            .filter(|a| *a == "live" || *a == "drivervm" || a.starts_with("drivervm."))
+            .filter(|a| *a == "live" || *a == "drivervm" || a.starts_with("drivervm.") || a.starts_with("devmgr."))
             .map(Into::into)
             .collect(),
         "vfs" if has("live") => alloc::vec!["live".into()],

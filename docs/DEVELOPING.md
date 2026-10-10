@@ -47,6 +47,7 @@ cargo xtask linux              # build the driver VM's Linux, its toolchain and 
 cargo xtask run --no-iommu     # QEMU without its IOMMU: no device goes to the driver VM
 cargo xtask run --cmdline "drivervm=off"    # ... or no driver VM at all
 cargo xtask script tests/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
+cargo xtask script tests/ui/drivervm-unplaced.vts   # ... and its xHCI, their BARs left unplaced for devmgr to place
 cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 stack, against airsim's networks
 ```
 

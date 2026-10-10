@@ -3,6 +3,10 @@
 //! A bitmap with one bit per 4 KiB frame (1 = in use) covering all RAM. A
 //! rolling search hint makes single-frame allocation fast in the common case;
 //! contiguous allocations (DMA buffers, large kernel objects) scan for runs.
+//!
+//! It also remembers where the RAM is that the kernel owns (free RAM, its
+//! own image, the boot data, the loader's memory it takes back): physical
+//! VMOs, which drivers map devices' memory with, may not reach it.
 
 use bootinfo::{MemoryKind, MemoryRegion};
 
@@ -18,6 +22,57 @@ struct Bitmap {
 }
 
 static ALLOCATOR: SpinLock<Option<Bitmap>> = SpinLock::new(None);
+
+/// The kernel's RAM, as ranges of physical addresses (adjacent regions
+/// merged); past the last slot, the last range grows to cover the rest (more
+/// is taken for RAM, never less).
+static RAM: SpinLock<([(u64, u64); 64], usize)> = SpinLock::new(([(0, 0); 64], 0));
+
+/// The kinds of the memory map's regions that are the kernel's RAM.
+fn is_kernel_ram(kind: MemoryKind) -> bool {
+    matches!(
+        kind,
+        MemoryKind::Usable
+            | MemoryKind::LoaderReclaimable
+            | MemoryKind::Kernel
+            | MemoryKind::Initrd
+            | MemoryKind::BootData
+    )
+}
+
+/// Whether `[base, base + size)` reaches the kernel's RAM.
+pub fn overlaps_ram(base: u64, size: u64) -> bool {
+    let end = base.saturating_add(size);
+    let ram = RAM.lock();
+    ram.0[..ram.1].iter().any(|&(s, e)| base < e && s < end)
+}
+
+fn remember_ram(map: &[MemoryRegion]) {
+    let mut regions: [(u64, u64); 256] = [(0, 0); 256];
+    let mut n = 0;
+    for r in map.iter().filter(|r| is_kernel_ram(r.kind)) {
+        if n == regions.len() {
+            // Even more regions: the last takes them in.
+            regions[n - 1].1 = regions[n - 1].1.max(r.end());
+            continue;
+        }
+        regions[n] = (r.base, r.end());
+        n += 1;
+    }
+    regions[..n].sort_unstable();
+    let mut ram = RAM.lock();
+    let (slots, used) = &mut *ram;
+    for &(s, e) in &regions[..n] {
+        match *used {
+            u if u > 0 && s <= slots[u - 1].1 => slots[u - 1].1 = slots[u - 1].1.max(e),
+            u if u < slots.len() => {
+                slots[u] = (s, e);
+                *used += 1;
+            }
+            u => slots[u - 1].1 = slots[u - 1].1.max(e),
+        }
+    }
+}
 
 /// Physical memory below this address is never handed out (real-mode area,
 /// AP trampoline).
@@ -84,6 +139,7 @@ impl Bitmap {
 /// Initialises the allocator from the boot memory map. Only `Usable` RAM is
 /// made available now; boot-time regions are reclaimed later.
 pub fn init(map: &[MemoryRegion]) {
+    remember_ram(map);
     let top = map
         .iter()
         .filter(|r| {

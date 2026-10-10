@@ -191,7 +191,12 @@ has ended and left its stack, which is how thread libraries join threads.
   device's configuration space (its BAR registers stay as the firmware set
   them), its BARs mapped, MSI interrupts (or the line its INTx is wired
   to, where the firmware's `_PRT` says) and DMA memory. Drivers never see
-  other devices.
+  other devices. A memory BAR the firmware leaves unplaced (a laptop's
+  does so for its serial bus controllers) devmgr places first, in a
+  window of the PCI root bridge's (`_CRS`) where nothing else is, from
+  the top down; one it cannot place reaches no driver, and no physical
+  VMO reaches the kernel's RAM. A function woken from D3hot that lost its
+  BARs (it resets, unless it says it does not) gets them back.
 * **ACPI.** `devmgr` also reads the firmware's ACPI tables (the kernel
   hands `init` the RSDP and the firmware's ACPI memory ranges, `init`
   hands them to `devmgr`), because some devices exist only there: a

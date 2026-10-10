@@ -32,6 +32,7 @@ extern crate alloc;
 mod acpi;
 mod gpio;
 mod pci;
+mod placement;
 
 use alloc::collections::BTreeMap;
 use alloc::collections::btree_map::Entry;
@@ -50,7 +51,7 @@ use vrt::println;
 
 use acpi::Acpi;
 use gpio::Gpio;
-use pci::{Address, ConfigSpace};
+use pci::{Address, ConfigSpace, Placement};
 
 vrt::entry!(main);
 
@@ -189,6 +190,8 @@ struct Bound {
     address: Address,
     info: DeviceInfo,
     channel: Channel,
+    /// Where the firmware placed it.
+    placement: Placement,
     /// Its ACPI companion, and the devices the firmware describes below
     /// it.
     companion: Option<Path>,
@@ -202,6 +205,7 @@ struct Bound {
 struct GuestDevice {
     address: Address,
     info: DeviceInfo,
+    placement: Placement,
     companion: Option<Path>,
     acpi: Vec<vacpi::device::Described>,
 }
@@ -311,7 +315,10 @@ impl pcidev::Server for DeviceSession<'_> {
         {
             return Err(PciError::BadOffset);
         }
-        self.mgr.config.write(self.dev.address, offset, width, value);
+        let a = self.dev.address;
+        if self.mgr.config.driver_write(a, &self.dev.placement, offset, width, value) {
+            println!("{:02x}:{:02x}.{} woke from D3hot without its BARs: put back", a.bus, a.slot, a.function);
+        }
         Ok(())
     }
 
@@ -663,6 +670,7 @@ impl DriverVm {
             let device = Bound {
                 address: d.address,
                 info: d.info.clone(),
+                placement: d.placement,
                 channel: ours,
                 companion: d.companion.clone(),
                 acpi: d.acpi.clone(),
@@ -746,12 +754,13 @@ impl DriverVm {
     }
 }
 
-/// The devices `drivervm.devices=VID:DID,...` gives the driver VM.
-fn guest_devices(options: &[String]) -> Vec<(u16, u16)> {
+/// The devices an option lists (`option` as `drivervm.devices=`, then
+/// `VID:DID,...`).
+fn listed_devices(options: &[String], option: &str) -> Vec<(u16, u16)> {
     let id = |s: &str| u16::from_str_radix(s, 16).ok();
     options
         .iter()
-        .filter_map(|a| a.strip_prefix("drivervm.devices="))
+        .filter_map(|a| a.strip_prefix(option))
         .flat_map(|list| list.split(','))
         .filter_map(|d| d.split_once(':').and_then(|(v, d)| Some((id(v)?, id(d)?))))
         .collect()
@@ -813,12 +822,24 @@ fn main() -> i32 {
         Ok(()) if !gives => println!("no IOMMU: no device can go to the driver VM"),
         Ok(()) => {}
     }
-    let listed = guest_devices(&drivervm);
+    let listed = listed_devices(&drivervm, "drivervm.devices=");
     let mut guest = Vec::new();
+
+    let functions = mgr.config.scan();
+    // Tests: these functions' BARs are taken as a firmware that leaves them
+    // unplaced does (`devmgr.unplaced=VID:DID,...`).
+    let unplaced = listed_devices(&args, "devmgr.unplaced=");
+    for &a in &functions {
+        let info = mgr.config.info(a);
+        if unplaced.contains(&(info.vendor, info.device)) {
+            mgr.config.forget_placement(a);
+        }
+    }
+    placement::place(&mgr.config, &functions, mgr.acpi.as_ref());
 
     let mut bound: BTreeMap<u64, Bound> = BTreeMap::new();
     let mut next = 1u64;
-    for a in mgr.config.scan() {
+    for a in functions {
         let info = mgr.config.info(a);
         let companion = mgr.acpi.as_ref().and_then(|acpi| acpi.pci_companion(a.bus, a.slot, a.function));
         println!(
@@ -842,8 +863,12 @@ fn main() -> i32 {
                 "{:04x}:{:04x} at {:02x}:{:02x}.{} goes to the driver VM",
                 info.vendor, info.device, a.bus, a.slot, a.function
             );
+            if let Some(state) = mgr.config.power_state(a).filter(|&s| s != 0) {
+                println!("{:02x}:{:02x}.{} is in D{}: the guest wakes it", a.bus, a.slot, a.function, state);
+            }
             let (companion, acpi) = described_below(mgr.acpi.as_ref(), a);
-            guest.push(GuestDevice { address: a, info, companion, acpi });
+            let placement = mgr.config.placement(a);
+            guest.push(GuestDevice { address: a, info, placement, companion, acpi });
             continue;
         }
         let Some(driver) = driver_for(&info) else { continue };
@@ -856,7 +881,9 @@ fn main() -> i32 {
         }
         let (companion, below) = described_below(mgr.acpi.as_ref(), a);
         if let Some(ch) = start_driver(&boot, driver, &info) {
-            bound.insert(next, Bound { address: a, info, channel: ch, companion, acpi: below, guest: false });
+            let placement = mgr.config.placement(a);
+            bound
+                .insert(next, Bound { address: a, info, placement, channel: ch, companion, acpi: below, guest: false });
             next += 1;
         }
     }

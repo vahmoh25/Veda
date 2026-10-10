@@ -1,0 +1,28 @@
+# A firmware may place a function's BARs nowhere (a laptop's leaves its
+# serial bus controllers so, asleep, for the operating system to set up):
+# devmgr places them then, in a window of the PCI root bridge's, before any
+# driver gets the function. Here devmgr takes two of QEMU's functions as
+# such a firmware leaves them (devmgr.unplaced): the HD Audio controller,
+# whose BAR is a 32-bit one, which goes below 4 GiB, and the xHCI
+# controller, whose BAR is a 64-bit one, as the laptop's are, which goes
+# above. The driver VM's Linux drives both at their new addresses: the
+# codec answers, which takes DMA both ways, and its MSIs arrive; Linux
+# finds the USB network adapter on the xHCI controller, and Veda's network
+# service gets an address through it.
+sound hda
+net none
+usb net
+boot-cmdline "devmgr.unplaced=8086:293e,1b36:000d drivervm.devices=8086:293e drivervm.run=pcitest"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+fail-on "pcitest: FAIL"
+wait-serial "pci 00:02.0: BAR 0 (16 KiB) unplaced by the firmware: placed at" 60
+wait-serial "pci 00:07.0: BAR 0 (16 KiB) unplaced by the firmware: placed at" 10
+wait-serial "is the guest's 00:07.0" 30
+wait-serial "pcitest: PASS" 60
+wait-serial "net: usb0: attached as eth0" 60
+wait-serial "netd: status: Routable via eth0" 60
+reject-serial "and no room for it"
+reject-serial "refused a physical VMO over RAM"
+reject-serial "hda: controller at"
+reject-serial "WARNING:"
