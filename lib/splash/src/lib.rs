@@ -7,6 +7,13 @@
 //! desktop. Both draw through this crate, so the handover never shows.
 //! Everything is integer arithmetic on `0xRRGGBB` colours (the loader has
 //! no floating point).
+//!
+//! The gradient is dark, and each channel steps only a dozen to a few
+//! dozen times from the top to the bottom: drawn in whole steps, it would
+//! show as bands as tall as a tenth of the screen. So it is dithered: each
+//! pixel takes the step above or the one below by an 8x8 ordered (Bayer)
+//! pattern, in the proportion the gradient falls between them, which the
+//! eye sees as the colour between.
 
 #![no_std]
 
@@ -45,9 +52,39 @@ pub fn isqrt(n: u32) -> u32 {
     x
 }
 
-/// The background of row `y` of a screen `h` pixels high.
-pub fn background(y: u32, h: u32) -> u32 {
-    mix(TOP, BOTTOM, y * 256 / h.max(1))
+/// The ordered-dither (8x8 Bayer) pattern at pixel (`x`, `y`), 0 to 63:
+/// the thresholds of every 2x2, 4x4 and 8x8 square of pixels are spread
+/// evenly over the range.
+pub fn bayer(x: u32, y: u32) -> u32 {
+    let level = |s: u32| (2 * ((x >> s) & 1) + 3 * ((y >> s) & 1)) & 3;
+    16 * level(0) + 4 * level(1) + level(2)
+}
+
+/// The background of row `y` of a screen `h` pixels high, from pixel `x`
+/// on, into `out` (`out.len()` pixels): the gradient from [`TOP`] to
+/// [`BOTTOM`] through the middle of the row, dithered. Each channel is
+/// `floor(v + (bayer + 1/2) / 64)` of its value `v` there: in integers,
+/// `v` in 128ths of a step and `h`ths, as the window system's shaders
+/// have it too.
+pub fn background(y: u32, h: u32, x: u32, out: &mut [u32]) {
+    let h = h.max(1) as i64;
+    let unit = 128 * h;
+    // A channel's whole steps along the row, and the pattern's threshold
+    // from which a pixel takes the next: where (2 bayer + 1) h, added to
+    // what is left over, makes another step.
+    let channel = |s: u32| {
+        let (top, bottom) = (((TOP >> s) & 0xFF) as i64, ((BOTTOM >> s) & 0xFF) as i64);
+        let v = top * unit + (bottom - top) * (2 * y as i64 + 1) * 64;
+        let (whole, part) = (v / unit, v % unit);
+        let next = (unit - part + h - 1) / h;
+        (whole as u32, (next / 2) as u32)
+    };
+    let [r, g, b] = [channel(16), channel(8), channel(0)];
+    for (i, px) in out.iter_mut().enumerate() {
+        let t = bayer(x + i as u32, y);
+        let step = |(whole, from): (u32, u32)| whole + u32::from(t >= from);
+        *px = step(r) << 16 | step(g) << 8 | step(b);
+    }
 }
 
 /// The ring: its centre and radii, in sixteenths of a pixel.
@@ -86,25 +123,12 @@ impl Ring {
     }
 }
 
-/// Paints the splash on a `w` x `h` screen, a pixel at a time through
-/// `put(x, y, 0xRRGGBB)`: the gradient and, over it, the ring.
-pub fn draw(w: u32, h: u32, mut put: impl FnMut(u32, u32, u32)) {
-    let ring = Ring::place(w, h);
-    for y in 0..h {
-        let row = background(y, h);
-        for x in 0..w {
-            let cover = ring.coverage(x as i32, y as i32);
-            put(x, y, if cover > 0 { mix(row, RING, cover) } else { row });
-        }
-    }
-}
-
 /// Row `y` of the splash on a `w` x `h` screen into `out` (`0xRRGGBB`
-/// each, `out.len()` pixels from the left), as [`draw`] paints it.
+/// each, `out.len()` pixels from the left): the gradient and, over it,
+/// the ring.
 pub fn row(w: u32, h: u32, y: u32, out: &mut [u32]) {
     let ring = Ring::place(w, h);
-    let background = background(y, h);
-    out.fill(background);
+    background(y, h, 0, out);
     // Only the ring's rows have more than the gradient, and only across it.
     let reach = ring.outer / 16 + 2;
     let (cx, cy) = (ring.cx / 16, ring.cy / 16);
@@ -116,7 +140,7 @@ pub fn row(w: u32, h: u32, y: u32, out: &mut [u32]) {
     for (x, px) in out.iter_mut().enumerate().take(to).skip(from) {
         let cover = ring.coverage(x as i32, y as i32);
         if cover > 0 {
-            *px = mix(background, RING, cover);
+            *px = mix(*px, RING, cover);
         }
     }
 }

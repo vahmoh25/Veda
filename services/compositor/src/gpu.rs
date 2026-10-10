@@ -143,34 +143,54 @@ void main() {
 }
 ";
 
-/// The startup sequence's gradient alone (`vsplash::background`): row by
-/// row in the same integer arithmetic as the boot loader's. At
-/// `u_opacity` (as it dissolves into the desktop).
-const ROWS: &str = "#version 300 es
+/// The startup sequence's gradient at the pixel, as `vsplash::background`
+/// has it, in the same integer arithmetic: the gradient through the middle
+/// of the pixel's row (in 128ths of a step and `h`ths), plus the 8x8
+/// ordered-dither pattern's threshold, rounded down.
+macro_rules! splash_background {
+    () => {
+        "
+uniform ivec3 u_top;
+uniform ivec3 u_bottom;
+vec3 background() {
+    int x = int(gl_FragCoord.x);
+    int y = int(gl_FragCoord.y);
+    int h = int(u_screen.y);
+    int t = 16 * ((2 * (x & 1) + 3 * (y & 1)) & 3)
+        + 4 * ((2 * ((x >> 1) & 1) + 3 * ((y >> 1) & 1)) & 3)
+        + ((2 * ((x >> 2) & 1) + 3 * ((y >> 2) & 1)) & 3);
+    ivec3 v = u_top * (128 * h) + (u_bottom - u_top) * ((2 * y + 1) * 64) + ivec3((2 * t + 1) * h);
+    return vec3(v / (128 * h)) / 255.0;
+}
+"
+    };
+}
+
+/// The startup sequence's gradient alone, at `u_opacity` (as it dissolves
+/// into the desktop).
+const ROWS: &str = concat!(
+    "#version 300 es
 precision highp float;
 precision highp int;
 uniform vec2 u_screen;
-uniform ivec3 u_top;
-uniform ivec3 u_bottom;
 uniform float u_opacity;
 out vec4 o;
-void main() {
-    int y = int(gl_FragCoord.y);
-    int t = (y * 256) / int(u_screen.y);
-    ivec3 row = (u_top * (256 - t) + u_bottom * t) / 256;
-    o = vec4(vec3(row) / 255.0, 1.0) * u_opacity;
+",
+    splash_background!(),
+    "void main() {
+    o = vec4(background(), 1.0) * u_opacity;
 }
-";
+"
+);
 
 /// The startup sequence's picture (`startup`, `vsplash`) where the light
 /// reaches: the gradient as [`ROWS`] has it; the light around the ring,
 /// with its glint; the ring. At `u_opacity`.
-const SPLASH: &str = "#version 300 es
+const SPLASH: &str = concat!(
+    "#version 300 es
 precision highp float;
 precision highp int;
 uniform vec2 u_screen;
-uniform ivec3 u_top;
-uniform ivec3 u_bottom;
 uniform vec2 u_centre;
 uniform float u_outer;
 uniform float u_inner;
@@ -180,11 +200,10 @@ uniform float u_glint;
 uniform vec3 u_glow;
 uniform float u_opacity;
 out vec4 o;
-void main() {
-    int y = int(gl_FragCoord.y);
-    int t = (y * 256) / int(u_screen.y);
-    ivec3 row = (u_top * (256 - t) + u_bottom * t) / 256;
-    vec3 c = vec3(row) / 255.0;
+",
+    splash_background!(),
+    "void main() {
+    vec3 c = background();
     vec2 v = gl_FragCoord.xy - u_centre;
     float d = length(v);
     float f = 1.0;
@@ -201,7 +220,8 @@ void main() {
     c = mix(c, vec3(1.0), cover * u_ring);
     o = vec4(c, 1.0) * u_opacity;
 }
-";
+"
+);
 
 /// The part of `r` within `band` pixels of its edge, as rectangles that do
 /// not overlap: strips across its top and bottom, and down its sides

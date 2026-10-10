@@ -113,6 +113,13 @@ fn outside(r: Rect, hole: Rect) -> [Rect; 4] {
     ]
 }
 
+/// `0xRRGGBB` pixels (`vsplash`'s) as the layer keeps them, opaque.
+fn opaque(line: &mut [u32]) {
+    for px in line {
+        *px |= 0xFF00_0000;
+    }
+}
+
 /// How far `t` is through its cycle of `period`, 0 to 1.
 fn cycle(t: u64, period: u64) -> f32 {
     (t % period) as f32 / period as f32
@@ -200,7 +207,10 @@ impl Startup {
         let (w, h) = (width as u32, height as u32);
         let screen = Rect::new(0, 0, width, height);
         let mut layer = Bitmap::new(width, height);
-        vsplash::draw(w, h, |x, y, c| layer.pixels[(y * w + x) as usize] = 0xFF00_0000 | c);
+        for (y, line) in layer.pixels.chunks_exact_mut(w as usize).enumerate() {
+            vsplash::row(w, h, y as u32, line);
+            opaque(line);
+        }
         let ring = Ring::place(w, h);
         let (cx, cy, radius) = (ring.cx as f32 / 16.0, ring.cy as f32 / 16.0, ring.outer as f32 / 16.0);
 
@@ -434,10 +444,10 @@ impl Startup {
         let around = self.around;
         let region = self.region;
         for y in region.y..region.bottom() {
-            let row = vsplash::background(y as u32, h as u32);
             let start = (y * w) as usize;
             let line = &mut self.layer.pixels[start + region.x as usize..start + region.right() as usize];
-            line.fill(0xFF00_0000 | row);
+            vsplash::background(y as u32, h as u32, region.x as u32, line);
+            opaque(line);
             if y < around.y || y >= around.bottom() {
                 continue;
             }
@@ -446,6 +456,7 @@ impl Startup {
             for x in x0..x1 {
                 let i = lut + (x - around.x) as usize;
                 let lit = (light[self.distance[i] as usize] as u32 * glint[self.direction[i] as usize] as u32) >> 8;
+                let row = line[(x - region.x) as usize] & 0xFF_FFFF;
                 let mut c = if lit > 0 { vsplash::mix(row, GLOW, lit.min(256)) } else { row };
                 let ring_cover = if at_rest { u32::from(self.rest[i]) } else { ring.coverage(x, y) };
                 let cover = (ring_cover * ring_alpha) >> 8;

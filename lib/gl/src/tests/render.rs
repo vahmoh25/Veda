@@ -312,6 +312,55 @@ fn front_facing_and_frag_coord() {
     assert_eq!(px(&img, 4, 1, 2), [255, e(1.5 / 4.0), e(2.5 / 4.0), 255]);
 }
 
+/// Integer arithmetic in a fragment shader is exact, as the window
+/// system's splash has it: a gradient ordered-dithered to whole steps (a
+/// falling channel among them), from the pixel's position by shifts, masks
+/// and divisions, the same as the processor's.
+#[test]
+fn integer_arithmetic_is_exact() {
+    let (w, h) = (64u32, 48u32);
+    let mut c = context(w, h);
+    let p = program(
+        &mut c,
+        VS_POS,
+        "#version 300 es
+        precision highp float; precision highp int;
+        uniform ivec3 u_top; uniform ivec3 u_bottom; uniform int u_h;
+        out vec4 color;
+        void main() {
+            int x = int(gl_FragCoord.x);
+            int y = int(gl_FragCoord.y);
+            int t = 16 * ((2 * (x & 1) + 3 * (y & 1)) & 3)
+                + 4 * ((2 * ((x >> 1) & 1) + 3 * ((y >> 1) & 1)) & 3)
+                + ((2 * ((x >> 2) & 1) + 3 * ((y >> 2) & 1)) & 3);
+            ivec3 v = u_top * (128 * u_h) + (u_bottom - u_top) * ((2 * y + 1) * 64) + ivec3((2 * t + 1) * u_h);
+            color = vec4(vec3(v / (128 * u_h)) / 255.0, 1.0);
+        }",
+    );
+    c.use_program(p);
+    let (top, bottom) = ([7, 200, 22], [250, 26, 53]);
+    let at = |c: &mut Context, name: &str| c.get_uniform_location(p, name);
+    let (t, b, hl) = (at(&mut c, "u_top"), at(&mut c, "u_bottom"), at(&mut c, "u_h"));
+    c.uniform3i(t, top[0], top[1], top[2]);
+    c.uniform3i(b, bottom[0], bottom[1], bottom[2]);
+    c.uniform1i(hl, h as i32);
+    attrib(&mut c, p, "pos", 4, &quad(-1.0, -1.0, 1.0, 1.0, 0.0));
+    c.draw_arrays(gl::TRIANGLES, 0, 6);
+    no_error(&mut c);
+    let img = read_rgba(&mut c, w, h);
+    let level = |x: u32, y: u32, s: u32| (2 * ((x >> s) & 1) + 3 * ((y >> s) & 1)) & 3;
+    for y in 0..h {
+        for x in 0..w {
+            let t = (16 * level(x, y, 0) + 4 * level(x, y, 1) + level(x, y, 2)) as i32;
+            let (y, hh) = (y as i32, h as i32);
+            let want = |i: usize| {
+                ((top[i] * 128 * hh + (bottom[i] - top[i]) * (2 * y + 1) * 64 + (2 * t + 1) * hh) / (128 * hh)) as u8
+            };
+            assert_eq!(px(&img, w, x, y as u32), [want(0), want(1), want(2), 255], "({x}, {y})");
+        }
+    }
+}
+
 #[test]
 fn indexed_draws_and_primitive_restart() {
     let mut c = context(8, 8);
