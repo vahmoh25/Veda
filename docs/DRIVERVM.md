@@ -203,13 +203,10 @@ it starts from (storage controllers, which are none of Linux's
 business), the platform's own functions (bridges, system peripherals,
 the SMBus, and the controller of the firmware's flash, the serial bus
 controller in device 31 of an Intel PCH: the other serial bus
-controllers, a laptop's I2C controllers with its touchpad, are Linux's),
-and the devices Veda still has drivers for (HD Audio
-controllers, and the SPI controller of a laptop's speaker amplifiers: they
-come with the firmware's descriptions of what is wired to them, see
-[Status](#status)). The boot options give it more
-(`drivervm.devices=VID:DID,...`: a sound card, in tests) or none
-(`drivervm=off`). It starts when the machine can give it devices: its
+controllers, a laptop's I2C controllers with its touchpad and its SPI
+controller with its speaker amplifiers, are Linux's). The boot options
+give it more (`drivervm.devices=VID:DID,...`: functions Veda would keep)
+or none (`drivervm=off`). It starts when the machine can give it devices: its
 processors run virtual machines (VMX with EPT), an IOMMU confines the
 devices (the kernel tells `devmgr` both, `vabi::platform`), and the
 system image has its Linux; `drivervm` starts it even without devices
@@ -410,6 +407,21 @@ A card that records (its first capture device) is the device's input too:
 a thread of its own reads the card a period at a time into the input
 ring, stamped with the card's count as playback is, from when the audio
 service opens the input until it closes it.
+
+The cards are Linux's to drive whole: HD Audio controllers
+(`snd-hda-intel`, its codecs' drivers: Realtek's and the generic one) and
+virtio's sound devices. A laptop's speaker amplifiers beside the codec
+(Cirrus Logic's CS35L41 on its SPI controller, as the Zenbook Pro 16X has
+them) are the codec driver's side codecs: `serial-multi-instantiate`
+makes them devices on the SPI controller (`spi-pxa2xx`, through
+`intel-lpss`) from the firmware's description, `cs35l41_hda` finds their
+reset line, speaker id and the second one's chip select on the
+platform's GPIO controller, and their interrupt on its line, loads their
+DSP's firmware (`ports/linux/firmware.txt`) and powers them for the
+codec's streams, as on the PC. Until the guest has the firmware's
+variables they play without the factory calibration of the speakers,
+which Linux reads from a UEFI variable (Veda's own driver had none
+either).
 
 **Network** (`guest/net`). Each of Linux's Ethernet cards (a PCI or USB
 device's interface) is attached to Veda's network service as a network
@@ -623,7 +635,8 @@ where Veda stands:
 | ACPI for the guest: the platform's tables (the PCI root, its functions, the keyboard controller); interrupt lines (GSIs), level-triggered ones too; functions' INTx | done (`tests/ui/drivervm-intx.vts`, `window-keys.vts`) |
 | The firmware's descriptions of devices below functions, in the guest's tables (ids, I2C addresses, interrupt lines, `_DSM`, constant data); a laptop's I2C controllers and HID devices (touchpads, touchscreens) to Linux | done under QEMU (`tests/ui/drivervm-described.vts`); not yet tried on a PC |
 | GPIO pins for the guest: the platform's GPIO controllers, the PC's pins that described devices are wired to, their interrupts (lines `devmgr` raises); devices on SPI controllers | done under QEMU (`tests/ui/drivervm-gpio.vts`, a simulated controller) |
-| The firmware's ties: a laptop's speaker amplifiers on SPI, HD Audio (and the DSP the built-in microphones are on) | next (below) |
+| Sound: HD Audio controllers and their codecs, a laptop's speaker amplifiers on SPI (with their pins); Veda's own HD Audio, SPI and amplifier drivers gone | done under QEMU (`tests/ui/drivervm-audio.vts`, `drivervm-mic.vts`, `drivervm-pci.vts`, `startup.vts`); the amplifiers not yet tried on a PC |
+| The firmware's ties: the firmware's variables (the amplifiers' calibration), the audio DSP the built-in microphones are on (SOF, the NHLT table) | next |
 
 **GPUs.** Linux's driver and Mesa's drive a GPU whole in the guest (lesson
 1): the guest's Linux has i915 and virtio-gpu, and its Mesa iris, virgl
@@ -635,10 +648,6 @@ guest needs too (lesson 7): memory reserved for them (an RMRR, which keeps
 a device the host's for now), their OpRegion (the panel's description,
 VBT) and stolen memory, and their place at 00:02.0. GPU memory is the
 guest's: a GPU needs a driver VM with the memory for it.
-
-**Still Veda's.** HD Audio controllers (with a laptop's speaker
-amplifiers on its SPI controller) keep Veda's driver until Linux's
-drives them in the guest, which now has the amplifiers' pins.
 
 ## Testing
 
@@ -654,7 +663,7 @@ driver VM, and the GUI scripts need it (`cargo xtask test --ui` says why
 when it cannot run). Its options are on the kernel command line:
 `drivervm.run=PROGRAM`, `drivervm.poweroff`, `drivervm.memory=MIB`,
 `drivervm.cpus=N`, `drivervm.devices=VID:DID,...` (devices Veda would
-keep: a sound card), `drivervm=off`, and `drivervm.crash=SECONDS`, which
+keep), `drivervm=off`, and `drivervm.crash=SECONDS`, which
 has Linux crash once, that long after it started, for the tests of the
 restart. Wi-Fi's scripts give QEMU's machine the virtual radio's
 virtio-serial function (`net wifi`), which `airlink` makes Linux's;

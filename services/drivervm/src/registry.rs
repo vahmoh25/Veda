@@ -18,7 +18,7 @@ use vrt::object::{Channel, Event};
 use vrt::sync::Mutex;
 
 /// The services the guest may connect to.
-const CONNECT: &[&str] = &["audiodev", "displaydev", "netdev", "wlanphy", "input", "speakers"];
+const CONNECT: &[&str] = &["audiodev", "displaydev", "netdev", "wlanphy", "input"];
 /// The services it may provide.
 const REGISTER: &[&str] = &["gpu"];
 

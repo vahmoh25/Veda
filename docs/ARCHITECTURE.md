@@ -15,9 +15,9 @@ that communicate over kernel channels.
  ├──────────────────────────────────────────────────────────────────────────┤
  │ Services       init (registry, launcher) · vfs · compositor · audio ·    │
  │                agent (the voice agent) · netd · wlan                     │
- │ Drivers        virtio-blk · ahci · nvme (disks) · hda (sound) · pci ·    │
- │                the driver VM (Linux's: GPUs, displays, input, USB,       │
- │                networks, Wi-Fi, sound …)                                 │
+ │ Drivers        virtio-blk · ahci · nvme (disks) · pci · the driver VM    │
+ │                (Linux's: GPUs, displays, input, USB, networks, Wi-Fi,    │
+ │                sound …)                                                  │
  ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
  │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
  ├──────────────────────────────────────────────────────────────────────────┤
@@ -200,7 +200,8 @@ has ended and left its stack, which is how thread libraries join threads.
 * **ACPI.** `devmgr` also reads the firmware's ACPI tables (the kernel
   hands `init` the RSDP and the firmware's ACPI memory ranges, `init`
   hands them to `devmgr`), because some devices exist only there: a
-  laptop's speaker amplifiers on an SPI bus, the GPIO pins wired to them.
+  laptop's touchpad on an I2C bus, its speaker amplifiers on an SPI bus,
+  the GPIO pins wired to them.
   `vacpi` (`lib/acpi`) loads the DSDT and SSDTs into a namespace and
   evaluates its objects with a small AML interpreter: integer, string,
   buffer and package operations, buffer fields, control flow, method
@@ -229,8 +230,8 @@ has ended and left its stack, which is how thread libraries join threads.
   (`msi_create` takes a resource naming it, `resource_kind::PCI`), which
   `devmgr` holds for all of them.
 * **The driver VM.** Every other device goes to Linux in a virtual machine
-  ([the driver VM](DRIVERVM.md)): all but the disks, the platform's own
-  functions and the devices Veda still drives itself (HD Audio). `devmgr`
+  ([the driver VM](DRIVERVM.md)): all but the disks and the platform's own
+  functions. `devmgr`
   hands their `pcidev` channels to `drivervm`, which gives them to its
   guest whole, their DMA confined to the guest's memory by the IOMMU, and
   describes them in ACPI tables of its own, as a PC's firmware would. It
@@ -634,104 +635,15 @@ renders under QEMU.
 
 ## Audio
 
-* `hda` (Intel High Definition Audio: most PCs, QEMU's `intel-hda`)
-  drives the sound cards, for playback and the microphone; QEMU's
-  virtio sound device is Linux's, in [the driver VM](DRIVERVM.md), whose
-  `alsa` serves it (HD Audio goes there too once the guest has the
-  firmware's descriptions of what a laptop wires to it). They connect to
-  the audio service's private `audiodev` protocol, so the service also
-  runs without sound hardware (a null output then consumes audio in real
-  time).
-* **HD Audio.** `devmgr` starts `hda` for the PCI class of HD Audio
-  controllers, and for Intel's since Skylake by their IDs (with an audio
-  DSP beside them they call themselves audio devices instead). The
-  driver resets the controller and reads every codec on its link through
-  the command rings (the immediate command registers on Intel's since
-  Lunar Lake); `vhda` (`lib/hda`, which touches no hardware and is
-  unit-tested on the host with models of real codecs) turns a codec's
-  widget graph into routes, and prepares the codecs that need more than
-  the specification: Realtek's get their EAPD pins to follow the EAPD
-  verb, and their speaker amplifier switched on when the firmware's
-  assembly ID says a GPIO of the codec switches it (as Linux does). The
-  outputs are the speakers, headphone jacks and the front pair of each
-  line output, each with a path from a DAC of its own where there are
-  enough, all fed the same stream at unity gain (the volume stays the
-  service's); the input is the best microphone or line input that one
-  ADC reaches. Everything else is muted, the analog loopback above all,
-  and external amplifiers are powered. While headphones are plugged in the speakers and line outputs
-  are off, and a microphone plugged into a jack records instead of the
-  built-in one: the codec reports plugging, and the driver also looks
-  every second. Streams run at 48 kHz (44.1 kHz on codecs without it),
-  16-bit stereo, as rings of 10 ms periods that the controller loops over;
-  a played period is silenced at once, so a late refill plays silence
-  rather than old audio. Where the controller is comes from its position
-  (the DMA position buffer it writes on Intel's since Skylake, as Linux
-  takes it there; the link position elsewhere), held against the link's
-  24 MHz clock, the clock the controller plays by: a stream that stops
-  moving is started again; a position that claims more periods than the
-  clock allowed since the last reading (one that wavered back across a
-  period boundary reads as a whole lap) is not taken as progress, which
-  would throw queued audio away; and one that runs far ahead of the clock
-  is not believed at all, the stream then being paced by the clock. The
-  controller interrupts after each period (MSI), or the driver polls
-  (also when no interrupt ever comes). Because many HD Audio controllers
-  can move audio without snooping the CPU's caches, the driver asks the
-  chipset for snooping and also flushes the cache lines it hands over.
-  What particular chipsets need follows Linux's `snd-hda-intel`: Intel's
-  since Skylake reset with their clock gating off (or codecs can go
-  unnoticed), get a link that the firmware left at a 6 MHz clock moved to
-  24 MHz, and keep every stream coupled to the link (out of the audio
-  DSP's processing pipe); ATI's and AMD's south bridges have a snoop
-  switch, NVIDIA's MSI is left unused, streams start only once the
-  controller has sized their FIFO, and a recorded period is taken only
-  once the controller is 32 frames past it (AMD's count frames before
-  they reach memory). For whoever looks into a machine where sound goes
-  wrong, the driver reads every converter's stream and format back
-  (setting them again where the codec did not take them), and soon after
-  playback starts logs how fast the link's clock ran by the system's, how
-  many buffers the controller completed, and how fast each of its
-  position counters moved (`dmesg hda`). HDMI and DisplayPort codecs are
-  left alone: their audio needs the graphics driver to set the display's
-  link up for it, which is Linux's, in the driver VM.
-* **Speaker amplifiers.** Many laptops since 2021 drive their speakers
-  with Cirrus Logic CS35L41 amplifiers: the codec sends them its output
-  over I2S, but they are set up over SPI or I2C, and play nothing until
-  they are. `devmgr` starts `lpss-spi` for the SPI controllers of Intel's
-  chipsets since Cannon Lake; it looks at the devices the firmware
-  describes on its bus and touches nothing unless they include the
-  amplifiers (`CSC3551`). Their settings come from Linux's table of
-  boards (by the subsystem id in `_SUB`; the firmware of these laptops
-  leaves them out): which GPIO resets them, which selects the second one,
-  which channel each plays. With them it resets the amplifiers, boots
-  each from its OTP memory, checks its id, applies its silicon revision's
-  fixes and the factory trims the OTP holds, and sets up the external
-  boost switch, its GPIOs and the I2S slot it plays; the sequences and
-  values are Linux's (`vcs35l41`, `lib/cs35l41`, over the SPI controller
-  of `vspi`, `lib/spi`; tested against a simulated amplifier and a
-  simulated Zenbook, `lib/boardsim`). It then serves the `speakers`
-  protocol: `hda` tells it when its stream starts (the amplifiers power
-  up once the codec clocks them) and before it stops (they power down
-  while it still does), and mutes them while headphones are plugged in.
-  A thread of `hda`'s own does the telling, and connects only once the
-  registry lists the service (a connection to a service that is not
-  registered waits in the registry until one is): the playback thread
-  never waits on another process. Before serving, the driver loads each
-  amplifier's DSP firmware, as Linux does: Cirrus's speaker protection
-  and the board maker's tuning for its speakers, from the Linux firmware
-  collection (`assets/firmware/cirrus`, installed at `/system/firmware`;
-  the files are chosen by board, speaker id and amplifier, by Linux's
-  names and rules). The firmware's blocks go into the DSP's memories, its
-  algorithm list is read back to place the tuning, then the core starts
-  and the firmware reports running and is paused; it is resumed for each
-  stream, switches the speaker on, and plays at 17.5 dB, which its
-  protection makes safe. If its files are missing or it does not start,
-  an amplifier plays without it, as on Linux: the codec's audio straight
-  to the amplifier at 4.5 dB. Not yet done as on Linux: the factory
-  calibration of the speakers Linux reads from a UEFI variable, and
-  putting the DSP to sleep between streams. Errors they latch
-  (overheating, a short) are logged once a second while they play, and
-  released when playback stops. Boards whose amplifiers boost their own
-  supply, and amplifiers on I2C, are not driven yet.
+* Sound devices are Linux's, in [the driver VM](DRIVERVM.md): HD Audio
+  controllers (most PCs' sound, QEMU's `intel-hda`) with their codecs,
+  virtio's sound devices, and a laptop's speaker amplifiers on its SPI
+  controller (Cirrus Logic's CS35L41, which the codec's driver plays
+  through; the guest gets the GPIO pins they are wired to). Linux's
+  drivers drive them, and `alsa`, Veda's driver for Linux, attaches the
+  card to the audio service's private `audiodev` protocol, as a native
+  driver would; the service also runs without sound hardware (a null
+  output then consumes audio in real time).
 * **Recording.** An input device produces into a ring with a capture
   clock; the service converts it for each capture stream, and runs the
   echo canceller for streams that ask for it (the agent's microphone) with
@@ -797,25 +709,19 @@ policy, the wake word) are in `vagent`, tested on the host. See
   published vectors, a station against an access point, two TCP/IP stacks
   over a simulated cable, the Wi-Fi simulator, and the TLS client against
   a rustls server and real certificate chains.
-* Simulated machines (`lib/boardsim`): hardware no emulator has, such as
-  a laptop's speaker amplifiers, as firmware descriptions shaped like the
-  real firmware's and models of the chips, wired as on the real board.
-  Veda's own code (the ACPI interpreter, the GPIO pads, the SPI
-  controller, the amplifiers' sequences and their DSP firmware, with the
-  real firmware files) runs against them through the same traits it uses
-  on the hardware, and the models note what a driver does wrong (two
-  devices selected at once, a protected register written while locked, an
-  amplifier powered without its clock, a DSP started with its memory
-  protection closed, a gain above 4.5 dB without the DSP's protection).
-  They cannot show that the real chips behave like their models, or how
-  anything sounds: the real machine stays the final check.
+* Hardware no emulator has is simulated where Veda's own code drives it:
+  `vgpio::sim` is a GPIO controller as its registers behave (Intel's
+  pads, its pins wired in pairs), which devmgr drives in place of a PC's
+  when a test's ACPI table describes one (`drivervm-gpio.vts`, through to
+  Linux's GPIO character device in the guest). `cargo xtask acpi` shows
+  what devmgr makes of a real machine's ACPI tables. The real machine
+  stays the final check of what Linux drives there.
 * GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
   mouse, keyboard, waits on log lines, screenshots — and fail on panics.
   QEMU's machine has an IOMMU, as PCs do, so the driver VM runs in every
   script, with the pointer, USB, the networks and the display.
   The sound cards' scripts also check QEMU's recording of the output for
-  dropouts, and `hda-speakers.vts` gives the HD Audio driver a stand-in
-  for a laptop's amplifier driver (`speakertest`) that answers slowly.
+  dropouts.
   `drivervm-display.vts` gives the window system a display that flips
   (QEMU's VGA, which Linux drives in the driver VM) and compares
   screenshots of the desktop before and after a window came and went, in
@@ -848,11 +754,9 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/glsl`, `lib/gl` | the GLSL ES compiler (with its TGSI back end), and OpenGL ES 3.0 with its software and GPU (virgl) renderers |
 | `lib/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
 | `lib/virtio` | virtio device access shared by the drivers |
-| `lib/hda`, `lib/cs35l41`, `lib/spi` | what the HD Audio, speaker amplifier and SPI drivers know that touches no hardware |
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `lib/hv`, `lib/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the virtual APIC, `cpuid`, the guests' platform and boot protocol, the bridge's ABI; VT-d's tables and structures |
-| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests |
-| `lib/boardsim` | simulated machines for host tests: firmware descriptions and models of chips no emulator has (a laptop's speaker amplifiers) |
+| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests (`bridgetest`, `pcitest`, `gpiotest`) |
 | `lib/splash` | the boot splash's picture, which the boot loader and the window system draw alike |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |

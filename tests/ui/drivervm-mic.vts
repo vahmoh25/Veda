@@ -5,7 +5,6 @@
 # of it, at the card's rate, and loses nothing.
 sound hda
 audio silent
-boot-cmdline "drivervm.devices=8086:293e"
 boot-cmdline "run=audiotest:record,3"
 fail-on "PANIC"
 fail-on "drivervm: processor"

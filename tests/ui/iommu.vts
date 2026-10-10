@@ -2,9 +2,9 @@
 # machines have, as PCs do: Veda's kernel remaps every device's interrupts,
 # which only that device may raise, and passes the DMA of Veda's own
 # devices through, while the driver VM's reach only its memory. Both work
-# at once, without a fault: the disks and the sound card (HD Audio),
-# Veda's; the USB controller with its keyboard and tablet, and the network
-# card, Linux's.
+# at once, without a fault: the disks, Veda's; the sound card (HD Audio),
+# the USB controller with its keyboard and tablet, and the network card,
+# Linux's.
 sound hda
 input usb
 net ethernet
@@ -14,7 +14,7 @@ fail-on "nettest: FAIL"
 wait-serial "iommu: 1 VT-d unit(s): interrupts remapped" 30
 wait-serial "desktop ready" 120
 wait-serial "input: QEMU QEMU USB Keyboard (usb 0627:0001): keyboard" 60
-wait-serial "hda: attached to the audio service" 60
+wait-serial "alsa: attached to the audio service" 60
 wait-serial "nettest: PASS" 300
 reject-serial "iommu: unit at"
 reject-serial "iommu: not used"

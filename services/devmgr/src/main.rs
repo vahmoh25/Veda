@@ -87,36 +87,8 @@ struct DriverMatch {
 }
 
 const DRIVERS: &[DriverMatch] = &[
-    // Intel's HD Audio controllers since Skylake: with an audio DSP beside
-    // them (laptops with digital microphones, mostly) they call themselves
-    // audio devices (class 04/01) rather than HD Audio controllers.
-    DriverMatch {
-        vendor: 0x8086,
-        devices: &[
-            0xA170, 0x9D70, 0xA171, 0x9D71, 0xA2F0, 0xA348, 0x9DC8, 0x02C8, 0x06C8, 0xA3F0, 0xF0C8, 0xF1C8, 0x34C8,
-            0x3DC8, 0x38C8, 0x4DC8, 0xA0C8, 0x43C8, 0x4B55, 0x4B58, 0x7AD0, 0x51C8, 0x51C9, 0x51CC, 0x51CD, 0x54C8,
-            0x7A50, 0x51CA, 0x51CB, 0x51CE, 0x51CF, 0x7E28, 0x7728, 0x7F50, 0x5A98, 0x3198, 0xA828, 0xE428, 0xE328,
-            0x4D28, 0xD328, 0x6E50,
-        ],
-        driver: "hda",
-    },
     // virtio block (transitional and modern)
     DriverMatch { vendor: 0x1AF4, devices: &[0x1001, 0x1042], driver: "virtio-blk" },
-    // The SPI controllers of Intel's chipsets since Cannon Lake (LPSS), for
-    // the devices the firmware places on them: a laptop's speaker
-    // amplifiers. The driver's own table has the same list.
-    DriverMatch {
-        vendor: 0x8086,
-        devices: &[
-            0x02AA, 0x02AB, 0x02FB, 0x06AA, 0x06AB, 0x06FB, 0x34AA, 0x34AB, 0x34FB, 0x4DAA, 0x4DAB, 0x4DFB, 0x9DAA,
-            0x9DAB, 0x9DFB, 0xA0AA, 0xA0AB, 0xA0DE, 0xA0DF, 0xA0FB, 0xA0FD, 0xA0FE, 0xA32A, 0xA32B, 0xA37B, 0x43AA,
-            0x43AB, 0x43FB, 0x43FD, 0x4D27, 0x4D30, 0x4D46, 0x51AA, 0x51AB, 0x51FB, 0x54AA, 0x54AB, 0x54FB, 0x6E2A,
-            0x6E2B, 0x6E5E, 0x7727, 0x7730, 0x7746, 0x7A2A, 0x7A2B, 0x7A79, 0x7A7B, 0x7AAA, 0x7AAB, 0x7AF9, 0x7AFB,
-            0x7E27, 0x7E30, 0x7E46, 0x7F2A, 0x7F2B, 0x7F5E, 0x7F5F, 0xA827, 0xA830, 0xA846, 0xD327, 0xD330, 0xD347,
-            0xE327, 0xE330, 0xE346, 0xE427, 0xE430, 0xE446,
-        ],
-        driver: "lpss-spi",
-    },
 ];
 
 /// Drivers for whole device classes: (class, subclass, programming
@@ -126,10 +98,6 @@ const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
     (0x01, 0x06, 0x01, "ahci"),
     // NVM Express controllers (the SSDs of most PCs since about 2016)
     (0x01, 0x08, 0x02, "nvme"),
-    // High Definition Audio controllers (most PCs' sound), also the ones
-    // with an audio DSP beside them
-    (0x04, 0x03, 0x00, "hda"),
-    (0x04, 0x03, 0x80, "hda"),
 ];
 
 /// Disk drivers. A live system (started with `live`) starts none of them:
@@ -154,11 +122,10 @@ fn driver_for(info: &DeviceInfo) -> Option<&'static str> {
 /// controllers, bridges, system peripherals, processors, encryption and
 /// signal processing controllers, the SMBus, and the controller of the
 /// firmware's flash: the serial bus controller in device 31 of an Intel
-/// PCH), and the devices it has drivers of its own for (HD Audio
-/// controllers, and the speaker amplifiers' SPI controller, until the
-/// firmware's descriptions of what is wired to them reach the guest).
-/// Other serial bus controllers (a laptop's I2C controllers, with its
-/// touchpad) are Linux's.
+/// PCH), and the devices it has drivers of its own for. Sound (HD Audio
+/// controllers, with an audio DSP beside them or not) and the other
+/// serial bus controllers (a laptop's I2C controllers with its touchpad,
+/// its SPI controller with its speaker amplifiers) are Linux's.
 fn veda_keeps(info: &DeviceInfo) -> bool {
     let flash = info.class == 0x0C && info.subclass == 0x80 && info.bus == 0 && info.slot == 0x1F;
     matches!(info.class, 0x01 | 0x05 | 0x06 | 0x08 | 0x0B | 0x10 | 0x11)

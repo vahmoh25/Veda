@@ -712,18 +712,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hda"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vbuild",
- "vhda",
- "vproto",
- "vrt",
- "vvirtio",
-]
-
-[[package]]
 name = "heapless"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -798,19 +786,6 @@ name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
-
-[[package]]
-name = "lpss-spi"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vbuild",
- "vcs35l41",
- "vipc",
- "vproto",
- "vrt",
- "vspi",
-]
 
 [[package]]
 name = "managed"
@@ -1262,17 +1237,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "speakertest"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vbuild",
- "vipc",
- "vproto",
- "vrt",
-]
-
-[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1454,16 +1418,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vboardsim"
-version = "0.1.0"
-dependencies = [
- "vacpi",
- "vcs35l41",
- "vgpio",
- "vspi",
-]
-
-[[package]]
 name = "vboot"
 version = "0.1.0"
 dependencies = [
@@ -1474,10 +1428,6 @@ dependencies = [
 
 [[package]]
 name = "vbuild"
-version = "0.1.0"
-
-[[package]]
-name = "vcs35l41"
 version = "0.1.0"
 
 [[package]]
@@ -1548,10 +1498,6 @@ dependencies = [
 
 [[package]]
 name = "vgpio"
-version = "0.1.0"
-
-[[package]]
-name = "vhda"
 version = "0.1.0"
 
 [[package]]
@@ -1678,10 +1624,6 @@ dependencies = [
  "vhv",
  "vpe",
 ]
-
-[[package]]
-name = "vspi"
-version = "0.1.0"
 
 [[package]]
 name = "vsplash"

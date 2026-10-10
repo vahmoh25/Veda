@@ -18,13 +18,13 @@ cargo xtask script tests/ui/about-interaction.vts   # scripted GUI test
 cargo xtask test               # host unit tests + in-system integration tests
 cargo xtask test --ui          # ... plus every GUI script in tests/ui and tests/agent, several at once
 cargo xtask test --ui --jobs 2 # ... two at a time (default: one per five processors)
-cargo xtask scripts tests/ui/hda.vts tests/ui/nvme.vts   # some scripts, built once, side by side
+cargo xtask scripts tests/ui/drivervm-audio.vts tests/ui/nvme.vts   # some scripts, built once, side by side
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
 cargo xtask run --disk-bus ahci             # QEMU with SATA disks
 cargo xtask run --disk-bus nvme             # ... with NVM Express disks
 cargo xtask script tests/ui/nvme.vts        # starting from NVMe, the home directory on NVMe
 cargo xtask run --sound hda    # Intel HD Audio, as most PCs have
-cargo xtask script tests/ui/hda.vts         # HD Audio: music plays and reaches the recording
+cargo xtask script tests/ui/drivervm-audio.vts   # HD Audio, Linux's: music plays and reaches the recording
 cargo xtask run --input usb    # USB keyboard, tablet (behind a hub) and mouse, no PS/2
 cargo xtask script tests/ui/usb-input.vts   # USB input, with devices plugged in and out
 cargo xtask script tests/agent/sim-basics.vts   # the agent, with a stand-in for Deepgram
@@ -141,40 +141,24 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   when that is set.
 * `--sound hda` gives QEMU the ICH9's HD Audio controller with QEMU's
   codec (`hda-output` when recording to a WAV file, `hda-duplex`, with a
-  line input, otherwise). When the driver finds a
-  codec it cannot play through, it logs every widget of it (`dmesg hda`
-  in the Terminal shows them), which is what a fix for that codec needs.
-  When sound plays wrongly on a real PC, the same log has the converters'
-  stream and format as the codec took them (`hda: converters ...`) and,
-  about a second into playback, the `hda: output check` line (the link's
-  clock by Veda's, 24 MHz when both are right, and the buffers the
-  controller completed per second, 100 at 48 kHz) and the `hda: output
-  positions` line (how fast the link position, the DMA position buffer
-  and, on Intel since Skylake, the DMA position register move by the
-  link's clock: 192 kB/s at 48 kHz). They tell a controller playing too
-  fast from a position counter that only claims to, and from a codec
-  playing the wrong format; a position the driver stopped believing is
-  logged as `the output position ran ...`. After them come the codec's
-  widgets as they are while playing (power, converters, amplifier gains
-  with `m` for muted, pin controls, EAPD, the selected input marked `*`),
-  as Linux shows them in `/proc/asound`. `dmesg time` shows how the
-  system's clock was calibrated. Emulators move their DMA in bursts, so
-  there the positions' rates over the check's 20 ms vary.
+  line input, otherwise), which Linux drives in the driver VM, as it does
+  a PC's sound. When sound plays wrongly on a PC, Linux's log, which
+  Veda's carries (`drivervm: linux:` lines), says what Linux made of it:
+  `dmesg snd_hda` its controllers and codecs, `dmesg cs35l41` a laptop's
+  speaker amplifiers (their firmware, the speaker id, which codec they
+  bound to), `dmesg alsa` Veda's driver for Linux (the card it attached,
+  and underruns).
 * `dmesg devmgr` starts with what the firmware's ACPI tables gave
   (`devmgr: acpi: N tables, ...`, and the conditional definitions left
   out when their condition reads what the interpreter does not), then,
   for each driver's device with devices of its own in the tables, which
   ones (`acpi: 00:1e.3 is \_SB.PC00.SPI1, with ...`). `gpio:` lines show
   a GPIO controller's register windows and every pad `devmgr` set up for
-  a driver, with its configuration before and after. On a laptop with
-  speaker amplifiers, `dmesg lpss-spi` has the SPI controller (its clock
-  and chip selects), the amplifiers that came up (channel, chip select,
-  silicon revision, OTP id, trims) or why one did not, each amplifier's
-  DSP firmware and tuning (files, version, gain) or why it plays without
-  them, the first power transitions (`speakers on`, `speakers off`) and
-  any error an amplifier latched; `hda: speaker amplifiers found` shows
-  the sound driver reached them (`hda: no speaker amplifiers' driver is
-  running` that it did not). Before booting a machine, `cargo xtask acpi
+  a driver, with its configuration before and after, and the pins that
+  interrupt; the driver VM's monitor says which of them the guest has
+  (`'s GPIO pin 303 interrupts on the guest's GSI 256`), and Linux's
+  controller how many (`veda-gpio VEDA0001:00: 4 pins, 1 interrupting`).
+  Before booting a machine, `cargo xtask acpi
   DIR` shows what devmgr makes of its ACPI tables, on the host, with the
   interpreter devmgr runs: copy them first (`sudo cp -r
   /sys/firmware/acpi/tables DIR`, under Linux). It lists the PCI root
@@ -185,10 +169,7 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   not show, read as zeros (so devices they enable may be missing), but
   those given with `--set NAME=VALUE`; PCI configuration space comes from
   `DIR/pci/BB:DD.F` files (`/sys/bus/pci/devices/*/config`; all of it as
-  root), else from this machine. `cargo test -p vboardsim` runs the
-  amplifier path (the firmware's description, devmgr's GPIO pads, the SPI
-  controller, both amplifiers and their DSPs, with the firmware files in
-  `assets/firmware`) against a simulated Zenbook Pro 16X.
+  root), else from this machine.
 * The agent's scripts (`tests/agent/`) talk to a stand-in for Deepgram
   that xtask starts on the host, and feed the agent's microphone from the
   host (`testmic`). The scripts in `tests/real/` talk to the real Deepgram

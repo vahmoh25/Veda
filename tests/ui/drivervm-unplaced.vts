@@ -12,7 +12,7 @@
 sound hda
 net none
 usb net
-boot-cmdline "devmgr.unplaced=8086:293e,1b36:000d drivervm.devices=8086:293e drivervm.run=pcitest"
+boot-cmdline "devmgr.unplaced=8086:293e,1b36:000d drivervm.run=pcitest"
 fail-on "PANIC"
 fail-on "drivervm: processor"
 fail-on "pcitest: FAIL"
@@ -24,5 +24,4 @@ wait-serial "net: usb0: attached as eth0" 60
 wait-serial "netd: status: Routable via eth0" 60
 reject-serial "and no room for it"
 reject-serial "refused a physical VMO over RAM"
-reject-serial "hda: controller at"
 reject-serial "WARNING:"

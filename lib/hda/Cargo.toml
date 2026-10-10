@@ -1,9 +1,0 @@
-[package]
-name = "vhda"
-description = "Intel High Definition Audio for Veda's sound driver: codec verbs, the codec's widget graph, and the routes from converters to jacks"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[lints]
-workspace = true

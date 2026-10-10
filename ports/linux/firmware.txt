@@ -24,3 +24,13 @@ iwlwifi-so-a0-gf-a0.pnvm  linux-firmware  intel/iwlwifi/iwlwifi-so-a0-gf-a0.pnvm
 # lends to the driver VM.
 intel/ibt-0040-0041.sfi  linux-firmware  intel/ibt-0040-0041.sfi  8dcfb3a7c1592c11c3e80505d21ee78dbde3de0c830d8e3e856371c37717b62c
 intel/ibt-0040-0041.ddc  linux-firmware  intel/ibt-0040-0041.ddc  fe272982577efdc289cfe3e8bedafca607c0b7d6c9df1aab1880e22ef930d077
+
+# Cirrus Logic CS35L41 speaker amplifiers (cs35l41_hda): their DSP's speaker
+# protection (a link in linux-firmware to the algorithm's file), and the
+# board's tuning of each speaker by its id (the ASUS Zenbook Pro 16X's,
+# subsystem 10431f62).
+cirrus/cs35l41-dsp1-spk-prot-10431f62.wmfw  linux-firmware  cirrus/cs35l41/v6.61.1/halo_cspl_RAM_revB2_29.63.1.wmfw  c11cb3e25825c673a955a3519370ad77fbcd8bcf68808e8e34140a70caefcec4
+cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-l0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-l0.bin  f23e2b8a99a51858b47d13e804b656de2540e5ce961a088721988402f05c7e77
+cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-r0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-r0.bin  73596c413e3ace2e44706771af9188dd866ed3a6f188814123e73a24eb82fdb6
+cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-l0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-l0.bin  f23e2b8a99a51858b47d13e804b656de2540e5ce961a088721988402f05c7e77
+cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-r0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-r0.bin  73596c413e3ace2e44706771af9188dd866ed3a6f188814123e73a24eb82fdb6

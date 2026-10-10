@@ -35,12 +35,8 @@ members = [
     "lib/json",
     "lib/web",
     "lib/agent",
-    "lib/hda",
     "lib/acpi",
-    "lib/cs35l41",
-    "lib/boardsim",
     "lib/gpio",
-    "lib/spi",
     "lib/splash",
     "lib/glsl",
     "lib/gl",
@@ -74,13 +70,10 @@ members = [
     "drivers/virtio-blk",
     "drivers/ahci",
     "drivers/nvme",
-    "drivers/hda",
-    "drivers/lpss-spi",
     "tests/systest",
     "tests/nettest",
     "tests/testmic",
     "tests/audiotest",
-    "tests/speakertest",
     "guest/init",
     "guest/bridgetest",
     "guest/pcitest",
@@ -142,11 +135,8 @@ vradiolink = { path = "lib/radiolink" }
 vjson = { path = "lib/json" }
 vweb = { path = "lib/web" }
 vagent = { path = "lib/agent" }
-vhda = { path = "lib/hda" }
 vacpi = { path = "lib/acpi" }
-vcs35l41 = { path = "lib/cs35l41" }
 vgpio = { path = "lib/gpio" }
-vspi = { path = "lib/spi" }
 vsplash = { path = "lib/splash" }
 vglsl = { path = "lib/glsl" }
 vgl = { path = "lib/gl" }

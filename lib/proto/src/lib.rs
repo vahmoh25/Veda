@@ -21,7 +21,6 @@ pub mod net;
 pub mod netring;
 pub mod pci;
 pub mod shell;
-pub mod speakers;
 pub mod tty;
 pub mod wlan;
 
