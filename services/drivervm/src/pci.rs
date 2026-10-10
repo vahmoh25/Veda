@@ -5,6 +5,9 @@
 //! Linux finds them on bus 0 of the guest's PCI, their configuration space
 //! as `vhv::pci` makes it, through the platform's hypercalls.
 //!
+//! A function reports no errors to the host, which a PC may make NMIs of:
+//! its error reporting is turned off before the guest runs, and stays off.
+//!
 //! Where a function is: on the host's bus 0, a function keeps its device
 //! and function numbers if its device's function 0 comes too (drivers may
 //! look for siblings where they are on the PC); other functions take a
@@ -99,11 +102,13 @@ impl Devices {
                 pci.device_resource().map_err(|e| format!("devmgr: {e}"))?.map_err(|e| format!("{name}: {e:?}"))?;
             let sid = (info.bus as u16) << 8 | (info.slot as u16) << 3 | info.function as u16;
             guest.attach_device(&resource, sid).map_err(|e| format!("{name} cannot be given to the guest: {e}"))?;
+            let pci_express = vproto::pci::find_capability(&pci, vhv::pci::CAP_PCI_EXPRESS);
+            quiet_errors(&pci, pci_express);
             let bars = map_bars(guest, &pci, &info, windows).map_err(|e| format!("{name}: {e}"))?;
             let at: Vec<String> =
                 bars.iter().map(|b| format!("BAR {} at {:#x} ({} KiB)", b.index, b.address, b.size / 1024)).collect();
             println!("{} is the guest's 00:{:02x}.{}: {}", name, devfn >> 3, devfn & 7, at.join(", "));
-            let config = ConfigSpace::new(bars, multifunction);
+            let config = ConfigSpace::new(bars, multifunction, pci_express);
             list.push(Device { devfn, info, state: Mutex::new(State { pci, config, msis: BTreeMap::new() }) });
         }
         Ok(Devices { list })
@@ -166,6 +171,20 @@ impl Devices {
                 vhv::platform::error::INVALID
             }
         }
+    }
+}
+
+/// Turns off the errors the function reports to the host (its SERR# and
+/// PCI Express error reporting; see `vhv::pci`), before the guest runs.
+fn quiet_errors(pci: &pcidev::Client, pci_express: Option<u16>) {
+    let read = |at| pci.config_read(at, 2).ok().and_then(|r| r.ok());
+    if let Some(command) = read(0x04) {
+        let _ = pci.config_write(0x04, 2, command & !(vhv::pci::COMMAND_SERR as u32));
+    }
+    if let Some(at) = pci_express.map(|p| p + vhv::pci::DEVCTL)
+        && let Some(control) = read(at)
+    {
+        let _ = pci.config_write(at, 2, control & !(vhv::pci::DEVCTL_ERROR_REPORTING as u32));
     }
 }
 

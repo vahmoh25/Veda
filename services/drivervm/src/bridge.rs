@@ -412,8 +412,11 @@ impl Bridge {
             Ok(_) | Err(Error::TimedOut) => {}
             Err(e) => return Err(e),
         }
+        // Waits that are pending, or finished and not yet in the ring, are
+        // at most what the ring holds: a guest that takes nothing from it
+        // cannot make the monitor (Veda's memory) keep more.
         let mut waits = self.waits.lock();
-        if waits.pending.len() >= b::ring::CAPACITY as usize {
+        if waits.pending.len() + waits.done.len() >= b::ring::CAPACITY as usize {
             return Err(Error::LimitReached);
         }
         waits.pending.push(Pending { key: r.key, items_gpa: r.items, items, deadline: r.deadline });

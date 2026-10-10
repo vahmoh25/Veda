@@ -4,6 +4,11 @@
 //! answer sizing as BARs do; other writes leave them where they are);
 //! there is no expansion ROM, I/O BAR or INTx; the header type says what
 //! the function's place in the guest's topology is.
+//!
+//! And the function reports no errors to the host: the errors a function
+//! signals become the host's system errors, which a PC may turn into NMIs
+//! (as Xen's XSA-59 found). Its SERR# enable and PCI Express error
+//! reporting stay off, whatever the guest writes.
 
 use alloc::vec::Vec;
 
@@ -33,6 +38,18 @@ pub enum Write {
 /// bytes is not given (extended configuration space).
 pub const SIZE: u16 = 256;
 
+/// The command register's SERR# enable: the function may signal system
+/// errors.
+pub const COMMAND_SERR: u16 = 1 << 8;
+/// The error reporting enables of the PCI Express capability's device
+/// control register (correctable, non-fatal, fatal, unsupported request).
+pub const DEVCTL_ERROR_REPORTING: u16 = 0xF;
+/// Where device control is in the PCI Express capability.
+pub const DEVCTL: u16 = 8;
+/// The PCI Express capability's id.
+pub const CAP_PCI_EXPRESS: u8 = 0x10;
+
+const COMMAND_DWORD: u16 = 0x04;
 const HEADER_TYPE_DWORD: u16 = 0x0C;
 const BARS: core::ops::Range<u16> = 0x10..0x28;
 const ROM: u16 = 0x30;
@@ -44,14 +61,16 @@ pub struct ConfigSpace {
     bars: Vec<Bar>,
     /// What the header type's multi-function bit says.
     multifunction: bool,
+    /// Where the function's PCI Express capability is, if it has one.
+    pci_express: Option<u16>,
     /// The BAR registers the guest wrote all ones to (and reads their size
     /// from).
     sizing: u8,
 }
 
 impl ConfigSpace {
-    pub fn new(bars: Vec<Bar>, multifunction: bool) -> ConfigSpace {
-        ConfigSpace { bars, multifunction, sizing: 0 }
+    pub fn new(bars: Vec<Bar>, multifunction: bool, pci_express: Option<u16>) -> ConfigSpace {
+        ConfigSpace { bars, multifunction, pci_express, sizing: 0 }
     }
 
     /// The memory BARs.
@@ -114,12 +133,19 @@ impl ConfigSpace {
             }
             return Write::Absorbed;
         }
+        let devctl = self.pci_express.map(|p| (p + DEVCTL) & !3);
         match at {
             ROM => Write::Absorbed,
             // The header type is read-only; the interrupt line is the
             // platform's (there is none).
             HEADER_TYPE_DWORD if offset == 0x0E => Write::Absorbed,
             INTERRUPT_DWORD if offset < 0x3E => Write::Absorbed,
+            // No system errors, no error messages.
+            COMMAND_DWORD => Write::Device { offset, width, value: without(offset, value, COMMAND_SERR as u32) },
+            _ if Some(at) == devctl => {
+                let bits = (DEVCTL_ERROR_REPORTING as u32) << (8 * ((self.pci_express.unwrap_or(0) + DEVCTL) & 3));
+                Write::Device { offset, width, value: without(offset, value, bits) }
+            }
             _ => Write::Device { offset, width, value },
         }
     }
@@ -127,6 +153,11 @@ impl ConfigSpace {
 
 fn aligned(offset: u16, width: u8) -> bool {
     matches!(width, 1 | 2 | 4) && offset.is_multiple_of(width as u16)
+}
+
+/// `value`, written at `offset`, without `bits` (of the dword it falls in).
+fn without(offset: u16, value: u32, bits: u32) -> u32 {
+    value & !(bits >> (8 * (offset & 3) as u32))
 }
 
 #[cfg(test)]
@@ -137,7 +168,7 @@ mod tests {
     /// A device as Intel's HD Audio controllers are: one 64-bit BAR.
     fn hda() -> ConfigSpace {
         let bar = Bar { index: 0, address: 0xC000_4000, size: 0x4000, is64: true, prefetchable: false };
-        ConfigSpace::new(vec![bar], false)
+        ConfigSpace::new(vec![bar], false, Some(0x60))
     }
 
     /// The function's own registers: a header that says multi-function,
@@ -197,7 +228,7 @@ mod tests {
     #[test]
     fn high_bars_and_prefetchable_ones() {
         let bar = Bar { index: 2, address: 0x20_0000_0000, size: 1 << 28, is64: true, prefetchable: true };
-        let mut c = ConfigSpace::new(vec![bar], true);
+        let mut c = ConfigSpace::new(vec![bar], true, None);
         assert_eq!(c.read(0x18, 4, device), 0x0000_000C);
         assert_eq!(c.read(0x1C, 4, device), 0x20);
         assert_eq!(c.read(0x0E, 1, device), 0x80);
@@ -205,6 +236,24 @@ mod tests {
         c.write(0x1C, 4, u32::MAX);
         assert_eq!(c.read(0x18, 4, device), 0xF000_000C);
         assert_eq!(c.read(0x1C, 4, device), u32::MAX);
+    }
+
+    #[test]
+    fn the_function_reports_no_errors() {
+        let mut c = hda();
+        // SERR# goes, the rest of the command stays; whatever the width.
+        assert_eq!(c.write(0x04, 2, 0x0506), Write::Device { offset: 0x04, width: 2, value: 0x0406 });
+        assert_eq!(c.write(0x04, 4, 0xF900_0146), Write::Device { offset: 0x04, width: 4, value: 0xF900_0046 });
+        assert_eq!(c.write(0x05, 1, 0x05), Write::Device { offset: 0x05, width: 1, value: 0x04 });
+        assert_eq!(c.write(0x04, 1, 0x06), Write::Device { offset: 0x04, width: 1, value: 0x06 });
+        // Device control (the PCI Express capability at 0x60): no error
+        // reporting, its other settings as written; device status as is.
+        assert_eq!(c.write(0x68, 2, 0x281F), Write::Device { offset: 0x68, width: 2, value: 0x2810 });
+        assert_eq!(c.write(0x68, 4, 0x000F_201F), Write::Device { offset: 0x68, width: 4, value: 0x000F_2010 });
+        assert_eq!(c.write(0x6A, 2, 0x000F), Write::Device { offset: 0x6A, width: 2, value: 0x000F });
+        // Without the capability, nothing there is the platform's.
+        let mut plain = ConfigSpace::new(vec![], false, None);
+        assert_eq!(plain.write(0x68, 2, 0x281F), Write::Device { offset: 0x68, width: 2, value: 0x281F });
     }
 
     #[test]

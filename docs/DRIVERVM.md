@@ -228,9 +228,17 @@ expansion ROM, I/O BAR or INTx. A function on the host's bus 0 keeps its
 device number when it can, so drivers that look for a sibling where it is
 on a PC find it.
 
+**Errors.** The errors a function signals become the host's system
+errors, which a PC may turn into NMIs, and an NMI stops Veda: a given
+function reports none. The monitor turns its SERR# enable and its PCI
+Express error reporting off before the guest runs, and they stay off,
+whatever the guest writes.
+
 What a function needs for this, and the limits for now: MSIs (or MSI-X),
 memory BARs of whole pages, and its first 256 bytes of configuration space
-(`devmgr` reaches no more yet); the guest's memory is at most 3 GiB.
+(`devmgr` reaches no more yet); no memory the firmware keeps for it (an
+RMRR: such a device stays the host's); the guest's memory is at most
+3 GiB.
 
 ### Veda's drivers for Linux
 
@@ -265,6 +273,96 @@ A guest program's handles are its own: the guest's kernel lets a file use
 only handles it made or received, and closes what is left when the file
 closes. The registry the guest gets lets it connect only to services that
 drivers attach to, and register only services it provides.
+
+## What others learned
+
+Running a driver's own operating system in a virtual machine, for the
+driver, is twenty years old: L4Ka's DD/OS ran unmodified Linux drivers,
+each in its Linux, on a microkernel acting as hypervisor, within a few
+percent of native network throughput
+([LeVasseur et al., OSDI 2004](https://www.usenix.org/conference/osdi-04/unmodified-device-driver-reuse-and-improved-system-dependability-virtual-machines)).
+Xen's driver domains, Qubes' `sys-net`, `sys-usb` and `sys-audio`, Ghaf's
+system VMs, Spectrum's network VMs and seL4's LionsOS do it today;
+Genode compiles Linux's drivers into components of its own instead (DDE
+Linux), and HongMeng into a container on its kernel, rejecting virtual
+machines for managing memory and scheduling twice. Veda differs from all
+of them in being the host operating system and the hypervisor at once,
+and in its drivers' protocols being the boundary. What they found, and
+where Veda stands:
+
+1. **Cut at the coarsest interface, and keep it asynchronous.** A
+   generic layer inside Linux gives the lowest common denominator
+   (LeVasseur); forwarding a GPU's API reaches 12–86% of native, while
+   forwarding its kernel interface (ChromeOS's DRM native contexts)
+   reaches 99% on Qualcomm's GPUs. Veda cuts at its own driver protocols, which are
+   asynchronous and share memory (decision 1). For GPUs the plan is the
+   same cut: Mesa's own drivers in Veda over a transport of Veda's (Mesa
+   keeps it apart, in `vdrm`), the kernel's interface in the guest.
+2. **What the guest writes is hostile.** Xen's backends were taken over
+   through values they read twice from shared rings
+   ([XSA-155](https://xenbits.xen.org/xsa/advisory-155.html)), and its
+   frontends attacked through races in revoking grants
+   ([XSA-396](https://xenbits.xen.org/xsa/advisory-396.html)). The
+   monitor copies a request out of guest memory before it checks it,
+   keeps the ring's indices itself (the guest's only clamp them), and
+   bounds what a guest can make it keep: handles, and waits, pending or
+   finished (a guest that collects nothing cannot grow the monitor,
+   whose memory is Veda's). Veda's shared rings already trust no peer's
+   position.
+3. **No ambient access to the host's memory.** Qubes replaced a display
+   protocol that needed the host to map any of a guest's pages with
+   grants; Linux got virtio DMA through grants. The guest reaches the VMOs
+   it was given, in its window, and nothing else of Veda's.
+4. **Map bulk data, keep the mappings, copy small things.** Xen moved
+   between flipping pages, copying and mapping them as TLB shootdowns
+   dominated; mappings it kept needed limits and reclaiming. A guest
+   program's rings and buffers stay mapped while it uses them; messages
+   are copied; one unmap is one shootdown.
+5. **Signal only when the peer waits.** Xen's rings, Hyper-V's VMBus and
+   seL4's queues (whose protocol was model-checked) all hold signals
+   back. Veda's protocols signal events, and the bridge one interrupt for
+   all the finished waits; how often an event is signalled is still to
+   be measured and tuned.
+6. **DMA remapping, interrupt remapping, and errors.** Without interrupt
+   remapping a driver domain forges MSIs
+   ([CVE-2011-1898](https://nvd.nist.gov/vuln/detail/CVE-2011-1898)); with
+   it, a device can still raise the host's NMIs through system errors
+   ([XSA-59](https://xenbits.xen.org/xsa/advisory-59.txt)). No device is
+   given away without both remappings; every interrupt in Veda is
+   remapped and checked against its source; a given function reports no
+   errors.
+7. **The firmware's ties to devices.** Memory reserved for a device
+   (RMRRs), Intel's integrated graphics (its OpRegion, stolen memory and
+   expected address 00:02.0), and the ACPI table that describes a
+   laptop's microphones (Ghaf passes NHLT to its audio VM) all leak into
+   the driver VM. Devices with RMRRs stay the host's for now; the
+   firmware's tables for the guest (which has no ACPI) come with the
+   devices that need them.
+8. **Reset is the weak point; restarting the whole VM is the fallback.**
+   A function-level reset takes 100 ms and many devices have none (Qubes'
+   users weaken isolation to get past it); AMD's GPUs need resets of
+   their own. Restarting Xen's network backend cost 140–260 ms without
+   the device (Xoar). A guest's devices reach nothing once it ends;
+   resetting them and starting a new guest is a later phase, and Veda's
+   services already cope with a driver going away.
+9. **Suspend, device by device.** Qubes unloads its PCI drivers before
+   suspending; Ghaf picks a policy per VM. Later.
+10. **Fixed memory, fast boot.** Passthrough rules out ballooning
+    (Qubes); Firecracker reaches its guest's init in 125 ms. The driver
+    VM's memory is one committed VMO, and Linux reaches its init in about
+    0.1 s.
+11. **Narrow, typed control.** Genode's Wi-Fi driver takes a declarative
+    configuration and reports access points; Ghaf filters the D-Bus it
+    forwards from its network VM. Veda's own protocols (`wlanphy`,
+    `netdev`, `audiodev`) are that boundary already.
+12. **Own the presentation clock.** No system found exports a GPU VM's
+    display to another system's compositor with its real vertical blank:
+    virtio-gpu's emulated one has been wrong, Xen's display protocol is
+    fixed at 60 Hz. `displaydev` carries real flip events and timestamps,
+    which Linux's KMS has (the display phase).
+13. **Few driver VMs to start with.** IOMMU groups put devices together,
+    and combining several driver VMs is still hard elsewhere (seL4's
+    libvmm). One driver VM for now; nothing in the design assumes one.
 
 ## Status
 

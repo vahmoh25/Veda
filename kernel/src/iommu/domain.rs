@@ -115,9 +115,21 @@ impl Domain {
 
     /// Puts device `sid` (a requester id on segment 0) in the domain. It
     /// must be in the host's domain, or in none (left by a guest that
-    /// ended); not in another guest's.
+    /// ended); not in another guest's. A device the firmware keeps memory
+    /// for (an RMRR: the firmware may go on using it with the device) stays
+    /// the host's.
     pub fn attach(&mut self, sid: u16) -> Result<(), Error> {
         let iommu = self.iommu();
+        let (bus, dev, func) = (sid >> 8, (sid >> 3) & 0x1F, sid & 7);
+        if iommu.dmar.reserved.iter().any(|r| r.segment == 0 && r.scopes.iter().any(|s| s.source_id() == Some(sid))) {
+            crate::kwarn!(
+                "iommu: {:02x}:{:02x}.{} has memory the firmware keeps for it; it stays the host's",
+                bus,
+                dev,
+                func
+            );
+            return Err(Error::NotSupported);
+        }
         let u = iommu.dmar.unit_for(0, sid).ok_or(Error::NotSupported)?;
         let unit = &iommu.units[u];
         if let Some(Translation::Tables(_)) = vtd::context_state(unit.context(sid)) {
@@ -130,7 +142,6 @@ impl Domain {
         })?;
         self.devices.push((u, sid));
         self.devices.sort_unstable();
-        let (bus, dev, func) = (sid >> 8, (sid >> 3) & 0x1F, sid & 7);
         crate::kinfo!("iommu: {:02x}:{:02x}.{} is in domain {} now", bus, dev, func, self.id);
         Ok(())
     }
