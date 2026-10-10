@@ -2,24 +2,25 @@
 //! running virtual machine: screenshots, keyboard/mouse input, shutdown.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::util::Result;
 
 pub struct Qmp {
-    reader: BufReader<TcpStream>,
-    writer: TcpStream,
+    reader: BufReader<UnixStream>,
+    writer: UnixStream,
 }
 
 impl Qmp {
-    /// Connects to QEMU's QMP server, retrying until `timeout` expires (QEMU
-    /// needs a moment to open the socket after starting).
-    pub fn connect(port: u16, timeout: Duration) -> Result<Self> {
+    /// Connects to QEMU's QMP server at its socket, retrying until
+    /// `timeout` expires (QEMU needs a moment to open the socket after
+    /// starting).
+    pub fn connect(socket: &Path, timeout: Duration) -> Result<Self> {
         let start = Instant::now();
         let stream = loop {
-            match TcpStream::connect(("127.0.0.1", port)) {
+            match UnixStream::connect(socket) {
                 Ok(s) => break s,
                 Err(e) if start.elapsed() > timeout => return Err(format!("cannot connect to QMP: {e}")),
                 Err(_) => std::thread::sleep(Duration::from_millis(100)),

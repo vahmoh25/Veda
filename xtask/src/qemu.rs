@@ -104,15 +104,26 @@ impl NetMode {
     }
 }
 
-/// The local ports joining QEMU and `airsim` (see `crate::airsim`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WifiPorts {
+/// The sockets joining QEMU and `airsim` (see `crate::airsim`): Unix
+/// sockets in the run's directory, which no other run shares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WifiSockets {
     /// QEMU listens here for the simulator's radio connection.
-    pub radio: u16,
-    /// QEMU's end of the bridged NAT link (UDP).
-    pub qemu_udp: u16,
-    /// The simulator's end of it (UDP).
-    pub sim_udp: u16,
+    pub radio: PathBuf,
+    /// QEMU's end of the bridged NAT link (datagrams).
+    pub qemu: PathBuf,
+    /// The simulator's end of it.
+    pub sim: PathBuf,
+}
+
+/// A Unix socket's path as a QEMU option value (`,` would split it).
+pub fn socket_option(path: &Path) -> Result<String> {
+    let s = path.to_str().ok_or_else(|| format!("{} is not UTF-8", path.display()))?;
+    // A socket's address holds at most 107 bytes of path.
+    if s.contains(',') || s.len() > 107 {
+        return Err(format!("{s}: no socket can be there (a comma, or longer than 107 bytes)"));
+    }
+    Ok(s.to_string())
 }
 
 /// How the disks are attached.
@@ -174,8 +185,8 @@ pub struct VmConfig {
     pub audio_silent: bool,
     /// Serial output destination: `None` = this terminal.
     pub serial_file: Option<PathBuf>,
-    /// QMP control socket (TCP port on localhost), used by automated tests.
-    pub qmp_port: Option<u16>,
+    /// QMP's socket (a Unix socket), which automated tests drive QEMU by.
+    pub qmp: Option<PathBuf>,
     /// Wait for a GDB connection on port 1234.
     pub gdb: bool,
     /// Allow the guest to terminate QEMU with an exit code (tests).
@@ -198,9 +209,9 @@ pub struct VmConfig {
     pub net: NetMode,
     /// Model of the wired card (`None`: virtio-net).
     pub nic_model: Option<String>,
-    /// Ports for the Wi-Fi radio and its NAT link (required when `net`
+    /// Sockets for the Wi-Fi radio and its NAT link (required when `net`
     /// includes Wi-Fi).
-    pub wifi: Option<WifiPorts>,
+    pub wifi: Option<WifiSockets>,
     /// A display that is also a 3D GPU (virtio-gpu with virgl): `None` uses
     /// one if QEMU has it.
     pub gpu: Option<bool>,
@@ -225,7 +236,7 @@ impl Default for VmConfig {
             audio_wav: None,
             audio_silent: false,
             serial_file: None,
-            qmp_port: None,
+            qmp: None,
             gdb: false,
             debug_exit: false,
             home_disk: None,
@@ -402,8 +413,8 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         // Without this QEMU adds a default card.
         cmd.args(["-nic", "none"]);
     }
-    if let (true, Some(p)) = (cfg.net.wireless(), cfg.wifi) {
-        cmd.args(wifi_args(cfg, &p));
+    if let (true, Some(p)) = (cfg.net.wireless(), &cfg.wifi) {
+        cmd.args(wifi_args(cfg, p));
     }
     if cfg.display {
         // GTK, whose window grabs the mouse at a click while the pointer is
@@ -432,8 +443,8 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
             "chardev:serial0",
         ]),
     };
-    if let Some(port) = cfg.qmp_port {
-        cmd.args(["-qmp", &format!("tcp:127.0.0.1:{port},server=on,wait=off")]);
+    if let Some(path) = &cfg.qmp {
+        cmd.args(["-qmp", &format!("unix:{},server=on,wait=off", path.display())]);
     }
     if cfg.debug_exit {
         cmd.args(["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]);
@@ -482,12 +493,12 @@ fn virtio(cfg: &VmConfig, spec: &str) -> String {
 /// `org.veda.wlan.0` that `airsim` connects to, and a NAT (`user`
 /// network) joined through a hub to a UDP link with `airsim`, whose access
 /// points bridge their stations onto it.
-pub fn wifi_args(cfg: &VmConfig, p: &WifiPorts) -> Vec<String> {
+pub fn wifi_args(cfg: &VmConfig, p: &WifiSockets) -> Vec<String> {
     [
         "-device",
         &virtio(cfg, "virtio-serial-pci,id=vser0,max_ports=2"),
         "-chardev",
-        &format!("socket,id=wlanradio,host=127.0.0.1,port={},server=on,wait=off", p.radio),
+        &format!("socket,id=wlanradio,path={},server=on,wait=off", p.radio.display()),
         "-device",
         "virtserialport,bus=vser0.0,nr=1,chardev=wlanradio,name=org.veda.wlan.0",
         "-netdev",
@@ -496,9 +507,9 @@ pub fn wifi_args(cfg: &VmConfig, p: &WifiPorts) -> Vec<String> {
         "hubport,id=wlanhub0,hubid=7,netdev=wlanwan",
         "-netdev",
         &format!(
-            "dgram,id=wlanair,local.type=inet,local.host=127.0.0.1,local.port={},\
-             remote.type=inet,remote.host=127.0.0.1,remote.port={}",
-            p.qemu_udp, p.sim_udp
+            "dgram,id=wlanair,local.type=unix,local.path={},remote.type=unix,remote.path={}",
+            p.qemu.display(),
+            p.sim.display()
         ),
         "-netdev",
         "hubport,id=wlanhub1,hubid=7,netdev=wlanair",

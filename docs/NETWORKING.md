@@ -150,9 +150,10 @@ of access points built on `vwlan`'s access point state machine. The port
 goes to the driver VM, where `airlink` makes it a radio of Linux's (see
 below). airsim
 bridges the access points to a QEMU user-mode network (NAT) through a hub
-and a UDP link, so the guest reaches the real Internet over (simulated)
-Wi-Fi. It talks only to QEMU over the loopback interface; it has nothing to
-do with the host's own Wi-Fi.
+and a datagram link, so the guest reaches the real Internet over
+(simulated) Wi-Fi. It talks to QEMU, and takes the tests' commands, over
+Unix sockets in the run's directory (none is a port that another run on
+the machine could take); it has nothing to do with the host's own Wi-Fi.
 
 | Name | SSID | Security | Channel | Signal |
 |------|------|----------|---------|--------|

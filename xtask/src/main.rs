@@ -466,15 +466,16 @@ fn run(o: &Options) -> Result {
     let vars = qemu::vars_file(&install)?;
     // The simulated Wi-Fi environment runs while QEMU does.
     let _sim = if vm.net.wireless() {
-        let sim = airsim::AirSim::start(&airsim::build()?, &util::out_dir().join("airsim.log"))?;
-        vm.wifi = Some(sim.ports);
+        let out = util::out_dir();
+        let sim = airsim::AirSim::start(&airsim::build()?, &out, &out.join("airsim.log"))?;
+        vm.wifi = Some(sim.sockets.clone());
         util::status(
             "Wi-Fi",
             format!(
-                "simulated networks (password \"{}\"); log {}; control: telnet 127.0.0.1 {}",
+                "simulated networks (password \"{}\"); log {}; control: nc -U {}",
                 airsim::PASSWORD,
                 sim.log.display(),
-                sim.control
+                sim.control.display()
             ),
         );
         Some(sim)

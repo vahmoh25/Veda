@@ -2,12 +2,12 @@
 //! environment that `--net wifi` runs next to QEMU (see `tools/airsim`).
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
-use crate::qemu::WifiPorts;
+use crate::qemu::{self, WifiSockets};
 use crate::util::{self, Result};
 
 /// The password of the simulated secured networks (see `tools/airsim`).
@@ -21,37 +21,41 @@ pub fn build() -> Result<PathBuf> {
     if exe.is_file() { Ok(exe) } else { Err(format!("{} was not built", exe.display())) }
 }
 
-fn free_tcp_port() -> Result<u16> {
-    let l = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    Ok(l.local_addr().map_err(|e| e.to_string())?.port())
-}
-
-fn free_udp_port() -> Result<u16> {
-    let s = UdpSocket::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    Ok(s.local_addr().map_err(|e| e.to_string())?.port())
-}
-
 /// A running simulator. It is stopped when dropped (and exits by itself if
 /// this process dies, as it watches its standard input).
 pub struct AirSim {
     child: Child,
-    pub ports: WifiPorts,
-    pub control: u16,
+    pub sockets: WifiSockets,
+    pub control: PathBuf,
     pub log: PathBuf,
 }
 
 impl AirSim {
-    /// Picks free local ports and starts the simulator, logging to `log`.
-    pub fn start(exe: &Path, log: &Path) -> Result<AirSim> {
-        let ports = WifiPorts { radio: free_tcp_port()?, qemu_udp: free_udp_port()?, sim_udp: free_udp_port()? };
-        let control = free_tcp_port()?;
+    /// Starts the simulator, its sockets in `dir` (the run's), logging to
+    /// `log`.
+    pub fn start(exe: &Path, dir: &Path, log: &Path) -> Result<AirSim> {
+        let sockets = WifiSockets {
+            radio: dir.join("radio.sock"),
+            qemu: dir.join("air-qemu.sock"),
+            sim: dir.join("air-sim.sock"),
+        };
+        let control = dir.join("airsim.sock");
+        for s in [&sockets.radio, &sockets.qemu, &sockets.sim, &control] {
+            qemu::socket_option(s)?;
+            // One a run before left.
+            let _ = std::fs::remove_file(s);
+        }
         let out = std::fs::File::create(log).map_err(|e| format!("creating {}: {e}", log.display()))?;
         let err = out.try_clone().map_err(|e| e.to_string())?;
         let child = Command::new(exe)
-            .args(["--radio", &format!("127.0.0.1:{}", ports.radio)])
-            .args(["--wired-local", &format!("127.0.0.1:{}", ports.sim_udp)])
-            .args(["--wired-remote", &format!("127.0.0.1:{}", ports.qemu_udp)])
-            .args(["--control", &format!("127.0.0.1:{control}")])
+            .arg("--radio")
+            .arg(&sockets.radio)
+            .arg("--wired-local")
+            .arg(&sockets.sim)
+            .arg("--wired-remote")
+            .arg(&sockets.qemu)
+            .arg("--control")
+            .arg(&control)
             .args(["--password", PASSWORD])
             .arg("--exit-with-stdin")
             .stdin(Stdio::piped())
@@ -59,7 +63,7 @@ impl AirSim {
             .stderr(err)
             .spawn()
             .map_err(|e| format!("starting airsim: {e}"))?;
-        let mut sim = AirSim { child, ports, control, log: log.to_path_buf() };
+        let mut sim = AirSim { child, sockets, control, log: log.to_path_buf() };
         // Wait until it accepts control connections.
         let start = std::time::Instant::now();
         while sim.command("status").is_err() {
@@ -77,7 +81,7 @@ impl AirSim {
     /// Sends a control command; returns its answer (without the final
     /// `ok`), or the simulator's error.
     pub fn command(&self, line: &str) -> Result<String> {
-        let mut s = TcpStream::connect(("127.0.0.1", self.control)).map_err(|e| e.to_string())?;
+        let mut s = UnixStream::connect(&self.control).map_err(|e| e.to_string())?;
         s.set_read_timeout(Some(Duration::from_secs(10))).ok();
         s.write_all(format!("{}\n", line.trim()).as_bytes()).map_err(|e| e.to_string())?;
         let mut answer = String::new();

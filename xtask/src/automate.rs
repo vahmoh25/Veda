@@ -173,17 +173,17 @@ impl Session {
         let _ = std::fs::remove_file(&serial_log);
         // Kernel panics print "PANIC", user-space panics "panicked at".
         let fail_patterns = vec!["PANIC".into(), "panicked at".into()];
-        let port = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-            l.local_addr().map_err(|e| e.to_string())?.port()
-        };
+        // QMP's socket, the run's own (no port another run could take).
+        let qmp = out.join("qmp.sock");
+        crate::qemu::socket_option(&qmp)?;
+        let _ = std::fs::remove_file(&qmp);
         vm.display = false;
         vm.serial_file = Some(serial_log.clone());
-        vm.qmp_port = Some(port);
+        vm.qmp = Some(qmp.clone());
         vm.debug_exit = true;
         let sim = if vm.net.wireless() {
-            let sim = AirSim::start(&crate::airsim::build()?, &out.join("airsim.log"))?;
-            vm.wifi = Some(sim.ports);
+            let sim = AirSim::start(&crate::airsim::build()?, &out, &out.join("airsim.log"))?;
+            vm.wifi = Some(sim.sockets.clone());
             Some(sim)
         } else {
             None
@@ -192,7 +192,7 @@ impl Session {
         let mut cmd = qemu::command(install, disk, &vars, &vm);
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
         let child = cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?;
-        let qmp = Qmp::connect(port, Duration::from_secs(20))?;
+        let qmp = Qmp::connect(&qmp, Duration::from_secs(20))?;
         Ok(Session {
             m: Machine { child, qmp },
             serial_log,

@@ -3,24 +3,25 @@
 //! QEMU cannot emulate a Wi-Fi adapter, so Veda's virtual radio (a
 //! virtio-serial port, which `airlink` in the driver VM makes a radio of
 //! Linux's) exchanges raw 802.11 frames with the host over that port.
-//! `cargo xtask run --net wifi` starts QEMU with that port as a TCP server
-//! on the loopback interface and starts airsim, which
+//! `cargo xtask run --net wifi` starts QEMU with that port on a Unix socket
+//! in the run's directory and starts airsim, which
 //!
 //! * connects to the port and speaks the radio link protocol
 //!   ([`vradiolink`]) with the guest's `airlink`;
 //! * runs the simulated access points (see [`world`]);
 //! * bridges the access points to a QEMU user-mode network (NAT) through a
-//!   pair of UDP sockets (`-netdev dgram` on a hub with `-netdev user`), so
-//!   the guest reaches the Internet over Wi-Fi;
-//! * accepts control commands (see [`control`]) that tests use to change
-//!   signal levels, switch access points off and so on.
+//!   pair of Unix datagram sockets (`-netdev dgram` on a hub with `-netdev
+//!   user`), so the guest reaches the Internet over Wi-Fi;
+//! * accepts control commands (see [`control`]) on a Unix socket, which
+//!   tests use to change signal levels, switch access points off and so
+//!   on.
 //!
-//! airsim only talks to QEMU over the loopback interface; it has nothing to
-//! do with the host's own Wi-Fi.
+//! Its sockets are files of the run's (none is a port another run on the
+//! machine could take); it has nothing to do with the host's own Wi-Fi.
 //!
 //! ```text
-//! airsim --radio 127.0.0.1:<port> --wired-local 127.0.0.1:<port> --wired-remote 127.0.0.1:<port>
-//!        [--control 127.0.0.1:<port>] [--password <password>] [--seed <n>] [--exit-with-stdin]
+//! airsim --radio <socket> --wired-local <socket> --wired-remote <socket>
+//!        [--control <socket>] [--password <password>] [--seed <n>] [--exit-with-stdin]
 //! ```
 
 mod control;
@@ -30,7 +31,9 @@ mod tests;
 mod world;
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::Shutdown;
+use std::os::unix::net::{UnixDatagram, UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -45,10 +48,10 @@ const DEFAULT_PASSWORD: &str = "veda-wifi";
 const GUEST_QUEUE: usize = 1024;
 
 struct Options {
-    radio: SocketAddr,
-    wired_local: SocketAddr,
-    wired_remote: SocketAddr,
-    control: Option<SocketAddr>,
+    radio: PathBuf,
+    wired_local: PathBuf,
+    wired_remote: PathBuf,
+    control: Option<PathBuf>,
     password: String,
     seed: Option<u64>,
     exit_with_stdin: bool,
@@ -56,7 +59,7 @@ struct Options {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: airsim --radio <addr> --wired-local <addr> --wired-remote <addr> [--control <addr>] \
+        "usage: airsim --radio <socket> --wired-local <socket> --wired-remote <socket> [--control <socket>] \
          [--password <password>] [--seed <n>] [--exit-with-stdin]"
     );
     std::process::exit(2)
@@ -66,7 +69,7 @@ fn parse_options() -> Options {
     let mut args = std::env::args().skip(1);
     let (mut radio, mut wired_local, mut wired_remote, mut control) = (None, None, None, None);
     let (mut password, mut seed, mut exit_with_stdin) = (DEFAULT_PASSWORD.to_string(), None, false);
-    let addr = |v: Option<String>| -> SocketAddr { v.and_then(|v| v.parse().ok()).unwrap_or_else(|| usage()) };
+    let addr = |v: Option<String>| -> PathBuf { v.map(PathBuf::from).unwrap_or_else(|| usage()) };
     while let Some(a) = args.next() {
         match a.as_str() {
             "--radio" => radio = Some(addr(args.next())),
@@ -93,7 +96,7 @@ fn parse_options() -> Options {
 
 enum Event {
     /// Connected to the guest's port; the stream is for writing.
-    RadioUp(TcpStream),
+    RadioUp(UnixStream),
     RadioData(Vec<u8>),
     RadioDown,
     Wired(Vec<u8>),
@@ -111,7 +114,7 @@ type Hold = Arc<Mutex<Option<Instant>>>;
 
 /// Connects to the guest's port (retrying while QEMU starts, and again
 /// after the connection drops) and forwards what arrives.
-fn radio_thread(addr: SocketAddr, events: Sender<Event>, hold: Hold) {
+fn radio_thread(addr: PathBuf, events: Sender<Event>, hold: Hold) {
     loop {
         let until = *hold.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(t) = until
@@ -120,9 +123,8 @@ fn radio_thread(addr: SocketAddr, events: Sender<Event>, hold: Hold) {
             std::thread::sleep(Duration::from_millis(100));
             continue;
         }
-        match TcpStream::connect_timeout(&addr, Duration::from_secs(1)) {
+        match UnixStream::connect(&addr) {
             Ok(stream) => {
-                let _ = stream.set_nodelay(true);
                 let Ok(writer) = stream.try_clone() else { continue };
                 if events.send(Event::RadioUp(writer)).is_err() {
                     return;
@@ -151,7 +153,7 @@ fn radio_thread(addr: SocketAddr, events: Sender<Event>, hold: Hold) {
 }
 
 /// Writes queued messages to the guest's port until the connection closes.
-fn writer_thread(mut stream: TcpStream, queue: Receiver<Vec<u8>>) {
+fn writer_thread(mut stream: UnixStream, queue: Receiver<Vec<u8>>) {
     while let Ok(bytes) = queue.recv() {
         if stream.write_all(&bytes).is_err() {
             return;
@@ -160,12 +162,12 @@ fn writer_thread(mut stream: TcpStream, queue: Receiver<Vec<u8>>) {
 }
 
 /// Receives frames from QEMU's network.
-fn wired_thread(socket: UdpSocket, remote: SocketAddr, events: Sender<Event>) {
+fn wired_thread(socket: UnixDatagram, remote: PathBuf, events: Sender<Event>) {
     let mut buf = vec![0u8; 65536];
     loop {
         match socket.recv_from(&mut buf) {
             // Only QEMU's socket may inject frames.
-            Ok((n, from)) if from == remote => {
+            Ok((n, from)) if from.as_pathname() == Some(remote.as_path()) => {
                 if events.send(Event::Wired(buf[..n].to_vec())).is_err() {
                     return;
                 }
@@ -177,7 +179,7 @@ fn wired_thread(socket: UdpSocket, remote: SocketAddr, events: Sender<Event>) {
 }
 
 /// Serves control connections.
-fn control_thread(listener: TcpListener, events: Sender<Event>) {
+fn control_thread(listener: UnixListener, events: Sender<Event>) {
     for conn in listener.incoming().flatten() {
         let events = events.clone();
         std::thread::spawn(move || {
@@ -199,8 +201,17 @@ fn control_thread(listener: TcpListener, events: Sender<Event>) {
 
 struct Guest {
     queue: SyncSender<Vec<u8>>,
-    stream: TcpStream,
+    stream: UnixStream,
     reader: Reader,
+}
+
+/// A socket of ours at `path`, an old one of a run before removed first.
+fn bind<T>(path: &Path, bind: impl Fn(&Path) -> std::io::Result<T>) -> T {
+    let _ = std::fs::remove_file(path);
+    bind(path).unwrap_or_else(|e| {
+        eprintln!("airsim: cannot bind {}: {e}", path.display());
+        std::process::exit(1)
+    })
 }
 
 fn main() {
@@ -214,27 +225,21 @@ fn main() {
     let networks = default_networks(now(), &mut rng, &opts.password);
     let mut world = World::new(networks, rng);
 
-    let wired = UdpSocket::bind(opts.wired_local).unwrap_or_else(|e| {
-        eprintln!("airsim: cannot bind {}: {e}", opts.wired_local);
-        std::process::exit(1)
-    });
+    let wired = bind(&opts.wired_local, |p| UnixDatagram::bind(p));
     let (events, inbox) = mpsc::channel::<Event>();
     {
-        let (socket, events) = (wired.try_clone().expect("UDP socket clone"), events.clone());
-        let remote = opts.wired_remote;
+        let (socket, events) = (wired.try_clone().expect("datagram socket clone"), events.clone());
+        let remote = opts.wired_remote.clone();
         std::thread::spawn(move || wired_thread(socket, remote, events));
     }
     let hold: Hold = Arc::new(Mutex::new(None));
     {
         let (events, hold) = (events.clone(), hold.clone());
-        let radio = opts.radio;
+        let radio = opts.radio.clone();
         std::thread::spawn(move || radio_thread(radio, events, hold));
     }
-    if let Some(addr) = opts.control {
-        let listener = TcpListener::bind(addr).unwrap_or_else(|e| {
-            eprintln!("airsim: cannot listen on {addr}: {e}");
-            std::process::exit(1)
-        });
+    if let Some(path) = &opts.control {
+        let listener = bind(path, |p| UnixListener::bind(p));
         let events = events.clone();
         std::thread::spawn(move || control_thread(listener, events));
     }
@@ -249,7 +254,15 @@ fn main() {
     }
     drop(events);
 
-    log(start, &format!("airsim: radio {}, wired {} <-> {}", opts.radio, opts.wired_local, opts.wired_remote));
+    log(
+        start,
+        &format!(
+            "airsim: radio {}, wired {} <-> {}",
+            opts.radio.display(),
+            opts.wired_local.display(),
+            opts.wired_remote.display()
+        ),
+    );
     for line in world.describe_networks().lines() {
         log(start, line);
     }
@@ -320,7 +333,7 @@ fn main() {
                     }
                 }
                 Output::Wired(frame) => {
-                    let _ = wired.send_to(&frame, opts.wired_remote);
+                    let _ = wired.send_to(&frame, &opts.wired_remote);
                 }
                 Output::Log(line) => log(start, &line),
             }
