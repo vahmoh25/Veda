@@ -285,7 +285,8 @@ PS/2 keyboards, mice and touchpads, USB network adapters, and Intel's and
 Realtek's Ethernet cards and Intel's Wi-Fi cards; USB disks, the stick
 included, are left alone. Sound plays through Linux's drivers too: HD
 Audio, the sound hardware of nearly every PC since 2005, through the
-speakers (a laptop's amplifiers among them: Cirrus Logic's CS35L41), or
+speakers (a laptop's amplifiers among them: Cirrus Logic's CS35L41, with
+the calibration the firmware keeps for them), or
 the headphones when they are plugged in, and the line outputs, with the
 microphone on the codec (built in, or on a jack) for the agent.
 Built-in microphones wired to an audio DSP rather than to the codec, as

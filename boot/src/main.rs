@@ -7,9 +7,11 @@
 //! 2. pick and set a graphics mode and paint the boot splash,
 //! 3. load the kernel's PE sections into fresh physical pages,
 //! 4. build the initial page tables (identity map, direct map, kernel image),
-//! 5. exit boot services, translate the firmware memory map into the
+//! 5. read the firmware's variables that an operating system may read
+//!    ([`bootinfo::variables`]),
+//! 6. exit boot services, translate the firmware memory map into the
 //!    [`bootinfo`] format, and
-//! 6. switch to the new address space and jump to the kernel.
+//! 7. switch to the new address space and jump to the kernel.
 
 #![no_std]
 #![no_main]
@@ -26,7 +28,7 @@ use core::ptr;
 
 use bootinfo::{
     BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, BootTime, Framebuffer, HHDM_BASE, KernelImage, MemoryKind, MemoryMap,
-    MemoryRegion, PhysRegion, PixelFormat, SplashReport, made_wc, memory_type,
+    MemoryRegion, PhysRegion, PixelFormat, SplashReport, made_wc, memory_type, variables,
 };
 use uefi::{memory_type as mt, *};
 
@@ -34,6 +36,9 @@ const PAGE: u64 = 4096;
 const BOOT_STACK_SIZE: u64 = 128 * 1024;
 /// Most separately recorded allocations handed to the kernel.
 const MAX_TAGS: usize = 256;
+/// Most variables the loader takes from the firmware: more than any keeps,
+/// and an end for one that lists a variable again and again.
+const MAX_VARIABLES: usize = 4096;
 
 /// The allocations handed to the kernel and what they hold.
 ///
@@ -64,6 +69,46 @@ impl Tags {
 }
 
 type Result<T> = core::result::Result<T, &'static str>;
+
+/// Memory the loader reads into from the firmware, as much as that needs:
+/// loader data, which the kernel takes back.
+struct Buffer {
+    base: u64,
+    len: usize,
+}
+
+impl Buffer {
+    /// `len` bytes, zeroed.
+    fn new(fw: &Firmware, len: usize) -> Result<Buffer> {
+        Ok(Buffer { base: fw.alloc_zeroed(len as u64, None)?, len })
+    }
+
+    /// A buffer of `len` bytes (or this one's, if more) holding what this
+    /// one does.
+    fn grown(&self, fw: &Firmware, len: usize) -> Result<Buffer> {
+        let grown = Buffer::new(fw, len.max(self.len))?;
+        // SAFETY: two of the loader's buffers, apart.
+        unsafe { ptr::copy_nonoverlapping(self.base as *const u8, grown.base as *mut u8, self.len) };
+        Ok(grown)
+    }
+
+    fn ptr<T>(&self) -> *mut T {
+        self.base as *mut T
+    }
+
+    /// Its first `len` bytes.
+    fn bytes(&self, len: usize) -> &[u8] {
+        // SAFETY: the buffer's own memory.
+        unsafe { core::slice::from_raw_parts(self.base as *const u8, len.min(self.len)) }
+    }
+
+    /// The UTF-16 string it holds, without the NUL.
+    fn string(&self) -> &[u16] {
+        // SAFETY: the buffer's own memory, page-aligned.
+        let units = unsafe { core::slice::from_raw_parts(self.base as *const u16, self.len / 2) };
+        &units[..units.iter().position(|&u| u == 0).unwrap_or(units.len())]
+    }
+}
 
 /// Thin safe-ish wrapper around the firmware tables.
 struct Firmware {
@@ -207,6 +252,81 @@ impl Firmware {
         // SAFETY: a valid protocol instance and a buffer of the stated size.
         let s = unsafe { ((*rng).get_rng)(rng, ptr::null(), buf.len(), buf.as_mut_ptr()) };
         if is_error(s) { ([0; bootinfo::ENTROPY_MAX], 0) } else { (buf, buf.len()) }
+    }
+
+    /// Calls `f` with each of the firmware's variables that an operating
+    /// system may read while it runs (those with runtime access): its
+    /// vendor, its attributes, its name (UTF-16, without the NUL) and its
+    /// data.
+    fn for_each_variable(&self, mut f: impl FnMut(&Guid, u32, &[u16], &[u8])) -> Result<()> {
+        // SAFETY: the runtime services are valid during boot.
+        let rt = unsafe { &*self.st.runtime_services };
+        // Zeroed: the empty name, from which the list starts.
+        let mut name = Buffer::new(self, PAGE as usize)?;
+        let mut data = Buffer::new(self, PAGE as usize)?;
+        let mut guid = Guid(0, 0, 0, [0; 8]);
+        for _ in 0..MAX_VARIABLES {
+            let mut size = name.len;
+            // SAFETY: `name` holds, in `size` bytes, the name the firmware
+            // gave last (or the empty one).
+            match unsafe { (rt.get_next_variable_name)(&mut size, name.ptr(), &mut guid) } {
+                SUCCESS => {}
+                NOT_FOUND => return Ok(()),
+                BUFFER_TOO_SMALL => {
+                    name = name.grown(self, size)?;
+                    continue;
+                }
+                _ => return Err("the firmware cannot list its variables"),
+            }
+            let (mut attributes, mut size) = (0, data.len);
+            // SAFETY: a name the firmware gave, and a buffer of `size` bytes.
+            let mut status = unsafe { (rt.get_variable)(name.ptr(), &guid, &mut attributes, &mut size, data.ptr()) };
+            if status == BUFFER_TOO_SMALL
+                && let Ok(bigger) = Buffer::new(self, size)
+            {
+                data = bigger;
+                size = data.len;
+                // SAFETY: as above.
+                status = unsafe { (rt.get_variable)(name.ptr(), &guid, &mut attributes, &mut size, data.ptr()) };
+            }
+            // One it cannot read (or find the memory for) is left out.
+            if status == SUCCESS && attributes & variables::attributes::RUNTIME_ACCESS != 0 {
+                f(&guid, attributes, name.string(), data.bytes(size));
+            }
+        }
+        Err("the firmware lists too many variables")
+    }
+
+    /// The firmware's variables that an operating system may read (those
+    /// with runtime access), as `bootinfo::variables` records in memory of
+    /// their own; none if it has none.
+    fn variables(&self) -> Result<PhysRegion> {
+        // How much memory they take, then the records.
+        let mut size = variables::HEADER_SIZE;
+        self.for_each_variable(|_, _, name, data| {
+            size = size.saturating_add(variables::record_size(name.len(), data.len()).unwrap_or(usize::MAX));
+        })?;
+        if size == variables::HEADER_SIZE {
+            return Ok(PhysRegion::EMPTY);
+        }
+        let base = self.alloc_zeroed(size as u64, Some(MemoryKind::FirmwareVariables))?;
+        // SAFETY: freshly allocated, identity-mapped memory of `size` bytes.
+        let out = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, size) };
+        let mut records = variables::Writer::new(out).ok_or("no memory for the variables")?;
+        let (mut count, mut more) = (0, 0);
+        self.for_each_variable(|guid, attributes, name, data| {
+            if records.push(&guid.to_bytes(), attributes, name, data) {
+                count += 1;
+            } else {
+                more += 1;
+            }
+        })?;
+        let size = records.finish();
+        log!("variables: {} that an operating system may read ({} bytes)", count, size);
+        if more > 0 {
+            log!("variables: {} more the second time the firmware listed them, left out", more);
+        }
+        Ok(PhysRegion { base, size: size as u64 })
     }
 
     fn boot_time(&self) -> BootTime {
@@ -525,6 +645,11 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
     let boot_time = fw.boot_time();
     let (entropy, entropy_len) = fw.entropy();
     log!("entropy: {} bytes from the firmware RNG", entropy_len);
+    // The system starts without them if need be.
+    let firmware_variables = fw.variables().unwrap_or_else(|e| {
+        log!("variables: none for the operating system: {}", e);
+        PhysRegion::EMPTY
+    });
 
     // Allocate everything the kernel will receive before taking the final
     // memory map.
@@ -661,6 +786,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
             entropy_len: entropy_len as u32,
             entropy,
             splash,
+            firmware_variables,
         });
     }
     log!("handing over to the kernel ({} memory regions)", merged);

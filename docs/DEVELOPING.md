@@ -51,6 +51,7 @@ cargo xtask run --cmdline "drivervm=off"    # ... or no driver VM at all
 cargo xtask script tests/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
 cargo xtask script tests/ui/drivervm-unplaced.vts   # ... and its xHCI, their BARs left unplaced for devmgr to place
 cargo xtask script tests/ui/drivervm-gpio.vts   # GPIO pins for Linux: a simulated controller's, their interrupts
+cargo xtask script tests/ui/drivervm-variables.vts   # the firmware's variables for Linux, read-only, through efivarfs
 cargo xtask acpi target/acpi   # what devmgr makes of a PC's ACPI tables (sudo cp -r /sys/firmware/acpi/tables target/acpi)
 cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 stack, against airsim's networks
 ```
@@ -158,6 +159,10 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   interrupt; the driver VM's monitor says which of them the guest has
   (`'s GPIO pin 303 interrupts on the guest's GSI 256`), and Linux's
   controller how many (`veda-gpio VEDA0001:00: 4 pins, 1 interrupting`).
+  The loader says how many of the firmware's variables it took (`[vboot]
+  variables: ...`, on the serial port only), the monitor how many the
+  guest has and which it read (`drivervm: the guest read the firmware
+  variable ...`).
   Before booting a machine, `cargo xtask acpi
   DIR` shows what devmgr makes of its ACPI tables, on the host, with the
   interpreter devmgr runs: copy them first (`sudo cp -r
@@ -165,9 +170,9 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   bridges' windows (where devmgr places BARs the firmware left unplaced),
   what the motherboard reserves, and for each function on a root bus its
   ACPI device, its INTx route and the devices below it, with anything
-  that could not be evaluated. The firmware's variables, which Linux does
-  not show, read as zeros (so devices they enable may be missing), but
-  those given with `--set NAME=VALUE`; PCI configuration space comes from
+  that could not be evaluated. The variables the tables keep in the
+  firmware's memory, which Linux does not show, read as zeros (so devices
+  they enable may be missing), but those given with `--set NAME=VALUE`; PCI configuration space comes from
   `DIR/pci/BB:DD.F` files (`/sys/bus/pci/devices/*/config`; all of it as
   root), else from this machine.
 * The agent's scripts (`tests/agent/`) talk to a stand-in for Deepgram

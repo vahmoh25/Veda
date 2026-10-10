@@ -11,6 +11,7 @@ test = false
 bench = false
 
 [dependencies]
+bootinfo = { workspace = true }
 vrt = { workspace = true }
 vabi = { workspace = true }
 vhv = { workspace = true }

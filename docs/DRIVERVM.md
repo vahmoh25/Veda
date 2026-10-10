@@ -144,9 +144,9 @@ Each one came from what the alternatives would cost.
 | IOMMU logic | `lib/iommu` (`viommu`) | the DMAR table; the units' registers, tables, entries and descriptors (host-tested) |
 | Device manager | `services/devmgr` | which devices go to the driver VM (all but Veda's own), their `pcidev` channels, resetting them and starting the driver VM again |
 | Monitor | `services/drivervm` | the machine, its hypercalls, its PCI functions, the bridge, the narrowed registry |
-| Guest kernel | `ports/linux` | Linux with the Veda platform: `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`, `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/gpio/gpio-veda.c` |
+| Guest kernel | `ports/linux` | Linux with the Veda platform: `arch/x86/kernel/cpu/veda.c`, `arch/x86/pci/veda.c`, `drivers/tty/hvc/hvc_veda.c`, `drivers/virt/veda/bridge.c`, `drivers/virt/veda/efi.c`, `drivers/gpio/gpio-veda.c` |
 | Guest runtime | `lib/rt/src/guest.rs` | `vrt`'s system calls through `/dev/veda`; watches |
-| Guest programs | `guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`, `gpiotest`; what they share (`sys`: system calls, network interfaces; `netlink`) |
+| Guest programs | `guest/` | `init`; Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`) and its renderer (`renderer`: C and Rust); `airlink` (QEMU's virtual radio as Linux's); `bridgetest`, `pcitest`, `gpiotest`, `efivartest`; what they share (`sys`: system calls, network interfaces; `netlink`) |
 | Build | `xtask/src/linux.rs`, `ports/linux/build.sh` | `cargo xtask linux`: the kernel, a toolchain for the guest's programs in C and C++, Mesa; the initramfs, with the firmware of `ports/linux/firmware.txt`; the image's `linux/` |
 
 ### The platform
@@ -175,6 +175,7 @@ in `rbx`, `rcx`, `rdx`, `rsi`, `rdi` (`vhv::platform`):
 | `PCI_MSI` | routes an MSI of a function to a processor and vector; gives the message the function sends |
 | `GSI` | routes an interrupt line the guest has (a GSI: the keyboard controller's 1 and 12, the lines functions' INTx are wired to, from 256 the platform's own: GPIO pins' interrupts) to a processor and vector, or masks it |
 | `GPIO` | reads a GPIO pin the guest has, drives it, makes it an input, or tells its direction |
+| `FIRMWARE_VARIABLE` | the PC's firmware variables, read-only: what UEFI's `GetVariable` and `GetNextVariableName` do |
 
 The monitor boots Linux through the x86 boot protocol's 64-bit entry
 (`vhv::linux`): the kernel at the address it prefers, the initramfs at the
@@ -318,6 +319,24 @@ controllers is `drivers/gpio/gpio-veda.c`: a GPIO chip at the controller's
 ACPI device, whose lines are the pins, and whose pins' IRQs are its
 interrupts, so that Linux's ACPI finds a device's GPIOs and its GPIO
 interrupt as on the PC.
+
+**Firmware variables.** Some drivers read what the PC's maker keeps in
+the firmware's (UEFI's) variables: a laptop's speaker amplifiers' driver
+reads their factory calibration there, without which they play
+uncalibrated. Veda runs no firmware code: its loader reads the variables
+an operating system may read (those with runtime access) before it
+leaves the firmware's boot services, into memory of their own
+(`bootinfo::variables`), which the kernel hands to `init` as they are,
+read-only, `init` to `devmgr` and `devmgr` to the driver VM. The
+`FIRMWARE_VARIABLE` hypercall does what UEFI's `GetVariable` and
+`GetNextVariableName` do with them; the guest cannot change them, and
+they are as they were when the PC started. Linux's side is
+`drivers/virt/veda/efi.c`: EFI's runtime services, of which the guest has
+only these two (`efi.get_variable`, which drivers call), and efivars, so
+that efivarfs gives them to programs, read-only. The monitor logs each
+variable the guest reads (`the guest read the firmware variable
+CirrusSmartAmpCalibrationData-...`), and the first few it asks for that
+the PC does not have.
 
 **Power states.** The guest puts its functions to sleep and wakes them as
 Linux does on a PC (runtime power management), and a firmware may leave
@@ -636,7 +655,8 @@ where Veda stands:
 | The firmware's descriptions of devices below functions, in the guest's tables (ids, I2C addresses, interrupt lines, `_DSM`, constant data); a laptop's I2C controllers and HID devices (touchpads, touchscreens) to Linux | done under QEMU (`tests/ui/drivervm-described.vts`); not yet tried on a PC |
 | GPIO pins for the guest: the platform's GPIO controllers, the PC's pins that described devices are wired to, their interrupts (lines `devmgr` raises); devices on SPI controllers | done under QEMU (`tests/ui/drivervm-gpio.vts`, a simulated controller) |
 | Sound: HD Audio controllers and their codecs, a laptop's speaker amplifiers on SPI (with their pins); Veda's own HD Audio, SPI and amplifier drivers gone | done under QEMU (`tests/ui/drivervm-audio.vts`, `drivervm-mic.vts`, `drivervm-pci.vts`, `startup.vts`); the amplifiers not yet tried on a PC |
-| The firmware's ties: the firmware's variables (the amplifiers' calibration), the audio DSP the built-in microphones are on (SOF, the NHLT table) | next |
+| The PC's firmware variables for the guest, read-only (the amplifiers' calibration) | done under QEMU (`tests/ui/drivervm-variables.vts`, variables added to OVMF's); not yet tried on a PC |
+| The audio DSP the built-in microphones are on (SOF, the NHLT table) | next |
 
 **GPUs.** Linux's driver and Mesa's drive a GPU whole in the guest (lesson
 1): the guest's Linux has i915 and virtio-gpu, and its Mesa iris, virgl
@@ -665,7 +685,9 @@ when it cannot run). Its options are on the kernel command line:
 `drivervm.cpus=N`, `drivervm.devices=VID:DID,...` (devices Veda would
 keep), `drivervm=off`, and `drivervm.crash=SECONDS`, which
 has Linux crash once, that long after it started, for the tests of the
-restart. Wi-Fi's scripts give QEMU's machine the virtual radio's
+restart. A script adds variables to the firmware's store with
+`firmware-variable` (a scripted run starts with OVMF's own store, those
+added). Wi-Fi's scripts give QEMU's machine the virtual radio's
 virtio-serial function (`net wifi`), which `airlink` makes Linux's;
 `usb net` a USB network adapter on its xHCI controller, and `input usb`
 USB keyboards, mice and a tablet instead of the PS/2 keyboard and the

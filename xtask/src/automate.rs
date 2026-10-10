@@ -29,6 +29,7 @@
 //! nic e1000e                       # QEMU model of the wired card for this run, applied before boot
 //! disk nvme                        # how QEMU attaches the disks for this run (virtio, ahci, nvme), applied before boot
 //! acpi-table touchpad              # add a table to the firmware's (xtask/src/acpitest.rs), applied before boot
+//! firmware-variable Name GUID 7 0a0b  # add a variable (attributes, hex data) to the firmware's store, before boot
 //! sound hda                        # the sound card for this run (virtio or hda), applied before boot
 //! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
@@ -82,6 +83,7 @@ use std::time::{Duration, Instant};
 use crate::agentsim::AgentSim;
 use crate::airsim::AirSim;
 use crate::mic::{self, MicServer};
+use crate::ovmfvars;
 use crate::qemu::{self, DiskBus, InputDevices, NetMode, QemuInstall, VmConfig};
 use crate::qmp::Qmp;
 use crate::util::{self, Result};
@@ -188,7 +190,7 @@ impl Session {
         } else {
             None
         };
-        let vars = qemu::vars_file(install)?;
+        let vars = qemu::script_vars_file(install, &vm.firmware_variables)?;
         let mut cmd = qemu::command(install, disk, &vars, &vm);
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
         let child = cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?;
@@ -517,6 +519,29 @@ pub fn acpi_tables(script: &str) -> Result<Vec<PathBuf>> {
     Ok(tables)
 }
 
+/// The variables a script adds to the firmware's store with
+/// `firmware-variable NAME GUID ATTRIBUTES DATA` (UEFI's attributes, in
+/// hex like the data).
+pub fn firmware_variables(script: &str) -> Result<Vec<ovmfvars::Variable>> {
+    let mut variables = Vec::new();
+    for w in script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "firmware-variable")) {
+        let [_, name, guid, attributes, data] = &w[..] else {
+            return Err("firmware-variable: needs a name, a GUID, attributes and data".into());
+        };
+        let guid = ovmfvars::guid(guid).ok_or(format!("firmware-variable: {guid} is not a GUID"))?;
+        let attributes = u32::from_str_radix(attributes.trim_start_matches("0x"), 16)
+            .map_err(|_| format!("firmware-variable: attributes {attributes} are not hex"))?;
+        let data = (0..data.len())
+            .step_by(2)
+            .map(|i| data.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
+            .collect::<Option<Vec<u8>>>()
+            .filter(|d| !d.is_empty())
+            .ok_or(format!("firmware-variable: data {data} is not hex bytes"))?;
+        variables.push(ovmfvars::Variable { name: name.clone(), guid, attributes, data });
+    }
+    Ok(variables)
+}
+
 /// The wired card model a script asks for with `nic`.
 pub fn nic_model(script: &str) -> Option<String> {
     script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "nic")).find_map(|w| w.get(1).cloned())
@@ -624,7 +649,7 @@ pub fn run_script(
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
                 "boot-cmdline" | "net" | "nic" | "disk" | "usb" | "sound" | "audio" | "requires" | "live" | "input"
-                | "gpu" | "acpi-table" => {}
+                | "gpu" | "acpi-table" | "firmware-variable" => {}
                 "qmp" => {
                     let command = w.get(1).ok_or("missing command")?;
                     let arguments = w.get(2).map_or("{}", String::as_str);

@@ -17,7 +17,8 @@
 //! DMA into the guest's memory only, their BARs, their interrupts (MSIs,
 //! and the lines their INTx are wired to: `lines`); the PC's keyboard
 //! controller, if devmgr hands its ports and interrupts over (`i8042`);
-//! and ACPI tables that describe them (`vhv::acpi`).
+//! ACPI tables that describe them (`vhv::acpi`); and the PC's firmware
+//! variables, read-only (`variables`).
 //!
 //! The guest's life is this process's: when Linux powers the machine off,
 //! restarts it, crashes or does something the platform does not allow,
@@ -44,6 +45,7 @@ mod machine;
 mod memory;
 mod pci;
 mod registry;
+mod variables;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -52,7 +54,8 @@ use vrt::object::{Channel, Interrupt, IoPorts, Resource, Vmo};
 use vrt::println;
 
 use lines::Lines;
-use machine::{Config, Machine};
+use machine::{Config, Machine, Pc};
+use variables::FirmwareVariables;
 
 vrt::entry!(main);
 
@@ -67,6 +70,8 @@ const I8042_DATA_ROLE: u32 = vabi::startup::role::USER + 3;
 const I8042_COMMAND_ROLE: u32 = vabi::startup::role::USER + 4;
 const I8042_KEYBOARD_ROLE: u32 = vabi::startup::role::USER + 5;
 const I8042_MOUSE_ROLE: u32 = vabi::startup::role::USER + 6;
+/// Role of the PC's firmware variables, if it has some.
+const VARIABLES_ROLE: u32 = vabi::startup::role::USER + 7;
 
 /// Maps the system image (the initrd), where the guest's kernel is.
 fn system_image() -> Option<initrd::Archive<'static>> {
@@ -122,7 +127,9 @@ fn main() -> i32 {
             }
             _ => None,
         };
-    match Machine::start(&hypervisor, kernel.data, initramfs.data, devices, i8042, lines, &config) {
+    let variables = take(VARIABLES_ROLE).map(Vmo::from_handle).map(FirmwareVariables::map).unwrap_or_default();
+    let pc = Pc { devices, i8042, lines, variables };
+    match Machine::start(&hypervisor, kernel.data, initramfs.data, pc, &config) {
         Ok(machine) => machine.wait(),
         Err(e) => {
             let e: String = e;

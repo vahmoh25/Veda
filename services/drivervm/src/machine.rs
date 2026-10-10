@@ -37,6 +37,7 @@ use crate::i8042::{self, I8042};
 use crate::lines::Lines;
 use crate::memory::GuestMemory;
 use crate::pci::{Devices, Windows};
+use crate::variables::FirmwareVariables;
 
 /// How the machine is made.
 pub struct Config {
@@ -83,6 +84,18 @@ pub mod exit_code {
     pub const FAULT: i32 = 4;
 }
 
+/// What the guest has of the PC.
+pub struct Pc {
+    /// The `pcidev` channels of its PCI functions.
+    pub devices: Vec<Channel>,
+    /// The keyboard controller, if devmgr hands it over.
+    pub i8042: Option<I8042>,
+    /// Its interrupt lines (to which the functions' are added).
+    pub lines: Lines,
+    /// The firmware's variables.
+    pub variables: FirmwareVariables,
+}
+
 pub struct Machine {
     guest: Guest,
     memory: GuestMemory,
@@ -92,6 +105,8 @@ pub struct Machine {
     i8042: Option<I8042>,
     /// The interrupt lines the guest has.
     lines: Lines,
+    /// The PC's firmware variables.
+    variables: FirmwareVariables,
     /// The guest's first processor, which the bridge's interrupts go to.
     notify: Vcpu,
     /// The processors that have started (by APIC id), for the devices'
@@ -106,19 +121,16 @@ pub struct Machine {
 }
 
 impl Machine {
-    /// Makes the machine, gives it the PCI functions of `devices` (their
-    /// `pcidev` channels), the keyboard controller and the interrupt lines
-    /// of `lines` (to which the functions' are added), describes them in
-    /// ACPI tables, loads Linux and starts its first processor.
+    /// Makes the machine, gives it what it has of the PC, describes that
+    /// in ACPI tables, loads Linux and starts its first processor.
     pub fn start(
         hypervisor: &Resource,
         kernel: &[u8],
         initramfs: &[u8],
-        devices: Vec<Channel>,
-        i8042: Option<I8042>,
-        mut lines: Lines,
+        pc: Pc,
         config: &Config,
     ) -> Result<Arc<Machine>, String> {
+        let Pc { devices, i8042, mut lines, variables } = pc;
         let size = config.memory_mib as u64 * MIB;
         if size > PCI_LOW.start {
             return Err(format!("the guest can have at most {} MiB", PCI_LOW.start / MIB));
@@ -209,6 +221,7 @@ impl Machine {
             devices,
             i8042,
             lines,
+            variables,
             notify,
             vcpus: Mutex::new(vcpus),
             console: Mutex::new((0..config.cpus).map(|_| Vec::new()).collect()),
@@ -313,6 +326,7 @@ impl Machine {
                 _ => error::INVALID,
             },
             hypercall::GPIO => self.devices.gpio(data[1], data[2], data[3], data[4]),
+            hypercall::FIRMWARE_VARIABLE => self.variables.call(&self.memory, data[1], data[2]),
             _ => error::UNKNOWN,
         }
     }

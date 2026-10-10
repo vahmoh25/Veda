@@ -200,6 +200,8 @@ pub struct VmConfig {
     pub disk_bus: DiskBus,
     /// ACPI tables added to the firmware's (tests' descriptions of devices).
     pub acpi_tables: Vec<PathBuf>,
+    /// Variables added to the firmware's store, for a scripted run's.
+    pub firmware_variables: Vec<crate::ovmfvars::Variable>,
     /// The keyboard and pointing devices.
     pub input: InputDevices,
     /// Let the guest reboot (otherwise a reset, e.g. after a triple fault,
@@ -243,6 +245,7 @@ impl Default for VmConfig {
             usb_stick: false,
             disk_bus: DiskBus::Virtio,
             acpi_tables: Vec::new(),
+            firmware_variables: Vec::new(),
             input: InputDevices::Standard,
             allow_reboot: false,
             net: NetMode::Ethernet,
@@ -517,6 +520,20 @@ pub fn wifi_args(cfg: &VmConfig, p: &WifiSockets) -> Vec<String> {
     .iter()
     .map(|s| s.to_string())
     .collect()
+}
+
+/// A scripted run's UEFI variable store: a copy of the firmware's template
+/// (every run starts with the same), with `variables` added.
+pub fn script_vars_file(install: &QemuInstall, variables: &[crate::ovmfvars::Variable]) -> Result<PathBuf> {
+    let path = util::out_dir().join("script-vars.fd");
+    let template = &install.ovmf_vars_template;
+    let mut image = std::fs::read(template).map_err(|e| format!("reading {}: {e}", template.display()))?;
+    if !variables.is_empty() {
+        crate::ovmfvars::add(&mut image, variables).map_err(|e| format!("{}: {e}", template.display()))?;
+    }
+    std::fs::create_dir_all(util::out_dir()).map_err(|e| e.to_string())?;
+    std::fs::write(&path, image).map_err(|e| format!("writing {}: {e}", path.display()))?;
+    Ok(path)
 }
 
 /// Returns the path of this machine's writable UEFI variable store, creating

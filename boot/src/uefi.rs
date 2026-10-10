@@ -24,6 +24,18 @@ pub fn is_error(s: Status) -> bool {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Guid(pub u32, pub u16, pub u16, pub [u8; 8]);
 
+impl Guid {
+    /// Its bytes, as UEFI lays it out in memory.
+    pub fn to_bytes(self) -> [u8; 16] {
+        let mut b = [0; 16];
+        b[..4].copy_from_slice(&self.0.to_le_bytes());
+        b[4..6].copy_from_slice(&self.1.to_le_bytes());
+        b[6..8].copy_from_slice(&self.2.to_le_bytes());
+        b[8..].copy_from_slice(&self.3);
+        b
+    }
+}
+
 pub const GRAPHICS_OUTPUT_PROTOCOL: Guid =
     Guid(0x9042a9de, 0x23dc, 0x4a38, [0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a]);
 pub const LOADED_IMAGE_PROTOCOL: Guid =
@@ -172,6 +184,15 @@ pub const UNSPECIFIED_TIMEZONE: i16 = 0x07FF;
 pub struct RuntimeServices {
     pub hdr: TableHeader,
     pub get_time: unsafe extern "efiapi" fn(*mut Time, *mut c_void) -> Status,
+    pub set_time: usize,
+    pub get_wakeup_time: usize,
+    pub set_wakeup_time: usize,
+    pub set_virtual_address_map: usize,
+    pub convert_pointer: usize,
+    /// `GetVariable(VariableName, VendorGuid, Attributes, DataSize, Data)`.
+    pub get_variable: unsafe extern "efiapi" fn(*const u16, *const Guid, *mut u32, *mut usize, *mut c_void) -> Status,
+    /// `GetNextVariableName(VariableNameSize, VariableName, VendorGuid)`.
+    pub get_next_variable_name: unsafe extern "efiapi" fn(*mut usize, *mut u16, *mut Guid) -> Status,
 }
 
 #[repr(C)]

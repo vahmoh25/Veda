@@ -18,6 +18,8 @@
 
 #![no_std]
 
+pub mod variables;
+
 /// Virtual base address of the higher-half direct map of physical memory.
 pub const HHDM_BASE: u64 = 0xFFFF_8000_0000_0000;
 
@@ -28,7 +30,7 @@ pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 pub const BOOTINFO_MAGIC: u64 = u64::from_le_bytes(*b"VEDABOOT");
 
 /// Version of this protocol. Bump on any layout change.
-pub const BOOTINFO_VERSION: u32 = 3;
+pub const BOOTINFO_VERSION: u32 = 4;
 
 /// Maximum length of the kernel command line, in bytes.
 pub const CMDLINE_MAX: usize = 256;
@@ -77,6 +79,9 @@ pub struct BootInfo {
     pub entropy: [u8; ENTROPY_MAX],
     /// How the loader painted the boot splash, for the kernel's log.
     pub splash: SplashReport,
+    /// The firmware's variables that an operating system may read, as the
+    /// loader read them ([`variables`]); empty if it found none.
+    pub firmware_variables: PhysRegion,
 }
 
 /// How the loader painted the boot splash: how long it took, and the
@@ -252,6 +257,8 @@ pub enum MemoryKind {
     Unusable = 10,
     /// Kernel symbol table.
     Symbols = 11,
+    /// The firmware's variables ([`variables`]).
+    FirmwareVariables = 12,
 }
 
 impl MemoryKind {

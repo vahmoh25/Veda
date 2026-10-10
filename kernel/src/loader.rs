@@ -136,6 +136,14 @@ pub fn spawn_init(boot: &BootInfo) {
     }
     handles.push(Handle { object: KObject::Vmo(info_vmo), rights: read_only });
     roles.push(role::BOOT_INFO);
+    let variables = &boot.firmware_variables;
+    if !variables.is_empty() {
+        handles.push(Handle {
+            object: KObject::Vmo(Vmo::new_physical(variables.base, variables.size, Cache::WriteBack)),
+            rights: read_only,
+        });
+        roles.push(role::FIRMWARE_VARIABLES);
+    }
 
     let mut data = Vec::new();
     startup::Startup { args: &["init"], roles: &roles, ..Default::default() }

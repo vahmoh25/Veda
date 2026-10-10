@@ -22,7 +22,8 @@ unsafe impl Plain for u64 {}
 unsafe impl Plain for vabi::WaitItem {}
 macro_rules! plain {
     ($($t:ty),*) => {$(
-        // SAFETY: a `vhv::bridge` request: integers, no padding.
+        // SAFETY: a request of the bridge's or the platform's: integers,
+        // no padding.
         unsafe impl Plain for $t {}
     )*};
 }
@@ -43,7 +44,8 @@ plain!(
     vhv::bridge::VmoMap,
     vhv::bridge::Bootstrap,
     vhv::bridge::Clock,
-    vhv::bridge::Completion
+    vhv::bridge::Completion,
+    vhv::platform::Variable
 );
 
 pub struct GuestMemory {

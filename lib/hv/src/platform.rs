@@ -34,6 +34,11 @@
 //! the pins; their interrupts are lines too, GSIs from
 //! [`PLATFORM_GSIS`] on.
 //!
+//! The PC's firmware variables that an operating system may read (UEFI's,
+//! with runtime access, as they were when the PC started) the guest reads
+//! with [`hypercall::FIRMWARE_VARIABLE`], which does what UEFI's
+//! `GetVariable` and `GetNextVariableName` do; it cannot change them.
+//!
 //! PCI functions given to the guest are on its PCI segment 0, where the
 //! platform puts them (bus 0); the guest finds them by reading their
 //! configuration space, which it reaches only through hypercalls. Their
@@ -103,7 +108,50 @@ pub mod hypercall {
     /// pin is an output, or 0; [`super::error::INVALID`] if the guest has
     /// no such pin, or the PC would not do it.
     pub const GPIO: u64 = 10;
+    /// Operation `rbx` ([`super::variable`]) on the PC's firmware
+    /// variables, with the [`super::Variable`] request at guest-physical
+    /// address `rcx`. Returns 0; [`super::error::NOT_FOUND`] if there is no
+    /// such variable (or none after it); [`super::error::TOO_SMALL`] if a
+    /// buffer is too small for what goes there (the request then holds the
+    /// size it needs); [`super::error::INVALID`] if the request is not in
+    /// the guest's memory, or what it names is not a variable's name.
+    pub const FIRMWARE_VARIABLE: u64 = 11;
 }
+
+/// What [`hypercall::FIRMWARE_VARIABLE`] does.
+pub mod variable {
+    /// UEFI's `GetVariable`: copies the data of the variable `name` (of
+    /// vendor `guid`) to `data`, and sets `data_size` to its size and
+    /// `attributes` to its attributes (with [`super::error::TOO_SMALL`]
+    /// too).
+    pub const GET: u64 = 0;
+    /// UEFI's `GetNextVariableName`: replaces `name` and `guid` with those
+    /// of the variable after them (the first after the empty name), and
+    /// sets `name_size` to its name's size, the NUL included.
+    pub const NEXT: u64 = 1;
+}
+
+/// A [`hypercall::FIRMWARE_VARIABLE`] request, in the guest's memory.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Variable {
+    /// The variable's vendor (a GUID, as UEFI lays it out).
+    pub guid: [u8; 16],
+    /// Where its name is (guest-physical): UTF-16, NUL-terminated, in a
+    /// buffer of `name_size` bytes.
+    pub name: u64,
+    pub name_size: u64,
+    /// Where its data goes ([`variable::GET`]), a buffer of `data_size`
+    /// bytes.
+    pub data: u64,
+    pub data_size: u64,
+    /// Its attributes (UEFI's), from [`variable::GET`].
+    pub attributes: u32,
+    pub reserved: u32,
+}
+
+// The layout Linux's side (`asm/veda_para.h`) has.
+const _: () = assert!(core::mem::size_of::<Variable>() == 56);
 
 /// GSIs are below this: the guest's IRQs of the same numbers.
 pub const GSIS: u32 = 512;
@@ -142,6 +190,10 @@ pub mod error {
     pub const UNKNOWN: u64 = -1i64 as u64;
     /// An argument was invalid.
     pub const INVALID: u64 = -2i64 as u64;
+    /// There is no such thing.
+    pub const NOT_FOUND: u64 = -3i64 as u64;
+    /// A buffer is too small for what goes there.
+    pub const TOO_SMALL: u64 = -4i64 as u64;
 }
 
 /// The bytes of a [`hypercall::CONSOLE_WRITE`], from its registers.

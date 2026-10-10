@@ -37,6 +37,7 @@ fn is_kernel_ram(kind: MemoryKind) -> bool {
             | MemoryKind::Kernel
             | MemoryKind::Initrd
             | MemoryKind::BootData
+            | MemoryKind::FirmwareVariables
     )
 }
 

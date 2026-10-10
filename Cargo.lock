@@ -436,6 +436,7 @@ dependencies = [
 name = "drivervm"
 version = "0.1.0"
 dependencies = [
+ "bootinfo",
  "initrd",
  "vabi",
  "vbuild",
@@ -610,6 +611,13 @@ dependencies = [
  "vipc",
  "vproto",
  "vrt",
+]
+
+[[package]]
+name = "guest-efivartest"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
 ]
 
 [[package]]

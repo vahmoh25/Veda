@@ -172,7 +172,7 @@
  
  obj-$(CONFIG_NITRO_ENCLAVES)	+= nitro_enclaves/
  obj-$(CONFIG_ACRN_HSM)		+= acrn/
-+obj-$(CONFIG_VEDA_BRIDGE)	+= veda/
++obj-$(CONFIG_VEDA_GUEST)	+= veda/
  obj-y				+= coco/
 --- a/drivers/gpio/Kconfig
 +++ b/drivers/gpio/Kconfig
@@ -200,9 +200,34 @@
  obj-$(CONFIG_GPIO_VF610)		+= gpio-vf610.o
  obj-$(CONFIG_GPIO_VIPERBOARD)		+= gpio-viperboard.o
  obj-$(CONFIG_GPIO_VIRTUSER)		+= gpio-virtuser.o
+--- a/drivers/firmware/efi/efi.c
++++ b/drivers/firmware/efi/efi.c
+@@ -189,7 +189,12 @@
+ 	.is_visible = efi_attr_is_visible,
+ };
+ 
+-struct blocking_notifier_head efivar_ops_nh;
++/*
++ * Initialised here, not when the EFI subsystem registers: variables may come
++ * from elsewhere on a machine not booted through EFI (gsmi, a hypervisor's),
++ * and efivarfs registers with this at every mount.
++ */
++BLOCKING_NOTIFIER_HEAD(efivar_ops_nh);
+ EXPORT_SYMBOL_GPL(efivar_ops_nh);
+ 
+ static struct efivars generic_efivars;
+@@ -457,8 +462,6 @@
+ 		platform_device_register_simple("efivars", 0, NULL, 0);
+ 	}
+ 
+-	BLOCKING_INIT_NOTIFIER_HEAD(&efivar_ops_nh);
+-
+ 	error = sysfs_create_group(efi_kobj, &efi_subsys_attr_group);
+ 	if (error) {
+ 		pr_err("efi: Sysfs attribute export failed with error %d.\n",
 --- /dev/null
 +++ b/arch/x86/include/asm/veda_para.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,112 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * Veda's paravirtual platform, on which Linux runs as Veda's driver VM:
@@ -256,6 +281,32 @@
 +#define VEDA_GPIO_WRITE		1	/* made an output */
 +#define VEDA_GPIO_INPUT		2
 +#define VEDA_GPIO_DIRECTION	3
++/*
++ * rbx: VEDA_VARIABLE_*, rcx: a struct veda_variable (guest-physical). The
++ * PC's firmware variables that an operating system may read, read-only:
++ * VEDA_VARIABLE_GET does what UEFI's GetVariable does, VEDA_VARIABLE_NEXT
++ * what GetNextVariableName does. Returns 0, VEDA_ERR_NOT_FOUND,
++ * VEDA_ERR_TOO_SMALL (the request then holds the size needed) or
++ * VEDA_ERR_INVALID.
++ */
++#define VEDA_HC_FIRMWARE_VARIABLE 11
++#define VEDA_VARIABLE_GET	0
++#define VEDA_VARIABLE_NEXT	1
++
++struct veda_variable {
++	u8 guid[16];		/* the vendor, as UEFI lays it out */
++	u64 name;		/* UTF-16, NUL-terminated, */
++	u64 name_size;		/* in a buffer of this many bytes */
++	u64 data;		/* VEDA_VARIABLE_GET's buffer, */
++	u64 data_size;		/* of this many bytes */
++	u32 attributes;		/* from VEDA_VARIABLE_GET */
++	u32 reserved;
++};
++
++#define VEDA_ERR_UNKNOWN	(-1)	/* no such hypercall */
++#define VEDA_ERR_INVALID	(-2)
++#define VEDA_ERR_NOT_FOUND	(-3)
++#define VEDA_ERR_TOO_SMALL	(-4)
 +
 +#define VEDA_POWER_OFF		0
 +#define VEDA_POWER_RESTART	1
@@ -915,7 +966,7 @@
 +#endif /* _UAPI_LINUX_VEDA_H */
 --- /dev/null
 +++ b/drivers/virt/veda/Kconfig
-@@ -0,0 +1,10 @@
+@@ -0,0 +1,19 @@
 +# SPDX-License-Identifier: GPL-2.0
 +config VEDA_BRIDGE
 +	bool "Veda driver VM bridge"
@@ -926,11 +977,21 @@
 +	  use Veda's IPC: channels, events, memory objects and waits on
 +	  them, on objects that live in Veda; and memory objects as dma-bufs
 +	  for Linux's drivers.
++
++config VEDA_EFI
++	bool "The PC's firmware variables in Veda's driver VM"
++	depends on VEDA_GUEST && EFI
++	help
++	  The UEFI variables of the PC Veda runs on that an operating system
++	  may read, which Linux in Veda's driver VM reads as on the PC,
++	  read-only: its drivers through EFI's runtime services, programs
++	  through efivarfs.
 --- /dev/null
 +++ b/drivers/virt/veda/Makefile
-@@ -0,0 +1,2 @@
+@@ -0,0 +1,3 @@
 +# SPDX-License-Identifier: GPL-2.0
 +obj-$(CONFIG_VEDA_BRIDGE)	+= bridge.o
++obj-$(CONFIG_VEDA_EFI)		+= efi.o
 --- /dev/null
 +++ b/drivers/virt/veda/bridge.c
 @@ -0,0 +1,1063 @@
@@ -2347,3 +2408,144 @@
 +	.probe = veda_gpio_probe,
 +};
 +builtin_platform_driver(veda_gpio_driver);
+--- /dev/null
++++ b/drivers/virt/veda/efi.c
+@@ -0,0 +1,138 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * The PC's firmware variables, in Veda's driver VM.
++ *
++ * Veda's loader reads the UEFI variables of the PC that an operating
++ * system may read before Veda starts, and the platform gives them to the
++ * guest, read-only, through a hypercall that does what UEFI's GetVariable
++ * and GetNextVariableName do (asm/veda_para.h). Linux reads them as on the
++ * PC: its drivers through EFI's runtime services, of which the platform
++ * has only these (a laptop's speaker amplifiers' driver reads their
++ * calibration so), and programs through efivarfs, read-only.
++ */
++
++#include <linux/efi.h>
++#include <linux/init.h>
++#include <linux/minmax.h>
++#include <linux/overflow.h>
++#include <linux/printk.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/ucs2_string.h>
++#include <asm/veda_para.h>
++
++/*
++ * A request and the buffers it names, in one allocation of the kernel's:
++ * the caller's buffers may be anywhere (on a stack, in a module's data),
++ * the monitor reaches guest-physical memory.
++ */
++struct veda_efi_request {
++	struct veda_variable var;
++	u8 buf[];
++};
++
++static efi_status_t veda_efi_call(unsigned long op, struct veda_efi_request *r)
++{
++	switch (veda_hypercall(VEDA_HC_FIRMWARE_VARIABLE, op, __pa(&r->var), 0, 0, 0)) {
++	case 0:
++		return EFI_SUCCESS;
++	case VEDA_ERR_NOT_FOUND:
++		return EFI_NOT_FOUND;
++	case VEDA_ERR_TOO_SMALL:
++		return EFI_BUFFER_TOO_SMALL;
++	case VEDA_ERR_INVALID:
++		return EFI_INVALID_PARAMETER;
++	default:
++		return EFI_UNSUPPORTED;
++	}
++}
++
++static efi_status_t veda_get_variable(efi_char16_t *name, efi_guid_t *vendor, u32 *attr,
++				      unsigned long *data_size, void *data)
++{
++	struct veda_efi_request *r;
++	efi_status_t status;
++	size_t name_size;
++
++	if (!name || !vendor || !data_size || (*data_size && !data))
++		return EFI_INVALID_PARAMETER;
++	name_size = (ucs2_strnlen(name, EFI_VAR_NAME_LEN) + 1) * sizeof(*name);
++	r = kzalloc(struct_size(r, buf, size_add(name_size, *data_size)), GFP_KERNEL);
++	if (!r)
++		return EFI_OUT_OF_RESOURCES;
++	memcpy(r->var.guid, vendor, sizeof(r->var.guid));
++	memcpy(r->buf, name, name_size - sizeof(*name));
++	r->var.name = __pa(r->buf);
++	r->var.name_size = name_size;
++	r->var.data = __pa(r->buf + name_size);
++	r->var.data_size = *data_size;
++	status = veda_efi_call(VEDA_VARIABLE_GET, r);
++	if (status == EFI_SUCCESS) {
++		*data_size = min_t(u64, r->var.data_size, *data_size);
++		memcpy(data, r->buf + name_size, *data_size);
++	} else if (status == EFI_BUFFER_TOO_SMALL) {
++		*data_size = r->var.data_size;
++	}
++	if (attr && (status == EFI_SUCCESS || status == EFI_BUFFER_TOO_SMALL))
++		*attr = r->var.attributes;
++	kfree(r);
++	return status;
++}
++
++static efi_status_t veda_get_next_variable(unsigned long *name_size, efi_char16_t *name,
++					   efi_guid_t *vendor)
++{
++	struct veda_efi_request *r;
++	efi_status_t status;
++
++	if (!name_size || !name || !vendor)
++		return EFI_INVALID_PARAMETER;
++	r = kzalloc(struct_size(r, buf, *name_size), GFP_KERNEL);
++	if (!r)
++		return EFI_OUT_OF_RESOURCES;
++	memcpy(r->var.guid, vendor, sizeof(r->var.guid));
++	memcpy(r->buf, name, *name_size);
++	r->var.name = __pa(r->buf);
++	r->var.name_size = *name_size;
++	status = veda_efi_call(VEDA_VARIABLE_NEXT, r);
++	if (status == EFI_SUCCESS) {
++		*name_size = min_t(u64, r->var.name_size, *name_size);
++		memcpy(name, r->buf, *name_size);
++		memcpy(vendor, r->var.guid, sizeof(*vendor));
++	} else if (status == EFI_BUFFER_TOO_SMALL) {
++		*name_size = r->var.name_size;
++	}
++	kfree(r);
++	return status;
++}
++
++static struct efivars veda_efivars;
++
++static const struct efivar_operations veda_efivar_ops = {
++	.get_variable		= veda_get_variable,
++	.get_next_variable	= veda_get_next_variable,
++};
++
++/*
++ * After EFI's own setup (efipostcore_init), which finds no runtime services
++ * here, and before the drivers that read variables.
++ */
++static int __init veda_efi_init(void)
++{
++	unsigned long size = sizeof(efi_char16_t);
++	efi_char16_t name = 0;
++	efi_guid_t guid = NULL_GUID;
++
++	if (!veda_platform())
++		return 0;
++	/* With room for no name: the first variable's does not fit, if any. */
++	if (veda_get_next_variable(&size, &name, &guid) != EFI_BUFFER_TOO_SMALL)
++		return 0;
++	efi.get_variable = veda_get_variable;
++	efi.get_next_variable = veda_get_next_variable;
++	efi.runtime_supported_mask = EFI_RT_SUPPORTED_GET_VARIABLE |
++				     EFI_RT_SUPPORTED_GET_NEXT_VARIABLE_NAME;
++	pr_info("veda: the PC's firmware variables, read-only\n");
++	return efivars_register(&veda_efivars, &veda_efivar_ops);
++}
++arch_initcall(veda_efi_init);

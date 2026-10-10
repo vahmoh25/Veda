@@ -11,6 +11,7 @@ mod components;
 mod image;
 mod linux;
 mod mic;
+mod ovmfvars;
 mod qemu;
 mod qmp;
 mod toolchain;
@@ -718,6 +719,7 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
         vm.disk_bus = bus;
     }
     vm.acpi_tables = automate::acpi_tables(script)?;
+    vm.firmware_variables = automate::firmware_variables(script)?;
     if let Some(input) = automate::input_devices(script)? {
         vm.input = input;
     }

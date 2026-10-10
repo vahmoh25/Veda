@@ -1,0 +1,18 @@
+# The PC's firmware variables for the driver VM. The test's firmware (OVMF,
+# with two variables of a test vendor's added to its store) has VedaTest,
+# which an operating system may read, and VedaBootOnly, which only its boot
+# services may: Veda's loader takes the first, and the driver VM's Linux
+# reads it as the firmware keeps it through efivarfs (efivartest), which the
+# platform's hypercall serves; the second it does not have, and it cannot
+# change them.
+firmware-variable VedaTest 4c9c67e7-ba9b-4464-baa5-3e0538e7a82d 7 617320746865205043206b65657073206974
+firmware-variable VedaBootOnly 4c9c67e7-ba9b-4464-baa5-3e0538e7a82d 3 01
+boot-cmdline "drivervm.run=efivartest drivervm.poweroff"
+fail-on "PANIC"
+fail-on "efivartest: FAIL"
+wait-serial "drivervm: the PC's firmware variables:" 60
+wait-serial "veda: the PC's firmware variables, read-only" 60
+wait-serial "drivervm: the guest read the firmware variable VedaTest-4c9c67e7-ba9b-4464-baa5-3e0538e7a82d (18 bytes)" 60
+wait-serial "efivartest: PASS" 30
+wait-serial "drivervm: Linux powered the machine off" 30
+reject-serial "VedaBootOnly"

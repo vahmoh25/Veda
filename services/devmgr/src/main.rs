@@ -12,7 +12,8 @@
 //! Every other device goes to the driver VM, whose Linux drives it: all
 //! but the disks Veda starts from, the platform's own functions, and the
 //! devices Veda still has drivers for (see [`veda_keeps`]); the PC's
-//! keyboard controller too. The driver VM
+//! keyboard controller too, and the firmware's variables, which Linux's
+//! drivers may read (`init` hands them over). The driver VM
 //! gets their `pcidev` channels, through which it also gets the resource
 //! that lets it give them to its guest. It starts when the machine can
 //! give it devices: its processors run virtual machines, an IOMMU confines
@@ -78,6 +79,9 @@ const DRIVERVM_I8042_ROLES: [u32; 4] = [
     vabi::startup::role::USER + 5,
     vabi::startup::role::USER + 6,
 ];
+/// Role of the firmware's variables (`init` hands them over), which the
+/// driver VM gets.
+const DRIVERVM_VARIABLES_ROLE: u32 = vabi::startup::role::USER + 7;
 
 /// Which driver handles which device.
 struct DriverMatch {
@@ -614,6 +618,8 @@ struct DriverVm {
     args: Vec<String>,
     devices: Vec<GuestDevice>,
     i8042: Option<I8042>,
+    /// The firmware's variables, for Linux's drivers that read them.
+    variables: Option<Vmo>,
     hypervisor: Resource,
     process: Option<Process>,
     /// How many times it started, when it last did, the failures in a row
@@ -625,7 +631,13 @@ struct DriverVm {
 }
 
 impl DriverVm {
-    fn new(options: &[String], devices: Vec<GuestDevice>, i8042: Option<I8042>, hypervisor: Resource) -> DriverVm {
+    fn new(
+        options: &[String],
+        devices: Vec<GuestDevice>,
+        i8042: Option<I8042>,
+        variables: Option<Vmo>,
+        hypervisor: Resource,
+    ) -> DriverVm {
         let args = options
             .iter()
             .filter_map(|a| a.strip_prefix("drivervm."))
@@ -636,6 +648,7 @@ impl DriverVm {
             args,
             devices,
             i8042,
+            variables,
             hypervisor,
             process: None,
             starts: 0,
@@ -647,7 +660,8 @@ impl DriverVm {
 
     /// Starts it, with what it runs on: the hypervisor resource, the system
     /// image, which holds its Linux, new channels of its devices (which
-    /// devmgr serves as `bound`'s), and the keyboard controller.
+    /// devmgr serves as `bound`'s), the keyboard controller, and the
+    /// firmware's variables.
     fn start(
         &mut self,
         boot: &initrd::Archive<'static>,
@@ -659,6 +673,9 @@ impl DriverVm {
         let (Ok(h), Ok(i)) = (self.hypervisor.duplicate(), image.0.duplicate(None)) else { return };
         let mut handles = alloc::vec![(DRIVERVM_HYPERVISOR_ROLE, h.into_handle()), (vabi::startup::role::INITRD, i)];
         handles.extend(self.i8042.as_ref().and_then(I8042::handles).unwrap_or_default());
+        if let Some(variables) = self.variables.as_ref().and_then(|v| v.0.duplicate(None).ok()) {
+            handles.push((DRIVERVM_VARIABLES_ROLE, variables));
+        }
         for d in &self.devices {
             let Ok((ours, theirs)) = Channel::create() else { continue };
             handles.push((DRIVERVM_DEVICE_ROLE, theirs.into_handle()));
@@ -895,7 +912,10 @@ fn main() -> i32 {
     let mut vm = None;
     if runs.is_ok() && (!guest.is_empty() || i8042.is_some() || drivervm.iter().any(|a| a == "drivervm")) {
         match take(HYPERVISOR_RESOURCE) {
-            Some(hypervisor) => vm = Some(DriverVm::new(&drivervm, guest, i8042, hypervisor)),
+            Some(hypervisor) => {
+                let variables = vrt::env::take_handle(vabi::startup::role::FIRMWARE_VARIABLES).map(Vmo::from_handle);
+                vm = Some(DriverVm::new(&drivervm, guest, i8042, variables, hypervisor));
+            }
             None => println!("no hypervisor resource for the driver VM"),
         }
     }

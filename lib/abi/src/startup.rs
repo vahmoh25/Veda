@@ -37,6 +37,10 @@ pub mod role {
     pub const FRAMEBUFFER: u32 = 3;
     /// VMO holding a [`crate::KernelBootInfo`].
     pub const BOOT_INFO: u32 = 4;
+    /// VMO holding the firmware's variables that an operating system may
+    /// read, as the loader read them (in `bootinfo::variables`' layout);
+    /// only given if there are some.
+    pub const FIRMWARE_VARIABLES: u32 = 5;
     /// Channel to the service registry (`init`).
     pub const REGISTRY: u32 = 16;
     /// Channel on which a service receives incoming client connections.

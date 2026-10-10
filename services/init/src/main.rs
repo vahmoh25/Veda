@@ -63,6 +63,9 @@ pub struct Init {
     initrd_vmo: Vmo,
     framebuffer: Option<Vmo>,
     boot_info: Option<Vmo>,
+    /// The firmware's variables (only the device manager's, which gives
+    /// them to the driver VM).
+    firmware_variables: Option<Vmo>,
     services: BTreeMap<String, (Channel, u64)>,
     /// Names registered by system services: only system services may
     /// register them again (after a restart).
@@ -389,6 +392,7 @@ fn main() -> i32 {
         initrd_vmo,
         framebuffer: vrt::env::take_handle(role::FRAMEBUFFER).map(Vmo::from_handle),
         boot_info: vrt::env::take_handle(role::BOOT_INFO).map(Vmo::from_handle),
+        firmware_variables: vrt::env::take_handle(role::FIRMWARE_VARIABLES).map(Vmo::from_handle),
         services: BTreeMap::new(),
         reserved: BTreeSet::new(),
         pending: BTreeMap::new(),

@@ -32,7 +32,9 @@ that communicate over kernel channels.
 2. `vboot` reads `\VEDA\BOOT.CFG`, `VKERNEL.EXE` and `INITRD.IMG`, picks a
    GOP graphics mode, paints the splash screen (`vsplash`), loads the
    kernel's PE sections, builds page tables (identity map, direct map at
-   `0xFFFF800000000000`, kernel at `0xFFFFFFFF80000000`), exits boot services
+   `0xFFFF800000000000`, kernel at `0xFFFFFFFF80000000`), reads the
+   firmware's variables that an operating system may read (for the driver
+   VM's Linux: `bootinfo::variables`), exits boot services
    and jumps to the kernel with a `bootinfo::BootInfo`. Firmware usually
    leaves its framebuffer uncached, where every write is a bus transaction
    of its own and a PC's screen shows the picture being painted from the
@@ -639,7 +641,8 @@ renders under QEMU.
   controllers (most PCs' sound, QEMU's `intel-hda`) with their codecs,
   virtio's sound devices, and a laptop's speaker amplifiers on its SPI
   controller (Cirrus Logic's CS35L41, which the codec's driver plays
-  through; the guest gets the GPIO pins they are wired to). Linux's
+  through; the guest gets the GPIO pins they are wired to, and the
+  firmware's variables their calibration is in). Linux's
   drivers drive them, and `alsa`, Veda's driver for Linux, attaches the
   card to the audio service's private `audiodev` protocol, as a native
   driver would; the service also runs without sound hardware (a null
@@ -756,7 +759,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/virtio` | virtio device access shared by the drivers |
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `lib/hv`, `lib/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the virtual APIC, `cpuid`, the guests' platform and boot protocol, the bridge's ABI; VT-d's tables and structures |
-| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests (`bridgetest`, `pcitest`, `gpiotest`) |
+| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`) |
 | `lib/splash` | the boot splash's picture, which the boot loader and the window system draw alike |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |

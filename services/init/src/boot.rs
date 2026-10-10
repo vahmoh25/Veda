@@ -57,8 +57,10 @@ fn handles_for(init: &Init, name: &str) -> Vec<(u32, Handle)> {
         // resource), and the system image to load the drivers from.
         "devmgr" => {
             out.extend(init.initrd_vmo.0.duplicate(None).ok().map(|h| (role::INITRD, h)));
-            // Where the ACPI tables are, for the devices they describe.
+            // Where the ACPI tables are, for the devices they describe; the
+            // firmware's variables, for the driver VM.
             out.extend(dup(&init.boot_info).map(|h| (role::BOOT_INFO, h)));
+            out.extend(dup(&init.firmware_variables).map(|h| (role::FIRMWARE_VARIABLES, h)));
             for (r, kind, base, size) in [
                 (roles::IOPORT_RESOURCE, resource_kind::IOPORT, 0u64, 0x1_0000u64),
                 (roles::IRQ_RESOURCE, resource_kind::IRQ, 0, 256),
