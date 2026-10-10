@@ -120,8 +120,10 @@ pub struct WifiPorts {
 pub enum DiskBus {
     /// virtio-blk (QEMU's default here).
     Virtio,
-    /// SATA disks on the machine's AHCI controller (as most PCs have).
+    /// SATA disks on the machine's AHCI controller (as many PCs have).
     Ahci,
+    /// NVM Express controllers, one a disk (as most PCs have).
+    Nvme,
 }
 
 impl DiskBus {
@@ -129,6 +131,7 @@ impl DiskBus {
         match s {
             "virtio" => Some(DiskBus::Virtio),
             "ahci" | "sata" => Some(DiskBus::Ahci),
+            "nvme" => Some(DiskBus::Nvme),
             _ => None,
         }
     }
@@ -335,6 +338,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
                 cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=disk0,bootindex=0,serial=veda-boot")])
             }
             DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.0,drive=disk0,bootindex=0,serial=veda-boot"]),
+            DiskBus::Nvme => cmd.args(["-device", "nvme,drive=disk0,bootindex=0,serial=veda-boot"]),
         };
     }
     if let Some(home) = &cfg.home_disk {
@@ -342,6 +346,7 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         match cfg.disk_bus {
             DiskBus::Virtio => cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=home,serial=veda-home")]),
             DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.1,drive=home,serial=veda-home"]),
+            DiskBus::Nvme => cmd.args(["-device", "nvme,drive=home,serial=veda-home"]),
         };
     }
     match cfg.input {

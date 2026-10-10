@@ -198,3 +198,33 @@ pub fn enable_msi(pci: &pcidev::Client) -> Option<Interrupt> {
     good &= ok(pci.config_write(at + 2, 2, ((control & !(0x7 << 4)) | 1) as u32));
     good.then_some(irq)
 }
+
+/// Sets up entry 0 of the MSI-X table of a device with the MSI-X
+/// capability for every interrupt cause it has that names entry 0 (a
+/// controller's queues can each name one), and returns the interrupt to
+/// wait on (`None`: no MSI-X).
+pub fn enable_msix(pci: &pcidev::Client) -> Option<Interrupt> {
+    let at = find_capability(pci, cap::MSI_X)?;
+    let control = config_read(pci, at + 2, 2)? as u16;
+    let table = config_read(pci, at + 4, 4)?;
+    let vmo = pci.map_bar((table & 7) as u8).ok()?.ok()?;
+    let offset = (table & !7) as usize;
+    let size = vmo.size().ok()?;
+    if offset + 16 > size {
+        return None;
+    }
+    let (irq, msi) = pci.alloc_msi().ok()?.ok()?;
+    let map = vrt::vm::Mapping::new(vmo, size, vabi::map_flags::READ | vabi::map_flags::WRITE).ok()?;
+    // SAFETY: entry 0 of the table, inside the mapped BAR; the device reads
+    // it, so the stores must reach it as they are.
+    unsafe {
+        let entry = map.as_ptr().add(offset) as *mut u32;
+        core::ptr::write_volatile(entry, msi.address as u32);
+        core::ptr::write_volatile(entry.add(1), (msi.address >> 32) as u32);
+        core::ptr::write_volatile(entry.add(2), msi.data);
+        core::ptr::write_volatile(entry.add(3), 0);
+    }
+    // Enabled, the function's mask off.
+    let enabled = ((control | 0x8000) & !0x4000) as u32;
+    matches!(pci.config_write(at + 2, 2, enabled), Ok(Ok(()))).then_some(irq)
+}

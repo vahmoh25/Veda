@@ -27,6 +27,7 @@
 //! double-click 0.05 0.44           # two quick clicks
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
 //! nic e1000e                       # QEMU model of the wired card for this run, applied before boot
+//! disk nvme                        # how QEMU attaches the disks for this run (virtio, ahci, nvme), applied before boot
 //! sound hda                        # the sound card for this run (virtio or hda), applied before boot
 //! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
@@ -79,7 +80,7 @@ use std::time::{Duration, Instant};
 use crate::agentsim::AgentSim;
 use crate::airsim::AirSim;
 use crate::mic::{self, MicServer};
-use crate::qemu::{self, InputDevices, NetMode, QemuInstall, VmConfig};
+use crate::qemu::{self, DiskBus, InputDevices, NetMode, QemuInstall, VmConfig};
 use crate::qmp::Qmp;
 use crate::util::{self, Result};
 
@@ -480,6 +481,18 @@ pub fn usb_net(script: &str) -> bool {
     script.lines().map(words).any(|w| w.len() == 2 && w[0] == "usb" && w[1] == "net")
 }
 
+/// How QEMU attaches the disks, as a script asks with `disk`.
+pub fn disk_bus(script: &str) -> Result<Option<DiskBus>> {
+    let mut bus = None;
+    for w in script.lines().map(words) {
+        if w.first().is_some_and(|c| c == "disk") {
+            let v = w.get(1).ok_or("disk: missing bus")?;
+            bus = Some(DiskBus::parse(v).ok_or(format!("disk: unknown bus '{v}' (virtio, ahci, nvme)"))?);
+        }
+    }
+    Ok(bus)
+}
+
 /// The wired card model a script asks for with `nic`.
 pub fn nic_model(script: &str) -> Option<String> {
     script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "nic")).find_map(|w| w.get(1).cloned())
@@ -586,7 +599,8 @@ pub fn run_script(
                     s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "usb" | "sound" | "audio" | "requires" | "live" | "input" | "gpu" => {}
+                "boot-cmdline" | "net" | "nic" | "disk" | "usb" | "sound" | "audio" | "requires" | "live" | "input"
+                | "gpu" => {}
                 "qmp" => {
                     let command = w.get(1).ok_or("missing command")?;
                     let arguments = w.get(2).map_or("{}", String::as_str);

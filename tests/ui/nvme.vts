@@ -1,0 +1,35 @@
+# NVM Express disks (1280x800): the machine starts from one, whose boot
+# loader and system the firmware reads, and Veda's nvme driver serves the
+# home disk, another, from which the home directory survives a reboot: a
+# note written on the desktop, the machine restarted, the note opened again.
+disk nvme
+fail-on "PANIC"
+wait-serial "desktop ready" 90
+expect-serial "devmgr: started nvme for"
+expect-serial "nvme: disk veda-home at"
+expect-serial "home directory new, on the home disk"
+reject-serial "devmgr: started virtio-blk"
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 30
+wait 4
+type "edit Desktop/Note.txt && exit"
+key ret
+wait-serial "started editor" 30
+wait 5
+type "NVMe check: this line was saved before a reboot."
+key ret
+key ctrl-s
+wait 3
+reset
+wait-serial "desktop ready" 90
+expect-serial "home directory restored from the home disk"
+# Double-click the sixth desktop icon (Note.txt, after the Trash, Home,
+# Velocity, Starfall and Prism).
+double-click 0.0469 0.6875
+wait-serial "started editor" 30
+wait 5
+shot target/veda/nvme-after-reboot.png
+reject-serial "failed:"

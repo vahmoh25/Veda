@@ -15,8 +15,8 @@ that communicate over kernel channels.
  ├──────────────────────────────────────────────────────────────────────────┤
  │ Services       init (registry, launcher) · vfs · compositor · audio ·    │
  │                agent (the voice agent) · netd · wlan                     │
- │ Drivers        virtio-blk · ahci (disks) · hda (sound) · pci · the       │
- │                driver VM (Linux's: GPUs, displays, input, USB,           │
+ │ Drivers        virtio-blk · ahci · nvme (disks) · hda (sound) · pci ·    │
+ │                the driver VM (Linux's: GPUs, displays, input, USB,       │
  │                networks, Wi-Fi, sound …)                                 │
  ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
  │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
@@ -241,12 +241,19 @@ has ended and left its stack, which is how thread libraries join threads.
 
 ## Storage
 
-* `virtio-blk` (QEMU) and `ahci` (SATA disks: QEMU's q35 controller, most
-  PCs) serve each disk through the `block` protocol under the name
-  `block/<serial>`, so clients find a disk by its serial number
-  whatever the controller. `devmgr` matches drivers by vendor and device,
-  and AHCI controllers by their PCI class. The live system starts neither
-  (see Boot).
+* `virtio-blk` (QEMU), `ahci` (SATA disks: QEMU's q35 controller, many
+  PCs) and `nvme` (NVM Express: the SSDs of most PCs since about 2016,
+  QEMU's `nvme`) serve each disk (each namespace of an NVMe controller)
+  through the `block` protocol under the name `block/<serial>`, so clients
+  find a disk by its serial number whatever the controller. `devmgr`
+  matches drivers by vendor and device, and AHCI and NVMe controllers by
+  their PCI class. The live system starts none of them (see Boot).
+* `nvme` resets the controller and gives it an admin queue pair and one
+  I/O queue pair, and runs a request at a time: READ, WRITE and FLUSH, the
+  data in one buffer that PRP entries describe (a list past two pages), a
+  request the controller cannot take whole split into several; IDENTIFY
+  gives the serial number, the namespaces and their block sizes (512 or
+  4096 bytes). It waits on an MSI-X or MSI interrupt, or polls.
 * `vfs` serves `/system` straight from the initrd and keeps `/home` and
   `/tmp` in memory. If a disk with serial `veda-home` is attached, `/home`
   is restored from it at boot and written back half a second after changes

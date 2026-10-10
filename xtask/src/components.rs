@@ -42,6 +42,7 @@ pub const PROGRAMS: &[Program] = &[
     Program { package: "drivervm", binary: "drivervm" },
     Program { package: "virtio-blk", binary: "virtio-blk" },
     Program { package: "ahci", binary: "ahci" },
+    Program { package: "nvme", binary: "nvme" },
     Program { package: "netd", binary: "netd" },
     Program { package: "wlan", binary: "wlan" },
     Program { package: "compositor", binary: "compositor" },

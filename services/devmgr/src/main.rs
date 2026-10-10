@@ -120,6 +120,8 @@ const DRIVERS: &[DriverMatch] = &[
 const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
     // SATA controllers in AHCI mode (QEMU q35, most PCs)
     (0x01, 0x06, 0x01, "ahci"),
+    // NVM Express controllers (the SSDs of most PCs since about 2016)
+    (0x01, 0x08, 0x02, "nvme"),
     // High Definition Audio controllers (most PCs' sound), also the ones
     // with an audio DSP beside them
     (0x04, 0x03, 0x00, "hda"),
@@ -128,7 +130,7 @@ const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
 
 /// Disk drivers. A live system (started with `live`) starts none of them:
 /// it runs from memory and never touches the computer's disks.
-const DISK_DRIVERS: [&str; 2] = ["virtio-blk", "ahci"];
+const DISK_DRIVERS: [&str; 3] = ["virtio-blk", "ahci", "nvme"];
 
 /// The driver for a device, if any.
 fn driver_for(info: &DeviceInfo) -> Option<&'static str> {
@@ -160,6 +162,7 @@ fn veda_keeps(info: &DeviceInfo) -> bool {
 fn class_name(info: &DeviceInfo) -> &'static str {
     match (info.class, info.subclass) {
         (0x01, 0x06) => "SATA controller",
+        (0x01, 0x08) => "NVM Express controller",
         (0x01, _) => "storage controller",
         (0x02, _) => "network controller",
         (0x03, _) => "display controller",

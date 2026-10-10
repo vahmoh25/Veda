@@ -146,7 +146,7 @@ the voice pipeline, consent, memory and how the agent is tested.
   Veda's keyboards, mice and tablets, USB, wired and Wi-Fi networks,
   displays and GPUs; when the VM fails, Veda resets its devices and starts
   it again. See [the driver VM](docs/DRIVERVM.md).
-* **Storage.** virtio-blk and AHCI (SATA) drivers and a file system
+* **Storage.** virtio-blk, AHCI (SATA) and NVMe drivers and a file system
   service that keeps the home directory on its own disk with crash-safe
   snapshots, so your files survive restarts. The agent's memory and key
   live in a private directory that only the agent can open.
@@ -484,7 +484,7 @@ The serial console (kernel log plus every program's output) is saved to
 | `kernel/` | `vkernel`, the microkernel |
 | `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `posix` (the POSIX layer under the C library), `elf` (ELF executables), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `hda` (HD Audio codecs and their routes), `hv` and `iommu` (the hypervisor's and the IOMMU's logic), `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor) |
-| `drivers/` | Veda's own drivers: `virtio-blk`, `ahci` (SATA), `hda` (Intel HD Audio), `lpss-spi` (a laptop's speaker amplifiers) |
+| `drivers/` | Veda's own drivers: `virtio-blk`, `ahci` (SATA), `nvme` (NVM Express), `hda` (Intel HD Audio), `lpss-spi` (a laptop's speaker amplifiers) |
 | `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `racer` (*Velocity*) and `starfall` |
 | `ports/` | the C toolchain built from source: GCC, binutils, GMP, MPFR, MPC and musl, each an upstream release and Veda's patch; and Linux for the driver VM |
 | `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests |

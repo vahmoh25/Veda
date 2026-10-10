@@ -74,7 +74,7 @@ RUN OPTIONS:
     --net MODE          Network: ethernet (default, QEMU's NAT), wifi (the virtual Wi-Fi radio
                         and the airsim access points), both, or none
     --nic MODEL         Model of the wired card: virtio-net-pci (default), e1000e, igb
-    --disk-bus BUS      How QEMU attaches the disks: virtio (default) or ahci (SATA)
+    --disk-bus BUS      How QEMU attaches the disks: virtio (default), ahci (SATA) or nvme
     --input DEVICES     Keyboard and pointer: standard (default: PS/2 keyboard and virtio
                         tablet) or usb (on the xHCI controller: a keyboard and a tablet behind
                         a hub, and a mouse)
@@ -175,7 +175,8 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--nic" => o.vm.nic_model = Some(value(arg)?),
             "--disk-bus" => {
                 let v = value(arg)?;
-                o.vm.disk_bus = qemu::DiskBus::parse(&v).ok_or(format!("unknown disk bus '{v}' (virtio, ahci)"))?;
+                o.vm.disk_bus =
+                    qemu::DiskBus::parse(&v).ok_or(format!("unknown disk bus '{v}' (virtio, ahci, nvme)"))?;
             }
             "--input" => {
                 let v = value(arg)?;
@@ -516,6 +517,9 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     }
     if let Some(model) = automate::nic_model(script) {
         vm.nic_model = Some(model);
+    }
+    if let Some(bus) = automate::disk_bus(script)? {
+        vm.disk_bus = bus;
     }
     if let Some(input) = automate::input_devices(script)? {
         vm.input = input;

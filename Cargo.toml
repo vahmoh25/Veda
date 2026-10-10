@@ -73,6 +73,7 @@ members = [
     "tools/airsim",
     "drivers/virtio-blk",
     "drivers/ahci",
+    "drivers/nvme",
     "drivers/hda",
     "drivers/lpss-spi",
     "tests/systest",
