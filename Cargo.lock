@@ -1890,6 +1890,7 @@ dependencies = [
  "initrd",
  "sha1",
  "sha2",
+ "vacpi",
  "vbuild",
  "vimage",
  "vpe",

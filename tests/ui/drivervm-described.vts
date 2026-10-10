@@ -1,0 +1,22 @@
+# What a PC's firmware describes below a PCI function goes into the driver
+# VM's ACPI tables, below the function as the guest has it. A test table
+# describes a HID-over-I2C device (as a laptop's touchpad is) below QEMU's
+# virtio GPU, the firmware's \_SB.PCI0.S80: its address on the function's
+# bus, its interrupt line (GSI 10) and the _DSM that HID over I2C asks for
+# its descriptor's address. devmgr reads it from the PC's tables; the
+# monitor describes it in the guest's, the line given to the guest too; and
+# Linux's ACPI finds it there, its AML loaded without errors.
+acpi-table touchpad
+boot-cmdline "drivervm.run=pcitest drivervm.poweroff"
+fail-on "PANIC"
+fail-on "pcitest: FAIL"
+wait-serial "acpi: 00:10.0 is \_SB.PCI0.S80, with \_SB.PCI0.S80.TPD0 (VTST0001)" 60
+wait-serial "the guest has \_SB.PCI0.S80.TPD0 (VTST0001) below it, its HID descriptor at 0x20" 30
+expect-serial "\_SB.PCI0.S80.TPD0: interrupt 0 on GSI 10 (level, active high)"
+wait-serial "is \_SB_.PCI0.S80_, with \_SB_.PCI0.S80_.TPD0 (VTST0001)" 60
+wait-serial "pcitest: PASS" 60
+wait-serial "drivervm: Linux powered the machine off" 30
+reject-serial "ACPI Error"
+reject-serial "ACPI BIOS Error"
+reject-serial "ACPI Exception"
+reject-serial "uses what the guest does not get"

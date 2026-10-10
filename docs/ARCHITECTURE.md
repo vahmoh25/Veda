@@ -232,8 +232,11 @@ has ended and left its stack, which is how thread libraries join threads.
   powered it off, `devmgr` resets its devices and starts it again.
 * A driver asks for the devices the firmware describes below its PCI
   function (its ACPI companion, found by `_ADR` under the PCI root bridge):
-  their ids (`_HID`, `_UID`, `_SUB`), status and resources (`_CRS`:
-  memory, ports, interrupts, GPIO and SPI or I2C connections).
+  their ids (`_HID`, `_CID`, `_UID`, `_SUB`), status and resources (`_CRS`:
+  memory, ports, interrupts, GPIO and SPI or I2C connections, their
+  controllers resolved), and what the driver VM's monitor passes on: their
+  interrupt lines, what their `_DSM` answers, constant data (`_DSD`, an
+  I2C controller's timing).
 * **GPIO.** `devmgr` drives the GPIO pins those devices are wired to on
   the driver's behalf, and no others: a driver names a GPIO connection of
   one of its devices, `devmgr` finds the controller (its registers from

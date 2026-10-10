@@ -52,6 +52,16 @@ message! {
 }
 
 message! {
+    /// An I/O APIC input (a GSI), and how it signals.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct InterruptLine {
+        pub gsi: u32,
+        pub level: bool,
+        pub active_low: bool,
+    }
+}
+
+message! {
     /// Where a function's INTx goes, as the firmware routes it (`_PRT`).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct IntxLine {
@@ -73,6 +83,8 @@ message! {
         pub path: String,
         /// Hardware id (`CSC3551`); empty if none.
         pub hid: String,
+        /// Compatible ids (`PNP0C50`).
+        pub cids: Vec<String>,
         /// Unique id; empty if none.
         pub uid: String,
         /// Subsystem id: the board's, for devices that need per-board
@@ -95,7 +107,9 @@ union! {
         3 => Irq { irqs: Vec<u32>, edge: bool, active_low: bool, shared: bool },
         /// A GPIO connection: an input or output (`GpioIo`), or an
         /// interrupt (`GpioInt`). `pull`: 0 default, 1 up, 2 down, 3 none;
-        /// `restriction`: 0 either way, 1 input only, 2 output only.
+        /// `restriction`: 0 either way, 1 input only, 2 output only. The
+        /// controllers of connections are absolute paths where the name
+        /// resolves (as written where it does not).
         4 => Gpio { interrupt: bool, pins: Vec<u16>, controller: String, pull: u8, restriction: u8, shared: bool },
         /// The device's connection to an SPI controller.
         5 => Spi {
@@ -107,7 +121,7 @@ union! {
             cpha: bool,
             cs_active_high: bool,
         },
-        6 => I2c { controller: String, address: u16, speed_hz: u32 },
+        6 => I2c { controller: String, address: u16, speed_hz: u32, ten_bit: bool },
         /// Something else (its descriptor type).
         7 => Other { kind: u8 },
     }
@@ -166,6 +180,22 @@ protocol! {
         /// function on a line shares the one interrupt; a driver that
         /// takes it leaves the function's MSIs off.
         13 => fn intx() -> Result<(Interrupt, IntxLine), PciError>;
+        /// What `_DSM` of ACPI device `device` (its index in
+        /// `acpi_devices`) answers function `function` of `uuid` (its 16
+        /// bytes, as `ToUUID` makes them) at `revision`, without arguments:
+        /// an integer (`NotFound` if it has no `_DSM` or answers anything
+        /// else).
+        14 => fn acpi_dsm(device: u32, uuid: Vec<u8>, revision: u64, function: u64) -> Result<u64, PciError>;
+        /// Constant object `name` (`_DSD`, an I2C controller's `FMCN`) of
+        /// ACPI device `device`, or of the function's own device with
+        /// `device` `u32::MAX`, as AML (`NotFound` if it has none;
+        /// `Unsupported` if it is no constant: integers, strings, buffers
+        /// and packages of them).
+        15 => fn acpi_data(device: u32, name: String) -> Result<Vec<u8>, PciError>;
+        /// The interrupt line of interrupt `index` of ACPI device `device`
+        /// (counting the interrupts of its `Irq` resources in order), as
+        /// `intx` gives a function's: shared by whoever else is on it.
+        16 => fn acpi_interrupt(device: u32, index: u32) -> Result<(Interrupt, InterruptLine), PciError>;
     }
 }
 

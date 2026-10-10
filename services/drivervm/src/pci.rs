@@ -5,7 +5,11 @@
 //! and the line its INTx is wired to is the guest's (`lines`; functions on
 //! one line share it). Linux finds them on bus 0 of the guest's PCI, their
 //! configuration space as `vhv::pci` makes it, through the platform's
-//! hypercalls.
+//! hypercalls. What the PC's firmware describes below a function goes into
+//! the guest's ACPI tables (`vhv::acpi`): the devices on its bus that use
+//! nothing but their place on the bus and interrupt lines (a touchpad on an
+//! I2C controller, whose line the guest gets too), and the function's and
+//! their constant data.
 //!
 //! A function reports no errors to the host, which a PC may make NMIs of:
 //! its error reporting is turned off before the guest runs, and stays off.
@@ -31,8 +35,9 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use vabi::map_flags;
+use vhv::acpi::{self, Child, Function, HID_OVER_I2C, Resource};
 use vhv::pci::{Bar, ConfigSpace, Write};
-use vproto::pci::{DeviceInfo, IntxLine, pcidev};
+use vproto::pci::{AcpiDevice, AcpiResource, DeviceInfo, IntxLine, pcidev};
 use vrt::object::{Channel, Guest, Interrupt, Vcpu};
 use vrt::println;
 use vrt::sync::Mutex;
@@ -46,8 +51,8 @@ struct Device {
     /// Where the guest has it on bus 0: device << 3 | function.
     devfn: u8,
     info: DeviceInfo,
-    /// Its INTx, if the guest has the line.
-    intx: Option<IntxLine>,
+    /// What the guest's ACPI tables say about it (its INTx among it).
+    description: Function,
     state: Mutex<State>,
 }
 
@@ -133,8 +138,10 @@ impl Devices {
                 at.push(format!("INT{}# on GSI {}", (b'A' + l.pin - 1) as char, l.gsi));
             }
             println!("{} is the guest's 00:{:02x}.{}: {}", name, devfn >> 3, devfn & 7, at.join(", "));
+            let description = describe(&pci, &name, devfn, intx, lines);
             let config = ConfigSpace::new(bars, multifunction, pci_express, intx.map(|l| (l.pin, l.gsi as u8)));
-            list.push(Device { devfn, info, intx, state: Mutex::new(State { pci, config, msis: BTreeMap::new() }) });
+            let state = Mutex::new(State { pci, config, msis: BTreeMap::new() });
+            list.push(Device { devfn, info, description, state });
         }
         Devices { list }
     }
@@ -155,8 +162,8 @@ impl Devices {
     }
 
     /// The functions, as the ACPI tables describe them.
-    pub fn functions(&self) -> Vec<vhv::acpi::Function> {
-        self.list.iter().map(|d| vhv::acpi::Function { devfn: d.devfn, intx: d.intx.map(|l| (l.pin, l.gsi)) }).collect()
+    pub fn functions(&self) -> Vec<Function> {
+        self.list.iter().map(|d| d.description.clone()).collect()
     }
 
     fn device(&self, function: u64) -> Option<&Device> {
@@ -244,6 +251,103 @@ fn give(
     quiet_errors(pci, pci_express);
     let bars = map_bars(guest, pci, info, windows)?;
     Ok((bars, pci_express))
+}
+
+/// The names of constant data an I2C controller's driver reads from its
+/// device: the bus's timing at each speed.
+const CONTROLLER_DATA: [&str; 4] = ["SSCN", "FMCN", "FPCN", "HSCN"];
+/// HID over I2C's ids.
+const HID_OVER_I2C_IDS: [&str; 2] = ["PNP0C50", "ACPI0C50"];
+
+/// What the guest's tables say about function `name` at `devfn`: its
+/// INTx, its constant data, and the devices the firmware describes below
+/// it, whose interrupt lines are added to `lines`. What a device uses that
+/// the guest cannot have is left out, and said.
+fn describe(pci: &pcidev::Client, name: &str, devfn: u8, intx: Option<IntxLine>, lines: &mut Lines) -> Function {
+    let data_of = |device: u32, names: &[&str]| -> Vec<(String, Vec<u8>)> {
+        names
+            .iter()
+            .filter_map(|n| match pci.acpi_data(device, String::from(*n)) {
+                Ok(Ok(aml)) => Some((String::from(*n), aml)),
+                _ => None,
+            })
+            .collect()
+    };
+    let children = pci
+        .acpi_devices()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d.status & 1 != 0)
+        .filter_map(|(i, d)| child(pci, name, i as u32, d, lines))
+        .collect::<Vec<Child>>();
+    Function { devfn, intx: intx.map(|l| (l.pin, l.gsi)), data: data_of(u32::MAX, &CONTROLLER_DATA), children }
+}
+
+/// Described device `index` (`d`) of function `name`, as the guest has it:
+/// its connection to the function's bus, its interrupts (whose lines go to
+/// `lines`), what its `_DSM` answers HID over I2C, its `_DSD`.
+fn child(pci: &pcidev::Client, name: &str, index: u32, d: &AcpiDevice, lines: &mut Lines) -> Option<Child> {
+    let (parent, own) = d.path.rsplit_once('.')?;
+    let mut resources = Vec::new();
+    let mut interrupts = 0;
+    for r in &d.resources {
+        match r {
+            AcpiResource::I2c { controller, address, speed_hz, ten_bit } if controller == parent => {
+                resources.push(Resource::I2c { address: *address, speed_hz: *speed_hz, ten_bit: *ten_bit });
+            }
+            AcpiResource::Irq { irqs, edge, active_low, shared } => {
+                for _ in irqs {
+                    let given = match pci.acpi_interrupt(index, interrupts) {
+                        Ok(Ok((irq, line))) => {
+                            (lines.has(line.gsi) || lines.add(line.gsi, irq, line.level)).then_some(line)
+                        }
+                        _ => None,
+                    };
+                    match given {
+                        Some(line) => resources.push(Resource::Interrupt {
+                            gsi: line.gsi,
+                            edge: *edge,
+                            active_low: *active_low,
+                            shared: *shared,
+                            wake: false,
+                        }),
+                        None => println!("{name}: {}'s interrupt {} cannot be given to the guest", d.path, interrupts),
+                    }
+                    interrupts += 1;
+                }
+            }
+            other => println!("{name}: {} uses what the guest does not get: {:?}", d.path, other),
+        }
+    }
+    let hid_over_i2c = HID_OVER_I2C_IDS.iter().any(|id| d.hid == *id || d.cids.iter().any(|c| c == id));
+    let hid_descriptor = acpi::uuid(HID_OVER_I2C).filter(|_| hid_over_i2c).and_then(|uuid| {
+        match pci.acpi_dsm(index, uuid.to_vec(), 1, 1) {
+            Ok(Ok(address)) => u16::try_from(address).ok(),
+            _ => None,
+        }
+    });
+    let data = match pci.acpi_data(index, String::from("_DSD")) {
+        Ok(Ok(aml)) => alloc::vec![(String::from("_DSD"), aml)],
+        _ => Vec::new(),
+    };
+    let text = |s: &str| (!s.is_empty()).then(|| String::from(s));
+    println!(
+        "{name}: the guest has {} ({}) below it{}",
+        d.path,
+        if d.hid.is_empty() { "no id" } else { &d.hid },
+        hid_descriptor.map(|a| format!(", its HID descriptor at {a:#x}")).unwrap_or_default()
+    );
+    Some(Child {
+        name: String::from(own),
+        hid: text(&d.hid),
+        cids: d.cids.clone(),
+        uid: text(&d.uid),
+        sub: text(&d.sub),
+        resources,
+        hid_descriptor,
+        data,
+    })
 }
 
 /// Turns off the errors the function reports to the host (its SERR# and

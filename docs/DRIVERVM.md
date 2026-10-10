@@ -199,8 +199,10 @@ CPU before the pages can be reused.
 Every PCI function goes to the driver VM but those Veda keeps: the disks
 it starts from (storage controllers, which are none of Linux's
 business), the platform's own functions (bridges, system peripherals,
-the SMBus, and the serial bus controllers, one of which holds the
-firmware's flash), and the devices Veda still has drivers for (HD Audio
+the SMBus, and the controller of the firmware's flash, the serial bus
+controller in device 31 of an Intel PCH: the other serial bus
+controllers, a laptop's I2C controllers with its touchpad, are Linux's),
+and the devices Veda still has drivers for (HD Audio
 controllers, and the SPI controller of a laptop's speaker amplifiers: they
 come with the firmware's descriptions of what is wired to them, see
 [Status](#status)). The boot options give it more
@@ -278,6 +280,23 @@ memory is on the host (`veda.device=00:01.0,0:0x80000000,...`): a driver
 in the guest names the host's memory it drives so, to services that know
 the host's addresses (the compositor, where the firmware's framebuffer
 was).
+
+**What the firmware describes.** A PC's firmware describes some devices
+only in its ACPI tables: a laptop's touchpad and touchscreen are HID
+devices on its I2C controllers, which say nothing of them. The guest's
+tables describe them below their function as the PC's do: devmgr reads
+the devices below the function's ACPI companion (present ones), and the
+monitor writes each into the guest's tables (`vhv::acpi`) with its ids
+(`_HID`, `_CID`, `_UID`, `_SUB`), its place on the function's bus
+(`I2cSerialBusV2`, retargeted to the function as the guest has it), its
+interrupts (GSIs, whose lines devmgr hands over as it does a function's
+INTx: `acpi_interrupt`), what its `_DSM` answers HID over I2C (its HID
+descriptor's address, which Linux's i2c-hid-acpi asks for), and constant
+data (`_DSD`), and the function's own constant data (an I2C controller's
+timing, `SSCN`, `FMCN`, `FPCN`, `HSCN`). What a device uses that the guest
+does not get yet (GPIO connections, an SPI bus) is left out, and said.
+Linux's intel-lpss, i2c-designware and i2c-hid-acpi then drive the
+controllers and devices as on the PC.
 
 **Errors.** The errors a function signals become the host's system
 errors, which a PC may turn into NMIs, and an NMI stops Veda: a given
@@ -569,7 +588,8 @@ where Veda stands:
 | Restart and device reset | done (`tests/ui/drivervm-restart.vts`); hangs, suspend later |
 | PS/2: the keyboard controller, its ports through the monitor, its interrupts routed; touchpads made a pointer; Veda's own PS/2 driver gone | done (every script's keyboard, `tests/ui/window-keys.vts`) |
 | ACPI for the guest: the platform's tables (the PCI root, its functions, the keyboard controller); interrupt lines (GSIs), level-triggered ones too; functions' INTx | done (`tests/ui/drivervm-intx.vts`, `window-keys.vts`) |
-| The firmware's ties: its descriptions of devices for the guest's tables (I2C touchpads and touchscreens, a laptop's speaker amplifiers on SPI, GPIO pins), HD Audio | next (below) |
+| The firmware's descriptions of devices below functions, in the guest's tables (ids, I2C addresses, interrupt lines, `_DSM`, constant data); a laptop's I2C controllers and HID devices (touchpads, touchscreens) to Linux | done under QEMU (`tests/ui/drivervm-described.vts`); not yet tried on a PC |
+| The firmware's ties: GPIO pins for the guest (a laptop's speaker amplifiers on SPI, their pins), HD Audio (and the DSP the built-in microphones are on) | next (below) |
 
 **GPUs.** Linux's driver and Mesa's drive a GPU whole in the guest (lesson
 1): the guest's Linux has i915 and virtio-gpu, and its Mesa iris, virgl
@@ -583,11 +603,10 @@ VBT) and stolen memory, and their place at 00:02.0. GPU memory is the
 guest's: a GPU needs a driver VM with the memory for it.
 
 **Still Veda's.** HD Audio controllers (with a laptop's speaker
-amplifiers on its SPI controller) keep Veda's driver until the guest's
-tables carry the firmware's descriptions of what they need: which
-amplifiers are on which bus, the GPIO pins wired to them. A laptop's I2C
-touchpad and touchscreen need such descriptions too, and nothing drives
-them yet.
+amplifiers on its SPI controller) keep Veda's driver until the guest can
+have the GPIO pins wired to the amplifiers (their reset and chip select
+lines, and their interrupt), which the guest's tables cannot describe
+yet.
 
 ## Testing
 

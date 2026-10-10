@@ -365,6 +365,59 @@ fn the_descriptors_veda_writes_read_back() {
 }
 
 #[test]
+fn connections_and_interrupts_veda_writes_read_back() {
+    let template = cat(&[
+        &i2c_descriptor(0x15, 400_000, false, "\\_SB.PCI0.S29"),
+        &interrupt_of(40, false, true, false, true),
+        &END_TAG,
+    ]);
+    let r = resource::parse(&template).unwrap();
+    assert_eq!(
+        r[0],
+        Resource::I2c(crate::resource::I2c {
+            controller: String::from("\\_SB.PCI0.S29"),
+            speed_hz: 400_000,
+            address: 0x15,
+            ten_bit: false,
+        })
+    );
+    assert!(
+        matches!(&r[1], Resource::Irq { irqs, edge: false, active_low: true, shared: false, wake: true } if irqs == &[40])
+    );
+}
+
+#[test]
+fn a_dsm_answers_what_hid_over_i2c_asks() {
+    let hid = uuid("3cdff6f7-4267-4555-ad05-b30a3d8938de").unwrap();
+    assert_eq!(hid[..4], [0xF7, 0xF6, 0xDF, 0x3C]);
+    assert_eq!(hid[8..10], [0xAD, 0x05]);
+    assert_eq!(uuid("3cdff6f7-4267-4555-ad05"), None);
+    let aml = device("TPD0", &dsm(&hid, 1, &int(0x20)));
+    let mut ns = Namespace::new();
+    ns.load(&aml, &crate::NoMemory).unwrap();
+    let call = |u: &[u8; 16], function: u64| {
+        let args = [Value::Buffer(u.to_vec()), Value::Integer(1), Value::Integer(function), Value::Package(vec![])];
+        ns.evaluate(&path("\\TPD0._DSM"), &args, &crate::NoMemory)
+    };
+    assert_eq!(call(&hid, 1), Ok(Value::Integer(0x20)));
+    assert_eq!(call(&hid, 0), Ok(Value::Buffer(vec![3])));
+    assert_eq!(call(&[0; 16], 1), Ok(Value::Buffer(vec![0])));
+}
+
+#[test]
+fn constants_are_written_as_they_evaluate() {
+    let v = Value::Package(vec![
+        Value::Integer(0x264),
+        Value::String(String::from("cirrus,dev-index")),
+        Value::Buffer(vec![1, 2]),
+    ]);
+    let mut ns = Namespace::new();
+    ns.load(&name("DATA", &constant(&v).unwrap()), &crate::NoMemory).unwrap();
+    assert_eq!(eval(&ns, "\\DATA", &crate::NoMemory), Ok(v));
+    assert_eq!(constant(&Value::Reference(path("\\_SB"))), None);
+}
+
+#[test]
 fn pci_interrupts_in_apic_mode() {
     // As QEMU's q35 has it: `_PRT` answers for the model `_PIC` sets, its
     // routes through interrupt link devices defined after it (in APIC

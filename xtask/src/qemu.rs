@@ -187,6 +187,8 @@ pub struct VmConfig {
     pub usb_stick: bool,
     /// How the boot and home disks are attached.
     pub disk_bus: DiskBus,
+    /// ACPI tables added to the firmware's (tests' descriptions of devices).
+    pub acpi_tables: Vec<PathBuf>,
     /// The keyboard and pointing devices.
     pub input: InputDevices,
     /// Let the guest reboot (otherwise a reset, e.g. after a triple fault,
@@ -229,6 +231,7 @@ impl Default for VmConfig {
             home_disk: None,
             usb_stick: false,
             disk_bus: DiskBus::Virtio,
+            acpi_tables: Vec::new(),
             input: InputDevices::Standard,
             allow_reboot: false,
             net: NetMode::Ethernet,
@@ -287,6 +290,9 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         machine.push_str(",kernel-irqchip=split");
     }
     cmd.args(["-machine", &machine]);
+    for t in &cfg.acpi_tables {
+        cmd.args(["-acpitable", &format!("file={}", t.display())]);
+    }
     // The IOMMU comes before the devices it translates.
     if cfg.iommu {
         cmd.args(["-device", "intel-iommu,intremap=on,eim=on"]);

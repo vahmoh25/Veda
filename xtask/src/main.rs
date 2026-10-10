@@ -2,6 +2,7 @@
 //!
 //! Run `cargo xtask help` for the list of commands.
 
+mod acpitest;
 mod agentsim;
 mod airsim;
 mod automate;
@@ -521,6 +522,7 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     if let Some(bus) = automate::disk_bus(script)? {
         vm.disk_bus = bus;
     }
+    vm.acpi_tables = automate::acpi_tables(script)?;
     if let Some(input) = automate::input_devices(script)? {
         vm.input = input;
     }

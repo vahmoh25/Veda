@@ -9,6 +9,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::name::NameString;
+use crate::value::Value;
 
 /// The bytes of `body` behind its PkgLength.
 pub fn pkg(body: &[u8]) -> Vec<u8> {
@@ -176,6 +177,61 @@ pub const LOCAL0: u8 = 0x60;
 pub const LOCAL1: u8 = 0x61;
 pub const ARG0: u8 = 0x68;
 pub const ARG1: u8 = 0x69;
+pub const ARG2: u8 = 0x6A;
+
+/// The AML of a constant: an integer, a string, a buffer, or a package of
+/// them (`None` for anything else, a reference say).
+pub fn constant(v: &Value) -> Option<Vec<u8>> {
+    match v {
+        Value::Integer(i) => Some(int(*i)),
+        Value::String(s) => Some(string(s)),
+        Value::Buffer(b) => Some(buffer(b)),
+        Value::Package(items) if items.len() <= 0xFF => {
+            Some(package(&items.iter().map(constant).collect::<Option<Vec<_>>>()?))
+        }
+        _ => None,
+    }
+}
+
+/// The bytes `ToUUID ("...")` makes of a UUID's text: the first three
+/// fields little-endian, the rest as written. `None` if it is not one.
+pub fn uuid(text: &str) -> Option<[u8; 16]> {
+    let hex: Vec<u8> = text
+        .split('-')
+        .flat_map(|g| g.as_bytes().chunks(2))
+        .map(|pair| u8::from_str_radix(core::str::from_utf8(pair).ok()?, 16).ok())
+        .collect::<Option<_>>()?;
+    let groups: Vec<usize> = text.split('-').map(str::len).collect();
+    if hex.len() != 16 || groups != [8, 4, 4, 4, 12] {
+        return None;
+    }
+    let mut u = [0u8; 16];
+    u[..4].copy_from_slice(&[hex[3], hex[2], hex[1], hex[0]]);
+    u[4..8].copy_from_slice(&[hex[5], hex[4], hex[7], hex[6]]);
+    u[8..].copy_from_slice(&hex[8..]);
+    Some(u)
+}
+
+/// A `_DSM` that answers function `function` of `uuid` (at any revision)
+/// with `answer` (an AML term), and function 0 with the functions there
+/// are; anything else with nothing.
+pub fn dsm(uuid: &[u8; 16], function: u8, answer: &[u8]) -> Vec<u8> {
+    let functions = buffer(&[1 | 1 << function]);
+    method(
+        "_DSM",
+        4,
+        &cat(&[
+            &if_(
+                &lequal(&[ARG0], &buffer(uuid)),
+                &cat(&[
+                    &if_(&lequal(&[ARG2], &int(0)), &ret(&functions)),
+                    &if_(&lequal(&[ARG2], &int(function as u64)), &ret(answer)),
+                ]),
+            ),
+            &ret(&buffer(&[0])),
+        ]),
+    )
+}
 
 // --- Resource descriptors ---------------------------------------------------
 
@@ -225,7 +281,29 @@ pub fn memory32_fixed(base: u32, length: u32) -> Vec<u8> {
 
 /// `Interrupt (ResourceConsumer, Level, ActiveLow, Shared) { irq }`.
 pub fn interrupt(irq: u32) -> Vec<u8> {
-    large(0x09, &cat(&[&[0x0D, 1], &irq.to_le_bytes()]))
+    interrupt_of(irq, false, true, true, false)
+}
+
+/// `Interrupt (ResourceConsumer, ...) { irq }` as given: edge- or
+/// level-triggered, active low or high, shared or not, a wake source or
+/// not.
+pub fn interrupt_of(irq: u32, edge: bool, active_low: bool, shared: bool, wake: bool) -> Vec<u8> {
+    let flags = 1 | (edge as u8) << 1 | (active_low as u8) << 2 | (shared as u8) << 3 | (wake as u8) << 4;
+    large(0x09, &cat(&[&[flags, 1], &irq.to_le_bytes()]))
+}
+
+/// `I2cSerialBusV2 (address, ControllerInitiated, speed, 7- or 10-bit
+/// addressing, controller)`.
+pub fn i2c_descriptor(address: u16, speed: u32, ten_bit: bool, controller: &str) -> Vec<u8> {
+    let mut d = vec![2, 0, 1, 2];
+    d.extend_from_slice(&(ten_bit as u16).to_le_bytes());
+    d.push(1);
+    d.extend_from_slice(&6u16.to_le_bytes());
+    d.extend_from_slice(&speed.to_le_bytes());
+    d.extend_from_slice(&address.to_le_bytes());
+    d.extend_from_slice(controller.as_bytes());
+    d.push(0);
+    large(0x0E, &d)
 }
 
 /// `IO (Decode16, base, base, 1, length)`.

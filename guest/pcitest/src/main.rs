@@ -1,9 +1,10 @@
 //! `pcitest` — checks, inside the driver VM's Linux, the PCI functions
-//! Veda gave it: each is on the guest's PCI with a driver of Linux's. A
-//! sound card's codec has answered, which takes the controller's DMA both
-//! ways, and its MSIs, which announce the answers, arrived (other
-//! functions interrupt only when something happens). It says
-//! `pcitest: PASS` when all is well.
+//! Veda gave it: each is on the guest's PCI with a driver of Linux's, and
+//! described by an ACPI device of the platform's tables (with the devices
+//! they describe below it, which it lists). An HD Audio controller's
+//! codec has answered, which takes the controller's DMA both ways, and its
+//! MSIs, which announce the answers, arrived (other functions interrupt
+//! only when something happens). It says `pcitest: PASS` when all is well.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -40,6 +41,24 @@ fn functions() -> Vec<PathBuf> {
 fn driver(function: &Path) -> Option<String> {
     let link = fs::read_link(function.join("driver")).ok()?;
     Some(link.file_name()?.to_string_lossy().into_owned())
+}
+
+/// The ACPI device that describes a function (its companion), and the
+/// devices the tables describe below that one, with their ids.
+fn described(function: &Path) -> (String, Vec<String>) {
+    let companion = read(&function.join("firmware_node").join("path"));
+    let mut below = Vec::new();
+    if !companion.is_empty() {
+        for d in fs::read_dir("/sys/bus/acpi/devices").into_iter().flatten().flatten() {
+            let path = read(&d.path().join("path"));
+            let child = path.strip_prefix(&companion).and_then(|r| r.strip_prefix('.'));
+            if child.is_some_and(|r| !r.contains('.')) {
+                below.push(format!("{} ({})", path, read(&d.path().join("hid"))));
+            }
+        }
+        below.sort();
+    }
+    (companion, below)
 }
 
 /// Polls `done` for up to `timeout`.
@@ -85,7 +104,11 @@ fn main() {
             &format!("{name} {id} (class {class}) has a driver: {}", driver.as_deref().unwrap_or("none")),
             driver.is_some(),
         );
-        if class.starts_with("0x04") {
+        let (companion, below) = described(&f);
+        let with = if below.is_empty() { String::new() } else { format!(", with {}", below.join(", ")) };
+        let is = if companion.is_empty() { "described by nothing" } else { &companion };
+        c.check(&format!("{name} is {is}{with}"), !companion.is_empty());
+        if class.starts_with("0x0403") {
             // The codec answered the controller: its commands went out
             // and its answers came back by DMA, announced by interrupts.
             let codec = Path::new("/proc/asound/card0/codec#0");

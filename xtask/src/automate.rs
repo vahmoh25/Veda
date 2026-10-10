@@ -28,6 +28,7 @@
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
 //! nic e1000e                       # QEMU model of the wired card for this run, applied before boot
 //! disk nvme                        # how QEMU attaches the disks for this run (virtio, ahci, nvme), applied before boot
+//! acpi-table touchpad              # add a table to the firmware's (xtask/src/acpitest.rs), applied before boot
 //! sound hda                        # the sound card for this run (virtio or hda), applied before boot
 //! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
@@ -493,6 +494,20 @@ pub fn disk_bus(script: &str) -> Result<Option<DiskBus>> {
     Ok(bus)
 }
 
+/// The ACPI tables a script adds to QEMU's with `acpi-table NAME`
+/// (`acpitest`), written out for QEMU.
+pub fn acpi_tables(script: &str) -> Result<Vec<PathBuf>> {
+    let mut tables = Vec::new();
+    for w in script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "acpi-table")) {
+        let n = w.get(1).ok_or("acpi-table: missing name")?;
+        let table = crate::acpitest::table(n).ok_or(format!("acpi-table: no table '{n}' (touchpad)"))?;
+        let path = util::out_dir().join(format!("acpi-{n}.aml"));
+        std::fs::write(&path, table).map_err(|e| format!("{}: {e}", path.display()))?;
+        tables.push(path);
+    }
+    Ok(tables)
+}
+
 /// The wired card model a script asks for with `nic`.
 pub fn nic_model(script: &str) -> Option<String> {
     script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "nic")).find_map(|w| w.get(1).cloned())
@@ -600,7 +615,7 @@ pub fn run_script(
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
                 "boot-cmdline" | "net" | "nic" | "disk" | "usb" | "sound" | "audio" | "requires" | "live" | "input"
-                | "gpu" => {}
+                | "gpu" | "acpi-table" => {}
                 "qmp" => {
                     let command = w.get(1).ok_or("missing command")?;
                     let arguments = w.get(2).map_or("{}", String::as_str);

@@ -13,6 +13,7 @@ vbuild = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
 vimage = { workspace = true }
+vacpi = { workspace = true }
 
 [lints]
 workspace = true

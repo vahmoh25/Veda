@@ -42,8 +42,9 @@ use core::cell::RefCell;
 use vabi::{cache_policy, irq_flags, signals};
 use vacpi::name::Path;
 use vacpi::resource::Resource as FirmwareResource;
+use vacpi::value::Value;
 use vipc::WaitSet;
-use vproto::pci::{AcpiDevice, AcpiResource, DeviceInfo, IntxLine, MsiAddress, PciError, pcidev};
+use vproto::pci::{AcpiDevice, AcpiResource, DeviceInfo, InterruptLine, IntxLine, MsiAddress, PciError, pcidev};
 use vrt::object::{Channel, Interrupt, IoPorts, Process, Resource, Vmo};
 use vrt::println;
 
@@ -149,14 +150,18 @@ fn driver_for(info: &DeviceInfo) -> Option<&'static str> {
 /// disks it starts from (storage controllers, whether it drives them yet
 /// or not: they are none of Linux's business), the platform's own (memory
 /// controllers, bridges, system peripherals, processors, encryption and
-/// signal processing controllers, the SMBus, and the serial bus
-/// controllers, one of which holds the firmware's flash), and the devices
-/// it has drivers of its own for (HD Audio controllers, and the speaker
-/// amplifiers' SPI controller, until the firmware's descriptions of what
-/// is wired to them reach the guest).
+/// signal processing controllers, the SMBus, and the controller of the
+/// firmware's flash: the serial bus controller in device 31 of an Intel
+/// PCH), and the devices it has drivers of its own for (HD Audio
+/// controllers, and the speaker amplifiers' SPI controller, until the
+/// firmware's descriptions of what is wired to them reach the guest).
+/// Other serial bus controllers (a laptop's I2C controllers, with its
+/// touchpad) are Linux's.
 fn veda_keeps(info: &DeviceInfo) -> bool {
+    let flash = info.class == 0x0C && info.subclass == 0x80 && info.bus == 0 && info.slot == 0x1F;
     matches!(info.class, 0x01 | 0x05 | 0x06 | 0x08 | 0x0B | 0x10 | 0x11)
-        || (info.class == 0x0C && matches!(info.subclass, 0x05 | 0x80))
+        || (info.class == 0x0C && info.subclass == 0x05)
+        || flash
         || driver_for(info).is_some()
 }
 
@@ -184,10 +189,21 @@ struct Bound {
     address: Address,
     info: DeviceInfo,
     channel: Channel,
-    /// The devices the firmware describes below it.
+    /// Its ACPI companion, and the devices the firmware describes below
+    /// it.
+    companion: Option<Path>,
     acpi: Vec<vacpi::device::Described>,
     /// The driver VM has it.
     guest: bool,
+}
+
+/// A function the driver VM gets, with what the firmware describes below
+/// it.
+struct GuestDevice {
+    address: Address,
+    info: DeviceInfo,
+    companion: Option<Path>,
+    acpi: Vec<vacpi::device::Described>,
 }
 
 struct Manager {
@@ -209,8 +225,13 @@ fn intx_letter(pin: u8) -> char {
     (b'A' + pin.saturating_sub(1)) as char
 }
 
-/// A resource as the `pcidev` protocol carries it.
-fn wire(r: &FirmwareResource) -> AcpiResource {
+/// A resource of the device at `scope`, as the `pcidev` protocol carries
+/// it: the controllers of its connections resolved where they can be.
+fn wire(r: &FirmwareResource, acpi: &Acpi, scope: &Path) -> AcpiResource {
+    let controller = |name: &str| {
+        let resolved = vacpi::name::NameString::parse(name).and_then(|n| acpi.ns.resolve(scope, &n));
+        resolved.map_or_else(|| String::from(name), |p| alloc::format!("{}", p))
+    };
     match r {
         FirmwareResource::Memory { base, length, .. } => AcpiResource::Memory { base: *base, length: *length },
         FirmwareResource::Io { base, length } => AcpiResource::Io { base: *base, length: *length },
@@ -220,13 +241,13 @@ fn wire(r: &FirmwareResource) -> AcpiResource {
         FirmwareResource::Gpio(g) => AcpiResource::Gpio {
             interrupt: g.interrupt,
             pins: g.pins.clone(),
-            controller: g.controller.clone(),
+            controller: controller(&g.controller),
             pull: g.pull,
             restriction: g.restriction,
             shared: g.shared,
         },
         FirmwareResource::Spi(s) => AcpiResource::Spi {
-            controller: s.controller.clone(),
+            controller: controller(&s.controller),
             chip_select: s.chip_select,
             speed_hz: s.speed_hz,
             bits: s.bits,
@@ -234,9 +255,12 @@ fn wire(r: &FirmwareResource) -> AcpiResource {
             cpha: s.cpha,
             cs_active_high: s.cs_active_high,
         },
-        FirmwareResource::I2c(i) => {
-            AcpiResource::I2c { controller: i.controller.clone(), address: i.address, speed_hz: i.speed_hz }
-        }
+        FirmwareResource::I2c(i) => AcpiResource::I2c {
+            controller: controller(&i.controller),
+            address: i.address,
+            speed_hz: i.speed_hz,
+            ten_bit: i.ten_bit,
+        },
         FirmwareResource::Window { .. } => AcpiResource::Other { kind: 0x87 },
         FirmwareResource::Other { kind } => AcpiResource::Other { kind: *kind },
     }
@@ -245,6 +269,23 @@ fn wire(r: &FirmwareResource) -> AcpiResource {
 struct DeviceSession<'a> {
     mgr: &'a Manager,
     dev: &'a Bound,
+}
+
+impl DeviceSession<'_> {
+    /// The interrupt of line `gsi`: the one the lines' table has, or a
+    /// new one, signalling as given.
+    fn line(&self, gsi: u32, level: bool, active_low: bool) -> Result<Interrupt, PciError> {
+        let mut lines = self.mgr.lines.borrow_mut();
+        let irq = match lines.entry(gsi) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
+                let flags =
+                    if level { irq_flags::LEVEL } else { 0 } | if active_low { irq_flags::ACTIVE_LOW } else { 0 };
+                e.insert(Interrupt::create(&self.mgr.irq, gsi as usize, flags).map_err(|_| PciError::NoResources)?)
+            }
+        };
+        irq.0.duplicate(None).map(Interrupt).map_err(|_| PciError::NoResources)
+    }
 }
 
 impl pcidev::Server for DeviceSession<'_> {
@@ -322,18 +363,7 @@ impl pcidev::Server for DeviceSession<'_> {
             return Err(PciError::NotFound);
         };
         let line = IntxLine { pin, gsi: route.gsi, level: route.level, active_low: route.active_low };
-        let mut lines = self.mgr.lines.borrow_mut();
-        let irq = match lines.entry(route.gsi) {
-            Entry::Occupied(e) => e.into_mut(),
-            Entry::Vacant(e) => {
-                let flags = if route.level { irq_flags::LEVEL } else { 0 }
-                    | if route.active_low { irq_flags::ACTIVE_LOW } else { 0 };
-                e.insert(
-                    Interrupt::create(&self.mgr.irq, route.gsi as usize, flags).map_err(|_| PciError::NoResources)?,
-                )
-            }
-        };
-        let irq = irq.0.duplicate(None).map_err(|_| PciError::NoResources)?;
+        let irq = self.line(route.gsi, route.level, route.active_low)?;
         println!(
             "{:02x}:{:02x}.{}: INT{}# on GSI {} ({}, active {})",
             a.bus,
@@ -344,7 +374,7 @@ impl pcidev::Server for DeviceSession<'_> {
             if route.level { "level" } else { "edge" },
             if route.active_low { "low" } else { "high" }
         );
-        Ok((Interrupt(irq), line))
+        Ok((irq, line))
     }
 
     fn device_resource(&mut self) -> Result<Resource, PciError> {
@@ -356,19 +386,79 @@ impl pcidev::Server for DeviceSession<'_> {
     }
 
     fn acpi_devices(&mut self) -> Vec<AcpiDevice> {
+        let Some(acpi) = self.mgr.acpi.as_ref() else { return Vec::new() };
         self.dev
             .acpi
             .iter()
             .map(|d| AcpiDevice {
                 path: alloc::format!("{}", d.path),
                 hid: d.identity.hid.clone().unwrap_or_default(),
+                cids: d.identity.cids.clone(),
                 uid: d.identity.uid.clone().unwrap_or_default(),
                 sub: d.identity.sub.clone().unwrap_or_default(),
                 status: d.identity.status as u32,
-                resources: d.resources.as_ref().map(|r| r.iter().map(wire).collect()).unwrap_or_default(),
+                resources: d
+                    .resources
+                    .as_ref()
+                    .map(|r| r.iter().map(|r| wire(r, acpi, &d.path)).collect())
+                    .unwrap_or_default(),
                 resource_error: d.resources.as_ref().err().map(|e| alloc::format!("{}", e)).unwrap_or_default(),
             })
             .collect()
+    }
+
+    fn acpi_dsm(&mut self, device: u32, uuid: Vec<u8>, revision: u64, function: u64) -> Result<u64, PciError> {
+        let acpi = self.mgr.acpi.as_ref().ok_or(PciError::NotFound)?;
+        let d = self.dev.acpi.get(device as usize).ok_or(PciError::NotFound)?;
+        let dsm = d.path.join("_DSM").ok_or(PciError::NotFound)?;
+        let args =
+            [Value::Buffer(uuid), Value::Integer(revision), Value::Integer(function), Value::Package(Vec::new())];
+        let answer = acpi.ns.evaluate(&dsm, &args, &acpi.memory).map_err(|_| PciError::NotFound)?;
+        match answer {
+            Value::Integer(v) => Ok(v),
+            _ => Err(PciError::NotFound),
+        }
+    }
+
+    fn acpi_data(&mut self, device: u32, name: String) -> Result<Vec<u8>, PciError> {
+        let acpi = self.mgr.acpi.as_ref().ok_or(PciError::NotFound)?;
+        let owner = match device {
+            u32::MAX => self.dev.companion.as_ref(),
+            d => self.dev.acpi.get(d as usize).map(|d| &d.path),
+        };
+        let owner = owner.ok_or(PciError::NotFound)?;
+        let value = acpi.ns.evaluate_child(owner, &name, &acpi.memory).ok_or(PciError::NotFound)?;
+        let value = value.map_err(|_| PciError::Unsupported)?;
+        vacpi::asm::constant(&value).ok_or(PciError::Unsupported)
+    }
+
+    fn acpi_interrupt(&mut self, device: u32, index: u32) -> Result<(Interrupt, InterruptLine), PciError> {
+        let d = self.dev.acpi.get(device as usize).ok_or(PciError::NotFound)?;
+        let line = d
+            .resources
+            .as_ref()
+            .ok()
+            .and_then(|r| {
+                r.iter()
+                    .flat_map(|r| match r {
+                        FirmwareResource::Irq { irqs, edge, active_low, .. } => irqs
+                            .iter()
+                            .map(|&gsi| InterruptLine { gsi, level: !*edge, active_low: *active_low })
+                            .collect(),
+                        _ => Vec::new(),
+                    })
+                    .nth(index as usize)
+            })
+            .ok_or(PciError::NotFound)?;
+        println!(
+            "{}: interrupt {} on GSI {} ({}, active {})",
+            d.path,
+            index,
+            line.gsi,
+            if line.level { "level" } else { "edge" },
+            if line.active_low { "low" } else { "high" }
+        );
+        Ok((self.line(line.gsi, line.level, line.active_low)?, line))
     }
 
     fn gpio_read(&mut self, device: u32, index: u32) -> Result<bool, PciError> {
@@ -447,9 +537,9 @@ fn boot_info() -> Option<vabi::KernelBootInfo> {
 }
 
 /// The devices the firmware describes below PCI function `a`; logs them.
-fn described_below(acpi: Option<&Acpi>, a: Address) -> Vec<vacpi::device::Described> {
-    let Some(acpi) = acpi else { return Vec::new() };
-    let Some(companion) = acpi.pci_companion(a.bus, a.slot, a.function) else { return Vec::new() };
+fn described_below(acpi: Option<&Acpi>, a: Address) -> (Option<Path>, Vec<vacpi::device::Described>) {
+    let Some(acpi) = acpi else { return (None, Vec::new()) };
+    let Some(companion) = acpi.pci_companion(a.bus, a.slot, a.function) else { return (None, Vec::new()) };
     let below = acpi.children(&companion);
     if !below.is_empty() {
         let names: Vec<String> = below
@@ -458,7 +548,7 @@ fn described_below(acpi: Option<&Acpi>, a: Address) -> Vec<vacpi::device::Descri
             .collect();
         println!("acpi: {:02x}:{:02x}.{} is {}, with {}", a.bus, a.slot, a.function, companion, names.join(", "));
     }
-    below
+    (Some(companion), below)
 }
 
 /// Maps the system image (the initrd) that `init` hands over; also
@@ -520,7 +610,7 @@ struct DriverVm {
     /// Its options: `drivervm.NAME=VALUE` (`drivervm.memory=512`) but
     /// `devices`, which is devmgr's.
     args: Vec<String>,
-    devices: Vec<(Address, DeviceInfo)>,
+    devices: Vec<GuestDevice>,
     i8042: Option<I8042>,
     hypervisor: Resource,
     process: Option<Process>,
@@ -533,12 +623,7 @@ struct DriverVm {
 }
 
 impl DriverVm {
-    fn new(
-        options: &[String],
-        devices: Vec<(Address, DeviceInfo)>,
-        i8042: Option<I8042>,
-        hypervisor: Resource,
-    ) -> DriverVm {
+    fn new(options: &[String], devices: Vec<GuestDevice>, i8042: Option<I8042>, hypervisor: Resource) -> DriverVm {
         let args = options
             .iter()
             .filter_map(|a| a.strip_prefix("drivervm."))
@@ -572,10 +657,17 @@ impl DriverVm {
         let (Ok(h), Ok(i)) = (self.hypervisor.duplicate(), image.0.duplicate(None)) else { return };
         let mut handles = alloc::vec![(DRIVERVM_HYPERVISOR_ROLE, h.into_handle()), (vabi::startup::role::INITRD, i)];
         handles.extend(self.i8042.as_ref().and_then(I8042::handles).unwrap_or_default());
-        for (address, info) in &self.devices {
+        for d in &self.devices {
             let Ok((ours, theirs)) = Channel::create() else { continue };
             handles.push((DRIVERVM_DEVICE_ROLE, theirs.into_handle()));
-            let device = Bound { address: *address, info: info.clone(), channel: ours, acpi: Vec::new(), guest: true };
+            let device = Bound {
+                address: d.address,
+                info: d.info.clone(),
+                channel: ours,
+                companion: d.companion.clone(),
+                acpi: d.acpi.clone(),
+                guest: true,
+            };
             bound.insert(*next, device);
             *next += 1;
         }
@@ -610,7 +702,7 @@ impl DriverVm {
     /// stays the host's, neither reset when the driver VM ends nor given to
     /// the next.
     fn turned_down(&mut self, address: Address) {
-        self.devices.retain(|(a, _)| *a != address);
+        self.devices.retain(|d| d.address != address);
     }
 
     /// Its process ended: unless Linux powered it off, its devices are
@@ -632,9 +724,9 @@ impl DriverVm {
         let ran_ns = vrt::time::now_ns().saturating_sub(self.started_ns);
         self.failures = if ran_ns < DRIVERVM_STABLE_NS { self.failures + 1 } else { 0 };
         let mut resets = Vec::new();
-        for (address, info) in &self.devices {
-            let how = config.reset(*address).unwrap_or("no reset");
-            resets.push(alloc::format!("{:04x}:{:04x} {}", info.vendor, info.device, how));
+        for d in &self.devices {
+            let how = config.reset(d.address).unwrap_or("no reset");
+            resets.push(alloc::format!("{:04x}:{:04x} {}", d.info.vendor, d.info.device, how));
         }
         if resets.is_empty() {
             println!("the driver VM ended: {}", why);
@@ -728,14 +820,16 @@ fn main() -> i32 {
     let mut next = 1u64;
     for a in mgr.config.scan() {
         let info = mgr.config.info(a);
+        let companion = mgr.acpi.as_ref().and_then(|acpi| acpi.pci_companion(a.bus, a.slot, a.function));
         println!(
-            "pci {:02x}:{:02x}.{} {:04x}:{:04x} {}",
+            "pci {:02x}:{:02x}.{} {:04x}:{:04x} {}{}",
             a.bus,
             a.slot,
             a.function,
             info.vendor,
             info.device,
-            class_name(&info)
+            class_name(&info),
+            companion.map(|c| alloc::format!(" ({})", c)).unwrap_or_default()
         );
         if gives && (!veda_keeps(&info) || listed.contains(&(info.vendor, info.device))) {
             // An endpoint only: a bridge would give the guest what is
@@ -748,7 +842,8 @@ fn main() -> i32 {
                 "{:04x}:{:04x} at {:02x}:{:02x}.{} goes to the driver VM",
                 info.vendor, info.device, a.bus, a.slot, a.function
             );
-            guest.push((a, info));
+            let (companion, acpi) = described_below(mgr.acpi.as_ref(), a);
+            guest.push(GuestDevice { address: a, info, companion, acpi });
             continue;
         }
         let Some(driver) = driver_for(&info) else { continue };
@@ -759,9 +854,9 @@ fn main() -> i32 {
             );
             continue;
         }
-        let below = described_below(mgr.acpi.as_ref(), a);
+        let (companion, below) = described_below(mgr.acpi.as_ref(), a);
         if let Some(ch) = start_driver(&boot, driver, &info) {
-            bound.insert(next, Bound { address: a, info, channel: ch, acpi: below, guest: false });
+            bound.insert(next, Bound { address: a, info, channel: ch, companion, acpi: below, guest: false });
             next += 1;
         }
     }
