@@ -323,7 +323,10 @@ sleep between events.
   was). The test microphone (`mic-silence`, `mic-tone`, `say TEXT`,
   `mic-wav FILE`) feeds the agent's microphone through `testmic`;
   `mic-echo GAIN DELAY` brings the machine's own sound output back into
-  it, as loudspeakers next to a microphone would (`tests/agent/echo.vts`).
+  it, as loudspeakers next to a microphone would (`tests/agent/echo.vts`);
+  the suite runs such scripts after the others, one at a time, as
+  machines running beside them put the echo out of time now and then,
+  which the echo canceller must then learn anew.
   To see how a real machine echoes, a script with `audio host` plays
   through the host's loudspeakers and records its microphone instead
   (not part of the tests: it is audible).

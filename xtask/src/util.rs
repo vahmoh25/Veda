@@ -22,6 +22,12 @@ pub fn out_dir() -> PathBuf {
     }
 }
 
+/// Caches every run shares, wherever `$VEDA_OUT` puts the rest (the test
+/// microphone's speech).
+pub fn cache_dir() -> PathBuf {
+    workspace_root().join("target").join("veda")
+}
+
 /// Cargo's target directory (`$CARGO_TARGET_DIR` overrides it).
 pub fn target_dir() -> PathBuf {
     match std::env::var_os("CARGO_TARGET_DIR") {
@@ -119,4 +125,9 @@ pub fn ninja(dir: &Path, target: &str) -> Result {
 /// Prints a status line in the style of cargo.
 pub fn status(verb: &str, msg: impl std::fmt::Display) {
     eprintln!("\x1b[1;32m{verb:>12}\x1b[0m {msg}");
+}
+
+/// The same, for what failed (in red).
+pub fn failure(verb: &str, msg: impl std::fmt::Display) {
+    eprintln!("\x1b[1;31m{verb:>12}\x1b[0m {msg}");
 }

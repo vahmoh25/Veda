@@ -273,7 +273,7 @@ fn stream_to(mut stream: TcpStream, shared: &Shared) {
 /// Speech for `text` as 16 kHz mono samples, from the cache or from
 /// Deepgram's text-to-speech API (needs `$DEEPGRAM_API_KEY`).
 pub fn synthesize(text: &str, voice: &str) -> Result<Vec<i16>> {
-    let dir = util::out_dir().join("tts-cache");
+    let dir = util::cache_dir().join("tts-cache");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let file = dir.join(format!("{:016x}.pcm", fnv64(&format!("{voice}\0{RATE}\0{text}"))));
     if let Ok(bytes) = std::fs::read(&file)
@@ -284,7 +284,10 @@ pub fn synthesize(text: &str, voice: &str) -> Result<Vec<i16>> {
     let key = std::env::var("DEEPGRAM_API_KEY")
         .map_err(|_| "`say` needs a Deepgram API key in $DEEPGRAM_API_KEY (or a cached phrase)".to_string())?;
     let bytes = deepgram_speak(text, voice, &key, &dir)?;
-    std::fs::write(&file, &bytes).map_err(|e| e.to_string())?;
+    // Runs side by side may cache the same phrase: each writes its own file
+    // and moves it in whole.
+    let part = file.with_extension(format!("{}.part", std::process::id()));
+    std::fs::write(&part, &bytes).and_then(|_| std::fs::rename(&part, &file)).map_err(|e| e.to_string())?;
     Ok(pcm_from_bytes(&bytes))
 }
 

@@ -16,7 +16,9 @@ cargo xtask shot --wait 15     # boot headless, save target/veda/screen.png
 cargo xtask shot --cmdline "run=about"   # also start bin/about.exe at boot
 cargo xtask script tests/ui/about-interaction.vts   # scripted GUI test
 cargo xtask test               # host unit tests + in-system integration tests
-cargo xtask test --ui          # ... plus every GUI script in tests/ui
+cargo xtask test --ui          # ... plus every GUI script in tests/ui and tests/agent, several at once
+cargo xtask test --ui --jobs 2 # ... two at a time (default: one per five processors)
+cargo xtask scripts tests/ui/hda.vts tests/ui/nvme.vts   # some scripts, built once, side by side
 cargo xtask script docs/screenshots.vts   # retake the README screenshots
 cargo xtask run --disk-bus ahci             # QEMU with SATA disks
 cargo xtask run --disk-bus nvme             # ... with NVM Express disks

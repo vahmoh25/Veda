@@ -494,6 +494,14 @@ pub fn disk_bus(script: &str) -> Result<Option<DiskBus>> {
     Ok(bus)
 }
 
+/// Whether a script needs the machine to itself: the machine's sound
+/// coming back into the microphone (`mic-echo`) must keep in time with it,
+/// as loudspeakers' does, for the echo canceller to take it out, and
+/// machines running beside it put it out of time now and then.
+pub fn alone(script: &str) -> bool {
+    script.lines().any(|l| words(l).first().is_some_and(|w| w == "mic-echo"))
+}
+
 /// The ACPI tables a script adds to QEMU's with `acpi-table NAME`
 /// (`acpitest`), written out for QEMU.
 pub fn acpi_tables(script: &str) -> Result<Vec<PathBuf>> {

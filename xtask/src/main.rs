@@ -36,9 +36,12 @@ COMMANDS:
     run         Build, then boot Veda in QEMU
     shot        Boot headless, wait, and save a screenshot (dev aid)
     script FILE Boot headless and run an automation script (see automate.rs)
+    scripts FILE...
+                Build once, then run the scripts, several at once (--jobs N);
+                each one's log goes to target/veda/test-logs
     test        Run host unit tests, then the in-system integration tests
                 (--ui also runs the GUI automation scripts in tests/ui
-                and the agent's in tests/agent)
+                and the agent's in tests/agent, several at once: --jobs N)
     toolchain   Build the C toolchain (GCC, binutils, musl) from ports/: a cross
                 compiler for this machine and the native one the image installs in
                 /system (needs build tools; see docs/C.md; --jobs N)
@@ -81,6 +84,10 @@ RUN OPTIONS:
                         a hub, and a mouse)
     --live              Boot the live system (iso) from a USB stick, as a PC would
 
+SCRIPT OPTIONS:
+    --jobs N            How many scripts run at once (scripts, test --ui; default: one per
+                        five processors, at least one)
+
 SHOT OPTIONS:
     --wait SECS         Seconds to wait before the screenshot (default 10)
     --until TEXT        Instead, wait until the serial log contains TEXT
@@ -112,6 +119,13 @@ struct Options {
     fresh_home: bool,
     /// `run`, `shot`, `script`: boot the live system from a USB stick.
     live: bool,
+    /// `script`: the system as `scripts` and `test` built it, instead of
+    /// building it.
+    prebuilt: Option<PathBuf>,
+    /// `scripts`, `test --ui`: how many scripts run at once.
+    jobs: usize,
+    /// The options as given, for the scripts' own runs.
+    given: Vec<String>,
 }
 
 fn parse_options(args: &[String]) -> Result<Options> {
@@ -129,6 +143,9 @@ fn parse_options(args: &[String]) -> Result<Options> {
         skip: Vec::new(),
         fresh_home: false,
         live: false,
+        prebuilt: None,
+        jobs: std::thread::available_parallelism().map_or(1, |n| (n.get() / 5).max(1)),
+        given: args.to_vec(),
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -166,6 +183,11 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--until" => o.until = Some(value(arg)?),
             "--out" => o.out = Some(PathBuf::from(value(arg)?)),
             "--ui" => o.ui = true,
+            "--prebuilt" => o.prebuilt = Some(PathBuf::from(value(arg)?)),
+            "--jobs" | "-j" => {
+                let v = value(arg)?;
+                o.jobs = v.parse().ok().filter(|&n| n > 0).ok_or(format!("--jobs: not a number of jobs: {v}"))?;
+            }
             "--no-generate" => o.generate = false,
             "--skip" => o.skip.push(value(arg)?),
             "--fresh-home" => o.fresh_home = true,
@@ -460,7 +482,173 @@ fn run(o: &Options) -> Result {
 
 /// Boots headless and runs an automation script (see `automate.rs`).
 fn script(o: &Options, script: &str) -> Result {
-    script_on(o, script, None)
+    match &o.prebuilt {
+        Some(dir) => script_on(o, script, Some(&load_system(dir)?)),
+        None => script_on(o, script, None),
+    }
+}
+
+/// Where `scripts` and `test` keep the system they built, for the scripts'
+/// runs (`--prebuilt`).
+fn system_dir() -> PathBuf {
+    util::out_dir().join("system")
+}
+
+const SYSTEM_PARTS: [&str; 3] = ["bootloader.efi", "kernel.efi", "initrd.img"];
+
+fn save_system(system: &System, dir: &std::path::Path) -> Result {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for (name, data) in SYSTEM_PARTS.iter().zip([&system.bootloader, &system.kernel, &system.initrd]) {
+        std::fs::write(dir.join(name), data).map_err(|e| format!("{}: {e}", dir.join(name).display()))?;
+    }
+    Ok(())
+}
+
+fn load_system(dir: &std::path::Path) -> Result<System> {
+    let [bootloader, kernel, initrd] = SYSTEM_PARTS.map(|name| util::read(&dir.join(name)));
+    Ok(System { bootloader: bootloader?, kernel: kernel?, initrd: initrd? })
+}
+
+/// `cargo xtask scripts FILE...`: builds the system once and runs the
+/// scripts on it.
+fn scripts(o: &Options, files: Vec<PathBuf>) -> Result {
+    let started = std::time::Instant::now();
+    let system = build_system(o)?;
+    util::status("Built", format!("the system in {:.1}s", started.elapsed().as_secs_f32()));
+    save_system(&system, &system_dir())?;
+    run_scripts(o, files)
+}
+
+/// Runs `files`, `o.jobs` at a time, each in a process of its own on the
+/// system `system_dir` holds, with a directory of its own (`$VEDA_OUT`: its
+/// disk image, serial log, home disk, firmware variables). Each one's
+/// output goes to `target/veda/test-logs/NAME.log` (and a failing one's
+/// serial log beside it); each result is told as it comes, the longest
+/// scripts (as the last run timed them) first, and those that need the
+/// machine to themselves ([`automate::alone`]) last, one at a time. Fails
+/// if any script did.
+fn run_scripts(o: &Options, mut files: Vec<PathBuf>) -> Result {
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    let logs = util::out_dir().join("test-logs");
+    std::fs::create_dir_all(&logs).map_err(|e| format!("{}: {e}", logs.display()))?;
+    let name_of = |p: &PathBuf| p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let mut runnable = Vec::new();
+    for path in files.drain(..) {
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+        if let Some(what) = automate::needs_toolchain(&text)
+            && !toolchain::built(what)
+        {
+            util::status(
+                "Skipping",
+                format!("GUI script {} (needs the {what}: `cargo xtask toolchain`)", name_of(&path)),
+            );
+            continue;
+        }
+        runnable.push((path, automate::alone(&text)));
+    }
+    // The longest first, so that the last to finish are short.
+    let timings_file = logs.join("durations");
+    let timings: std::collections::HashMap<String, f32> = std::fs::read_to_string(&timings_file)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split_once(' ').and_then(|(n, s)| Some((n.to_string(), s.parse().ok()?))))
+        .collect();
+    let time = |p: &PathBuf| timings.get(&name_of(p)).copied().unwrap_or(60.0);
+    runnable.sort_by(|(a, _), (b, _)| time(b).total_cmp(&time(a)));
+    let (alone, together): (Vec<_>, Vec<_>) = runnable.into_iter().partition(|&(_, alone)| alone);
+    let [alone, together] = [alone, together].map(|b| b.into_iter().map(|(p, _)| p).collect::<Vec<_>>());
+    let total = alone.len() + together.len();
+    let jobs = o.jobs.min(together.len()).max(1);
+    let then = match alone.len() {
+        0 => String::new(),
+        n => format!(", then {n} that need the machine to themselves"),
+    };
+    util::status("Testing", format!("{total} GUI scripts, {jobs} at a time{then}"));
+    // What the scripts' own runs are given: the options but those of this
+    // command.
+    let mut given = Vec::new();
+    let mut it = o.given.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--ui" => {}
+            "--jobs" | "-j" | "--prebuilt" => {
+                it.next();
+            }
+            a if a.ends_with(".vts") => {}
+            _ => given.push(a.clone()),
+        }
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let results: Mutex<Vec<(String, bool, f32)>> = Mutex::new(Vec::new());
+    // Runs `batch`, `jobs` at a time.
+    let run = |batch: Vec<PathBuf>, jobs: usize| {
+        let queue = Mutex::new(batch.into_iter().collect::<VecDeque<_>>());
+        std::thread::scope(|s| {
+            for slot in 0..jobs {
+                let (queue, results, given, exe, logs) = (&queue, &results, &given, &exe, &logs);
+                s.spawn(move || {
+                    let run_dir = util::out_dir().join("jobs").join(slot.to_string());
+                    loop {
+                        // The queue is locked for taking the next only.
+                        let next = queue.lock().unwrap().pop_front();
+                        let Some(path) = next else { break };
+                        let name = name_of(&path);
+                        let log = logs.join(format!("{name}.log"));
+                        let started = std::time::Instant::now();
+                        let ok = std::fs::File::create(&log)
+                            .and_then(|out| {
+                                let err = out.try_clone()?;
+                                std::process::Command::new(exe)
+                                    .arg("script")
+                                    .arg(&path)
+                                    .arg("--prebuilt")
+                                    .arg(system_dir())
+                                    .args(given)
+                                    .env("VEDA_OUT", &run_dir)
+                                    .stdout(out)
+                                    .stderr(err)
+                                    .status()
+                            })
+                            .is_ok_and(|s| s.success());
+                        let secs = started.elapsed().as_secs_f32();
+                        if ok {
+                            util::status("Passed", format!("{name} ({secs:.0} s)"));
+                        } else {
+                            let serial = logs.join(format!("{name}.serial.log"));
+                            let _ = std::fs::copy(run_dir.join("serial.log"), &serial);
+                            let why = std::fs::read_to_string(&log)
+                                .unwrap_or_default()
+                                .lines()
+                                .rev()
+                                .find(|l| l.contains("error:"))
+                                .map(str::to_string)
+                                .unwrap_or_default();
+                            util::failure("Failed", format!("{name} ({secs:.0} s) {why} — {}", log.display()));
+                        }
+                        results.lock().unwrap().push((name, ok, secs));
+                    }
+                });
+            }
+        });
+    };
+    run(together, jobs);
+    run(alone, 1);
+    let results = results.into_inner().unwrap();
+    let mut timings = timings;
+    for (name, _, secs) in &results {
+        timings.insert(name.clone(), *secs);
+    }
+    let mut lines: Vec<String> = timings.iter().map(|(n, s)| format!("{n} {s:.0}")).collect();
+    lines.sort();
+    let _ = std::fs::write(&timings_file, lines.join("\n") + "\n");
+    let failed: Vec<&str> = results.iter().filter(|r| !r.1).map(|r| r.0.as_str()).collect();
+    if failed.is_empty() {
+        util::status("Passed", format!("all {total} GUI scripts"));
+        Ok(())
+    } else {
+        Err(format!("{} of {total} GUI scripts failed: {}", failed.len(), failed.join(", ")))
+    }
 }
 
 /// Runs an automation script on `system`, or on a fresh build if `None`.
@@ -681,6 +869,7 @@ fn test(o: &Options) -> Result {
     let started = std::time::Instant::now();
     let system = build_system(o)?;
     util::status("Built", format!("the system in {:.1}s", started.elapsed().as_secs_f32()));
+    save_system(&system, &system_dir())?;
     util::status("Testing", "integration tests inside Veda");
     let mut o = o.clone();
     o.cmdline = format!("{} systest", o.cmdline).trim().to_string();
@@ -704,20 +893,9 @@ fn test(o: &Options) -> Result {
             found.sort();
             scripts.extend(found);
         }
-        for path in scripts {
-            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-            let text = std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
-            if let Some(what) = automate::needs_toolchain(&text)
-                && !toolchain::built(what)
-            {
-                util::status("Skipping", format!("GUI script {name} (needs the {what}: `cargo xtask toolchain`)"));
-                continue;
-            }
-            util::status("Testing", format!("GUI script {name}"));
-            let mut ui = o.clone();
-            ui.cmdline.clear();
-            script_on(&ui, &text, Some(&system)).map_err(|e| format!("{name}: {e}"))?;
-        }
+        let mut ui = o.clone();
+        ui.cmdline.clear();
+        run_scripts(&ui, scripts)?;
     }
     util::status("Passed", "all tests");
     Ok(())
@@ -805,6 +983,15 @@ fn main() -> ExitCode {
         "run" => parse_options(rest).and_then(|o| run(&o)),
         "shot" => parse_options(rest).and_then(|o| shot(&o)),
         "test" => parse_options(rest).and_then(|o| test(&o)),
+        "scripts" => {
+            let files: Vec<PathBuf> = rest.iter().filter(|a| a.ends_with(".vts")).map(PathBuf::from).collect();
+            if files.is_empty() {
+                Err("usage: cargo xtask scripts FILE... [options]".into())
+            } else {
+                parse_options(&rest.iter().filter(|a| !a.ends_with(".vts")).cloned().collect::<Vec<_>>())
+                    .and_then(|o| scripts(&o, files))
+            }
+        }
         "script" => match rest.split_first() {
             Some((file, opts)) => std::fs::read_to_string(file)
                 .map_err(|e| format!("reading {file}: {e}"))
