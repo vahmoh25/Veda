@@ -293,6 +293,43 @@
  	error = sysfs_create_group(efi_kobj, &efi_subsys_attr_group);
  	if (error) {
  		pr_err("efi: Sysfs attribute export failed with error %d.\n",
+--- a/drivers/gpu/drm/i915/display/intel_display.c
++++ b/drivers/gpu/drm/i915/display/intel_display.c
+@@ -4417,6 +4417,8 @@
+ 			  struct intel_crtc *crtc)
+ {
+ 	struct intel_display *display = to_intel_display(crtc);
++	const struct intel_crtc_state *old_crtc_state =
++		intel_atomic_get_old_crtc_state(state, crtc);
+ 	struct intel_crtc_state *crtc_state =
+ 		intel_atomic_get_new_crtc_state(state, crtc);
+ 	struct drm_connector *connector;
+@@ -4437,6 +4439,25 @@
+ 			return ret;
+ 	}
+ 
++	/*
++	 * The first commit keeps the bpp the firmware drives the display
++	 * at, where that is less than the most the sink takes but 8 bpc at
++	 * least (a laptop's firmware drives its 10 bpc panel at 8): with all
++	 * else as the firmware set it, that commit is then a fastset, and
++	 * the display goes on showing pictures, where a few more bits a
++	 * colour would take a full modeset, a panel powering off and on.
++	 */
++	if (old_crtc_state && old_crtc_state->inherited &&
++	    old_crtc_state->hw.active &&
++	    old_crtc_state->pipe_bpp >= 8 * 3 &&
++	    old_crtc_state->pipe_bpp < crtc_state->pipe_bpp) {
++		drm_dbg_kms(display->drm,
++			    "[CRTC:%d:%s] keeping the firmware's pipe bpp %d (rather than %d)\n",
++			    crtc->base.base.id, crtc->base.name,
++			    old_crtc_state->pipe_bpp, crtc_state->pipe_bpp);
++		crtc_state->pipe_bpp = old_crtc_state->pipe_bpp;
++	}
++
+ 	return 0;
+ }
+ 
 --- /dev/null
 +++ b/arch/x86/include/asm/veda_para.h
 @@ -0,0 +1,112 @@

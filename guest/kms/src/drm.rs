@@ -338,9 +338,6 @@ struct Property {
     value: u64,
 }
 
-/// As many bits a colour as Veda's pictures have, for a display's link.
-const PICTURE_BPC: u64 = 8;
-
 /// A page flip that completed: the request's own number, and the
 /// vertical blank it happened at (Linux's monotonic clock, ns).
 pub struct Flipped {
@@ -526,13 +523,11 @@ impl Card {
         let mut commit = Commit::default();
         let connector = self.properties(output.connector, OBJECT_CONNECTOR)?;
         commit.set(output.connector, &connector, "CRTC_ID", output.crtc as u64)?;
-        // The link carries as many bits a colour as the pictures have: more
-        // would show nothing more, and a PC's firmware drives its panel so,
-        // which the driver then keeps, changing only what the display shows
-        // (no mode set of the panel, which goes dark meanwhile).
-        if connector.iter().any(|p| p.name == "max bpc" && p.value > PICTURE_BPC) {
-            commit.set(output.connector, &connector, "max bpc", PICTURE_BPC)?;
-        }
+        // The connector's max bpc stays as it is: any change of it makes the
+        // commit a full mode set, which powers a laptop's panel off and on.
+        // Linux's i915 keeps the bits a colour the firmware drives the
+        // display at instead (Veda's patch), so that the first commit only
+        // changes the picture shown.
         let crtc = self.properties(output.crtc, OBJECT_CRTC)?;
         commit.set(output.crtc, &crtc, "MODE_ID", blob as u64)?;
         commit.set(output.crtc, &crtc, "ACTIVE", 1)?;
