@@ -17,9 +17,13 @@
 //! A function reports no errors to the host, which a PC may make NMIs of:
 //! its error reporting is turned off before the guest runs, and stays off.
 //!
-//! A function the guest cannot be given (one the firmware keeps memory
-//! for, one without room on the bus or for its BARs) is said so and let
-//! go of: its channel closes, which tells devmgr it stays the host's.
+//! Memory the firmware keeps for a function (an RMRR: a GPU's stolen
+//! memory, which it and the firmware's framebuffer use) the guest has where
+//! the PC has it, in a free span of its address space: the function's DMA
+//! reaches it there, as the firmware left it. A function the guest cannot
+//! be given (its firmware's memory where the guest has its own, no room on
+//! the bus or for its BARs) is said so and let go of: its channel closes,
+//! which tells devmgr it stays the host's.
 //!
 //! Where a function is: on the host's bus 0, a function keeps its device
 //! and function numbers if its device's function 0 comes too (drivers may
@@ -75,13 +79,17 @@ pub struct Devices {
     pins: Pins,
     /// The firmware's tables that came with them (one of each).
     firmware_tables: Vec<Vec<u8>>,
+    /// The memory the firmware keeps for them, where the guest has it.
+    reserved: Vec<Range<u64>>,
 }
 
-/// Where in the guest's memory BARs go: below 4 GiB the ones that must
-/// (32-bit) or fit, the rest above.
+/// Where in the guest's address space BARs go: below 4 GiB the ones that
+/// must (32-bit) or fit, the rest above; and where the memory the firmware
+/// keeps for functions may be (where nothing else of the guest's is).
 pub struct Windows {
     pub low: Range<u64>,
     pub high: Range<u64>,
+    pub free: Vec<Range<u64>>,
 }
 
 impl Windows {
@@ -102,12 +110,13 @@ impl Windows {
 impl Devices {
     /// No functions.
     pub fn none() -> Devices {
-        Devices { list: Vec::new(), pins: Pins::default(), firmware_tables: Vec::new() }
+        Devices { list: Vec::new(), pins: Pins::default(), firmware_tables: Vec::new(), reserved: Vec::new() }
     }
 
     /// Gives the guest the functions of `channels` it can have: their DMA,
-    /// their BARs (in `windows`), their place on its bus 0, the lines their
-    /// INTx are wired to (added to `lines`).
+    /// the memory the firmware keeps for them, their BARs (in `windows`),
+    /// their place on its bus 0, the lines their INTx are wired to (added
+    /// to `lines`).
     pub fn attach(guest: &Guest, channels: Vec<Channel>, windows: &mut Windows, lines: &mut Lines) -> Devices {
         let mut given = Vec::new();
         for channel in channels {
@@ -121,6 +130,7 @@ impl Devices {
         let mut list = Vec::new();
         let mut pins = Pins::default();
         let mut firmware_tables: Vec<Vec<u8>> = Vec::new();
+        let mut reserved = Vec::new();
         for ((pci, info), place) in given.into_iter().zip(places) {
             let name = format!(
                 "{:04x}:{:04x} at {:02x}:{:02x}.{}",
@@ -130,8 +140,8 @@ impl Devices {
                 println!("{name}: the guest's bus is full; it does not get it");
                 continue;
             };
-            let (bars, pci_express) = match give(guest, &pci, &info, windows) {
-                Ok(given) => given,
+            let Placed { bars, pci_express, kept } = match give(guest, &pci, &info, windows, &reserved) {
+                Ok(placed) => placed,
                 Err(e) => {
                     println!("{name} cannot be given to the guest: {e}");
                     continue;
@@ -145,6 +155,10 @@ impl Devices {
             };
             let mut at: Vec<String> =
                 bars.iter().map(|b| format!("BAR {} at {:#x} ({} KiB)", b.index, b.address, b.size / 1024)).collect();
+            for k in &kept {
+                at.push(format!("the memory the firmware keeps for it at {:#x}-{:#x}", k.start, k.end - 1));
+            }
+            reserved.extend(kept.into_iter().filter(|k| !reserved.contains(k)).collect::<Vec<_>>());
             if let Some(l) = intx {
                 at.push(format!("INT{}# on GSI {}", (b'A' + l.pin - 1) as char, l.gsi));
             }
@@ -164,7 +178,7 @@ impl Devices {
             let state = Mutex::new(State { pci, config, msis: BTreeMap::new() });
             list.push(Device { devfn, info, description, state });
         }
-        Devices { list, pins, firmware_tables }
+        Devices { list, pins, firmware_tables, reserved }
     }
 
     /// The kernel command line's options that say where the functions'
@@ -196,6 +210,11 @@ impl Devices {
     /// The firmware's tables that describe their hardware.
     pub fn firmware_tables(&self) -> &[Vec<u8>] {
         &self.firmware_tables
+    }
+
+    /// The memory the firmware keeps for them, where the guest has it.
+    pub fn reserved(&self) -> &[Range<u64>] {
+        &self.reserved
     }
 
     /// Operation `op` ([`gpio`]) on pin `pin` of GPIO controller
@@ -287,24 +306,67 @@ impl Devices {
     }
 }
 
-/// Gives the guest function `info` (`pci`'s): its DMA, then its memory
-/// BARs, placed in `windows`. Returns them, and where its PCI Express
-/// capability is.
+/// Where a function given is in the guest: its BARs, its PCI Express
+/// capability, and the memory the firmware keeps for it.
+struct Placed {
+    bars: Vec<Bar>,
+    pci_express: Option<u16>,
+    kept: Vec<Range<u64>>,
+}
+
+/// Gives the guest function `info` (`pci`'s): the memory the firmware
+/// keeps for it (but what `reserved` has, which a function given before
+/// brought), its DMA, then its memory BARs, placed in `windows`.
 fn give(
     guest: &Guest,
     pci: &pcidev::Client,
     info: &DeviceInfo,
     windows: &mut Windows,
-) -> Result<(Vec<Bar>, Option<u16>), String> {
+    reserved: &[Range<u64>],
+) -> Result<Placed, String> {
+    let resource = pci.device_resource().map_err(|e| format!("devmgr: {e}"))?.map_err(|e| format!("{e:?}"))?;
+    // The memory the firmware keeps for it, where the PC has it: in the
+    // guest's address space, so in its IOMMU domain, before it joins (a
+    // function given before may have had the same).
+    let kept = pci.reserved_memory().map_err(|e| format!("devmgr: {e}"))?.map_err(|e| format!("{e:?}"))?;
+    let mut mapped: Vec<Range<u64>> = Vec::new();
+    let unmap = |mapped: &[Range<u64>]| {
+        for r in mapped {
+            let _ = guest.unmap(r.start, (r.end - r.start) as usize);
+        }
+    };
+    for k in &kept {
+        let range = k.base..k.base + k.size;
+        if reserved.contains(&range) {
+            continue;
+        }
+        let at = format!("the memory the firmware keeps for it ({:#x}-{:#x})", range.start, range.end - 1);
+        let free = windows.free.iter().any(|f| f.start <= range.start && range.end <= f.end)
+            && !reserved.iter().chain(&mapped).any(|r| r.start < range.end && range.start < r.end);
+        let mapping = if free {
+            guest
+                .map(&k.memory, 0, k.size as usize, k.base, map_flags::READ | map_flags::WRITE)
+                .map_err(|e| format!("{at} cannot be the guest's: {e}"))
+        } else {
+            Err(format!("{at} is where the guest has something else"))
+        };
+        if let Err(e) = mapping {
+            unmap(&mapped);
+            return Err(e);
+        }
+        mapped.push(range);
+    }
     // Its DMA reaches the guest's memory from now on, before the guest can
     // enable it.
-    let resource = pci.device_resource().map_err(|e| format!("devmgr: {e}"))?.map_err(|e| format!("{e:?}"))?;
     let sid = (info.bus as u16) << 8 | (info.slot as u16) << 3 | info.function as u16;
-    guest.attach_device(&resource, sid).map_err(|e| format!("{e}"))?;
+    if let Err(e) = guest.attach_device(&resource, sid) {
+        unmap(&mapped);
+        return Err(format!("{e}"));
+    }
     let pci_express = vproto::pci::find_capability(pci, vhv::pci::CAP_PCI_EXPRESS);
     quiet_errors(pci, pci_express);
     let bars = map_bars(guest, pci, info, windows)?;
-    Ok((bars, pci_express))
+    Ok(Placed { bars, pci_express, kept: kept.iter().map(|k| k.base..k.base + k.size).collect() })
 }
 
 /// The names of constant data an I2C controller's driver reads from its

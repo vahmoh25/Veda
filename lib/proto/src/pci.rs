@@ -63,6 +63,18 @@ message! {
 }
 
 message! {
+    /// Memory the firmware keeps for a function (an RMRR of the IOMMU's
+    /// table: a GPU's stolen memory, which it and the firmware's
+    /// framebuffer use): where it is, and a VMO of it.
+    #[derive(Debug)]
+    pub struct ReservedMemory {
+        pub base: u64,
+        pub size: u64,
+        pub memory: Vmo,
+    }
+}
+
+message! {
     /// Where a function's INTx goes, as the firmware routes it (`_PRT`).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct IntxLine {
@@ -230,6 +242,11 @@ protocol! {
         /// Intel audio controller's NHLT (the links of its DSP, and the
         /// microphones and ports on them). None if there are none.
         20 => fn acpi_tables() -> Vec<Vec<u8>>;
+        /// The memory the firmware keeps for the function, which a guest
+        /// it is given to must have where the PC has it (its IOMMU domain
+        /// maps it there): only the driver VM's functions get it
+        /// (`Denied`).
+        21 => fn reserved_memory() -> Result<Vec<ReservedMemory>, PciError>;
     }
 }
 

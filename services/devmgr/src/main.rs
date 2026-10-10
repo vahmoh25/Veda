@@ -49,7 +49,9 @@ use vacpi::name::Path;
 use vacpi::resource::Resource as FirmwareResource;
 use vacpi::value::Value;
 use vipc::WaitSet;
-use vproto::pci::{AcpiDevice, AcpiResource, DeviceInfo, InterruptLine, IntxLine, MsiAddress, PciError, pcidev};
+use vproto::pci::{
+    AcpiDevice, AcpiResource, DeviceInfo, InterruptLine, IntxLine, MsiAddress, PciError, ReservedMemory, pcidev,
+};
 use vrt::object::{Channel, Interrupt, IoPorts, Process, Resource, Vmo};
 use vrt::println;
 
@@ -372,6 +374,23 @@ impl pcidev::Server for DeviceSession<'_> {
         }
         let sid = self.dev.address.requester_id() as u64;
         self.mgr.pci.create(vabi::resource_kind::PCI, sid, 1).map_err(|_| PciError::Denied)
+    }
+
+    fn reserved_memory(&mut self) -> Result<Vec<ReservedMemory>, PciError> {
+        if !self.dev.guest {
+            return Err(PciError::Denied);
+        }
+        let Some(acpi) = self.mgr.acpi.as_ref() else { return Ok(Vec::new()) };
+        let a = self.dev.address;
+        acpi.reserved_memory(a.bus, a.slot, a.function)
+            .into_iter()
+            .map(|r| {
+                let size = r.end - r.start;
+                let memory = Vmo::create_physical(&self.mgr.mmio, r.start, size as usize, cache_policy::UNCACHED)
+                    .map_err(|_| PciError::NoResources)?;
+                Ok(ReservedMemory { base: r.start, size, memory })
+            })
+            .collect()
     }
 
     fn acpi_tables(&mut self) -> Vec<Vec<u8>> {

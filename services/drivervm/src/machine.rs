@@ -17,6 +17,11 @@
 //! | 3 GiB to 4 GiB − 20 MiB | BARs of the guest's PCI functions |
 //! | 64 GiB to 128 GiB | the bridge's window: VMOs guest programs map |
 //! | 128 GiB to 256 GiB | BARs that do not fit below 4 GiB |
+//!
+//! Memory the firmware keeps for a function (a GPU's stolen memory) is
+//! where the PC has it, in what is free of that: from the end of RAM to
+//! 3 GiB, from 4 GiB to 64 GiB, from 256 GiB; the memory map says it is
+//! reserved.
 
 use alloc::format;
 use alloc::string::String;
@@ -32,7 +37,7 @@ use vrt::println;
 use vrt::sync::Mutex;
 use vrt::vm::Mapping;
 
-use crate::bridge::Bridge;
+use crate::bridge::{self, Bridge};
 use crate::i8042::{self, I8042};
 use crate::lines::Lines;
 use crate::memory::GuestMemory;
@@ -147,7 +152,8 @@ impl Machine {
         let devices = if devices.is_empty() {
             Devices::none()
         } else {
-            Devices::attach(&guest, devices, &mut Windows { low: PCI_LOW, high: PCI_HIGH }, &mut lines)
+            let free = alloc::vec![size..PCI_LOW.start, (4 << 30)..bridge::WINDOW_BASE, PCI_HIGH.end..u64::MAX];
+            Devices::attach(&guest, devices, &mut Windows { low: PCI_LOW, high: PCI_HIGH, free }, &mut lines)
         };
         let functions = devices.functions();
         let gpio = devices.gpio_controllers();
@@ -178,12 +184,18 @@ impl Machine {
             return Err(String::from("the kernel's command line is too long"));
         }
         cmdline.push('\0');
-        let ranges = [
+        let mut ranges = alloc::vec![
             MemoryRange { start: 0, len: LOW_RESERVED, kind: E820_RESERVED },
             MemoryRange { start: LOW_RESERVED, len: LEGACY_START - LOW_RESERVED, kind: E820_RAM },
             MemoryRange { start: LEGACY_START, len: LEGACY_END - LEGACY_START, kind: E820_RESERVED },
             MemoryRange { start: LEGACY_END, len: size - LEGACY_END, kind: E820_RAM },
         ];
+        ranges.extend(devices.reserved().iter().map(|r| MemoryRange {
+            start: r.start,
+            len: r.end - r.start,
+            kind: E820_RESERVED,
+        }));
+        ranges.sort_unstable_by_key(|r| r.start);
         let boot = linux::Boot {
             kernel: &image,
             kernel_at,

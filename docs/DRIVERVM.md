@@ -216,10 +216,10 @@ gets, and hands the driver VM its `pcidev` channel, as it hands a driver
 its device. Through it the monitor gets what giving the function away
 takes, and nothing more: its configuration space, its BARs, its MSIs,
 and a resource that names it (`resource_kind::PCI`, by requester id),
-which only the driver VM's functions have. A function the monitor cannot
-give (one the firmware keeps memory for, below) it lets go of at once:
-`devmgr` keeps it, and neither resets it when the driver VM ends nor
-offers it to the next.
+which only the driver VM's functions have, and the memory the firmware
+keeps for it (below). A function the monitor cannot give it lets go of at
+once: `devmgr` keeps it, and neither resets it when the driver VM ends
+nor offers it to the next.
 
 **DMA.** The kernel drives the IOMMU (`kernel/src/iommu`, Intel VT-d). At
 boot every device is in the host's domain, which passes requests through:
@@ -375,9 +375,21 @@ or an INTx the firmware routes on a root bus (QEMU's 82540EM, its
 PCI Express function always has), memory BARs
 of whole pages (an I/O BAR it also has is not given: Linux's drivers of
 PCI Express functions use their memory BARs), and its first 256 bytes of
-configuration space (`devmgr` reaches no more yet); no memory the
-firmware keeps for it (an RMRR: such a device stays the host's); the
-guest's memory is at most 3 GiB. Under QEMU, a virtio function's DMA goes
+configuration space (`devmgr` reaches no more yet); the guest's memory is
+at most 3 GiB.
+
+**The firmware's memory.** Memory the firmware keeps for a device (an
+RMRR of the DMAR table: a GPU's stolen memory, which it and the
+firmware's framebuffer use, a USB controller's for its legacy emulation)
+the firmware may go on using with the device. The guest has it where the
+PC has it: `devmgr` hands it over (`pcidev`'s `reserved_memory`, a VMO of
+it), and the monitor maps it at its own addresses, where nothing else of
+the guest's is (from the end of its RAM to 3 GiB, from 4 GiB to 64 GiB,
+from 256 GiB; its memory map says it is reserved), before the function
+joins the guest's domain. The kernel lets it join only so: a device
+whose firmware's memory its domain does not have where it is stays the
+host's. A function whose firmware's memory is where the guest has
+something else (its RAM, its BARs) is not given. Under QEMU, a virtio function's DMA goes
 through the IOMMU only if the function says so (`iommu_platform`): xtask
 gives QEMU's virtio functions that, modern ones only, as a PC's are
 behind its IOMMU, and Veda's virtio drivers accept it
@@ -617,9 +629,9 @@ where Veda stands:
    (RMRRs), Intel's integrated graphics (its OpRegion, stolen memory and
    expected address 00:02.0), and the ACPI table that describes a
    laptop's microphones (Ghaf passes NHLT to its audio VM) all leak into
-   the driver VM. Devices with RMRRs stay the host's for now; the
-   firmware's tables for the guest (which has no ACPI) come with the
-   devices that need them.
+   the driver VM. A device's RMRRs are the guest's where they are on the
+   PC; the firmware's tables for the guest (which has no ACPI) come with
+   the devices that need them.
 8. **Reset is the weak point; restarting the whole VM is the fallback.**
    A function-level reset takes 100 ms and many devices have none (Qubes'
    users weaken isolation to get past it); AMD's GPUs need resets of
@@ -673,6 +685,7 @@ where Veda stands:
 | Sound: HD Audio controllers and their codecs, a laptop's speaker amplifiers on SPI (with their pins); Veda's own HD Audio, SPI and amplifier drivers gone | done under QEMU (`tests/ui/drivervm-audio.vts`, `drivervm-mic.vts`, `drivervm-pci.vts`, `startup.vts`); the amplifiers not yet tried on a PC |
 | The PC's firmware variables for the guest, read-only (the amplifiers' calibration) | done under QEMU (`tests/ui/drivervm-variables.vts`, variables added to OVMF's); not yet tried on a PC |
 | The audio DSP the built-in microphones are on: SOF from Tiger Lake to Raptor Lake, with the firmware's NHLT | done under QEMU (`tests/ui/drivervm-nhlt.vts`: the NHLT; QEMU has no DSP); not yet tried on a PC |
+| The memory the firmware keeps for devices (RMRRs), the guest's where the PC has it | done; QEMU's machine has none: not yet tried on a PC |
 
 **GPUs.** Linux's driver and Mesa's drive a GPU whole in the guest (lesson
 1): the guest's Linux has i915 and virtio-gpu, and its Mesa iris, virgl

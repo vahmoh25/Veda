@@ -158,6 +158,8 @@ pub struct Acpi {
     roots: Vec<(u8, Path)>,
     /// The firmware's [`DEVICE_TABLES`].
     device_tables: Vec<tables::Table>,
+    /// The memory the firmware keeps for devices (the DMAR table's RMRRs).
+    reserved: Vec<viommu::dmar::Reserved>,
 }
 
 impl Acpi {
@@ -204,8 +206,27 @@ impl Acpi {
                 String::new()
             }
         );
+        let reserved = match tables.iter().find(|t| t.is(b"DMAR")).map(|t| viommu::dmar::parse(&t.data)) {
+            Some(Ok(dmar)) => dmar.reserved,
+            Some(Err(e)) => {
+                println!("acpi: the DMAR table: {:?}", e);
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
         let device_tables = tables.into_iter().filter(|t| DEVICE_TABLES.iter().any(|d| t.is(d.signature))).collect();
-        Some(Acpi { ns, memory, roots, device_tables })
+        Some(Acpi { ns, memory, roots, device_tables, reserved })
+    }
+
+    /// The memory the firmware keeps for function `bus:slot.function`, as
+    /// `[start, end)` ranges.
+    pub fn reserved_memory(&self, bus: u8, slot: u8, function: u8) -> Vec<Range<u64>> {
+        let sid = (bus as u16) << 8 | (slot as u16) << 3 | function as u16;
+        self.reserved
+            .iter()
+            .filter(|r| r.segment == 0 && r.scopes.iter().any(|s| s.source_id() == Some(sid)))
+            .map(|r| r.base..r.limit + 1)
+            .collect()
     }
 
     /// The firmware's tables that describe the hardware of the function

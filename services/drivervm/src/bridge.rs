@@ -30,8 +30,8 @@ const MAX_HANDLES: usize = 16384;
 const MAX_VMO: u64 = 1 << 30;
 /// VMOs the guest maps go in this range of its physical address space,
 /// beyond its RAM.
-const WINDOW_BASE: u64 = 64 << 30;
-const WINDOW_SIZE: u64 = 64 << 30;
+pub const WINDOW_BASE: u64 = 64 << 30;
+pub const WINDOW_SIZE: u64 = 64 << 30;
 
 pub struct Bridge {
     table: Mutex<Table>,

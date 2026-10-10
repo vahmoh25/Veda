@@ -79,6 +79,21 @@ impl Domain {
         Ok(())
     }
 
+    /// The frame the page at `address` is mapped to, if it is.
+    fn translate(&self, address: u64) -> Option<u64> {
+        let iommu = self.iommu();
+        let mut t = self.root;
+        for level in (1..iommu.levels).rev() {
+            let e = table(t)[index(address, level)];
+            if !present(e) {
+                return None;
+            }
+            t = e & SL_ADDRESS;
+        }
+        let e = table(t)[index(address, 0)];
+        present(e).then_some(e & SL_ADDRESS)
+    }
+
     /// Removes the mapping of the page at `address`, if any. The page may
     /// be reused only after [`Domain::commit`].
     pub fn unmap(&mut self, address: u64) {
@@ -116,19 +131,27 @@ impl Domain {
     /// Puts device `sid` (a requester id on segment 0) in the domain. It
     /// must be in the host's domain, or in none (left by a guest that
     /// ended); not in another guest's. A device the firmware keeps memory
-    /// for (an RMRR: the firmware may go on using it with the device) stays
-    /// the host's.
+    /// for (an RMRR: the firmware may go on using it with the device, as a
+    /// GPU its stolen memory and the firmware's framebuffer in it) comes
+    /// only if the domain maps that memory where it is: else it stays the
+    /// host's.
     pub fn attach(&mut self, sid: u16) -> Result<(), Error> {
         let iommu = self.iommu();
         let (bus, dev, func) = (sid >> 8, (sid >> 3) & 0x1F, sid & 7);
-        if iommu.dmar.reserved.iter().any(|r| r.segment == 0 && r.scopes.iter().any(|s| s.source_id() == Some(sid))) {
-            crate::kwarn!(
-                "iommu: {:02x}:{:02x}.{} has memory the firmware keeps for it; it stays the host's",
-                bus,
-                dev,
-                func
-            );
-            return Err(Error::NotSupported);
+        let reserved = iommu.dmar.reserved.iter().filter(|r| r.segment == 0);
+        for r in reserved.filter(|r| r.scopes.iter().any(|s| s.source_id() == Some(sid))) {
+            if (r.base..=r.limit).step_by(4096).any(|page| self.translate(page) != Some(page)) {
+                crate::kwarn!(
+                    "iommu: {:02x}:{:02x}.{} has memory the firmware keeps for it ({:#x}-{:#x}), which the domain \
+                     does not have where it is; it stays the host's",
+                    bus,
+                    dev,
+                    func,
+                    r.base,
+                    r.limit
+                );
+                return Err(Error::NotSupported);
+            }
         }
         let u = iommu.dmar.unit_for(0, sid).ok_or(Error::NotSupported)?;
         let unit = &iommu.units[u];
