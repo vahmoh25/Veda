@@ -108,7 +108,10 @@ alone or with every process it started, and those they started: its job,
 as the Terminal's Ctrl+C ends a program.
 
 **Memory.** VMOs are the unit of memory. Anonymous VMOs are committed lazily
-on page faults. Address spaces map VMOs with per-mapping permissions, which
+on page faults; they may be write-combining, for a device that reads them
+without snooping the processor's caches (a display engine's pictures), and
+then the kernel leaves no line of them in a cache as it zeroes, reads or
+writes them. Address spaces map VMOs with per-mapping permissions, which
 `vm_protect` can change for any part of a mapping but never beyond what the
 handle the VMO was mapped with allows; parts of mappings can be unmapped.
 *Private memory* (`vm_allocate`) is a VMO that no handle reaches, made for
@@ -447,10 +450,11 @@ laptop's panel. Displays and GPUs are Linux's, in
   display whose memory holds the firmware's framebuffer (a laptop with two
   GPUs has outputs on both), and attaches it to the window system through
   `displaydev`: the compositor draws into pictures of Veda's memory, which
-  Linux's driver shows as they are (dma-bufs of the VMOs) and flips at the
-  vertical blank, the flips' times on Veda's clock. Until it attaches, and
-  whenever the driver VM is gone, the compositor draws into the
-  firmware's framebuffer.
+  Linux's driver shows as they are (dma-bufs of the VMOs, write-combining
+  memory) and flips at the vertical blank, the flips' times on Veda's
+  clock; scaled by the display engine to a display that has no mode of
+  their size (a laptop's panel). Until it attaches, and whenever the driver
+  VM is gone, the compositor draws into the firmware's framebuffer.
 * **GPUs.** The renderer (`guest/renderer`) carries out applications'
   OpenGL ES command streams on Mesa's Gallium driver of the GPU, over the
   GPU's Linux driver (see below).

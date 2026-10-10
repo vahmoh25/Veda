@@ -247,6 +247,50 @@ fn test_ipc_primitives() -> TestResult {
     check(r == Err(vabi::Error::TimedOut) && start.elapsed().as_millis() >= 25, "wait timeout")
 }
 
+/// Write-combining memory (a display engine's pictures, which it reads
+/// past the processor's caches) is as consistent as other memory: what a
+/// mapping writes is what the kernel reads of it, and the other way; the
+/// pages it commits read as zeros. Flags it does not know are refused.
+fn test_write_combining_memory() -> TestResult {
+    use vabi::{map_flags, vmo_flags};
+    const PAGE: usize = vabi::PAGE_SIZE;
+    let err = |e: vabi::Error| e.to_string();
+    let word = |i: usize| 0x5eda_0000_0000_0000 | i as u64;
+    let vmo = Vmo::create_with(4 * PAGE, vmo_flags::WRITE_COMBINING).map_err(err)?;
+    let mapped = Vmo::from_handle(vmo.0.duplicate(None).map_err(err)?);
+    let map = vrt::vm::Mapping::new(mapped, 4 * PAGE, map_flags::READ | map_flags::WRITE).map_err(err)?;
+    // The first page through the mapping (which commits it), the second
+    // through the kernel.
+    for i in 0..PAGE / 8 {
+        // SAFETY: inside the mapping, which is writable.
+        unsafe { (map.as_ptr() as *mut u64).add(i).write_volatile(word(i)) };
+    }
+    let pattern: Vec<u8> = (0..PAGE).map(|i| (i % 251) as u8).collect();
+    vmo.write(PAGE, &pattern).map_err(err)?;
+    let mut first = alloc::vec![0u8; PAGE];
+    vmo.read(0, &mut first).map_err(err)?;
+    let words = first.as_chunks::<8>().0;
+    check(
+        words.iter().enumerate().all(|(i, w)| u64::from_le_bytes(*w) == word(i)),
+        "the kernel reads what a mapping wrote",
+    )?;
+    // SAFETY: inside the mapping, which is readable.
+    let (second, rest) = unsafe {
+        (
+            core::slice::from_raw_parts(map.as_ptr().add(PAGE), PAGE),
+            core::slice::from_raw_parts(map.as_ptr().add(2 * PAGE), 2 * PAGE),
+        )
+    };
+    check(second == &pattern[..], "a mapping reads what the kernel wrote")?;
+    check(rest.iter().all(|&b| b == 0), "the pages it commits read as zeros")?;
+    let committed = Vmo::create_with(2 * PAGE, vmo_flags::COMMIT | vmo_flags::WRITE_COMBINING).map_err(err)?;
+    let mut zeros = alloc::vec![1u8; 2 * PAGE];
+    committed.read(0, &mut zeros).map_err(err)?;
+    check(zeros.iter().all(|&b| b == 0), "committed at once, they read as zeros")?;
+    // (No flag of `vmo_flags`.)
+    check(Vmo::create_with(PAGE, 1 << 2).err() == Some(vabi::Error::InvalidArgs), "flags it does not know are refused")
+}
+
 /// Interrupts a program raises: an edge signals each time; a
 /// level-triggered one stays raised until it is ended, which signals its
 /// event; a duplicate without `SIGNAL` cannot raise it.
@@ -290,8 +334,9 @@ fn main() -> i32 {
         _ => {}
     }
     println!("starting");
-    let tests: [Test; 16] = [
+    let tests: [Test; 17] = [
         ("ipc primitives", test_ipc_primitives),
+        ("write-combining memory", test_write_combining_memory),
         ("software interrupts", test_software_interrupts),
         ("sockets", posix::test_sockets),
         ("memory protection", posix::test_memory_protection),

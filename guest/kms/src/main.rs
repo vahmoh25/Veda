@@ -5,21 +5,25 @@
 //!
 //! The compositor draws its frames into pictures of Veda's memory, which
 //! this driver hands it, and Linux's driver shows them as they are:
-//! imported as dma-bufs (the bridge maps each picture into the guest; a
-//! display engine reads it through the IOMMU, a display without one copies
-//! it into its own memory as it updates). A driver that cannot import gets
-//! each picture copied into a buffer of its own before the flip. Flips
-//! happen at the vertical blank; their events, on Veda's clock, tell the
-//! compositor when frames were shown.
+//! imported as dma-bufs. The bridge maps each picture into the guest, and
+//! a display engine reads it through the IOMMU, without snooping the
+//! processor's caches (the pictures are write-combining memory); a display
+//! without one copies it into its own memory as it updates. A driver that
+//! cannot import gets each picture (cached memory then, which this driver
+//! reads) copied into a buffer of its own before the flip. Flips happen at
+//! the vertical blank; their events, on Veda's clock, tell the compositor
+//! when frames were shown.
 //!
-//! Linux's driver sets the mode itself: the compositor's screen
-//! (`displaydev::screen`), in the mode of that size the display prefers,
-//! from the compositor's first frame on. The display is the one the
-//! compositor draws on, whose memory holds the firmware's framebuffer (a
-//! machine may have more GPUs with outputs): the card whose device has it
-//! at the host's address of one of its BARs, which the monitor writes on
-//! the kernel's command line (`veda.device=`), and the compositor checks
-//! again.
+//! The mode is set at the compositor's first frame, with Linux's atomic
+//! modesetting: one of the size of the compositor's screen
+//! (`displaydev::screen`) if the display has one, the one it prefers of
+//! them; else the display's own (a laptop's panel has no other), the
+//! display engine scaling the pictures to it as their proportions allow,
+//! in its middle. The display is the one the compositor draws on, whose
+//! memory holds the firmware's framebuffer (a machine may have more GPUs
+//! with outputs): the card whose device has it at the host's address of
+//! one of its BARs, which the monitor writes on the kernel's command line
+//! (`veda.device=`), and the compositor checks again.
 
 mod drm;
 
@@ -34,7 +38,7 @@ use vproto::displaydev::{self, DisplayDevError, FlipState, Link, Screen, ScreenM
 use vrt::object::{Channel, Event, Vmo};
 use vrt::vm::Mapping;
 
-use drm::{Card, DumbMap, ModeInfo, Output};
+use drm::{Card, DumbMap, ModeInfo, Output, Place};
 
 /// How long to wait for Linux's driver to make the card.
 const CARD_WAIT: Duration = Duration::from_secs(10);
@@ -52,11 +56,23 @@ enum Shows {
     Copies { buffers: Vec<(u32, u32, DumbMap)>, pictures: Vec<Mapping>, next: usize },
 }
 
+impl Shows {
+    /// A framebuffer pictures are shown in.
+    fn any_framebuffer(&self) -> u32 {
+        match self {
+            Shows::Pictures(fbs) => fbs[0],
+            Shows::Copies { buffers, .. } => buffers[0].0,
+        }
+    }
+}
+
 /// The display, set up for the compositor's screen.
 struct Display {
     card: Card,
     output: Output,
     mode: ModeInfo,
+    /// Where the pictures go on the display.
+    place: Place,
     width: u32,
     height: u32,
     stride: u32,
@@ -146,62 +162,116 @@ fn idle() -> ! {
     }
 }
 
+/// The mode to show pictures of `size` in, of `modes` (a display's), and
+/// where they go on the display: a mode of their size if there is one (the
+/// one the display prefers of them, the fastest), all of it; else the
+/// display's own (the mode it prefers, else its largest), the pictures as
+/// large as their proportions let them be on it, in its middle.
+fn choose(modes: &[ModeInfo], size: (u32, u32)) -> Option<(ModeInfo, Place)> {
+    if size.0 == 0 || size.1 == 0 {
+        return None;
+    }
+    let exact = modes.iter().filter(|m| m.size() == size).max_by_key(|m| (m.preferred(), m.vrefresh));
+    let mode = exact.or_else(|| {
+        modes.iter().max_by_key(|m| {
+            let (w, h) = m.size();
+            (m.preferred(), w as u64 * h as u64, m.vrefresh)
+        })
+    })?;
+    Some((*mode, fit(size, mode.size())))
+}
+
+/// Where a picture of `size` goes on a display of `on`'s: as large as its
+/// proportions let it be, in the middle.
+fn fit((width, height): (u32, u32), on: (u32, u32)) -> Place {
+    let (w, h) = (width as u64, height as u64);
+    let (on_w, on_h) = (on.0 as u64, on.1 as u64);
+    // Its sides reach the display's together, or the one that reaches it
+    // first is as long as the display's.
+    let (w, h) = if on_w * h <= on_h * w { (on_w, h * on_w / w) } else { (w * on_h / h, on_h) };
+    let (w, h) = (w as u32, h as u32);
+    Place { x: (on.0 - w) / 2, y: (on.1 - h) / 2, width: w, height: h }
+}
+
+/// Pictures `card` shows as they are, imported: write-combining memory (a
+/// display engine reads it without snooping the processor's caches), and
+/// their framebuffers. Writable by devices: Linux's DRM drivers map what
+/// they import both ways (i915 does), though a display only reads it.
+fn imported(card: &Card, width: u32, height: u32, stride: u32, bytes: usize) -> Result<(Vec<Vmo>, Vec<u32>), String> {
+    let mut pictures = Vec::new();
+    let mut framebuffers = Vec::new();
+    for _ in 0..displaydev::MIN_PICTURES {
+        let fb = Vmo::create_with(bytes, vabi::vmo_flags::WRITE_COMBINING)
+            .map_err(|e| format!("no write-combining memory: {e}"))
+            .and_then(|vmo| {
+                let buf: OwnedFd = vrt::guest::dmabuf(vmo.raw(), 0, bytes as u64, true).map_err(|e| format!("{e}"))?;
+                let fb = card.import_framebuffer(buf.as_raw_fd(), width, height, stride).map_err(|e| format!("{e}"))?;
+                Ok((vmo, fb))
+            });
+        match fb {
+            Ok((vmo, fb)) => {
+                pictures.push(vmo);
+                framebuffers.push(fb);
+            }
+            Err(e) => {
+                for fb in framebuffers {
+                    card.remove_framebuffer(fb);
+                }
+                return Err(e);
+            }
+        }
+    }
+    Ok((pictures, framebuffers))
+}
+
+/// Pictures `card` gets copies of, in buffers of its own: memory this
+/// driver reads (cached), and how they are shown.
+fn copied(card: &Card, width: u32, height: u32, bytes: usize) -> Result<(Vec<Vmo>, Shows), String> {
+    let mut pictures = Vec::new();
+    let mut buffers = Vec::new();
+    let mut maps = Vec::new();
+    for _ in 0..displaydev::MIN_PICTURES {
+        let vmo = Vmo::create(bytes).map_err(|e| format!("no memory for a picture: {e}"))?;
+        buffers.push(card.dumb_framebuffer(width, height).map_err(|e| format!("no buffer: {e}"))?);
+        let read = Vmo::from_handle(vmo.0.duplicate(None).map_err(|e| format!("{e}"))?);
+        maps.push(Mapping::new(read, bytes, vabi::map_flags::READ).map_err(|e| format!("{e}"))?);
+        pictures.push(vmo);
+    }
+    Ok((pictures, Shows::Copies { buffers, pictures: maps, next: 0 }))
+}
+
 impl Display {
-    /// The display set up for `screen`: its mode, and the pictures.
+    /// The display set up for `screen`: its mode, where the pictures go,
+    /// and the pictures.
     fn new(card: Card, output: Output, location: &str, screen: ScreenMode) -> Result<Display, String> {
         if screen.rgbx {
             return Err("the compositor's pixels hold red in the low byte; the display takes XRGB".into());
         }
-        let mode = output
-            .modes
-            .iter()
-            .filter(|m| (m.hdisplay as u32, m.vdisplay as u32) == (screen.width, screen.height))
-            .max_by_key(|m| (m.preferred(), m.vrefresh))
-            .copied()
-            .ok_or_else(|| format!("the display has no {}x{} mode", screen.width, screen.height))?;
         let (width, height) = (screen.width, screen.height);
+        let (mode, place) = choose(&output.modes, (width, height))
+            .ok_or_else(|| format!("the display has no mode to show {width}x{height} pictures in"))?;
         let stride = (width * 4).next_multiple_of(STRIDE_ALIGN);
         let bytes = (stride as usize * height as usize).next_multiple_of(4096);
-        let mut pictures = Vec::new();
-        let mut framebuffers = Vec::new();
-        let mut imports = true;
-        for _ in 0..displaydev::MIN_PICTURES {
-            let vmo = Vmo::create(bytes).map_err(|e| format!("no memory for a picture: {e}"))?;
-            if imports {
-                let fb = vrt::guest::dmabuf(vmo.raw(), 0, bytes as u64, false).map_err(|e| format!("{e}")).and_then(
-                    |buf: OwnedFd| {
-                        card.import_framebuffer(buf.as_raw_fd(), width, height, stride).map_err(|e| format!("{e}"))
-                    },
-                );
-                match fb {
-                    Ok(fb) => framebuffers.push(fb),
-                    Err(e) => {
-                        println!("kms: {} cannot show Veda's memory ({e}); it gets copies", card.driver);
-                        imports = false;
-                    }
-                }
+        let (pictures, shows) = match imported(&card, width, height, stride, bytes) {
+            Ok((pictures, framebuffers)) => (pictures, Shows::Pictures(framebuffers)),
+            Err(e) => {
+                println!("kms: {} cannot show Veda's memory ({e}); it gets copies", card.driver);
+                copied(&card, width, height, bytes)?
             }
-            pictures.push(vmo);
-        }
-        let shows = if imports {
-            Shows::Pictures(framebuffers)
-        } else {
-            for fb in framebuffers {
-                card.remove_framebuffer(fb);
-            }
-            let mut buffers = Vec::new();
-            let mut maps = Vec::new();
-            for p in &pictures {
-                let (fb, pitch, map) = card.dumb_framebuffer(width, height).map_err(|e| format!("no buffer: {e}"))?;
-                buffers.push((fb, pitch, map));
-                let vmo = Vmo::from_handle(p.0.duplicate(None).map_err(|e| format!("{e}"))?);
-                maps.push(Mapping::new(vmo, bytes, vabi::map_flags::READ).map_err(|e| format!("{e}"))?);
-            }
-            Shows::Copies { buffers, pictures: maps, next: 0 }
         };
+        // Before the compositor counts on the display: whether its driver
+        // takes the mode, and the pictures where they go (scaled, it may
+        // not).
+        card.test_mode(&output, shows.any_framebuffer(), (width, height), &mode, place).map_err(|e| {
+            let (w, h) = mode.size();
+            format!(
+                "{} cannot show {width}x{height} pictures at {}x{} in a {w}x{h} mode: {e}",
+                card.driver, place.width, place.height
+            )
+        })?;
         let name = format!("{} (Linux)", card.driver);
         let firmware = host_addresses(location);
-        Ok(Display { card, output, mode, width, height, stride, pictures, shows, on: false, name, firmware })
+        Ok(Display { card, output, mode, place, width, height, stride, pictures, shows, on: false, name, firmware })
     }
 
     /// Shows `picture` from the next vertical blank on (from now on if the
@@ -222,7 +292,7 @@ impl Display {
             }
         };
         if !self.on {
-            self.card.set_mode(&self.output, fb, &self.mode)?;
+            self.card.set_mode(&self.output, fb, (self.width, self.height), &self.mode, self.place)?;
             self.on = true;
             return Ok(false);
         }
@@ -369,14 +439,20 @@ fn main() {
                 Ok(d) => {
                     let how = if matches!(d.shows, Shows::Pictures(_)) { "shown as they are" } else { "copied" };
                     let millihertz = 1_000_000_000_000 / d.mode.period_ns().max(1);
+                    let (w, h) = d.mode.size();
                     println!(
-                        "kms: {}: {}x{} at {}.{:03} Hz, the compositor's pictures {how}",
+                        "kms: {}: {w}x{h} at {}.{:03} Hz, the compositor's pictures {how}",
                         d.name,
-                        d.width,
-                        d.height,
                         millihertz / 1000,
                         millihertz % 1000
                     );
+                    let p = d.place;
+                    if (p.width, p.height) != (d.width, d.height) {
+                        println!(
+                            "kms: {}: the compositor's {}x{} scaled to {}x{} at ({}, {})",
+                            d.name, d.width, d.height, p.width, p.height, p.x, p.y
+                        );
+                    }
                     display = Some(d);
                 }
                 Err(e) => {
@@ -402,5 +478,56 @@ fn main() {
                 std::thread::sleep(Duration::from_secs(1));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mode(width: u16, height: u16, hz: u32, preferred: bool) -> ModeInfo {
+        let mut m = ModeInfo::default();
+        (m.hdisplay, m.vdisplay, m.vrefresh) = (width, height, hz);
+        if preferred {
+            m.kind |= drm::MODE_TYPE_PREFERRED;
+        }
+        m
+    }
+
+    fn place(x: u32, y: u32, width: u32, height: u32) -> Place {
+        Place { x, y, width, height }
+    }
+
+    #[test]
+    fn a_mode_of_the_pictures_size_shows_them_whole() {
+        let modes = [mode(1920, 1080, 60, false), mode(1280, 800, 60, false), mode(1280, 800, 75, false)];
+        let (m, at) = choose(&modes, (1280, 800)).unwrap();
+        assert_eq!((m.size(), m.vrefresh, at), ((1280, 800), 75, place(0, 0, 1280, 800)));
+        // The display's preferred one among them, before a faster one.
+        let modes = [mode(1280, 800, 75, false), mode(1280, 800, 60, true)];
+        assert_eq!(choose(&modes, (1280, 800)).unwrap().0.vrefresh, 60);
+    }
+
+    #[test]
+    fn else_the_displays_own_mode_with_the_pictures_scaled() {
+        // A laptop's panel: its one mode, twice the pictures' width; their
+        // proportions leave rows above and below.
+        let panel = [mode(3840, 2400, 60, true), mode(3840, 2400, 48, false)];
+        let (m, at) = choose(&panel, (1920, 1080)).unwrap();
+        assert_eq!((m.size(), m.vrefresh, at), ((3840, 2400), 60, place(0, 120, 3840, 2160)));
+        assert_eq!(choose(&panel, (1920, 1200)).unwrap().1, place(0, 0, 3840, 2400));
+        // Columns left and right; smaller than the pictures (1366x768 is a
+        // little wider than 16:9).
+        assert_eq!(fit((1280, 800), (1920, 1080)), place(96, 0, 1728, 1080));
+        assert_eq!(fit((1920, 1080), (1366, 768)), place(0, 0, 1365, 768));
+        // No preferred mode: the largest.
+        let monitor = [mode(1024, 768, 60, false), mode(2560, 1440, 60, false), mode(1920, 1080, 60, false)];
+        assert_eq!(choose(&monitor, (1280, 800)).unwrap().0.size(), (2560, 1440));
+    }
+
+    #[test]
+    fn nothing_to_show_in_no_mode() {
+        assert!(choose(&[], (1280, 800)).is_none());
+        assert!(choose(&[mode(1280, 800, 60, true)], (0, 800)).is_none());
     }
 }

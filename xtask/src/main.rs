@@ -810,9 +810,9 @@ fn test(o: &Options) -> Result {
         }
         util::run(&mut cmd)?;
     }
-    // The driver VM's programs' logic (touchpads, sound cards' devices), on
-    // Linux as they run.
-    for package in ["guest-input", "guest-alsa"] {
+    // The driver VM's programs' logic (touchpads, sound cards' devices, a
+    // display's mode and where pictures go on it), on Linux as they run.
+    for package in ["guest-input", "guest-alsa", "guest-kms"] {
         util::run(util::cargo().args(["test", "--quiet", "--package", package, "--target", linux::GUEST_TARGET]))?;
     }
     // And through Veda's renderer, where it has been built: on softpipe,

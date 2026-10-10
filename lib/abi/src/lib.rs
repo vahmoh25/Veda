@@ -655,6 +655,11 @@ pub struct VmoInfo {
 pub mod vmo_flags {
     /// Commit (allocate) all pages immediately instead of on first touch.
     pub const COMMIT: usize = 1 << 0;
+    /// Map the memory write-combining, for a device that reads it without
+    /// snooping the CPU's caches (a display engine scanning a picture out):
+    /// what the CPU writes goes to memory, not into its caches. Reading the
+    /// memory from the CPU is slow.
+    pub const WRITE_COMBINING: usize = 1 << 1;
 }
 
 /// Flags for `vmo_create_contiguous`.

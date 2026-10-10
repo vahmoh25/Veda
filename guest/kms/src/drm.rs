@@ -1,7 +1,9 @@
 //! Linux's DRM, the part a display driver of Veda's needs: the card's
 //! connectors and modes, framebuffers of imported memory (PRIME) or of the
-//! card's own (dumb buffers), setting a mode, page flips and their events.
-//! Its ioctls as `drm.h` and `drm_mode.h` define them; no library.
+//! card's own (dumb buffers), setting a mode with the picture where it goes
+//! on the display (atomically: the primary plane, scaled by the display
+//! engine when the picture is not the mode's size), page flips and their
+//! events. Its ioctls as `drm.h` and `drm_mode.h` define them; no library.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -63,7 +65,7 @@ struct CardRes {
 
 /// `drm_mode_modeinfo`.
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ModeInfo {
     /// Pixel clock, kHz.
     pub clock: u32,
@@ -93,23 +95,14 @@ impl ModeInfo {
     pub fn preferred(&self) -> bool {
         self.kind & MODE_TYPE_PREFERRED != 0
     }
+
+    /// Its width and height.
+    pub fn size(&self) -> (u32, u32) {
+        (self.hdisplay as u32, self.vdisplay as u32)
+    }
 }
 
-const MODE_TYPE_PREFERRED: u32 = 1 << 3;
-
-/// `drm_mode_crtc`.
-#[repr(C)]
-struct Crtc {
-    set_connectors: u64,
-    count_connectors: u32,
-    crtc_id: u32,
-    fb_id: u32,
-    x: u32,
-    y: u32,
-    gamma_size: u32,
-    mode_valid: u32,
-    mode: ModeInfo,
-}
+pub const MODE_TYPE_PREFERRED: u32 = 1 << 3;
 
 /// `drm_mode_get_encoder`.
 #[repr(C)]
@@ -191,13 +184,88 @@ struct MapDumb {
     offset: u64,
 }
 
+/// `drm_mode_get_plane_res`.
+#[repr(C)]
+#[derive(Default)]
+struct PlaneRes {
+    plane_ids: u64,
+    count_planes: u32,
+    pad: u32,
+}
+
+/// `drm_mode_get_plane`.
+#[repr(C)]
+#[derive(Default)]
+struct GetPlane {
+    plane_id: u32,
+    crtc_id: u32,
+    fb_id: u32,
+    possible_crtcs: u32,
+    gamma_size: u32,
+    count_format_types: u32,
+    format_types: u64,
+}
+
+/// `drm_mode_obj_get_properties`.
+#[repr(C)]
+#[derive(Default)]
+struct ObjProperties {
+    props: u64,
+    prop_values: u64,
+    count_props: u32,
+    obj_id: u32,
+    obj_type: u32,
+    pad: u32,
+}
+
+/// `drm_mode_get_property`.
+#[repr(C)]
+#[derive(Default)]
+struct GetProperty {
+    values: u64,
+    enum_blobs: u64,
+    prop_id: u32,
+    flags: u32,
+    name: [u8; 32],
+    count_values: u32,
+    count_enum_blobs: u32,
+}
+
+/// `drm_mode_create_blob`.
+#[repr(C)]
+#[derive(Default)]
+struct CreateBlob {
+    data: u64,
+    length: u32,
+    blob_id: u32,
+}
+
+/// `drm_mode_atomic`.
+#[repr(C)]
+#[derive(Default)]
+struct Atomic {
+    flags: u32,
+    count_objs: u32,
+    objs: u64,
+    count_props: u64,
+    props: u64,
+    prop_values: u64,
+    reserved: u64,
+    user_data: u64,
+}
+
 const _: () = assert!(size_of::<Version>() == 64);
 const _: () = assert!(size_of::<CardRes>() == 64);
 const _: () = assert!(size_of::<ModeInfo>() == 68);
-const _: () = assert!(size_of::<Crtc>() == 104);
 const _: () = assert!(size_of::<GetConnector>() == 80);
 const _: () = assert!(size_of::<FbCmd2>() == 104);
 const _: () = assert!(size_of::<PageFlip>() == 24);
+const _: () = assert!(size_of::<PlaneRes>() == 16);
+const _: () = assert!(size_of::<GetPlane>() == 32);
+const _: () = assert!(size_of::<ObjProperties>() == 32);
+const _: () = assert!(size_of::<GetProperty>() == 64);
+const _: () = assert!(size_of::<CreateBlob>() == 16);
+const _: () = assert!(size_of::<Atomic>() == 56);
 
 const VERSION: u32 = rw(0x00, size_of::<Version>());
 const GEM_CLOSE: u32 = ioc(1, DRM, 0x09, 8);
@@ -205,7 +273,6 @@ const GET_CAP: u32 = rw(0x0C, size_of::<Cap>());
 const SET_CLIENT_CAP: u32 = ioc(1, DRM, 0x0D, size_of::<Cap>());
 const PRIME_FD_TO_HANDLE: u32 = rw(0x2E, size_of::<PrimeHandle>());
 const MODE_GETRESOURCES: u32 = rw(0xA0, size_of::<CardRes>());
-const MODE_SETCRTC: u32 = rw(0xA2, size_of::<Crtc>());
 const MODE_GETENCODER: u32 = rw(0xA6, size_of::<Encoder>());
 const MODE_GETCONNECTOR: u32 = rw(0xA7, size_of::<GetConnector>());
 const MODE_RMFB: u32 = rw(0xAF, 4);
@@ -213,20 +280,44 @@ const MODE_PAGE_FLIP: u32 = rw(0xB0, size_of::<PageFlip>());
 const MODE_CREATE_DUMB: u32 = rw(0xB2, size_of::<CreateDumb>());
 const MODE_MAP_DUMB: u32 = rw(0xB3, size_of::<MapDumb>());
 const MODE_ADDFB2: u32 = rw(0xB8, size_of::<FbCmd2>());
+const MODE_GETPROPERTY: u32 = rw(0xAA, size_of::<GetProperty>());
+const MODE_GETPLANERESOURCES: u32 = rw(0xB5, size_of::<PlaneRes>());
+const MODE_GETPLANE: u32 = rw(0xB6, size_of::<GetPlane>());
+const MODE_OBJ_GETPROPERTIES: u32 = rw(0xB9, size_of::<ObjProperties>());
+const MODE_ATOMIC: u32 = rw(0xBC, size_of::<Atomic>());
+const MODE_CREATEPROPBLOB: u32 = rw(0xBD, size_of::<CreateBlob>());
+const MODE_DESTROYPROPBLOB: u32 = rw(0xBE, 4);
 
 /// `DRM_FORMAT_XRGB8888`: blue in the low byte.
 pub const XRGB8888: u32 = u32::from_le_bytes(*b"XR24");
 const CAP_TIMESTAMP_MONOTONIC: u64 = 0x6;
-const CLIENT_CAP_UNIVERSAL_PLANES: u64 = 2;
+const CLIENT_CAP_ATOMIC: u64 = 3;
+const OBJECT_CRTC: u32 = 0xCCCC_CCCC;
+const OBJECT_CONNECTOR: u32 = 0xC0C0_C0C0;
+const OBJECT_PLANE: u32 = 0xEEEE_EEEE;
+const PLANE_TYPE_PRIMARY: u64 = 1;
+const ATOMIC_TEST_ONLY: u32 = 0x100;
+const ATOMIC_ALLOW_MODESET: u32 = 0x400;
 const MODE_CONNECTED: u32 = 1;
 const PAGE_FLIP_EVENT: u32 = 1;
 const EVENT_FLIP_COMPLETE: u32 = 2;
 
-/// A connected output: its connector, the CRTC that drives it, its modes.
+/// A connected output: its connector, the CRTC that drives it (and that
+/// CRTC's place in the card's list, which planes name it by), its modes.
 pub struct Output {
     pub connector: u32,
     pub crtc: u32,
+    crtc_index: u32,
     pub modes: Vec<ModeInfo>,
+}
+
+/// Where on the display a picture goes: its corner and its size there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Place {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// A page flip that completed: the request's own number, and the
@@ -265,16 +356,18 @@ impl Card {
         let driver = String::from_utf8_lossy(&name[..len]).into_owned();
         let card = Card { file, driver };
         // Flip timestamps on the monotonic clock (Linux's default), and
-        // the planes as they are.
+        // atomic modesetting, which places a picture on the display with
+        // the planes (all of them, the primary one among them).
         let mut cap = Cap { capability: CAP_TIMESTAMP_MONOTONIC, value: 0 };
         // SAFETY: the kernel fills in the capability's value.
         unsafe { ioctl(card.fd(), GET_CAP, &mut cap as *mut Cap as usize)? };
         if cap.value != 1 {
             return Err(io::Error::other("flip timestamps are not on the monotonic clock"));
         }
-        let mut set = Cap { capability: CLIENT_CAP_UNIVERSAL_PLANES, value: 0 };
+        let mut set = Cap { capability: CLIENT_CAP_ATOMIC, value: 1 };
         // SAFETY: the kernel reads the capability.
-        let _ = unsafe { ioctl(card.fd(), SET_CLIENT_CAP, &mut set as *mut Cap as usize) };
+        unsafe { ioctl(card.fd(), SET_CLIENT_CAP, &mut set as *mut Cap as usize) }
+            .map_err(|e| io::Error::other(format!("no atomic modesetting: {e}")))?;
         Ok(card)
     }
 
@@ -313,8 +406,7 @@ impl Card {
             if c.connection != MODE_CONNECTED || c.count_modes == 0 {
                 continue;
             }
-            // SAFETY: plain data, which the kernel fills in.
-            let mut modes: Vec<ModeInfo> = vec![unsafe { core::mem::zeroed() }; c.count_modes as usize];
+            let mut modes = vec![ModeInfo::default(); c.count_modes as usize];
             let mut its_encoders = vec![0u32; c.count_encoders as usize];
             let mut fill = GetConnector {
                 connector_id: id,
@@ -335,14 +427,14 @@ impl Card {
                     .iter()
                     .enumerate()
                     .find(|&(i, c)| enc.possible_crtcs & (1 << i) != 0 && !taken.contains(c))
-                    .map(|(_, &c)| c);
+                    .map(|(i, &c)| (c, i as u32));
                 if crtc.is_some() {
                     break;
                 }
             }
-            if let Some(crtc) = crtc {
+            if let Some((crtc, crtc_index)) = crtc {
                 taken.push(crtc);
-                outputs.push(Output { connector: id, crtc, modes });
+                outputs.push(Output { connector: id, crtc, crtc_index, modes });
             }
         }
         Ok(outputs)
@@ -385,21 +477,124 @@ impl Card {
         let _ = self.call(MODE_RMFB, &mut id);
     }
 
-    /// Shows framebuffer `fb` on `output` in `mode`.
-    pub fn set_mode(&self, output: &Output, fb: u32, mode: &ModeInfo) -> io::Result<()> {
-        let mut connector = output.connector;
-        let mut c = Crtc {
-            set_connectors: &mut connector as *mut u32 as u64,
-            count_connectors: 1,
-            crtc_id: output.crtc,
-            fb_id: fb,
-            x: 0,
-            y: 0,
-            gamma_size: 0,
-            mode_valid: 1,
-            mode: *mode,
+    /// Sets `output`'s `mode`, showing framebuffer `fb` (`size`, its width
+    /// and height) at `at`: on the CRTC's primary plane, which the display
+    /// engine scales if `at` is not the framebuffer's size. Its flips keep
+    /// the place.
+    pub fn set_mode(&self, output: &Output, fb: u32, size: (u32, u32), mode: &ModeInfo, at: Place) -> io::Result<()> {
+        self.modeset(output, fb, size, mode, at, ATOMIC_ALLOW_MODESET)
+    }
+
+    /// What [`Card::set_mode`] would do, checked by Linux's driver: the
+    /// error it would end in, if any. Changes nothing.
+    pub fn test_mode(&self, output: &Output, fb: u32, size: (u32, u32), mode: &ModeInfo, at: Place) -> io::Result<()> {
+        self.modeset(output, fb, size, mode, at, ATOMIC_TEST_ONLY | ATOMIC_ALLOW_MODESET)
+    }
+
+    fn modeset(
+        &self,
+        output: &Output,
+        fb: u32,
+        size: (u32, u32),
+        mode: &ModeInfo,
+        at: Place,
+        flags: u32,
+    ) -> io::Result<()> {
+        let plane = self.primary_plane(output)?;
+        let blob = self.mode_blob(mode)?;
+        let mut commit = Commit::default();
+        let connector = self.property_ids(output.connector, OBJECT_CONNECTOR)?;
+        commit.set(output.connector, &connector, "CRTC_ID", output.crtc as u64)?;
+        let crtc = self.property_ids(output.crtc, OBJECT_CRTC)?;
+        commit.set(output.crtc, &crtc, "MODE_ID", blob as u64)?;
+        commit.set(output.crtc, &crtc, "ACTIVE", 1)?;
+        let planes = self.property_ids(plane, OBJECT_PLANE)?;
+        let (width, height) = size;
+        for (name, value) in [
+            ("FB_ID", fb as u64),
+            ("CRTC_ID", output.crtc as u64),
+            // The source's in 16.16 fixed point, the display's in pixels.
+            ("SRC_X", 0),
+            ("SRC_Y", 0),
+            ("SRC_W", (width as u64) << 16),
+            ("SRC_H", (height as u64) << 16),
+            ("CRTC_X", at.x as u64),
+            ("CRTC_Y", at.y as u64),
+            ("CRTC_W", at.width as u64),
+            ("CRTC_H", at.height as u64),
+        ] {
+            commit.set(plane, &planes, name, value)?;
+        }
+        let done = commit.commit(self, flags);
+        // The CRTC's state holds the mode now, if it is set.
+        let mut id = blob;
+        let _ = self.call(MODE_DESTROYPROPBLOB, &mut id);
+        done
+    }
+
+    /// The primary plane of `output`'s CRTC.
+    fn primary_plane(&self, output: &Output) -> io::Result<u32> {
+        let mut res = PlaneRes::default();
+        self.call(MODE_GETPLANERESOURCES, &mut res)?;
+        let mut ids = vec![0u32; res.count_planes as usize];
+        let mut fill = PlaneRes { plane_ids: ids.as_mut_ptr() as u64, count_planes: res.count_planes, pad: 0 };
+        self.call(MODE_GETPLANERESOURCES, &mut fill)?;
+        ids.truncate(fill.count_planes.min(res.count_planes) as usize);
+        for id in ids {
+            let mut p = GetPlane { plane_id: id, ..GetPlane::default() };
+            self.call(MODE_GETPLANE, &mut p)?;
+            if p.possible_crtcs & (1 << output.crtc_index) == 0 {
+                continue;
+            }
+            let primary = self
+                .properties(id, OBJECT_PLANE)?
+                .iter()
+                .any(|(name, _, value)| name == "type" && *value == PLANE_TYPE_PRIMARY);
+            if primary {
+                return Ok(id);
+            }
+        }
+        Err(io::Error::other("its CRTC has no primary plane"))
+    }
+
+    /// The properties of object `id` (of `kind`): their names, ids and
+    /// values.
+    fn properties(&self, id: u32, kind: u32) -> io::Result<Vec<(String, u32, u64)>> {
+        let mut count = ObjProperties { obj_id: id, obj_type: kind, ..ObjProperties::default() };
+        self.call(MODE_OBJ_GETPROPERTIES, &mut count)?;
+        let mut ids = vec![0u32; count.count_props as usize];
+        let mut values = vec![0u64; count.count_props as usize];
+        let mut fill = ObjProperties {
+            props: ids.as_mut_ptr() as u64,
+            prop_values: values.as_mut_ptr() as u64,
+            count_props: count.count_props,
+            obj_id: id,
+            obj_type: kind,
+            pad: 0,
         };
-        self.call(MODE_SETCRTC, &mut c)
+        self.call(MODE_OBJ_GETPROPERTIES, &mut fill)?;
+        let n = fill.count_props.min(count.count_props) as usize;
+        let mut out = Vec::with_capacity(n);
+        for (&prop, &value) in ids[..n].iter().zip(&values[..n]) {
+            let mut p = GetProperty { prop_id: prop, ..GetProperty::default() };
+            self.call(MODE_GETPROPERTY, &mut p)?;
+            let end = p.name.iter().position(|&b| b == 0).unwrap_or(p.name.len());
+            out.push((String::from_utf8_lossy(&p.name[..end]).into_owned(), prop, value));
+        }
+        Ok(out)
+    }
+
+    /// The ids of object `id`'s properties, by name.
+    fn property_ids(&self, id: u32, kind: u32) -> io::Result<Vec<(String, u32)>> {
+        Ok(self.properties(id, kind)?.into_iter().map(|(name, prop, _)| (name, prop)).collect())
+    }
+
+    /// A property blob holding `mode` (for a CRTC's `MODE_ID`).
+    fn mode_blob(&self, mode: &ModeInfo) -> io::Result<u32> {
+        let mut b =
+            CreateBlob { data: mode as *const ModeInfo as u64, length: size_of::<ModeInfo>() as u32, blob_id: 0 };
+        self.call(MODE_CREATEPROPBLOB, &mut b)?;
+        Ok(b.blob_id)
     }
 
     /// Shows `fb` from the next vertical blank on; [`Card::events`] says
@@ -438,6 +633,49 @@ impl Card {
             rest = &rest[len..];
         }
         Ok(out)
+    }
+}
+
+/// An atomic commit being made: the objects whose properties it sets, and
+/// their values.
+#[derive(Default)]
+struct Commit {
+    objects: Vec<(u32, Vec<(u32, u64)>)>,
+}
+
+impl Commit {
+    /// Sets `object`'s property `name` (one of `ids`, its own) to `value`.
+    fn set(&mut self, object: u32, ids: &[(String, u32)], name: &str, value: u64) -> io::Result<()> {
+        let prop = ids
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|&(_, id)| id)
+            .ok_or_else(|| io::Error::other(format!("no property {name} on object {object}")))?;
+        match self.objects.iter_mut().find(|(o, _)| *o == object) {
+            Some((_, props)) => props.push((prop, value)),
+            None => self.objects.push((object, vec![(prop, value)])),
+        }
+        Ok(())
+    }
+
+    /// Carries it out, all at once (with `flags`).
+    fn commit(&self, card: &Card, flags: u32) -> io::Result<()> {
+        // The objects, how many properties each sets, then those, object by
+        // object, and their values.
+        let objects: Vec<u32> = self.objects.iter().map(|&(o, _)| o).collect();
+        let counts: Vec<u32> = self.objects.iter().map(|(_, p)| p.len() as u32).collect();
+        let (props, values): (Vec<u32>, Vec<u64>) = self.objects.iter().flat_map(|(_, p)| p.iter().copied()).unzip();
+        let mut a = Atomic {
+            flags,
+            count_objs: objects.len() as u32,
+            objs: objects.as_ptr() as u64,
+            count_props: counts.as_ptr() as u64,
+            props: props.as_ptr() as u64,
+            prop_values: values.as_ptr() as u64,
+            reserved: 0,
+            user_data: 0,
+        };
+        card.call(MODE_ATOMIC, &mut a)
     }
 }
 

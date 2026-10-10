@@ -46,12 +46,13 @@ impl Vmo {
         })
     }
 
-    pub fn new_anonymous(size: u64) -> Option<Arc<Vmo>> {
+    /// Zero-filled memory, mapped with `cache`.
+    pub fn new_anonymous(size: u64, cache: Cache) -> Option<Arc<Vmo>> {
         let size = super::checked_page_align_up(size)?;
         if size == 0 || size > MAX_VMO_SIZE {
             return None;
         }
-        Some(Vmo::new(size, VmoKind::Anonymous, Cache::WriteBack))
+        Some(Vmo::new(size, VmoKind::Anonymous, cache))
     }
 
     pub fn new_physical(base: u64, size: u64, cache: Cache) -> Arc<Vmo> {
@@ -66,13 +67,8 @@ impl Vmo {
             return None;
         }
         let base = phys::alloc_contiguous(size / PAGE_SIZE, PAGE_SIZE, max_addr)?;
-        if cache != Cache::WriteBack {
-            // It was zeroed through the direct map (write-back): none of
-            // those lines may stay in a cache, to be written back later over
-            // what is written to the memory without the caches.
-            crate::arch::cpu::flush_cache_range(phys_to_virt(base), size);
-        }
         let vmo = Vmo::new(size, VmoKind::Contiguous { base }, cache);
+        vmo.flush(base, size);
         vmo.committed.store(size, Ordering::Relaxed);
         Some(vmo)
     }
@@ -91,6 +87,18 @@ impl Vmo {
 
     pub fn committed_bytes(&self) -> u64 {
         self.committed.load(Ordering::Relaxed)
+    }
+
+    /// If the VMO is RAM mapped without the caches: makes memory hold what
+    /// the kernel wrote to `len` bytes of it at `phys` through the direct
+    /// map (write-back), and no cache keep a line of them. Such a line
+    /// would be written back later over what was written to the memory
+    /// past the caches, or read in place of that.
+    fn flush(&self, phys: u64, len: u64) {
+        let ram = !matches!(self.kind, VmoKind::Physical { .. });
+        if ram && self.cache != Cache::WriteBack {
+            crate::arch::cpu::flush_cache_range(phys_to_virt(phys), len);
+        }
     }
 
     /// Physical address of the page containing `offset`, committing a zeroed
@@ -112,6 +120,7 @@ impl Vmo {
                     return None;
                 }
                 let f = phys::alloc_zeroed()?;
+                self.flush(f, PAGE_SIZE);
                 pages.insert(page, f);
                 self.committed.fetch_add(PAGE_SIZE, Ordering::Relaxed);
                 Some(f)
@@ -158,14 +167,15 @@ impl Vmo {
             let in_page = (pos % PAGE_SIZE) as usize;
             let n = (PAGE_SIZE as usize - in_page).min(out.len() - done);
             match self.page(pos, false) {
-                // SAFETY: the frame is direct-mapped and `n` stays in the page.
-                Some(f) => unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        (phys_to_virt(f) + in_page as u64) as *const u8,
-                        out.as_mut_ptr().add(done),
-                        n,
-                    )
-                },
+                Some(f) => {
+                    let at = f + in_page as u64;
+                    self.flush(at, n as u64);
+                    // SAFETY: the frame is direct-mapped and `n` stays in the
+                    // page.
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(phys_to_virt(at) as *const u8, out.as_mut_ptr().add(done), n)
+                    }
+                }
                 None => out[done..done + n].fill(0),
             }
             done += n;
@@ -184,14 +194,10 @@ impl Vmo {
             let in_page = (pos % PAGE_SIZE) as usize;
             let n = (PAGE_SIZE as usize - in_page).min(data.len() - done);
             let Some(f) = self.page(pos, true) else { return false };
+            let at = f + in_page as u64;
             // SAFETY: as in `read`.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    data.as_ptr().add(done),
-                    (phys_to_virt(f) + in_page as u64) as *mut u8,
-                    n,
-                )
-            };
+            unsafe { core::ptr::copy_nonoverlapping(data.as_ptr().add(done), phys_to_virt(at) as *mut u8, n) };
+            self.flush(at, n as u64);
             done += n;
         }
         true

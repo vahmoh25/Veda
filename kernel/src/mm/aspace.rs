@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use vabi::Error;
 
-use super::paging::{self, Flags};
+use super::paging::{self, Cache, Flags};
 use super::vmo::{Frames, Vmo, VmoKind};
 use super::{PAGE_SIZE, page_align_down};
 use crate::sync::SpinLock;
@@ -146,7 +146,7 @@ impl AddressSpace {
         if len == 0 {
             return Err(Error::InvalidArgs);
         }
-        let vmo = Vmo::new_anonymous(len).ok_or(Error::NoMemory)?;
+        let vmo = Vmo::new_anonymous(len, Cache::WriteBack).ok_or(Error::NoMemory)?;
         let len = vmo.size();
         self.insert(
             Mapping { start: 0, len, vmo, vmo_offset: 0, perms, max: Perms::ALL, private: true },

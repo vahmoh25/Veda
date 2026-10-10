@@ -130,11 +130,11 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   output, or feed it back into the microphone, boot with it.
 * Displays and GPUs are Linux's, in the driver VM, as are input devices,
   USB and networks: `dmesg drivervm` shows what Linux and Veda's drivers
-  for Linux say (the display `kms` drives, whether it shows the
-  compositor's pictures as they are or copies them; the GPU the renderer
-  serves `gpu` on; the input devices `input` takes, the cards `net`
-  attaches), and `dmesg compositor` the display attaching. QEMU's VGA is a
-  display that flips once Linux drives it.
+  for Linux say (the display `kms` drives, its mode, whether it shows the
+  compositor's pictures as they are or copies them, and scaled to what; the
+  GPU the renderer serves `gpu` on; the input devices `input` takes, the
+  cards `net` attaches), and `dmesg compositor` the display attaching.
+  QEMU's VGA is a display that flips once Linux drives it.
   `expect-same A.png B.png [left top right bottom]` fails unless two
   screenshots are alike, pixel for pixel, in a region (fractions of the
   screen): `tests/ui/drivervm-display.vts` checks with it that a window

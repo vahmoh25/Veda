@@ -13,7 +13,11 @@ const VMO_RIGHTS: Rights =
     Rights(Rights::BASIC.0 | Rights::READ.0 | Rights::WRITE.0 | Rights::MAP.0 | Rights::EXECUTE.0 | Rights::GET_INFO.0);
 
 pub fn vmo_create(size: usize, flags: usize) -> SysResult {
-    let vmo = Vmo::new_anonymous(size as u64).ok_or(Error::InvalidArgs)?;
+    if flags & !(vmo_flags::COMMIT | vmo_flags::WRITE_COMBINING) != 0 {
+        return Err(Error::InvalidArgs);
+    }
+    let cache = if flags & vmo_flags::WRITE_COMBINING != 0 { Cache::WriteCombining } else { Cache::WriteBack };
+    let vmo = Vmo::new_anonymous(size as u64, cache).ok_or(Error::InvalidArgs)?;
     if flags & vmo_flags::COMMIT != 0 {
         for off in (0..vmo.size()).step_by(4096) {
             vmo.page(off, true).ok_or(Error::NoMemory)?;

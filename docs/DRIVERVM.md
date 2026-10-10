@@ -498,13 +498,19 @@ display drivers attach theirs: the one whose memory holds the firmware's
 framebuffer (a machine may have more GPUs with outputs), at the host's
 address of one of its BARs, which the monitor writes on Linux's command
 line (`veda.device=`) and the compositor tells (`displaydev::screen`).
-Linux's driver sets the mode itself — the compositor's screen — from the
-compositor's first frame on. The compositor draws into pictures of Veda's
+The driver sets the mode at the compositor's first frame, with Linux's
+atomic modesetting: one of the size of the compositor's screen if the
+display has one; else the display's own (a laptop's panel has no other),
+the display engine scaling the compositor's pictures to it as their
+proportions allow, in its middle (the driver checks with Linux's that it
+can, before it attaches). The compositor draws into pictures of Veda's
 memory, which the driver hands it, and Linux shows them as they are:
 imported as dma-bufs (the bridge maps each into the guest; a display engine
-reads it through the IOMMU, a display without one, such as QEMU's standard
-VGA, copies it into its own memory as it updates). A driver that cannot
-import gets each picture copied into a buffer of its own before the flip.
+reads it through the IOMMU without snooping the processor's caches, so the
+pictures are write-combining memory; a display without one, such as QEMU's
+standard VGA, copies it into its own memory as it updates). A driver that
+cannot import gets each picture copied into a buffer of its own before the
+flip.
 Flips are page flips at the vertical blank; their events' timestamps, on
 Linux's monotonic clock, become Veda's (both follow the TSC), so the
 compositor times its frames by the display's real blanks.

@@ -45,7 +45,7 @@ pub fn spawn_init(boot: &BootInfo) {
 
     // Copy the image into a VMO and map each section with its permissions.
     let base = pe.image_base();
-    let image = Vmo::new_anonymous(pe.size_of_image() as u64).expect("init image too large");
+    let image = Vmo::new_anonymous(pe.size_of_image() as u64, Cache::WriteBack).expect("init image too large");
     assert!(image.write(0, pe.header_bytes()));
     let ro = Perms { read: true, write: false, exec: false };
     aspace
@@ -67,7 +67,7 @@ pub fn spawn_init(boot: &BootInfo) {
             .expect("mapping an init section");
     }
 
-    let stack = Vmo::new_anonymous(STACK_SIZE).unwrap();
+    let stack = Vmo::new_anonymous(STACK_SIZE, Cache::WriteBack).unwrap();
     let rw = Perms { read: true, write: true, exec: false };
     let stack_base = aspace.map(stack, 0, STACK_SIZE, 0, false, rw, Perms::ALL, false).expect("mapping init's stack");
 
@@ -106,7 +106,7 @@ pub fn spawn_init(boot: &BootInfo) {
         acpi_memory_count: acpi_memory_count as u32,
         platform: platform(),
     };
-    let info_vmo = Vmo::new_anonymous(4096).unwrap();
+    let info_vmo = Vmo::new_anonymous(4096, Cache::WriteBack).unwrap();
     // SAFETY: viewing a plain #[repr(C)] struct as bytes.
     let info_bytes = unsafe {
         core::slice::from_raw_parts(&info as *const KernelBootInfo as *const u8, core::mem::size_of::<KernelBootInfo>())

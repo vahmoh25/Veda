@@ -335,11 +335,7 @@ impl Bridge {
         if r.size == 0 || r.size > MAX_VMO {
             return Err(Error::InvalidArgs);
         }
-        let vmo = if r.flags & vabi::vmo_flags::COMMIT as u32 != 0 {
-            Vmo::create_committed(r.size as usize)?
-        } else {
-            Vmo::create(r.size as usize)?
-        };
+        let vmo = Vmo::create_with(r.size as usize, r.flags as usize)?;
         r.handle = self.insert(vmo.into_handle())?;
         Ok(())
     }

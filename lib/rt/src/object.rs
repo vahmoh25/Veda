@@ -332,7 +332,13 @@ impl Vmo {
     }
 
     pub fn create_committed(size: usize) -> Result<Vmo, Error> {
-        call(nr::VMO_CREATE, [size, vabi::vmo_flags::COMMIT, 0, 0, 0, 0]).map(|h| Vmo(Handle(h as RawHandle)))
+        Vmo::create_with(size, vabi::vmo_flags::COMMIT)
+    }
+
+    /// Memory as `flags` ([`vabi::vmo_flags`]) ask: committed now,
+    /// write-combining.
+    pub fn create_with(size: usize, flags: usize) -> Result<Vmo, Error> {
+        call(nr::VMO_CREATE, [size, flags, 0, 0, 0, 0]).map(|h| Vmo(Handle(h as RawHandle)))
     }
 
     pub fn create_physical(res: &Resource, paddr: u64, size: usize, cache: usize) -> Result<Vmo, Error> {
