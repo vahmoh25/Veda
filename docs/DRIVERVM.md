@@ -674,7 +674,7 @@ where Veda stands:
 | Audio: ALSA → `audiodev` (playback and recording); virtio's sound devices Linux's, Veda's own driver of them and AC'97's gone | done (`tests/ui/drivervm-audio.vts`, `drivervm-mic.vts`, `music.vts`, `volume.vts`) |
 | Network and Wi-Fi: Linux's cards → `netdev`, nl80211 → `wlanphy` (managed radios); Veda's own network and radio drivers gone | done (`tests/ui/drivervm-net.vts`, `e1000e.vts`, `drivervm-wifi.vts`, `drivervm-wifi-recovery.vts`, `wifi-connect.vts`, `network-failover.vts`) |
 | Display: KMS → `displaydev`, the compositor's pictures shown as they are; Veda's own display drivers gone | done (`tests/ui/drivervm-display.vts`, `drivervm-display-restart.vts`, `drivervm-display-crash.vts`) |
-| GPU: the renderer in the guest, on Mesa's Gallium drivers over Linux's (virgl under QEMU; iris; softpipe); Veda's own GPU drivers gone | done (`tests/ui/drivervm-gpu.vts`, `drivervm-renderer.vts`, `drivervm-compose.vts`); Intel's integrated GPUs next (below) |
+| GPU: the renderer in the guest, on Mesa's Gallium drivers over Linux's (virgl under QEMU; iris; softpipe); Veda's own GPU drivers gone | done (`tests/ui/drivervm-gpu.vts`, `drivervm-renderer.vts`, `drivervm-compose.vts`); Intel's integrated GPUs below |
 | Input and USB: Linux's event devices → `input`; USB controllers whole (keyboards, mice, network and Bluetooth adapters); Veda's own USB and virtio input drivers gone | done (`tests/ui/usb-input.vts`, `drivervm-usb.vts`, `live-usb.vts`); touchpads later |
 | Every device Veda does not keep goes to the driver VM, which starts with Veda | done (every script, `tests/ui/iommu.vts`) |
 | Restart and device reset | done (`tests/ui/drivervm-restart.vts`); hangs, suspend later |
@@ -686,17 +686,38 @@ where Veda stands:
 | The PC's firmware variables for the guest, read-only (the amplifiers' calibration) | done under QEMU (`tests/ui/drivervm-variables.vts`, variables added to OVMF's); not yet tried on a PC |
 | The audio DSP the built-in microphones are on: SOF from Tiger Lake to Raptor Lake, with the firmware's NHLT | done under QEMU (`tests/ui/drivervm-nhlt.vts`: the NHLT; QEMU has no DSP); not yet tried on a PC |
 | The memory the firmware keeps for devices (RMRRs), the guest's where the PC has it | done; QEMU's machine has none: not yet tried on a PC |
+| Intel's integrated GPUs: their stolen memory where the PC has it, their OpRegion, the host bridge's stand-in, their firmware; HDMI and DisplayPort audio with them | done; QEMU has no Intel GPU: not yet tried on a PC |
 
 **GPUs.** Linux's driver and Mesa's drive a GPU whole in the guest (lesson
 1): the guest's Linux has i915 and virtio-gpu, and its Mesa iris, virgl
 and softpipe; AMD's and NVIDIA's (amdgpu and radeonsi, nouveau and NVK)
 come in with their firmware. Under QEMU the path is tested on the host's
 GPU, through virtio-gpu given to the guest; what QEMU cannot give is a
-PC's GPU. Intel's integrated GPUs come with ties to the firmware that the
-guest needs too (lesson 7): memory reserved for them (an RMRR, which keeps
-a device the host's for now), their OpRegion (the panel's description,
-VBT) and stolen memory, and their place at 00:02.0. GPU memory is the
-guest's: a GPU needs a driver VM with the memory for it.
+PC's GPU. GPU memory is the guest's: a GPU needs a driver VM with the
+memory for it.
+
+**Intel's integrated GPUs** come with ties to the firmware that the guest
+needs too (lesson 7). Their stolen memory (the GPU's own structures, and
+the firmware's framebuffer, which the display shows from) is the memory
+the firmware keeps for them (an RMRR), which the guest has where the PC
+has it, so their registers that place it are the PC's, read as they are
+(GGC, BDSM), and i915 finds what the firmware left there as on the PC
+(Linux's early quirks, which read those registers before its PCI is up,
+reach configuration space through the platform's hypercalls too).
+Their OpRegion (the display's description, the VBT, and the firmware's
+mailboxes), which their configuration space names (ASLS), the guest has a
+copy of at 0xC0000 (`vhv::igd`: `devmgr` reads it, with the VBT it keeps
+outside, `pcidev`'s `opregion`), without the mailbox through which the
+driver calls the PC's firmware (SWSCI, an SMI, whose register does
+nothing). They keep their place at 00:02.0, and i915 finds the host bridge
+it looks for at 00:00.0: a stand-in, read-only, with the PC's ids and the
+registers it reads (its MCHBAR is on; whether VGA is decoded), as
+`pcidev`'s `host_bridge` gives them. Their firmware (the display's DMC,
+GuC, HuC) comes from linux-firmware. The firmware's framebuffer is in such
+a GPU's aperture, which i915's tables translate: once it has the display,
+the compositor draws there no more (`kms` says so as it attaches, for any
+driver but QEMU's VGA's). Not yet: a compositor started again while i915
+has the display draws its first frames there, until `kms` attaches to it.
 
 ## Testing
 

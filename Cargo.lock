@@ -414,6 +414,7 @@ dependencies = [
  "vacpi",
  "vbuild",
  "vgpio",
+ "vhv",
  "viommu",
  "vipc",
  "vproto",

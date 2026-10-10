@@ -9,7 +9,10 @@
 //!   it, and its hypercalls.
 //! * [`linux`]: booting a Linux kernel on it (the x86 boot protocol).
 //! * [`bridge`]: Veda's IPC for the guest's programs.
-//! * [`pci`]: the configuration space of a PCI function given to a guest.
+//! * [`pci`]: the configuration space of a PCI function given to a guest,
+//!   and the stand-in for the PC's host bridge.
+//! * [`igd`]: what an Intel integrated GPU's driver reads of the PC's
+//!   firmware: its OpRegion, as the guest has it.
 //! * [`acpi`]: the ACPI tables that describe the guest's machine.
 //!
 //! The kernel drives them under its virtual processors (`kernel/src/hv`),
@@ -25,6 +28,7 @@ extern crate std;
 pub mod acpi;
 pub mod bridge;
 pub mod cpuid;
+pub mod igd;
 pub mod lapic;
 pub mod linux;
 pub mod pci;

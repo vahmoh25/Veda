@@ -130,13 +130,9 @@ impl Flips {
 }
 
 /// The surfaces a frame goes into.
-fn targets<'a>(firmware: &'a mut Surface, flips: &'a mut Option<Flips>) -> Vec<&'a mut Surface> {
-    let Some(f) = flips else { return vec![firmware] };
-    if f.lost {
-        core::iter::once(firmware).chain(f.pictures.iter_mut()).collect()
-    } else {
-        vec![&mut f.pictures[f.target]]
-    }
+fn targets<'a>(firmware: &'a mut Option<Surface>, flips: &'a mut Option<Flips>) -> Vec<&'a mut Surface> {
+    let Some(f) = flips else { return firmware.iter_mut().collect() };
+    if f.lost { firmware.iter_mut().chain(f.pictures.iter_mut()).collect() } else { vec![&mut f.pictures[f.target]] }
 }
 
 /// Frames a second, to two decimals, of a screen whose frames take
@@ -151,7 +147,9 @@ pub(crate) struct Screen {
     pub(crate) back: Bitmap,
     /// Red in the low byte of each pixel.
     rgb: bool,
-    firmware: Surface,
+    /// The firmware's framebuffer, until a driver that uses its memory for
+    /// its own has the display (`dd::Screen::firmware_kept`).
+    firmware: Option<Surface>,
     flips: Option<Flips>,
     /// What the frame being composed wrote.
     written: Damage,
@@ -165,7 +163,7 @@ impl Screen {
         Screen {
             back: Bitmap::new(width, height),
             rgb,
-            firmware: Surface { map: fb, pitch, stale: Damage::new() },
+            firmware: Some(Surface { map: fb, pitch, stale: Damage::new() }),
             flips: None,
             written: Damage::new(),
             clock: 0,
@@ -410,7 +408,7 @@ impl Screen {
     pub(crate) fn needs_frame(&self) -> bool {
         match &self.flips {
             None => false,
-            Some(f) if f.lost => !self.firmware.stale.is_empty() || f.pictures.iter().any(|p| !p.stale.is_empty()),
+            Some(f) if f.lost => self.firmware.iter().chain(&f.pictures).any(|s| !s.stale.is_empty()),
             Some(f) => f.shown.is_none() && f.pending.is_none() && f.drawing.is_none(),
         }
     }
@@ -485,6 +483,9 @@ impl Screen {
             if screen.period_ns > 0 { rate(screen.period_ns) } else { String::from("an unknown number of") },
             pictures.len()
         );
+        if !screen.firmware_kept && self.firmware.take().is_some() {
+            println!("{}: the firmware's framebuffer is its memory from now on: nothing is drawn there", screen.name);
+        }
         self.flips = Some(Flips {
             key,
             name: screen.name,
@@ -552,12 +553,18 @@ impl Screen {
         }
     }
 
-    /// Frames go into every picture and the firmware's framebuffer from now
-    /// on, all of them to be brought up to date first.
+    /// Frames go into every picture and the firmware's framebuffer (while
+    /// there is one) from now on, all of them to be brought up to date
+    /// first.
     fn lose(&mut self, why: &str) {
-        println!("{}: frames go into its pictures and the firmware's framebuffer, in place", why);
+        match &self.firmware {
+            Some(_) => println!("{}: frames go into its pictures and the firmware's framebuffer, in place", why),
+            None => println!("{}: frames go into its pictures, in place", why),
+        }
         let all = self.rect();
-        self.firmware.stale.add(all);
+        if let Some(firmware) = &mut self.firmware {
+            firmware.stale.add(all);
+        }
         if let Some(f) = &mut self.flips {
             f.lost = true;
             f.pending = None;

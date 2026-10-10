@@ -28,7 +28,14 @@
 //! Where a function is: on the host's bus 0, a function keeps its device
 //! and function numbers if its device's function 0 comes too (drivers may
 //! look for siblings where they are on the PC); other functions take a
-//! free device number, as its function 0.
+//! free device number, as its function 0. Device 0 is the host bridge's,
+//! as on a PC.
+//!
+//! An Intel integrated GPU's driver reads more of the PC's firmware: its
+//! OpRegion (the display's description), which the guest has a copy of
+//! (`vhv::igd`), and the PC's host bridge, which the guest has a stand-in
+//! for at 00:00.0, read-only (`vhv::pci::HostBridge`). Its stolen memory is
+//! the memory the firmware keeps for it, where the PC has it.
 //!
 //! The kernel's command line says where each function's memory BARs are on
 //! the host ([`Devices::host_options`]): a driver in the guest names the
@@ -43,7 +50,7 @@ use core::ops::Range;
 
 use vabi::map_flags;
 use vhv::acpi::{self, Child, Function, Gpio, GpioController, GpioInterrupt, HID_OVER_I2C, Resource};
-use vhv::pci::{Bar, ConfigSpace, Write};
+use vhv::pci::{Bar, ConfigSpace, HostBridge, Write};
 use vhv::platform::{error, gpio};
 use vproto::pci::{AcpiDevice, AcpiResource, DeviceInfo, IntxLine, pcidev};
 use vrt::object::{Channel, Guest, Interrupt, Vcpu};
@@ -81,6 +88,10 @@ pub struct Devices {
     firmware_tables: Vec<Vec<u8>>,
     /// The memory the firmware keeps for them, where the guest has it.
     reserved: Vec<Range<u64>>,
+    /// An Intel GPU's: the guest's copy of its OpRegion (for
+    /// `vhv::igd::OPREGION_AT`), and the stand-in for the PC's host bridge.
+    opregion: Option<Vec<u8>>,
+    host_bridge: Option<HostBridge>,
 }
 
 /// Where in the guest's address space BARs go: below 4 GiB the ones that
@@ -110,7 +121,14 @@ impl Windows {
 impl Devices {
     /// No functions.
     pub fn none() -> Devices {
-        Devices { list: Vec::new(), pins: Pins::default(), firmware_tables: Vec::new(), reserved: Vec::new() }
+        Devices {
+            list: Vec::new(),
+            pins: Pins::default(),
+            firmware_tables: Vec::new(),
+            reserved: Vec::new(),
+            opregion: None,
+            host_bridge: None,
+        }
     }
 
     /// Gives the guest the functions of `channels` it can have: their DMA,
@@ -131,6 +149,7 @@ impl Devices {
         let mut pins = Pins::default();
         let mut firmware_tables: Vec<Vec<u8>> = Vec::new();
         let mut reserved = Vec::new();
+        let (mut opregion, mut host_bridge, mut intel_gpus) = (None, None, 0);
         for ((pci, info), place) in given.into_iter().zip(places) {
             let name = format!(
                 "{:04x}:{:04x} at {:02x}:{:02x}.{}",
@@ -174,11 +193,20 @@ impl Devices {
                     firmware_tables.push(table);
                 }
             }
-            let config = ConfigSpace::new(bars, multifunction, pci_express, intx.map(|l| (l.pin, l.gsi as u8)));
+            let mut config = ConfigSpace::new(bars, multifunction, pci_express, intx.map(|l| (l.pin, l.gsi as u8)));
+            // The first Intel GPU's OpRegion and host bridge are the guest's.
+            if is_intel_gpu(&info) {
+                if intel_gpus == 0 {
+                    (opregion, host_bridge) = intel_gpu(&pci, &name);
+                }
+                let has_copy = intel_gpus == 0 && opregion.is_some();
+                config.intel_graphics(if has_copy { vhv::igd::OPREGION_AT as u32 } else { 0 });
+                intel_gpus += 1;
+            }
             let state = Mutex::new(State { pci, config, msis: BTreeMap::new() });
             list.push(Device { devfn, info, description, state });
         }
-        Devices { list, pins, firmware_tables, reserved }
+        Devices { list, pins, firmware_tables, reserved, opregion, host_bridge }
     }
 
     /// The kernel command line's options that say where the functions'
@@ -217,6 +245,12 @@ impl Devices {
         &self.reserved
     }
 
+    /// The guest's copy of an Intel GPU's OpRegion, for
+    /// `vhv::igd::OPREGION_AT`.
+    pub fn opregion(&self) -> Option<&[u8]> {
+        self.opregion.as_deref()
+    }
+
     /// Operation `op` ([`gpio`]) on pin `pin` of GPIO controller
     /// `controller`, with `value` for a level: through the channel of the
     /// function the pin's device is below.
@@ -246,9 +280,14 @@ impl Devices {
     /// A read of the configuration space of guest function `function`.
     pub fn config_read(&self, function: u64, offset: u64, width: u64) -> u64 {
         let all_ones = u32::MAX >> (32 - 8 * width.clamp(1, 4) as u32);
-        let (Some(d), Ok(offset), Ok(width)) = (self.device(function), u16::try_from(offset), u8::try_from(width))
-        else {
+        let (Ok(offset), Ok(width)) = (u16::try_from(offset), u8::try_from(width)) else {
             return all_ones as u64;
+        };
+        let Some(d) = self.device(function) else {
+            return match &self.host_bridge {
+                Some(b) if function == 0 => b.read(offset, width) as u64,
+                _ => all_ones as u64,
+            };
         };
         let s = d.state.lock();
         s.config.read(offset, width, |at| s.pci.config_read(at, 4).ok().and_then(|r| r.ok()).unwrap_or(u32::MAX)) as u64
@@ -256,9 +295,12 @@ impl Devices {
 
     /// A write to the configuration space of guest function `function`.
     pub fn config_write(&self, function: u64, offset: u64, width: u64, value: u64) -> u64 {
-        let (Some(d), Ok(offset), Ok(width)) = (self.device(function), u16::try_from(offset), u8::try_from(width))
-        else {
+        let (Ok(offset), Ok(width)) = (u16::try_from(offset), u8::try_from(width)) else {
             return vhv::platform::error::INVALID;
+        };
+        let Some(d) = self.device(function) else {
+            // The host bridge's stand-in is read-only.
+            return if function == 0 && self.host_bridge.is_some() { 0 } else { vhv::platform::error::INVALID };
         };
         let mut s = d.state.lock();
         if let Write::Device { offset, width, value } = s.config.write(offset, width, value as u32)
@@ -304,6 +346,59 @@ impl Devices {
             }
         }
     }
+}
+
+/// Whether the function is an Intel integrated GPU (a display controller of
+/// Intel's on the root bus).
+fn is_intel_gpu(info: &DeviceInfo) -> bool {
+    info.vendor == 0x8086 && info.class == 0x03 && info.bus == 0
+}
+
+/// What the driver of Intel GPU `pci` (`name`) reads of the PC's firmware:
+/// the guest's copy of its OpRegion (none if the firmware has none), and
+/// the stand-in for the PC's host bridge.
+fn intel_gpu(pci: &pcidev::Client, name: &str) -> (Option<Vec<u8>>, Option<HostBridge>) {
+    let copy = match pci.opregion() {
+        Ok(Ok(o)) => {
+            let vbt = (!o.vbt.is_empty()).then_some(&o.vbt[..]);
+            let copy = vhv::igd::for_guest(&o.opregion, vbt, vhv::igd::OPREGION_AT);
+            let vbt = match vbt {
+                Some(v) => format!("a VBT of {} bytes after it", v.len()),
+                None => String::from("its VBT in it"),
+            };
+            match &copy {
+                Some(_) => println!("{name}: its OpRegion is the guest's at {:#x}, {vbt}", vhv::igd::OPREGION_AT),
+                None => println!("{name}: its OpRegion is not one the guest can have"),
+            }
+            copy
+        }
+        Ok(Err(e)) => {
+            println!("{name}: no OpRegion ({e:?})");
+            None
+        }
+        Err(e) => {
+            println!("{name}: devmgr: {e}");
+            None
+        }
+    };
+    let bridge = match pci.host_bridge() {
+        Ok(Ok(b)) => {
+            println!(
+                "{name}: the PC's host bridge ({:04x}:{:04x}) is at the guest's 00:00.0",
+                b.ids & 0xFFFF,
+                b.ids >> 16
+            );
+            Some(HostBridge {
+                ids: b.ids,
+                class: b.class,
+                subsystem: b.subsystem,
+                mchbar: b.mchbar,
+                graphics_control: b.graphics_control,
+            })
+        }
+        _ => None,
+    };
+    (copy, bridge)
 }
 
 /// Where a function given is in the guest: its BARs, its PCI Express
@@ -589,7 +684,8 @@ fn map_bars(guest: &Guest, pci: &pcidev::Client, info: &DeviceInfo, windows: &mu
 
 /// Where each function of `functions` (bus, device, function on the host)
 /// goes on the guest's bus 0: device << 3 | function, and whether its
-/// device has other functions there; `None` once the bus is full.
+/// device has other functions there; `None` once the bus is full. Device 0
+/// stays the host bridge's.
 fn places(functions: &[(u8, u8, u8)]) -> Vec<Option<(u8, bool)>> {
     let keeps = |&(bus, dev, func): &(u8, u8, u8)| {
         bus == 0 && (func == 0 || functions.iter().any(|&(b, d, f)| (b, d, f) == (0, dev, 0)))
@@ -598,7 +694,8 @@ fn places(functions: &[(u8, u8, u8)]) -> Vec<Option<(u8, bool)>> {
     for f in functions.iter().filter(|f| keeps(f)) {
         taken[f.1 as usize] = true;
     }
-    let mut free = (0..32u8).filter(|&d| !taken[d as usize]).collect::<Vec<_>>().into_iter();
+    // Device 0 is the host bridge's.
+    let mut free = (1..32u8).filter(|&d| !taken[d as usize]).collect::<Vec<_>>().into_iter();
     functions
         .iter()
         .map(|f| {

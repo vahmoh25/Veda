@@ -164,7 +164,12 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   variables: ...`, on the serial port only), the monitor how many the
   guest has and which it read (`drivervm: the guest read the firmware
   variable ...`), and which of the firmware's tables come with a function
-  (`... comes with the firmware's NHLT (7054 bytes)`). Linux's SOF says
+  (`... comes with the firmware's NHLT (7054 bytes)`), the memory the
+  firmware keeps for one (`the memory the firmware keeps for it at
+  0x64000000-0x687fffff`), and what an Intel GPU gets besides (`its
+  OpRegion is the guest's at 0xc0000`, `the PC's host bridge (8086:4621)
+  is at the guest's 00:00.0`); i915 says which firmware it loaded and how
+  it found the stolen memory. Linux's SOF says
   what it found (`DMICs detected in NHLT tables: 4`, the topology it
   loads), and `alsa` which device it records (`records
   (/dev/snd/pcmC0D6c, 4 channels)`).

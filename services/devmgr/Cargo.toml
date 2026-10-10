@@ -19,6 +19,7 @@ initrd = { workspace = true }
 vacpi = { workspace = true }
 vgpio = { workspace = true }
 viommu = { workspace = true }
+vhv = { workspace = true }
 
 [build-dependencies]
 vbuild = { workspace = true }

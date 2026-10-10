@@ -214,6 +214,9 @@ impl Machine {
         loaded &= memory.write(BOOT_PARAMS_AT, &linux::boot_params(&boot));
         loaded &= memory.write(CMDLINE_AT, cmdline.as_bytes());
         loaded &= memory.write(acpi::AT, &acpi_tables);
+        if let Some(opregion) = devices.opregion() {
+            loaded &= memory.write(vhv::igd::OPREGION_AT, opregion);
+        }
         loaded &= memory.write(kernel_at, image.protected);
         loaded &= memory.write(initrd_at, initramfs);
         if !loaded {

@@ -45,12 +45,14 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use vabi::{cache_policy, irq_flags, signals};
+use vacpi::Memory;
 use vacpi::name::Path;
 use vacpi::resource::Resource as FirmwareResource;
 use vacpi::value::Value;
 use vipc::WaitSet;
 use vproto::pci::{
-    AcpiDevice, AcpiResource, DeviceInfo, InterruptLine, IntxLine, MsiAddress, PciError, ReservedMemory, pcidev,
+    AcpiDevice, AcpiResource, DeviceInfo, HostBridge, InterruptLine, IntxLine, MsiAddress, OpRegion, PciError,
+    ReservedMemory, pcidev,
 };
 use vrt::object::{Channel, Interrupt, IoPorts, Process, Resource, Vmo};
 use vrt::println;
@@ -259,7 +261,24 @@ struct DeviceSession<'a> {
     key: u64,
 }
 
+/// Whether the function is an Intel integrated GPU (a display controller of
+/// Intel's on the root bus).
+fn intel_gpu(info: &DeviceInfo) -> bool {
+    info.vendor == 0x8086 && info.class == 0x03 && info.bus == 0
+}
+
 impl DeviceSession<'_> {
+    /// That the function is an Intel integrated GPU the driver VM has.
+    fn guests_intel_gpu(&self) -> Result<(), PciError> {
+        if !self.dev.guest {
+            Err(PciError::Denied)
+        } else if !intel_gpu(&self.dev.info) {
+            Err(PciError::Unsupported)
+        } else {
+            Ok(())
+        }
+    }
+
     /// The interrupt of line `gsi`: the one the lines' table has, or a
     /// new one, signalling as given.
     fn line(&self, gsi: u32, level: bool, active_low: bool) -> Result<Interrupt, PciError> {
@@ -391,6 +410,38 @@ impl pcidev::Server for DeviceSession<'_> {
                 Ok(ReservedMemory { base: r.start, size, memory })
             })
             .collect()
+    }
+
+    fn opregion(&mut self) -> Result<OpRegion, PciError> {
+        self.guests_intel_gpu()?;
+        let acpi = self.mgr.acpi.as_ref().ok_or(PciError::NotFound)?;
+        let at = self.mgr.config.read(self.dev.address, vhv::pci::intel_graphics::ASLS, 4) as u64;
+        let mut opregion = alloc::vec![0; vhv::igd::OPREGION_SIZE];
+        if at == 0 || !acpi.memory.read(at, &mut opregion) || !vhv::igd::is_opregion(&opregion) {
+            return Err(PciError::NotFound);
+        }
+        // Its raw VBT, if it keeps that outside, and if it can be read.
+        let vbt = vhv::igd::raw_vbt(&opregion, at)
+            .filter(|&(_, size)| size <= vhv::igd::OPREGION_ROOM)
+            .and_then(|(vbt_at, size)| {
+                let mut vbt = alloc::vec![0; size];
+                acpi.memory.read(vbt_at, &mut vbt).then_some(vbt)
+            })
+            .unwrap_or_default();
+        Ok(OpRegion { opregion, vbt })
+    }
+
+    fn host_bridge(&mut self) -> Result<HostBridge, PciError> {
+        self.guests_intel_gpu()?;
+        let bridge = Address { bus: 0, slot: 0, function: 0 };
+        let dword = |offset| self.mgr.config.read(bridge, offset, 4);
+        Ok(HostBridge {
+            ids: dword(0x00),
+            class: dword(0x08),
+            subsystem: dword(0x2C),
+            mchbar: dword(0x48) as u64 | (dword(0x4C) as u64) << 32,
+            graphics_control: dword(vhv::pci::intel_graphics::GGC),
+        })
     }
 
     fn acpi_tables(&mut self) -> Vec<Vec<u8>> {

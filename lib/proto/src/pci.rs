@@ -75,6 +75,33 @@ message! {
 }
 
 message! {
+    /// What the firmware gives an Intel integrated GPU's driver: its
+    /// OpRegion (the memory its configuration space's ASLS names: the
+    /// display's description and the firmware's mailboxes), and its raw VBT
+    /// if the OpRegion keeps that outside itself (empty if not).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct OpRegion {
+        pub opregion: Vec<u8>,
+        pub vbt: Vec<u8>,
+    }
+}
+
+message! {
+    /// The registers of the PC's host bridge (00:00.0) that an Intel
+    /// integrated GPU's driver reads: its ids, class and subsystem (the
+    /// dwords at 0x00, 0x08 and 0x2C), its MCHBAR (0x48) and its graphics
+    /// control (the dword at 0x50).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct HostBridge {
+        pub ids: u32,
+        pub class: u32,
+        pub subsystem: u32,
+        pub mchbar: u64,
+        pub graphics_control: u32,
+    }
+}
+
+message! {
     /// Where a function's INTx goes, as the firmware routes it (`_PRT`).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct IntxLine {
@@ -247,6 +274,13 @@ protocol! {
         /// maps it there): only the driver VM's functions get it
         /// (`Denied`).
         21 => fn reserved_memory() -> Result<Vec<ReservedMemory>, PciError>;
+        /// An Intel integrated GPU's OpRegion, as the firmware has it
+        /// (`NotFound`: it has none; `Unsupported`: the function is no
+        /// Intel GPU).
+        22 => fn opregion() -> Result<OpRegion, PciError>;
+        /// The PC's host bridge's registers that an Intel integrated GPU's
+        /// driver reads (`Unsupported`: the function is no Intel GPU).
+        23 => fn host_bridge() -> Result<HostBridge, PciError>;
     }
 }
 

@@ -292,9 +292,9 @@ microphone on the codec (built in, or on a jack) for the agent.
 Built-in microphones wired to an audio DSP rather than to the codec, as
 in many recent laptops, are recorded through Linux's Sound Open Firmware on
 Intel's PCs from Tiger Lake to Raptor Lake (11th to 13th generation Core);
-later ones' stay silent for now. HDMI and DisplayPort audio come with
-Intel's graphics, which are still Veda's. To try USB input or HD Audio in
-QEMU:
+later ones' stay silent for now. Intel's integrated graphics are Linux's
+too (i915, with Mesa's iris for the GPU), and HDMI and DisplayPort audio
+with them. To try USB input or HD Audio in QEMU:
 
 ```bash
 cargo xtask run --input usb

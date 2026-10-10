@@ -37,6 +37,14 @@ cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid0-r0.bin  linux-firmware  cirrus/cs35
 cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-l0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-l0.bin  f23e2b8a99a51858b47d13e804b656de2540e5ce961a088721988402f05c7e77
 cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-r0.bin  linux-firmware  cirrus/cs35l41-dsp1-spk-prot-10431f62-spkid1-r0.bin  73596c413e3ace2e44706771af9188dd866ed3a6f188814123e73a24eb82fdb6
 
+# Intel's integrated GPUs of Alder Lake and Raptor Lake (i915): the
+# display's microcontroller (DMC, its power states), the GPU's scheduler
+# (GuC, which takes the GPU's work there) and its media microcontroller
+# (HuC).
+i915/adlp_dmc.bin  linux-firmware  i915/adlp_dmc.bin  3516de2e134ddcf3b319c75d2e437779fecbd58cbb77234bd6f297c544e92ccb
+i915/adlp_guc_70.bin  linux-firmware  i915/adlp_guc_70.bin  b7a800cbdcdf687e7b1c81f3316d040ab75fa3e5c698ebc356f077af17462ef8
+i915/tgl_huc.bin  linux-firmware  i915/tgl_huc.bin  dbb1316bac13a76427ffa7827e52b5b9affe8a4cadd23dc22e2a54e35c53bdad
+
 # Intel's audio DSP from Tiger Lake to Raptor Lake (SOF, IPC3; Raptor
 # Lake's are Alder Lake's builds): Linux drives one with SOF where the
 # firmware's NHLT has digital microphones, so every part its driver takes

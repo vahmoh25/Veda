@@ -239,6 +239,14 @@ struct Session {
     done: Event,
 }
 
+/// Whether Linux's driver `driver` leaves the firmware's framebuffer's
+/// memory only pixels: QEMU's standard VGA's (bochs-drm) holds nothing but
+/// pictures; a GPU's driver uses that memory for its own (an Intel GPU's
+/// aperture, which i915's tables translate to whatever they map).
+fn keeps_firmware_memory(driver: &str) -> bool {
+    driver == "bochs-drm"
+}
+
 fn attach(d: &Display, client: protocol::Client) -> Result<Session, String> {
     let (state, state_vmo) = FlipState::create().map_err(|e| format!("{e}"))?;
     let (request, done) = (Event::create().map_err(|e| format!("{e}"))?, Event::create().map_err(|e| format!("{e}"))?);
@@ -254,6 +262,7 @@ fn attach(d: &Display, client: protocol::Client) -> Result<Session, String> {
         stride: d.stride,
         rgbx: false,
         firmware: d.firmware.clone(),
+        firmware_kept: keeps_firmware_memory(&d.card.driver),
         period_ns: d.mode.period_ns(),
     };
     let link = Link { pictures: theirs, state: state_vmo, request: dup(&request)?, done: dup(&done)? };

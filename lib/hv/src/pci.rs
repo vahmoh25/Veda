@@ -12,6 +12,10 @@
 //! signals become the host's system errors, which a PC may turn into NMIs
 //! (as Xen's XSA-59 found). Its SERR# enable and PCI Express error
 //! reporting stay off, whatever the guest writes.
+//!
+//! An Intel integrated GPU has registers that are the platform's too
+//! ([`ConfigSpace::intel_graphics`]); its driver also reads the PC's host
+//! bridge, which the guest has a stand-in for ([`HostBridge`]).
 
 use alloc::vec::Vec;
 
@@ -52,6 +56,19 @@ pub const DEVCTL: u16 = 8;
 /// The PCI Express capability's id.
 pub const CAP_PCI_EXPRESS: u8 = 0x10;
 
+/// An Intel integrated GPU's registers that name the PC's memory: its
+/// graphics control (GGC: the size of its stolen memory), the base of its
+/// stolen memory (BDSM; from Ice Lake on BDSM's 64 bits), and its
+/// OpRegion's address (ASLS); and its software SCI (SWSCI), which a write
+/// sends to the PC's firmware (an SMI).
+pub mod intel_graphics {
+    pub const GGC: u16 = 0x50;
+    pub const BDSM: u16 = 0x5C;
+    pub const BDSM_64: u16 = 0xC0;
+    pub const SWSCI: u16 = 0xE8;
+    pub const ASLS: u16 = 0xFC;
+}
+
 const COMMAND_DWORD: u16 = 0x04;
 const HEADER_TYPE_DWORD: u16 = 0x0C;
 const BARS: core::ops::Range<u16> = 0x10..0x28;
@@ -72,11 +89,24 @@ pub struct ConfigSpace {
     /// The function's INTx, if the guest has its line: the pin (1 for
     /// INTA# to 4) and the GSI.
     intx: Option<(u8, u8)>,
+    /// An Intel integrated GPU's: where the guest's copy of its OpRegion
+    /// is (0: it has none).
+    intel_graphics: Option<u32>,
 }
 
 impl ConfigSpace {
     pub fn new(bars: Vec<Bar>, multifunction: bool, pci_express: Option<u16>, intx: Option<(u8, u8)>) -> ConfigSpace {
-        ConfigSpace { bars, multifunction, pci_express, sizing: 0, intx }
+        ConfigSpace { bars, multifunction, pci_express, sizing: 0, intx, intel_graphics: None }
+    }
+
+    /// Makes it an Intel integrated GPU's, whose OpRegion the guest has a
+    /// copy of at `opregion` (0: none). Its registers that name the PC's
+    /// memory are the platform's: its stolen memory's, which the guest has
+    /// where the PC has it, read as they are; its OpRegion's address
+    /// (ASLS), the copy's. Writes to them, and to its software SCI, which
+    /// would call the PC's firmware, do nothing.
+    pub fn intel_graphics(&mut self, opregion: u32) {
+        self.intel_graphics = Some(opregion);
     }
 
     /// The memory BARs.
@@ -118,11 +148,10 @@ impl ConfigSpace {
                 let (pin, line) = self.intx.unwrap_or((0, 0xFF));
                 (device(at) & 0xFFFF_0000) | (pin as u32) << 8 | line as u32
             }
+            intel_graphics::ASLS if let Some(opregion) = self.intel_graphics => opregion,
             _ => device(at),
         };
-        let shift = 8 * (offset & 3) as u32;
-        let mask = if width == 4 { u32::MAX } else { (1 << (8 * width as u32)) - 1 };
-        (dword >> shift) & mask
+        part(dword, offset, width)
     }
 
     /// The guest writes `value` (`width` bytes) at `offset`.
@@ -143,8 +172,17 @@ impl ConfigSpace {
             return Write::Absorbed;
         }
         let devctl = self.pci_express.map(|p| (p + DEVCTL) & !3);
+        let platforms = [
+            intel_graphics::GGC,
+            intel_graphics::BDSM,
+            intel_graphics::BDSM_64,
+            intel_graphics::BDSM_64 + 4,
+            intel_graphics::SWSCI,
+            intel_graphics::ASLS,
+        ];
         match at {
             ROM => Write::Absorbed,
+            _ if self.intel_graphics.is_some() && platforms.contains(&at) => Write::Absorbed,
             // The header type is read-only; the interrupt line is the
             // platform's.
             HEADER_TYPE_DWORD if offset == 0x0E => Write::Absorbed,
@@ -160,8 +198,53 @@ impl ConfigSpace {
     }
 }
 
+/// The PC's host bridge (00:00.0) as the guest sees it, read-only: its ids,
+/// class and subsystem, and the registers an Intel integrated GPU's driver
+/// reads of it (whether its MCHBAR is on, its graphics control: whether
+/// VGA is decoded), as the PC has them; the rest zero, which says it has
+/// no BARs and no capabilities, and decodes nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HostBridge {
+    /// Its vendor and device ids, class code and revision, and subsystem
+    /// (the dwords at 0x00, 0x08 and 0x2C).
+    pub ids: u32,
+    pub class: u32,
+    pub subsystem: u32,
+    /// Its MCHBAR register (0x48).
+    pub mchbar: u64,
+    /// Its graphics control register's dword (0x50).
+    pub graphics_control: u32,
+}
+
+impl HostBridge {
+    /// Reads `width` bytes (1, 2 or 4, aligned) at `offset`. Writes do
+    /// nothing.
+    pub fn read(&self, offset: u16, width: u8) -> u32 {
+        if !aligned(offset, width) || offset >= SIZE {
+            return u32::MAX >> (32 - 8 * width.clamp(1, 4) as u32);
+        }
+        let dword = match offset & !3 {
+            0x00 => self.ids,
+            0x08 => self.class,
+            0x2C => self.subsystem,
+            0x48 => self.mchbar as u32,
+            0x4C => (self.mchbar >> 32) as u32,
+            intel_graphics::GGC => self.graphics_control,
+            _ => 0,
+        };
+        part(dword, offset, width)
+    }
+}
+
 fn aligned(offset: u16, width: u8) -> bool {
     matches!(width, 1 | 2 | 4) && offset.is_multiple_of(width as u16)
+}
+
+/// The `width` bytes at `offset` of the dword it falls in.
+fn part(dword: u32, offset: u16, width: u8) -> u32 {
+    let shift = 8 * (offset & 3) as u32;
+    let mask = if width == 4 { u32::MAX } else { (1 << (8 * width as u32)) - 1 };
+    (dword >> shift) & mask
 }
 
 /// `value`, written at `offset`, without `bits` (of the dword it falls in).
@@ -281,5 +364,48 @@ mod tests {
         assert_eq!(c.write(0x62, 2, 0x81), Write::Device { offset: 0x62, width: 2, value: 0x81 });
         assert_eq!(c.write(0x100, 4, 1), Write::Absorbed);
         assert_eq!(c.write(0x63, 2, 1), Write::Absorbed);
+    }
+
+    #[test]
+    fn an_intel_gpus_registers_that_name_the_pcs_memory_are_the_platforms() {
+        // Alder Lake-P's: its stolen memory at 0x64000000, its OpRegion's
+        // copy at 0xC0000.
+        let gpu = |at: u16| match at {
+            0x50 => 0x0000_02C3,
+            0xC0 => 0x6400_0001,
+            0xC4 => 0,
+            0xFC => 0x5A2D_7018,
+            _ => device(at),
+        };
+        let mut c = ConfigSpace::new(vec![], false, None, None);
+        c.intel_graphics(0xC_0000);
+        assert_eq!(c.read(0xFC, 4, gpu), 0xC_0000);
+        assert_eq!(c.read(0xFE, 2, gpu), 0x000C);
+        assert_eq!((c.read(0x50, 2, gpu), c.read(0xC0, 4, gpu)), (0x02C3, 0x6400_0001));
+        for (at, width) in [(0x50, 2), (0x5C, 4), (0xC0, 4), (0xC4, 4), (0xE8, 2), (0xFC, 4), (0xFD, 1)] {
+            assert_eq!(c.write(at, width, 1), Write::Absorbed, "{at:#x}");
+        }
+        assert_eq!(c.write(0xE4, 4, 1), Write::Device { offset: 0xE4, width: 4, value: 1 });
+        // Another function's are its own.
+        let mut other = ConfigSpace::new(vec![], false, None, None);
+        assert_eq!(other.read(0xFC, 4, gpu), 0x5A2D_7018);
+        assert_eq!(other.write(0xE8, 2, 1), Write::Device { offset: 0xE8, width: 2, value: 1 });
+    }
+
+    #[test]
+    fn the_host_bridge_says_what_the_pcs_does_and_no_more() {
+        let b = HostBridge {
+            ids: 0x4621_8086,
+            class: 0x0600_0002,
+            subsystem: 0x1F62_1043,
+            mchbar: 0xFEDC_0001,
+            graphics_control: 0x02C3,
+        };
+        assert_eq!((b.read(0x00, 2), b.read(0x02, 2), b.read(0x0B, 1)), (0x8086, 0x4621, 0x06));
+        assert_eq!((b.read(0x48, 4), b.read(0x4C, 4), b.read(0x50, 2)), (0xFEDC_0001, 0, 0x02C3));
+        assert_eq!(b.read(0x2C, 4), 0x1F62_1043);
+        // No BARs, no capabilities, single-function, decoding nothing.
+        assert_eq!((b.read(0x04, 4), b.read(0x0E, 1), b.read(0x10, 4), b.read(0x34, 1)), (0, 0, 0, 0));
+        assert_eq!((b.read(0xA0, 4), b.read(0x49, 2), b.read(0x100, 4)), (0, u32::MAX >> 16, u32::MAX));
     }
 }

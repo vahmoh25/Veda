@@ -88,6 +88,12 @@ message! {
         /// may have given as its framebuffer's (through the graphics
         /// aperture, or the memory itself).
         pub firmware: Vec<u64>,
+        /// Whether that memory stays only pixels while the driver has the
+        /// display, and after (a VGA's memory, which holds nothing but
+        /// pictures). If not (an Intel GPU's aperture, which the driver's
+        /// tables translate to whatever they map), nothing may write there
+        /// once the driver has the display.
+        pub firmware_kept: bool,
         /// The time between two vertical blanks (ns; 0 if not known).
         pub period_ns: u64,
     }
