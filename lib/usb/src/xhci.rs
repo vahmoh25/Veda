@@ -16,6 +16,8 @@ pub mod trb_type {
     pub const DATA_STAGE: u8 = 3;
     pub const STATUS_STAGE: u8 = 4;
     pub const LINK: u8 = 6;
+    /// A TRB of a transfer ring that moves nothing (one cancelled).
+    pub const NOOP: u8 = 8;
     pub const ENABLE_SLOT: u8 = 9;
     pub const DISABLE_SLOT: u8 = 10;
     pub const ADDRESS_DEVICE: u8 = 11;
@@ -161,6 +163,12 @@ impl Trb {
     pub fn normal(buffer: u64, len: u32, td_size: u32, chain: bool) -> Trb {
         let flags = ISP | if chain { CHAIN } else { IOC };
         Trb::new(trb_type::NORMAL, buffer, transfer_status(len, td_size), flags)
+    }
+
+    /// A cancelled transfer's TRB: the same place on the ring, moving
+    /// nothing, with no event (`chain` as the TRB it replaces had).
+    pub fn noop(chain: bool) -> Trb {
+        Trb::new(trb_type::NOOP, 0, 0, if chain { CHAIN } else { 0 })
     }
 
     /// The link at the end of a ring, back to its start; `chain` when a
@@ -450,6 +458,34 @@ impl EndpointContext {
         }
     }
 
+    /// The context of a bulk or interrupt endpoint, of either direction
+    /// (`None` for an isochronous one).
+    pub fn for_endpoint(speed: Speed, e: &Endpoint, ring: u64) -> Option<EndpointContext> {
+        match e.transfer_type() {
+            TransferType::Interrupt => {
+                let mut c = EndpointContext::interrupt_in(speed, e, ring);
+                if !e.is_in() {
+                    c.endpoint_type = endpoint_type::INTERRUPT_OUT;
+                }
+                Some(c)
+            }
+            TransferType::Bulk => Some(EndpointContext {
+                endpoint_type: if e.is_in() { endpoint_type::BULK_IN } else { endpoint_type::BULK_OUT },
+                max_packet_size: e.packet_size(),
+                max_burst: match speed {
+                    Speed::Super | Speed::SuperPlus => e.max_burst.min(15),
+                    _ => 0,
+                },
+                error_count: 3,
+                dequeue: ring | 1,
+                // What section 4.14.1.1 suggests for bulk endpoints.
+                average_trb_length: 3072,
+                ..EndpointContext::default()
+            }),
+            _ => None,
+        }
+    }
+
     /// The context as the controller reads it.
     pub fn to_dwords(&self) -> [u32; 5] {
         [
@@ -471,6 +507,12 @@ pub fn input_control(add: u32) -> [u32; 2] {
     [0, add]
 }
 
+/// The input control context of a Configure Endpoint that also drops the
+/// endpoint contexts of `drop` (bit `i` for context `i`).
+pub fn input_control_change(drop: u32, add: u32) -> [u32; 2] {
+    [drop, add]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,6 +520,26 @@ mod tests {
 
     fn endpoint(address: u8, attributes: u8, max_packet_size: u16, interval: u8) -> Endpoint {
         Endpoint { address, attributes, max_packet_size, interval, max_burst: 0, bytes_per_interval: 0 }
+    }
+
+    #[test]
+    fn bulk_and_interrupt_endpoints_of_both_directions() {
+        // Bulk IN at high speed: 512-byte packets, no bursts.
+        let c = EndpointContext::for_endpoint(Speed::High, &endpoint(0x81, 2, 512, 0), 0x1000).unwrap();
+        assert_eq!((c.endpoint_type, c.max_packet_size, c.max_burst), (endpoint_type::BULK_IN, 512, 0));
+        assert_eq!((c.dequeue, c.interval, c.error_count), (0x1001, 0, 3));
+        // Bulk OUT at SuperSpeed bursts as its companion says.
+        let mut e = endpoint(0x02, 2, 1024, 0);
+        e.max_burst = 3;
+        let c = EndpointContext::for_endpoint(Speed::Super, &e, 0x2000).unwrap();
+        assert_eq!((c.endpoint_type, c.max_burst), (endpoint_type::BULK_OUT, 3));
+        // Interrupt OUT: as an IN one, the other way.
+        let c = EndpointContext::for_endpoint(Speed::Full, &endpoint(0x03, 3, 8, 10), 0x3000).unwrap();
+        assert_eq!((c.endpoint_type, c.interval), (endpoint_type::INTERRUPT_OUT, 6));
+        // Isochronous endpoints are not had.
+        assert!(EndpointContext::for_endpoint(Speed::High, &endpoint(0x84, 1, 192, 1), 0x4000).is_none());
+        // No-Op TRBs keep the chain.
+        assert!(Trb::noop(true).chained() && Trb::noop(true).kind() == trb_type::NOOP);
     }
 
     #[test]

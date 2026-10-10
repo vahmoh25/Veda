@@ -1,0 +1,23 @@
+# The microphone through Linux's driver: QEMU's Intel HD Audio controller,
+# whose codec has a line input (QEMU's silent sound system records silence,
+# at the card's pace), goes to the driver VM. Veda's ALSA driver attaches
+# the card's input to the audio service too; a recording gets every second
+# of it, at the card's rate, and loses nothing.
+requires drivervm
+iommu
+sound hda
+audio silent
+boot-cmdline "drivervm drivervm.devices=8086:293e"
+boot-cmdline "run=audiotest:record,3"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+fail-on "audiotest: FAIL"
+wait-serial "alsa: attached to the audio service (with recording)" 90
+wait-serial "audiotest: input device HDA Intel (Linux)" 60
+wait-serial "alsa: recording started" 30
+wait-serial-count "16000 samples)" 3 30
+wait-serial "audiotest: PASS" 30
+reject-serial "samples lost"
+reject-serial "alsa: recording overrun"
+reject-serial "alsa: the card does not record"
+reject-serial "iommu: unit at"

@@ -1,10 +1,30 @@
-//! PCI configuration space access (port 0xCF8/0xCFC mechanism) and bus
-//! enumeration.
+//! PCI configuration space access (port 0xCF8/0xCFC mechanism), bus
+//! enumeration, and resetting a function.
 
 use alloc::vec::Vec;
 
 use vproto::pci::{Bar, DeviceInfo};
 use vrt::object::IoPorts;
+use vrt::time::{Duration, sleep};
+
+const CAP_POWER_MANAGEMENT: u8 = 0x01;
+const CAP_PCI_EXPRESS: u8 = 0x10;
+/// PCI Express: Device Capabilities (function-level reset), Device Control
+/// (initiate it), Device Status (transactions pending).
+const DEVCAP: u16 = 4;
+const DEVCAP_FLR: u32 = 1 << 28;
+const DEVCTL: u16 = 8;
+const DEVCTL_FLR: u32 = 1 << 15;
+const DEVSTA: u16 = 0xA;
+const DEVSTA_TRANSACTIONS_PENDING: u32 = 1 << 5;
+/// Power management: Control/Status (the power state, and whether going
+/// back to D0 keeps the function's state).
+const PMCSR: u16 = 4;
+const PMCSR_STATE: u32 = 0b11;
+const PMCSR_D3HOT: u32 = 0b11;
+const PMCSR_NO_SOFT_RESET: u32 = 1 << 3;
+const COMMAND_DECODE: u32 = 0b11;
+const COMMAND_BUS_MASTER: u32 = 1 << 2;
 
 pub struct ConfigSpace {
     ports: IoPorts,
@@ -138,6 +158,83 @@ impl ConfigSpace {
             irq_pin: (irq >> 8) as u8,
             bars: if header == 0 { self.bars(a) } else { Vec::new() },
         }
+    }
+
+    /// Where capability `id` is in the function's list, if it has it.
+    pub fn capability(&self, a: Address, id: u8) -> Option<u16> {
+        if self.read(a, 0x06, 2) & (1 << 4) == 0 {
+            return None;
+        }
+        let mut at = (self.read(a, 0x34, 1) & 0xFC) as u16;
+        // At most 48 entries fit in 256 bytes.
+        for _ in 0..48 {
+            if at == 0 {
+                return None;
+            }
+            if self.read(a, at, 1) as u8 == id {
+                return Some(at);
+            }
+            at = (self.read(a, at + 1, 1) & 0xFC) as u16;
+        }
+        None
+    }
+
+    /// Resets the function to what it was at power-on, but where the
+    /// firmware placed it: a function-level reset if it has one (PCI
+    /// Express), else going through D3hot if that resets it. Its header
+    /// (BARs, expansion ROM, interrupt line) and its PCI Express device
+    /// control are put back, its decoding enabled and its DMA not. Says how,
+    /// or `None` if it cannot be reset.
+    pub fn reset(&self, a: Address) -> Option<&'static str> {
+        let header: Vec<u32> = (0..16).map(|i| self.read32(a, i * 4)).collect();
+        let command = header[1] & 0xFFFF;
+        let express = self.capability(a, CAP_PCI_EXPRESS);
+        let devctl = express.map(|at| self.read(a, at + DEVCTL, 2));
+        // Its DMA stops first.
+        self.write(a, 0x04, 2, command & !COMMAND_BUS_MASTER);
+        let how = if let Some(at) = express.filter(|&at| self.read32(a, at + DEVCAP) & DEVCAP_FLR != 0) {
+            // What it has started finishes (up to 100 ms) before the reset,
+            // which takes up to 100 ms.
+            for _ in 0..10 {
+                if self.read(a, at + DEVSTA, 2) & DEVSTA_TRANSACTIONS_PENDING == 0 {
+                    break;
+                }
+                sleep(Duration::from_millis(10));
+            }
+            self.write(a, at + DEVCTL, 2, devctl.unwrap_or(0) | DEVCTL_FLR);
+            sleep(Duration::from_millis(100));
+            "function-level reset"
+        } else if let Some(at) = self
+            .capability(a, CAP_POWER_MANAGEMENT)
+            .filter(|&at| self.read(a, at + PMCSR, 2) & PMCSR_NO_SOFT_RESET == 0)
+        {
+            let pmcsr = self.read(a, at + PMCSR, 2) & !PMCSR_STATE;
+            self.write(a, at + PMCSR, 2, pmcsr | PMCSR_D3HOT);
+            sleep(Duration::from_millis(10));
+            self.write(a, at + PMCSR, 2, pmcsr);
+            sleep(Duration::from_millis(10));
+            "reset through D3hot"
+        } else {
+            self.write(a, 0x04, 2, command & COMMAND_DECODE);
+            return None;
+        };
+        // It answers again within a second.
+        for _ in 0..100 {
+            if self.read32(a, 0) & 0xFFFF != 0xFFFF {
+                break;
+            }
+            sleep(Duration::from_millis(10));
+        }
+        // Cache line size and latency timer, the BARs, the expansion ROM,
+        // the interrupt line; then the command.
+        for i in [3usize, 4, 5, 6, 7, 8, 9, 12, 15] {
+            self.write32(a, i as u16 * 4, header[i]);
+        }
+        if let (Some(at), Some(ctl)) = (express, devctl) {
+            self.write(a, at + DEVCTL, 2, ctl & !DEVCTL_FLR);
+        }
+        self.write(a, 0x04, 2, command & COMMAND_DECODE);
+        Some(how)
     }
 
     /// Enumerates every function on every bus reachable from bus 0.

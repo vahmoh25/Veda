@@ -506,7 +506,7 @@
 +device_initcall(veda_hvc_init);
 --- /dev/null
 +++ b/include/uapi/linux/veda.h
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,202 @@
 +/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 +/*
 + * The bridge of Veda's driver VM: Veda's IPC for the programs of Linux in
@@ -660,6 +660,34 @@
 +	__u64 utc_at_zero;
 +};
 +
++/*
++ * A file (fd, out) that is readable while one of the handle's signals is
++ * active: so that a program polls Veda's objects with its other files.
++ * Reading it gives the signals active then (a __u32); the next poll waits
++ * for them again. A handle that is gone makes it an error (EPOLLERR, EIO).
++ */
++struct veda_watch {
++	__u32 status;
++	__u32 handle;
++	__u32 signals;
++	__s32 fd;
++};
++
++/*
++ * A dma-buf (fd, out) of len bytes of the VMO from offset, which the
++ * monitor maps as VEDA_IOC_VMO_MAP does (flags too): Linux's drivers reach
++ * Veda's memory through it, a display scanning a picture out, a GPU
++ * rendering into it. The pages stay mapped while the dma-buf lives.
++ */
++struct veda_vmo_dmabuf {
++	__u32 status;
++	__u32 handle;
++	__u64 offset;
++	__u64 len;
++	__u32 flags;
++	__s32 fd;
++};
++
 +#define VEDA_IOCTL		0xB9
 +#define VEDA_IOC_CLOSE		_IOWR(VEDA_IOCTL, 2, struct veda_close)
 +#define VEDA_IOC_DUPLICATE	_IOWR(VEDA_IOCTL, 3, struct veda_duplicate)
@@ -677,19 +705,23 @@
 +#define VEDA_IOC_VMO_MAP	_IOWR(VEDA_IOCTL, 16, struct veda_vmo_map)
 +#define VEDA_IOC_BOOTSTRAP	_IOWR(VEDA_IOCTL, 18, struct veda_bootstrap)
 +#define VEDA_IOC_CLOCK		_IOWR(VEDA_IOCTL, 19, struct veda_clock)
++#define VEDA_IOC_WATCH		_IOWR(VEDA_IOCTL, 20, struct veda_watch)
++#define VEDA_IOC_VMO_DMABUF	_IOWR(VEDA_IOCTL, 21, struct veda_vmo_dmabuf)
 +
 +#endif /* _UAPI_LINUX_VEDA_H */
 --- /dev/null
 +++ b/drivers/virt/veda/Kconfig
-@@ -0,0 +1,8 @@
+@@ -0,0 +1,10 @@
 +# SPDX-License-Identifier: GPL-2.0
 +config VEDA_BRIDGE
 +	bool "Veda driver VM bridge"
 +	depends on VEDA_GUEST
++	select DMA_SHARED_BUFFER
 +	help
 +	  /dev/veda, through which the programs of Linux in Veda's driver VM
 +	  use Veda's IPC: channels, events, memory objects and waits on
-+	  them, on objects that live in Veda.
++	  them, on objects that live in Veda; and memory objects as dma-bufs
++	  for Linux's drivers.
 --- /dev/null
 +++ b/drivers/virt/veda/Makefile
 @@ -0,0 +1,2 @@
@@ -697,7 +729,7 @@
 +obj-$(CONFIG_VEDA_BRIDGE)	+= bridge.o
 --- /dev/null
 +++ b/drivers/virt/veda/bridge.c
-@@ -0,0 +1,686 @@
+@@ -0,0 +1,1063 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * /dev/veda: the bridge of Veda's driver VM, through which the programs of
@@ -713,15 +745,33 @@
 + *
 + * A VMO is mapped by the monitor into guest-physical memory beyond RAM;
 + * the program maps those pages (mmap at the offset VEDA_IOC_VMO_MAP gives).
++ *
++ * A watch (VEDA_IOC_WATCH) is a file that is readable while a handle's
++ * signals are: a wait the monitor finishes later, made again as the file
++ * is polled after it was read. Programs poll Veda's objects with their
++ * other files so.
++ *
++ * A VMO's dma-buf (VEDA_IOC_VMO_DMABUF) gives Linux's drivers Veda's
++ * memory: the monitor maps the VMO as for a program, and the dma-buf hands
++ * its guest-physical range to importers, as addresses for their devices'
++ * DMA (the IOMMU sees the guest's memory as its processors do) or mapped
++ * for the processor. The range is unmapped when the dma-buf goes.
 + */
 +
++#include <linux/anon_inodes.h>
 +#include <linux/atomic.h>
++#include <linux/dma-buf.h>
++#include <linux/dma-mapping.h>
++#include <linux/file.h>
++#include <linux/io.h>
 +#include <linux/fs.h>
 +#include <linux/init.h>
 +#include <linux/list.h>
 +#include <linux/miscdevice.h>
 +#include <linux/mm.h>
 +#include <linux/mutex.h>
++#include <linux/poll.h>
++#include <linux/scatterlist.h>
 +#include <linux/slab.h>
 +#include <linux/spinlock.h>
 +#include <linux/uaccess.h>
@@ -734,7 +784,9 @@
 +/* Operations (lib/hv/src/bridge.rs: op): the ioctls' numbers, and the
 + * driver's own. */
 +#define OP_SETUP	1
++#define OP_WAIT		6
 +#define OP_CANCEL	7
++#define OP_VMO_MAP	16
 +#define OP_VMO_UNMAP	17
 +
 +#define VEDA_PENDING	0xFFFFFFFFu
@@ -1108,7 +1160,7 @@
 +	spin_lock_irqsave(&waiters_lock, flags);
 +	list_add(&waiter.node, &waiters);
 +	spin_unlock_irqrestore(&waiters_lock, flags);
-+	ret = bridge_call(6, w);
++	ret = bridge_call(OP_WAIT, w);
 +	if (!ret && w->status == VEDA_PENDING) {
 +		if (wait_event_interruptible(waiters_queue, READ_ONCE(waiter.done))) {
 +			struct cancel *c = kzalloc(sizeof(*c), GFP_KERNEL);
@@ -1148,6 +1200,188 @@
 +	return ret;
 +}
 +
++/* A watch: kernel memory, which the monitor reads and writes. */
++struct watch {
++	/* The /dev/veda file whose handle it watches. */
++	struct file *bridge;
++	u32 handle;
++	u32 signals;
++	struct mutex lock;
++	/* A wait is with the monitor; it finished (and is not read yet). */
++	bool armed;
++	bool ready;
++	struct waiter waiter;
++	struct veda_wait wait;
++	struct veda_wait_item item;
++	struct cancel cancel;
++};
++
++static void unlist(struct waiter *waiter)
++{
++	unsigned long flags;
++
++	spin_lock_irqsave(&waiters_lock, flags);
++	list_del(&waiter->node);
++	spin_unlock_irqrestore(&waiters_lock, flags);
++}
++
++/* Takes the finished wait, if it did. */
++static void watch_update(struct watch *w)
++{
++	if (w->armed && READ_ONCE(w->waiter.done)) {
++		unlist(&w->waiter);
++		w->wait.status = w->waiter.status;
++		w->armed = false;
++		w->ready = true;
++	}
++}
++
++/* Waits for the signals again: ready at once if they are active. */
++static void watch_arm(struct watch *w)
++{
++	struct bridge_file *f = w->bridge->private_data;
++	unsigned long flags;
++
++	w->ready = true;
++	if (!holds(f, w->handle)) {
++		w->wait.status = VEDA_BAD_HANDLE;
++		return;
++	}
++	w->item = (struct veda_wait_item){ .handle = w->handle, .signals = w->signals };
++	w->wait = (struct veda_wait){ .count = 1, .items = __pa(&w->item), .deadline = ~0ULL };
++	w->wait.key = atomic64_inc_return(&next_key);
++	w->waiter.key = w->wait.key;
++	w->waiter.done = false;
++	/* Listed before the monitor may finish it. */
++	spin_lock_irqsave(&waiters_lock, flags);
++	list_add(&w->waiter.node, &waiters);
++	spin_unlock_irqrestore(&waiters_lock, flags);
++	if (bridge_call(OP_WAIT, &w->wait)) {
++		unlist(&w->waiter);
++		w->wait.status = VEDA_BAD_HANDLE;
++	} else if (w->wait.status == VEDA_PENDING) {
++		w->armed = true;
++		w->ready = false;
++	} else {
++		unlist(&w->waiter);
++	}
++}
++
++static __poll_t watch_poll(struct file *file, poll_table *pt)
++{
++	struct watch *w = file->private_data;
++	__poll_t mask = 0;
++
++	poll_wait(file, &waiters_queue, pt);
++	mutex_lock(&w->lock);
++	watch_update(w);
++	if (!w->ready && !w->armed)
++		watch_arm(w);
++	if (w->ready)
++		mask = w->wait.status ? EPOLLERR : EPOLLIN | EPOLLRDNORM;
++	mutex_unlock(&w->lock);
++	return mask;
++}
++
++static ssize_t watch_read(struct file *file, char __user *buf, size_t len, loff_t *pos)
++{
++	struct watch *w = file->private_data;
++	u32 observed;
++
++	if (len < sizeof(observed))
++		return -EINVAL;
++	mutex_lock(&w->lock);
++	for (;;) {
++		watch_update(w);
++		if (!w->ready && !w->armed)
++			watch_arm(w);
++		if (w->ready)
++			break;
++		mutex_unlock(&w->lock);
++		if (file->f_flags & O_NONBLOCK)
++			return -EAGAIN;
++		if (wait_event_interruptible(waiters_queue, READ_ONCE(w->waiter.done)))
++			return -ERESTARTSYS;
++		mutex_lock(&w->lock);
++	}
++	if (w->wait.status) {
++		mutex_unlock(&w->lock);
++		return -EIO;
++	}
++	observed = w->item.observed;
++	w->ready = false;
++	mutex_unlock(&w->lock);
++	return copy_to_user(buf, &observed, sizeof(observed)) ? -EFAULT : sizeof(observed);
++}
++
++static int watch_release(struct inode *inode, struct file *file)
++{
++	struct watch *w = file->private_data;
++
++	if (w->armed) {
++		/* Given up, unless the monitor finished it meanwhile: its
++		 * completion is then on its way, and writes w->item. */
++		w->cancel.key = w->waiter.key;
++		if (bridge_call(OP_CANCEL, &w->cancel) || w->cancel.status)
++			wait_event(waiters_queue, READ_ONCE(w->waiter.done));
++		unlist(&w->waiter);
++	}
++	fput(w->bridge);
++	kfree(w);
++	return 0;
++}
++
++static const struct file_operations watch_fops = {
++	.owner = THIS_MODULE,
++	.poll = watch_poll,
++	.read = watch_read,
++	.release = watch_release,
++	.llseek = noop_llseek,
++};
++
++static long do_watch(struct file *file, void __user *arg)
++{
++	struct bridge_file *f = file->private_data;
++	struct veda_watch req;
++	struct file *wf;
++	struct watch *w;
++	int fd;
++
++	if (copy_from_user(&req, arg, sizeof(req)))
++		return -EFAULT;
++	if (!holds(f, req.handle)) {
++		req.status = VEDA_BAD_HANDLE;
++		return copy_to_user(arg, &req, sizeof(req)) ? -EFAULT : 0;
++	}
++	w = kzalloc(sizeof(*w), GFP_KERNEL);
++	if (!w)
++		return -ENOMEM;
++	mutex_init(&w->lock);
++	w->handle = req.handle;
++	w->signals = req.signals;
++	fd = get_unused_fd_flags(O_CLOEXEC);
++	if (fd < 0) {
++		kfree(w);
++		return fd;
++	}
++	wf = anon_inode_getfile("[veda-watch]", &watch_fops, w, O_RDONLY);
++	if (IS_ERR(wf)) {
++		put_unused_fd(fd);
++		kfree(w);
++		return PTR_ERR(wf);
++	}
++	w->bridge = get_file(file);
++	req.status = 0;
++	req.fd = fd;
++	if (copy_to_user(arg, &req, sizeof(req))) {
++		put_unused_fd(fd);
++		fput(wf);
++		return -EFAULT;
++	}
++	fd_install(fd, wf);
++	return 0;
++}
++
 +static long do_vmo_map(struct bridge_file *f, void __user *arg)
 +{
 +	struct veda_vmo_map *m;
@@ -1165,7 +1399,7 @@
 +	if (!holds(f, m->handle)) {
 +		m->status = VEDA_BAD_HANDLE;
 +	} else {
-+		ret = bridge_call(16, m);
++		ret = bridge_call(OP_VMO_MAP, m);
 +		if (ret)
 +			goto out;
 +		if (m->status == 0) {
@@ -1186,19 +1420,190 @@
 +	return ret;
 +}
 +
-+/* The monitor unmaps the VMO's pages from the guest (mappings_lock held). */
-+static void unmap(struct mapping *mapping)
++/* The monitor unmaps a VMO's pages from the guest. */
++static void unmap_range(u64 gpa, u64 len)
 +{
 +	struct veda_vmo_map *m = kzalloc(sizeof(*m), GFP_KERNEL);
 +
 +	if (m) {
-+		m->gpa = mapping->gpa;
-+		m->len = mapping->len;
++		m->gpa = gpa;
++		m->len = len;
 +		bridge_call(OP_VMO_UNMAP, m);
 +		kfree(m);
 +	}
++}
++
++/* (mappings_lock held) */
++static void unmap(struct mapping *mapping)
++{
++	unmap_range(mapping->gpa, mapping->len);
 +	list_del(&mapping->node);
 +	kfree(mapping);
++}
++
++/* A VMO's dma-buf: the range the monitor mapped it at. */
++struct vmo_buf {
++	u64 gpa;
++	u64 len;
++	bool writable;
++};
++
++/* The range as DMA addresses for the importer's device, in segments it
++ * takes; no pages (the range is not the guest's RAM). */
++static struct sg_table *vmo_buf_map(struct dma_buf_attachment *attach, enum dma_data_direction dir)
++{
++	struct vmo_buf *b = attach->dmabuf->priv;
++	u64 seg = dma_get_max_seg_size(attach->dev) & PAGE_MASK;
++	struct scatterlist *sg;
++	struct sg_table *sgt;
++	unsigned int i, n;
++	u64 at = 0;
++
++	if (dir != DMA_TO_DEVICE && !b->writable)
++		return ERR_PTR(-EACCES);
++	if (!seg)
++		seg = PAGE_SIZE;
++	n = DIV_ROUND_UP(b->len, seg);
++	sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
++	if (!sgt || sg_alloc_table(sgt, n, GFP_KERNEL)) {
++		kfree(sgt);
++		return ERR_PTR(-ENOMEM);
++	}
++	for_each_sgtable_sg(sgt, sg, i) {
++		u64 len = min(seg, b->len - at);
++		dma_addr_t addr = dma_map_resource(attach->dev, b->gpa + at, len, dir, DMA_ATTR_SKIP_CPU_SYNC);
++
++		if (dma_mapping_error(attach->dev, addr)) {
++			sgt->nents = i;
++			goto fail;
++		}
++		sg->length = len;
++		sg_dma_address(sg) = addr;
++		sg_dma_len(sg) = len;
++		at += len;
++	}
++	sgt->nents = n;
++	return sgt;
++fail:
++	for_each_sgtable_dma_sg(sgt, sg, i)
++		dma_unmap_resource(attach->dev, sg_dma_address(sg), sg_dma_len(sg), dir, DMA_ATTR_SKIP_CPU_SYNC);
++	sg_free_table(sgt);
++	kfree(sgt);
++	return ERR_PTR(-ENOMEM);
++}
++
++static void vmo_buf_unmap(struct dma_buf_attachment *attach, struct sg_table *sgt, enum dma_data_direction dir)
++{
++	struct scatterlist *sg;
++	unsigned int i;
++
++	for_each_sgtable_dma_sg(sgt, sg, i)
++		dma_unmap_resource(attach->dev, sg_dma_address(sg), sg_dma_len(sg), dir, DMA_ATTR_SKIP_CPU_SYNC);
++	sg_free_table(sgt);
++	kfree(sgt);
++}
++
++/* For importers that copy with the processor (a display without DMA of
++ * its own): the range, cached. */
++static int vmo_buf_vmap(struct dma_buf *dmabuf, struct iosys_map *map)
++{
++	struct vmo_buf *b = dmabuf->priv;
++	void *vaddr = memremap(b->gpa, b->len, MEMREMAP_WB);
++
++	if (!vaddr)
++		return -ENOMEM;
++	iosys_map_set_vaddr(map, vaddr);
++	return 0;
++}
++
++static void vmo_buf_vunmap(struct dma_buf *dmabuf, struct iosys_map *map)
++{
++	memunmap(map->vaddr);
++}
++
++static void vmo_buf_release(struct dma_buf *dmabuf)
++{
++	struct vmo_buf *b = dmabuf->priv;
++
++	unmap_range(b->gpa, b->len);
++	kfree(b);
++}
++
++static const struct dma_buf_ops vmo_buf_ops = {
++	.map_dma_buf = vmo_buf_map,
++	.unmap_dma_buf = vmo_buf_unmap,
++	.vmap = vmo_buf_vmap,
++	.vunmap = vmo_buf_vunmap,
++	.release = vmo_buf_release,
++};
++
++static long do_vmo_dmabuf(struct bridge_file *f, void __user *arg)
++{
++	DEFINE_DMA_BUF_EXPORT_INFO(info);
++	struct veda_vmo_dmabuf req;
++	struct veda_vmo_map *m;
++	struct dma_buf *buf;
++	struct vmo_buf *b;
++	long ret;
++	int fd;
++
++	if (copy_from_user(&req, arg, sizeof(req)))
++		return -EFAULT;
++	if (!holds(f, req.handle)) {
++		req.status = VEDA_BAD_HANDLE;
++		return copy_to_user(arg, &req, sizeof(req)) ? -EFAULT : 0;
++	}
++	m = kzalloc(sizeof(*m), GFP_KERNEL);
++	b = kzalloc(sizeof(*b), GFP_KERNEL);
++	ret = -ENOMEM;
++	if (!m || !b)
++		goto out;
++	m->handle = req.handle;
++	m->offset = req.offset;
++	m->len = req.len;
++	m->flags = req.flags;
++	ret = bridge_call(OP_VMO_MAP, m);
++	if (ret)
++		goto out;
++	req.status = m->status;
++	if (m->status) {
++		ret = copy_to_user(arg, &req, sizeof(req)) ? -EFAULT : 0;
++		goto out;
++	}
++	b->gpa = m->gpa;
++	b->len = m->len;
++	b->writable = m->flags & 2;
++	info.ops = &vmo_buf_ops;
++	info.size = b->len;
++	info.flags = O_RDWR | O_CLOEXEC;
++	info.priv = b;
++	buf = dma_buf_export(&info);
++	if (IS_ERR(buf)) {
++		unmap_range(b->gpa, b->len);
++		ret = PTR_ERR(buf);
++		goto out;
++	}
++	/* The dma-buf has the range now. */
++	b = NULL;
++	fd = get_unused_fd_flags(O_CLOEXEC);
++	if (fd < 0) {
++		dma_buf_put(buf);
++		ret = fd;
++		goto out;
++	}
++	req.fd = fd;
++	if (copy_to_user(arg, &req, sizeof(req))) {
++		put_unused_fd(fd);
++		dma_buf_put(buf);
++		ret = -EFAULT;
++		goto out;
++	}
++	fd_install(fd, buf->file);
++	ret = 0;
++out:
++	kfree(b);
++	kfree(m);
++	return ret;
 +}
 +
 +static long bridge_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
@@ -1242,6 +1647,10 @@
 +			     false);
 +	case VEDA_IOC_CLOCK:
 +		return plain(f, 19, uarg, sizeof(struct veda_clock), false, 0, false);
++	case VEDA_IOC_VMO_DMABUF:
++		return do_vmo_dmabuf(f, uarg);
++	case VEDA_IOC_WATCH:
++		return do_watch(file, uarg);
 +	default:
 +		return -ENOTTY;
 +	}

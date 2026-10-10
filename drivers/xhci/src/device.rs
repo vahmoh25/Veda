@@ -84,6 +84,8 @@ pub enum Function {
     Hub(Hub),
     /// Its keyboard, mouse and tablet interfaces.
     Hid(Vec<HidInterface>),
+    /// Lent to the driver VM.
+    Lent(crate::lend::Lent),
 }
 
 /// A device with a slot.
@@ -103,7 +105,7 @@ impl Device {
         match &mut self.function {
             Function::Hub(hub) => (hub.pipe.index == index).then_some(&mut hub.pipe),
             Function::Hid(interfaces) => interfaces.iter_mut().map(|h| &mut h.pipe).find(|p| p.index == index),
-            Function::None => None,
+            Function::None | Function::Lent(_) => None,
         }
     }
 }
@@ -275,7 +277,9 @@ impl Xhci {
         self.address(slot)?;
         let (descriptor, config) = self.identify(slot)?;
         let product = self.product_name(slot, &descriptor);
-        let what = if descriptor.class == class::HUB {
+        let what = if self.to_lend(&descriptor) {
+            Some(self.lend(slot, &descriptor, product.as_deref())?)
+        } else if descriptor.class == class::HUB {
             self.start_hub(slot, &config)?
         } else if config.default_interfaces().any(|i| i.class == class::HID) {
             self.start_hid(slot, &config)?
@@ -416,7 +420,7 @@ impl Xhci {
     }
 
     /// Releases a device's slot and memory; returns where it was.
-    fn remove(&mut self, slot: u8) -> Option<Location> {
+    pub(crate) fn remove(&mut self, slot: u8) -> Option<Location> {
         let mut dev = self.devices.remove(&slot)?;
         match &mut dev.function {
             Function::Hub(hub) => {
@@ -434,7 +438,8 @@ impl Xhci {
                     self.input.report(events);
                 }
             }
-            Function::None => {}
+            // Its consumer sees its channel close.
+            Function::None | Function::Lent(_) => {}
         }
         // The controller stops using the device's memory once the slot is
         // disabled; it is freed after that, with `dev`.

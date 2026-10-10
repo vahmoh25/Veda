@@ -1,24 +1,76 @@
 //! End-to-end tests: a [`Station`] and an [`AccessPoint`] joined by a
-//! simulated radio channel, with a millisecond clock.
+//! simulated radio channel, with a millisecond clock. A managed station's
+//! radio is simulated too ([`Mlme`]): it makes the frames of the station's
+//! commands, and protects and checks frames with the keys it is given.
 
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::ap::{AccessPoint, ApAction, ApConfig, ApEvent};
-use crate::frame::{self, Mac, mgmt, reason};
+use crate::ccmp;
+use crate::eapol;
+use crate::frame::{self, Header, Mac, capab, is_group, mgmt, reason};
 use crate::handshake::tests::TestRandom;
+use crate::ie;
 use crate::rsn::Security;
 use crate::scan::parse_bss;
-use crate::station::{Action, Credential, Failure, StaEvent, Station, Target};
+use crate::station::{Action, Credential, Failure, KeyKind, StaEvent, Station, Target};
 
 const STA_MAC: Mac = [0x02, 0x00, 0x00, 0x57, 0x4C, 0x01];
 const AP_MAC: Mac = [0x02, 0x00, 0x00, 0xA9, 0x00, 0x01];
 const HOST_MAC: Mac = [0x52, 0x55, 0x0A, 0x00, 0x02, 0x02];
 
+/// A managed radio, as far as the tests need one: Linux's mac80211, say.
+#[derive(Default)]
+struct Mlme {
+    tk: Option<[u8; 16]>,
+    tx_pn: u64,
+    gtk: BTreeMap<u8, [u8; 16]>,
+    seq: u16,
+    authorized: bool,
+    /// The commands the station gave, by name, in order.
+    commands: Vec<&'static str>,
+}
+
+impl Mlme {
+    fn next_seq(&mut self) -> u16 {
+        self.seq = (self.seq + 1) & 0xFFF;
+        self.seq
+    }
+
+    /// A frame from the station, encrypted if `encrypt`.
+    fn protect(&mut self, plain: Vec<u8>, encrypt: bool) -> Option<Vec<u8>> {
+        match (encrypt, self.tk) {
+            (true, Some(tk)) => {
+                self.tx_pn += 1;
+                ccmp::ccmp_encrypt(&tk, &plain, self.tx_pn, 0)
+            }
+            (true, None) => None,
+            (false, _) => Some(plain),
+        }
+    }
+
+    /// A data frame of the station's: Ethernet as 802.11.
+    fn data(&mut self, bssid: &Mac, eth: &[u8], encrypt: bool) -> Option<Vec<u8>> {
+        let (da, sa) = (eth[0..6].try_into().ok()?, eth[6..12].try_into().ok()?);
+        let seq = self.next_seq();
+        let f = frame::data_to_ds(bssid, &sa, &da, seq, u16::from_be_bytes([eth[12], eth[13]]), &eth[14..]);
+        self.protect(f, encrypt)
+    }
+}
+
+/// What the managed radio hands the station of a frame from the AP.
+enum Up {
+    Frame(Vec<u8>),
+    Ethernet(Vec<u8>),
+}
+
 struct Sim {
     now: u64,
     sta: Station,
+    /// The station's radio is managed.
+    mlme: Option<Mlme>,
     ap: AccessPoint,
     rng: TestRandom,
     sta_channel: u8,
@@ -57,6 +109,7 @@ impl Sim {
         Sim {
             now: 0,
             sta: Station::new(STA_MAC),
+            mlme: None,
             ap,
             rng,
             sta_channel: 1,
@@ -71,19 +124,138 @@ impl Sim {
         }
     }
 
+    /// A station of a managed radio, which follows the AP's channel.
+    fn managed(cfg: ApConfig) -> Sim {
+        let mut s = Sim::new(cfg);
+        s.sta = Station::managed(STA_MAC);
+        s.mlme = Some(Mlme::default());
+        s.sta_channel = s.ap.cfg.channel;
+        s
+    }
+
     fn sta_actions(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
                 Action::Transmit { frame, .. } => {
+                    assert!(self.mlme.is_none(), "a managed station transmits frames itself");
                     if self.air && self.sta_channel == self.ap.cfg.channel {
                         self.to_ap.push_back(frame);
                     }
                 }
-                Action::SetChannel(c) => self.sta_channel = c,
+                Action::SetChannel(c) => {
+                    assert!(self.mlme.is_none(), "a managed station tunes the radio");
+                    self.sta_channel = c;
+                }
                 Action::Deliver(eth) => self.delivered.push(eth),
                 Action::Event(e) => self.events.push(e),
+                managed => self.mlme_command(managed),
             }
         }
+    }
+
+    /// The managed radio carries out a command of the station's.
+    fn mlme_command(&mut self, a: Action) {
+        let air = self.air;
+        let m = self.mlme.as_mut().expect("a soft MAC station gave a managed radio's command");
+        let out = match a {
+            Action::Authenticate { bssid, body, .. } => {
+                m.commands.push("authenticate");
+                let seq = m.next_seq();
+                Some(frame::management(mgmt::AUTH, &bssid, &STA_MAC, &bssid, seq, &body))
+            }
+            Action::Associate { bssid, ssid, ies, pmf, .. } => {
+                m.commands.push(if pmf { "associate (pmf)" } else { "associate" });
+                let elements = ie::Builder::new().ssid(&ssid).rates(&ie::RATES_G).raw(&ies).build();
+                let cap = capab::ESS | if ies.is_empty() { 0 } else { capab::PRIVACY };
+                let seq = m.next_seq();
+                let body = frame::AssocReqBody::build(cap, 10, &elements);
+                Some(frame::management(mgmt::ASSOC_REQ, &bssid, &STA_MAC, &bssid, seq, &body))
+            }
+            Action::Deauthenticate { bssid, reason } => {
+                m.commands.push("deauthenticate");
+                let seq = m.next_seq();
+                let f = frame::management(mgmt::DEAUTH, &bssid, &STA_MAC, &bssid, seq, &reason.to_le_bytes());
+                let encrypt = m.authorized;
+                m.protect(f, encrypt)
+            }
+            Action::SendEapol { peer, frame, encrypt } => {
+                m.commands.push(if encrypt { "eapol (encrypted)" } else { "eapol" });
+                let mut eth = Vec::new();
+                eth.extend_from_slice(&peer);
+                eth.extend_from_slice(&STA_MAC);
+                eth.extend_from_slice(&eapol::ETHERTYPE.to_be_bytes());
+                eth.extend_from_slice(&frame);
+                m.data(&peer, &eth, encrypt)
+            }
+            Action::InstallKey { kind, index, key, .. } => {
+                m.commands.push(match kind {
+                    KeyKind::Pairwise => "pairwise key",
+                    KeyKind::Group => "group key",
+                    KeyKind::Integrity => "integrity key",
+                });
+                if let Ok(k) = <[u8; 16]>::try_from(key.as_slice()) {
+                    match kind {
+                        KeyKind::Pairwise => m.tk = Some(k),
+                        KeyKind::Group => {
+                            m.gtk.insert(index, k);
+                        }
+                        KeyKind::Integrity => {}
+                    }
+                }
+                None
+            }
+            Action::Authorize { .. } => {
+                m.commands.push("authorize");
+                m.authorized = true;
+                None
+            }
+            Action::SendManagement(f) => {
+                m.commands.push("management");
+                let encrypt = m.tk.is_some();
+                m.protect(f, encrypt)
+            }
+            Action::SendEthernet(eth) => {
+                let bssid = self.ap.cfg.bssid;
+                let protected = self.ap.cfg.security != Security::Open;
+                if protected && !m.authorized { None } else { m.data(&bssid, &eth, protected) }
+            }
+            _ => None,
+        };
+        if let Some(f) = out
+            && air
+        {
+            self.to_ap.push_back(f);
+        }
+    }
+
+    /// What the managed radio makes of a frame from the AP: management
+    /// frames the station needs, checked; data as Ethernet, decrypted.
+    fn mlme_receive(&mut self, f: &[u8]) -> Option<Up> {
+        let m = self.mlme.as_mut()?;
+        let h = Header::parse(f)?;
+        let plain = if h.fc.protected() {
+            let (_, key_id) = ccmp::ccmp_header(f)?;
+            let key = if is_group(&h.addr1) { *m.gtk.get(&key_id)? } else { m.tk? };
+            ccmp::ccmp_decrypt(&key, f).ok()?.0
+        } else {
+            f.to_vec()
+        };
+        if h.fc.is_management() {
+            return match h.fc.subtype() {
+                mgmt::BEACON | mgmt::PROBE_RESP => None,
+                _ => Some(Up::Frame(plain)),
+            };
+        }
+        let (ethertype, payload) = frame::parse_snap(plain.get(h.len..)?)?;
+        if !h.fc.protected() && ethertype != eapol::ETHERTYPE && self.ap.cfg.security != Security::Open {
+            return None;
+        }
+        let mut eth = Vec::new();
+        eth.extend_from_slice(&h.addr1);
+        eth.extend_from_slice(&h.addr3);
+        eth.extend_from_slice(&ethertype.to_be_bytes());
+        eth.extend_from_slice(payload);
+        Some(Up::Ethernet(eth))
     }
 
     fn ap_actions(&mut self, actions: Vec<ApAction>) {
@@ -107,7 +279,14 @@ impl Sim {
                 let a = self.ap.receive(&f, self.now, &mut self.rng);
                 self.ap_actions(a);
             } else if let Some(f) = self.to_sta.pop_front() {
-                let a = self.sta.receive(&f, -50, self.now, &mut self.rng);
+                let a = match self.mlme.is_some() {
+                    false => self.sta.receive(&f, -50, self.now, &mut self.rng),
+                    true => match self.mlme_receive(&f) {
+                        Some(Up::Frame(f)) => self.sta.receive(&f, -50, self.now, &mut self.rng),
+                        Some(Up::Ethernet(eth)) => self.sta.receive_ethernet(&eth, self.now, &mut self.rng),
+                        None => Vec::new(),
+                    },
+                };
                 self.sta_actions(a);
             } else {
                 return;
@@ -421,4 +600,98 @@ fn random_and_altered_frames_leave_the_connection_intact() {
         s.run(2000);
         s.exchange_data();
     }
+}
+
+#[test]
+fn managed_radio_wpa2() {
+    let mut s = Sim::managed(ap_config(Security::Wpa2Personal, "correct horse battery"));
+    s.connect("correct horse battery", true);
+    assert!(s.run_until(5000, |s| s.connected()), "events: {:?}", s.events);
+    assert!(matches!(s.events.last(), Some(StaEvent::Connected { security: Security::Wpa2Personal, pmf: true, .. })));
+    // The radio associated with the station's RSN element, sent messages
+    // 2 and 4 in clear and got the keys after them, and opened the port.
+    let commands = &s.mlme.as_ref().unwrap().commands;
+    assert_eq!(
+        commands[..],
+        [
+            "authenticate",
+            "associate (pmf)",
+            "eapol",
+            "eapol",
+            "pairwise key",
+            "group key",
+            "integrity key",
+            "authorize"
+        ],
+    );
+    s.exchange_data();
+    let b = s.broadcast_from_host();
+    assert_eq!(s.delivered.last(), Some(&b));
+    // A new group key: the station answers encrypted, the radio gets it.
+    let a = s.ap.rekey_group(&mut s.rng, s.now);
+    s.ap_actions(a);
+    s.pump();
+    s.run(10);
+    let b2 = s.broadcast_from_host();
+    assert_eq!(s.delivered.last(), Some(&b2));
+    assert!(s.mlme.as_ref().unwrap().commands.contains(&"eapol (encrypted)"));
+    assert_eq!(s.sta.counters.group_rekeys, 1);
+}
+
+#[test]
+fn managed_radio_wpa3_and_open() {
+    for h2e in [false, true] {
+        let mut cfg = ap_config(Security::Wpa3Personal, "bright blue sky");
+        cfg.h2e = h2e;
+        let mut s = Sim::managed(cfg);
+        s.connect("bright blue sky", true);
+        assert!(s.run_until(8000, |s| s.connected()), "h2e={h2e}: {:?}", s.events);
+        assert!(matches!(s.events.last(), Some(StaEvent::Connected { sae: true, pmf: true, .. })));
+        // SAE: the commit and the confirm, through the radio.
+        let commands = &s.mlme.as_ref().unwrap().commands;
+        assert_eq!(commands.iter().filter(|c| **c == "authenticate").count(), 2);
+        s.exchange_data();
+    }
+    let mut s = Sim::managed(ap_config(Security::Open, ""));
+    s.connect("", true);
+    assert!(s.run_until(2000, |s| s.connected()), "events: {:?}", s.events);
+    assert_eq!(s.mlme.as_ref().unwrap().commands[..], ["authenticate", "associate"]);
+    s.exchange_data();
+}
+
+#[test]
+fn managed_radio_failures() {
+    // A wrong password: the AP never sends message 3.
+    let mut s = Sim::managed(ap_config(Security::Wpa2Personal, "correct horse battery"));
+    s.connect("wrong password!", true);
+    assert!(s.run_until(10_000, |s| s.events.iter().any(|e| matches!(e, StaEvent::JoinFailed(_)))));
+    assert!(s.events.contains(&StaEvent::JoinFailed(Failure::WrongPassword)), "{:?}", s.events);
+    // The radio says the AP did not answer.
+    let mut s = Sim::managed(ap_config(Security::Wpa2Personal, "correct horse battery"));
+    s.air = false;
+    s.connect("correct horse battery", true);
+    let a = s.sta.mlme_timeout(s.now);
+    s.sta_actions(a);
+    assert_eq!(s.events.last(), Some(&StaEvent::JoinFailed(Failure::NoResponse)));
+    // ...and if it never says, the station gives up anyway.
+    let mut s = Sim::managed(ap_config(Security::Open, ""));
+    s.air = false;
+    s.connect("", true);
+    assert!(s.run_until(10_000, |s| s.events.iter().any(|e| matches!(e, StaEvent::JoinFailed(_)))));
+    // A lost link ends a connection; leaving deauthenticates through the
+    // radio.
+    let mut s = Sim::managed(ap_config(Security::Wpa2Personal, "correct horse battery"));
+    s.connect("correct horse battery", true);
+    assert!(s.run_until(5000, |s| s.connected()));
+    let a = s.sta.link_lost(s.now);
+    s.sta_actions(a);
+    assert_eq!(s.events.last(), Some(&StaEvent::Disconnected(Failure::SignalLost)));
+    let mut s = Sim::managed(ap_config(Security::Wpa2Personal, "correct horse battery"));
+    s.connect("correct horse battery", true);
+    assert!(s.run_until(5000, |s| s.connected()));
+    let a = s.sta.disconnect(s.now);
+    s.sta_actions(a);
+    s.pump();
+    assert_eq!(s.mlme.as_ref().unwrap().commands.last(), Some(&"deauthenticate"));
+    assert_eq!(s.events.last(), Some(&StaEvent::Disconnected(Failure::Local)));
 }

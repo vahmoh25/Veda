@@ -38,12 +38,13 @@ use alloc::vec::Vec;
 
 use vabi::signals;
 use vfiles::fs::Fs;
+use vipc::Decode;
 use vipc::WaitSet;
 use vproto::net::{DeviceAttachment, DeviceInfo, InterfaceKind};
 use vproto::netring::{Link, LinkEndpoints, RxInfo, kind};
 use vproto::wlan::{
-    ConnState, FailReason, LogEntry, PhyError, PhyInfo, RADIO_STATE_EVENT, RadioState, WLAN_EVENT, WlanCounters,
-    WlanEvent, WlanStatus, wlan, wlanphy,
+    ConnState, FailReason, LogEntry, MLME_EVENT, MlmeEvent, PhyError, PhyInfo, RADIO_STATE_EVENT, RadioState,
+    WLAN_EVENT, WlanCounters, WlanEvent, WlanStatus, wlan, wlanphy,
 };
 use vrt::object::Channel;
 use vrt::println;
@@ -343,11 +344,20 @@ impl Wlan {
     }
 
     fn radio_attached(&mut self, now: u64) {
-        self.sta = Station::new(self.radio.as_ref().map(|r| r.info.mac).unwrap_or([0; 6]));
+        self.sta = self.new_station();
         self.table.clear();
         self.attach_netd(now);
         if self.radio_usable() {
             self.radio_ready(now);
+        }
+    }
+
+    /// A station for the radio: managed if it joins access points itself.
+    pub fn new_station(&self) -> Station {
+        match &self.radio {
+            Some(r) if r.managed() => Station::managed(r.info.mac),
+            Some(r) => Station::new(r.info.mac),
+            None => Station::new([0; 6]),
         }
     }
 
@@ -367,8 +377,15 @@ impl Wlan {
         loop {
             let Some(r) = self.radio.as_ref() else { return };
             match r.channel.read() {
-                Ok(msg) => match vipc::decode_event::<RadioState>(msg) {
-                    Ok((RADIO_STATE_EVENT, state)) => self.radio_state(state, now),
+                Ok(mut msg) => match vipc::open(&mut msg) {
+                    Ok((h, mut d)) if h.ordinal == RADIO_STATE_EVENT => match RadioState::decode(&mut d) {
+                        Ok(state) => self.radio_state(state, now),
+                        Err(_) => println!("bad radio state from the radio driver"),
+                    },
+                    Ok((h, mut d)) if h.ordinal == MLME_EVENT => match MlmeEvent::decode(&mut d) {
+                        Ok(e) => self.mlme_event(e, now),
+                        Err(_) => println!("bad event from the radio driver"),
+                    },
                     _ => println!("unexpected message from the radio driver"),
                 },
                 Err(vabi::Error::ShouldWait) => break,
@@ -381,6 +398,31 @@ impl Wlan {
         if observed & signals::PEER_CLOSED != 0 {
             self.radio_gone(now);
         }
+    }
+
+    /// What a managed radio reports.
+    fn mlme_event(&mut self, e: MlmeEvent, now: u64) {
+        // The frames the radio sent before the event (a scan's results
+        // before its end) come first: the link is read after the events
+        // otherwise.
+        let queued = self.radio.as_ref().map_or(0, |r| r.link.pending() as usize);
+        self.receive_frames_up_to(queued, now);
+        let actions = match e {
+            MlmeEvent::ScanDone {} => {
+                if self.scan.is_some() {
+                    self.finish_scan(now);
+                }
+                return;
+            }
+            MlmeEvent::Signal { dbm } => {
+                self.sta.set_signal(dbm);
+                return;
+            }
+            MlmeEvent::Timeout {} => self.sta.mlme_timeout(now),
+            MlmeEvent::LinkLost {} => self.sta.link_lost(now),
+            MlmeEvent::UnprotectedDeauth { .. } => self.sta.unprotected_deauth(now),
+        };
+        self.station_actions(actions, now);
     }
 
     fn radio_state(&mut self, state: RadioState, now: u64) {
@@ -405,7 +447,7 @@ impl Wlan {
             let connected = self.current.as_ref().is_some_and(|c| c.state == ConnState::Connected);
             // Nothing can be sent: forget the connection without telling
             // the access point.
-            self.sta = Station::new(self.sta.mac());
+            self.sta = self.new_station();
             self.connection_ended(
                 if connected { vwlan::station::Failure::SignalLost } else { vwlan::station::Failure::NoResponse },
                 connected,
@@ -471,19 +513,32 @@ impl Wlan {
     // Frames
 
     fn receive_frames(&mut self, now: u64) {
-        for _ in 0..FRAME_BUDGET {
+        self.receive_frames_up_to(FRAME_BUDGET, now);
+    }
+
+    /// Handles up to `budget` frames of the radio's.
+    fn receive_frames_up_to(&mut self, budget: usize, now: u64) {
+        for _ in 0..budget {
             let Some(r) = self.radio.as_ref() else { return };
             let Some((meta, len)) = r.link.recv(&mut self.frame) else { return };
-            if meta.kind == kind::IEEE80211 {
-                let frame = self.frame[..len].to_vec();
-                self.radio_frame(&frame, RxInfo::unpack(meta.meta), now);
+            let managed = r.managed();
+            let frame = self.frame[..len].to_vec();
+            match meta.kind {
+                kind::IEEE80211 => self.radio_frame(&frame, RxInfo::unpack(meta.meta), now),
+                // A managed radio's data, and the handshakes' EAPOL.
+                kind::ETHERNET if managed => {
+                    let actions = self.sta.receive_ethernet(&frame, now, &mut self.rng);
+                    self.station_actions(actions, now);
+                }
+                _ => {}
             }
         }
     }
 
     /// Frames from `netd` for the network.
     fn forward_from_netd(&mut self, now: u64) {
-        let on_channel = self.scan.is_none();
+        // A managed radio keeps what it sends while it scans.
+        let on_channel = self.scan.is_none() || self.radio.as_ref().is_some_and(|r| r.managed());
         for _ in 0..FRAME_BUDGET {
             let connected = self.sta.is_connected();
             if connected && !on_channel {

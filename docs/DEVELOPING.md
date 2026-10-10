@@ -52,6 +52,7 @@ cargo xtask linux              # build the driver VM's Linux from ports/linux (o
 cargo xtask run --cmdline "drivervm"        # ... and boot with it (needs KVM's nested virtualization)
 cargo xtask run --iommu        # QEMU with an Intel IOMMU (interrupt remapping too)
 cargo xtask script tests/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
+cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 stack, against airsim's networks
 ```
 
 * The serial console (kernel log plus every program's `println!`) is saved

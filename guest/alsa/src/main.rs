@@ -1,6 +1,6 @@
 //! `alsa` — Veda's sound driver for Linux: the guest's sound card (Linux's
-//! first playback device, through ALSA's kernel interface) as Veda's output
-//! device.
+//! first playback device and its card's capture device, through ALSA's
+//! kernel interface) as Veda's output and input devices.
 //!
 //! It attaches to Veda's audio service (`audiodev`) over the bridge, as
 //! Veda's own sound drivers do, and plays the service's mixed output from
@@ -12,12 +12,18 @@
 //! it plays; after a while without audio it stops, and waits for the
 //! service to have some. The card's own mixer stays at unity gain (`ctl`):
 //! the volume is Veda's.
+//!
+//! The card records, on a thread of its own, while the audio service wants
+//! audio (the input ring's `CAPTURE` flag): what it read goes into the
+//! ring, with the moment it was recorded, and the service hears of it.
 
 mod ctl;
 mod pcm;
 
 use std::collections::VecDeque;
 use std::io;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use vabi::{WaitItem, signals};
@@ -25,7 +31,7 @@ use vproto::audio::{DeviceFormat, Ring, Role, audiodev, ring::flags};
 use vrt::object::{Channel, Event};
 use vrt::time::now_ns;
 
-use pcm::Pcm;
+use pcm::{Pcm, Stream};
 
 const RATE: u32 = 48_000;
 const CHANNELS: u32 = 2;
@@ -43,31 +49,58 @@ const PREFILL: u32 = 2;
 /// Stop the card after this long without audio.
 const IDLE_STOP_NS: u64 = 1_500_000_000;
 
-/// The first playback device, once there is one: its path, its card's
-/// number and the card's name.
-fn find_device() -> (String, String, String) {
+/// A sound card: its number and name, and its devices.
+struct Card {
+    number: String,
+    name: String,
+    playback: String,
+    capture: Option<String>,
+}
+
+/// The card of the first playback device, once there is one, and that
+/// card's first capture device. Linux lists a card (`/proc/asound/cards`)
+/// once it has made all of its devices, the mixer last (devtmpfs makes
+/// their nodes as it does): a card is taken once it is listed, and the list
+/// is read first.
+fn find_card() -> Card {
     let mut said = false;
     loop {
-        let mut pcms: Vec<String> = std::fs::read_dir("/dev/snd")
-            .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
-            .unwrap_or_default();
-        pcms.retain(|n| n.starts_with("pcmC") && n.ends_with('p'));
-        pcms.sort();
-        if let Some(pcm) = pcms.first() {
-            let card = pcm[4..].split('D').next().unwrap_or("0").to_string();
-            let cards = std::fs::read_to_string("/proc/asound/cards").unwrap_or_default();
-            let name = cards
-                .lines()
-                .find(|l| l.trim_start().starts_with(&format!("{card} [")))
-                .and_then(|l| l.split(" - ").nth(1))
-                .map_or_else(|| format!("card {card}"), |n| n.trim().to_string());
-            return (format!("/dev/snd/{pcm}"), card, name);
+        let cards = std::fs::read_to_string("/proc/asound/cards").unwrap_or_default();
+        let pcms = std::fs::read_to_string("/proc/asound/pcm").unwrap_or_default();
+        // `CC-DD: id : name : playback 1 : capture 1`
+        let devices: Vec<(u32, u32, bool, bool)> = pcms
+            .lines()
+            .filter_map(|l| {
+                let (at, rest) = l.split_once(':')?;
+                let (card, device) = at.split_once('-')?;
+                Some((
+                    card.trim().parse().ok()?,
+                    device.trim().parse().ok()?,
+                    rest.contains("playback"),
+                    rest.contains("capture"),
+                ))
+            })
+            .collect();
+        for &(number, device, ..) in devices.iter().filter(|d| d.2) {
+            // ` 0 [Intel          ]: HDA-Intel - HDA Intel`
+            let listed = cards.lines().find(|l| l.trim_start().starts_with(&format!("{number} [")));
+            let Some((_, name)) = listed.and_then(|l| l.split_once(" - ")) else {
+                continue;
+            };
+            let capture =
+                devices.iter().find(|d| d.0 == number && d.3).map(|d| format!("/dev/snd/pcmC{number}D{}c", d.1));
+            return Card {
+                number: number.to_string(),
+                name: name.trim().to_string(),
+                playback: format!("/dev/snd/pcmC{number}D{device}p"),
+                capture,
+            };
         }
         if !said {
             println!("alsa: waiting for a sound card");
             said = true;
         }
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -273,30 +306,165 @@ impl Player {
     }
 }
 
-/// Connects to the audio service and attaches the card.
-fn attach(name: &str, player: &Player) -> Result<(Channel, Ring, Event, Event), String> {
+/// The card's capture device, recording into the input ring.
+struct Recorder {
+    pcm: Pcm,
+    running: bool,
+    overruns: u32,
+    scratch: Vec<i16>,
+}
+
+/// The input link: the ring the recorder fills, the event that tells the
+/// service, and the one by which it says it wants audio.
+struct Input {
+    ring: Ring,
+    data_event: Event,
+    wake_event: Event,
+}
+
+impl Recorder {
+    fn new(pcm: Pcm) -> Recorder {
+        let samples = (pcm.period * CHANNELS) as usize;
+        Recorder { pcm, running: false, overruns: 0, scratch: vec![0; samples] }
+    }
+
+    /// Records while the service wants audio.
+    fn follow(&mut self, ring: &Ring) {
+        let wanted = ring.consumer_flags() & flags::CAPTURE != 0;
+        if wanted == self.running {
+            return;
+        }
+        if wanted {
+            match self.pcm.prepare().and_then(|_| self.pcm.start()) {
+                Ok(()) => {
+                    self.running = true;
+                    println!("alsa: recording started");
+                }
+                Err(e) => println!("alsa: the card does not record: {e}"),
+            }
+        } else {
+            self.stop();
+            println!("alsa: recording stopped");
+        }
+    }
+
+    fn stop(&mut self) {
+        let _ = self.pcm.stop();
+        self.running = false;
+    }
+
+    /// Takes what the card recorded into the ring. Returns true if frames
+    /// were delivered.
+    fn reap(&mut self, ring: &Ring) -> bool {
+        let mut delivered = false;
+        while self.running {
+            let n = match self.pcm.read(&mut self.scratch) {
+                Ok(0) => break,
+                Ok(n) => n,
+                // EPIPE: it ran over (this program was too slow), and
+                // stopped: start again.
+                Err(e) if e.raw_os_error() == Some(32) => {
+                    self.overruns += 1;
+                    if self.overruns <= 5 {
+                        println!("alsa: recording overrun; restarting the input");
+                    }
+                    if let Err(e) = self.pcm.prepare().and_then(|_| self.pcm.start()) {
+                        println!("alsa: the card does not record: {e}");
+                        self.running = false;
+                    }
+                    break;
+                }
+                Err(e) => {
+                    println!("alsa: the card's recording failed: {e}");
+                    self.stop();
+                    break;
+                }
+            };
+            let written = ring.write(&self.scratch[..n * CHANNELS as usize]);
+            if written < n {
+                ring.set_overruns(ring.overruns().saturating_add((n - written) as u32));
+            }
+            // What was read is all the card had: its last frame is now's.
+            ring.set_capture_clock(ring.write_pos(), now_ns());
+            delivered = true;
+        }
+        delivered
+    }
+
+    /// Records until `stop` is set (and the wake event signaled).
+    fn serve(&mut self, input: &Input, stop: &AtomicBool) {
+        let period_ms = (self.pcm.period * 1000 / RATE) as i32;
+        while !stop.load(Ordering::Acquire) {
+            if self.running {
+                // The card's period interrupt (or two periods' time).
+                let _ = self.pcm.wait(2 * period_ms + 5);
+            } else {
+                let mut items =
+                    [WaitItem { handle: input.wake_event.raw(), signals: signals::SIGNALED, ..Default::default() }];
+                let _ = vrt::object::wait_many(&mut items, now_ns() + 500_000_000);
+                let _ = input.wake_event.clear();
+            }
+            self.follow(&input.ring);
+            if self.reap(&input.ring) {
+                let _ = input.data_event.signal();
+            }
+        }
+        self.stop();
+    }
+}
+
+/// The output link: the ring the player plays, and its events.
+struct Output {
+    ring: Ring,
+    data_event: Event,
+    space_event: Event,
+}
+
+/// Connects to the audio service and attaches the card (and its input,
+/// with `recorder`).
+fn attach(
+    name: &str,
+    player: &Player,
+    recorder: Option<&Recorder>,
+) -> Result<(Channel, Output, Option<Input>), String> {
     let ch = vproto::connect(audiodev::NAME).map_err(|e| format!("no audio service: {e:?}"))?;
     let client = audiodev::Client::new(ch);
-    let format = DeviceFormat {
+    let format = |period_frames| DeviceFormat {
         name: format!("{name} (Linux)"),
         rate: RATE,
         channels: CHANNELS,
-        period_frames: player.period(),
+        period_frames,
         max_periods: MAX_DEPTH,
     };
     let link = client
-        .attach(format)
+        .attach(format(player.period()))
         .map_err(|e| format!("the audio service went away: {e}"))?
         .map_err(|e| format!("the audio service refused the card: {e}"))?;
     let ring = Ring::map(link.ring, Role::Consumer).map_err(|e| format!("bad ring: {e:?}"))?;
     if ring.rate() != RATE || ring.channels() != CHANNELS {
         return Err("the ring's format is not the card's".into());
     }
-    Ok((client.into_channel(), ring, link.data_event, link.space_event))
+    let output = Output { ring, data_event: link.data_event, space_event: link.space_event };
+    let input = recorder.and_then(|r| match client.attach_input(format(r.pcm.period)) {
+        Ok(Ok(l)) => match Ring::map(l.ring, Role::Producer) {
+            Ok(ring) => Some(Input { ring, data_event: l.data_event, wake_event: l.wake_event }),
+            Err(e) => {
+                println!("alsa: bad input ring: {e:?}");
+                None
+            }
+        },
+        Ok(Err(e)) => {
+            println!("alsa: the audio service refused the input: {e}");
+            None
+        }
+        Err(_) => None,
+    });
+    Ok((client.into_channel(), output, input))
 }
 
 /// Plays until the audio service goes away.
-fn serve(player: &mut Player, link: &Channel, ring: &Ring, data_event: &Event, space_event: &Event) {
+fn serve(player: &mut Player, link: &Channel, out: &Output) {
+    let (ring, data_event, space_event) = (&out.ring, &out.data_event, &out.space_event);
     let period_ms = (player.period() * 1000 / RATE) as i32;
     loop {
         if player.running {
@@ -328,29 +496,73 @@ fn serve(player: &mut Player, link: &Channel, ring: &Ring, data_event: &Event, s
 }
 
 fn main() {
-    let (path, card, name) = find_device();
-    match ctl::open_outputs(&card) {
+    let card = find_card();
+    let name = &card.name;
+    match ctl::open_outputs(&card.number) {
         Ok(set) => println!("alsa: outputs on, at unity gain: {}", set.join(", ")),
-        Err(e) => println!("alsa: the mixer of card {card}: {e}"),
+        Err(e) => println!("alsa: the mixer of card {}: {e}", card.number),
     }
-    let pcm = match Pcm::open(&path, RATE, CHANNELS, PERIOD, PERIODS) {
+    let pcm = match Pcm::open(&card.playback, Stream::Playback, RATE, CHANNELS, PERIOD, PERIODS) {
         Ok(p) => p,
         Err(e) => {
-            println!("alsa: {path} cannot play {RATE} Hz, 16-bit stereo: {e}");
+            println!("alsa: {} cannot play {RATE} Hz, 16-bit stereo: {e}", card.playback);
             std::process::exit(1);
         }
     };
-    println!("alsa: {name} ({path}): {} Hz, periods of {} frames, a buffer of {}", pcm.rate, pcm.period, pcm.buffer);
+    println!(
+        "alsa: {name} ({}): {} Hz, periods of {} frames, a buffer of {}",
+        card.playback, pcm.rate, pcm.period, pcm.buffer
+    );
+    let mut recorder = card.capture.as_ref().and_then(|path| {
+        match Pcm::open(path, Stream::Capture, RATE, CHANNELS, PERIOD, PERIODS) {
+            Ok(p) => {
+                println!("alsa: {name} records ({path}): periods of {} frames, a buffer of {}", p.period, p.buffer);
+                Some(Recorder::new(p))
+            }
+            Err(e) => {
+                println!("alsa: {path} cannot record {RATE} Hz, 16-bit stereo: {e}");
+                None
+            }
+        }
+    });
     let mut player = Player::new(pcm);
     loop {
-        match attach(&name, &player) {
-            Ok((link, ring, data_event, space_event)) => {
-                println!("alsa: attached to the audio service");
-                player.played = ring.read_pos();
+        match attach(name, &player, recorder.as_ref()) {
+            Ok((link, out, input)) => {
+                println!(
+                    "alsa: attached to the audio service{}",
+                    if input.is_some() { " (with recording)" } else { "" }
+                );
+                player.played = out.ring.read_pos();
                 player.played_ns = 0;
-                serve(&mut player, &link, &ring, &data_event, &space_event);
+                // The recorder records on a thread of its own while the
+                // link lasts.
+                let stop = Arc::new(AtomicBool::new(false));
+                let recording = match (input, recorder.take()) {
+                    (Some(input), Some(mut rec)) => {
+                        let stop = stop.clone();
+                        let wake = input.wake_event.0.duplicate(None).ok().map(Event::from_handle);
+                        let thread = std::thread::spawn(move || {
+                            rec.serve(&input, &stop);
+                            rec
+                        });
+                        Some((thread, wake))
+                    }
+                    (_, rec) => {
+                        recorder = rec;
+                        None
+                    }
+                };
+                serve(&mut player, &link, &out);
                 println!("alsa: the audio service went away");
                 player.stop();
+                if let Some((thread, wake)) = recording {
+                    stop.store(true, Ordering::Release);
+                    if let Some(w) = wake {
+                        let _ = w.signal();
+                    }
+                    recorder = thread.join().ok();
+                }
             }
             Err(e) => {
                 println!("alsa: cannot attach: {e}");

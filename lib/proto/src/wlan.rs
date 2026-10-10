@@ -11,6 +11,19 @@
 //!   roaming all happen in the service ("soft MAC"), so a new radio needs
 //!   only a small driver.
 //!
+//!   A *managed* radio ([`phy_caps::MANAGED`]) joins access points itself,
+//!   as Linux's mac80211 drivers do (its firmware keeps the MAC: what it
+//!   receives, acknowledges and encrypts): the service gives it commands
+//!   instead of frames — scan, authenticate, associate, leave — while
+//!   still deciding what to join and authenticating itself: SAE's commit
+//!   and confirm, the key handshakes and the keys' derivation stay in the
+//!   service, and the radio gets only the session keys. Its link carries
+//!   Ethernet frames, and the frames of the access point's the service
+//!   needs (authentication and association responses, deauthentications
+//!   and disassociations, scan results as probe responses, SA Query
+//!   actions); it reports scans' ends, timeouts and a lost link as
+//!   [`MlmeEvent`]s.
+//!
 //! The service presents each connected radio to `netd` as an Ethernet-like
 //! interface (`wlan0`) through the `netdev` protocol.
 
@@ -70,6 +83,9 @@ pub mod phy_caps {
     pub const TX_STATUS: u32 = 2;
     /// The radio supports 802.11n (HT).
     pub const HT: u32 = 4;
+    /// The radio joins access points itself, on the service's commands: its
+    /// control channel speaks [`super::wlanmlme_ctl`].
+    pub const MANAGED: u32 = 8;
 }
 
 message! {
@@ -128,6 +144,42 @@ message! {
 /// reporting its state can never deadlock against the service calling it
 /// through [`wlanphy_ctl`].
 pub const RADIO_STATE_EVENT: u32 = 1;
+/// Event ordinal on a [`wlanphy`] channel: what a managed radio reports
+/// ([`MlmeEvent`]).
+pub const MLME_EVENT: u32 = 2;
+
+union! {
+    /// What a managed radio reports, besides the frames on its link.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum MlmeEvent {
+        /// A scan ended (its results came before, as probe responses).
+        1 => ScanDone {},
+        /// The access point did not answer an authentication or an
+        /// association.
+        2 => Timeout {},
+        /// The access point stopped being heard: the radio left it.
+        3 => LinkLost {},
+        /// The signal of the access point joined (dBm).
+        4 => Signal { dbm: i8 },
+        /// An unprotected deauthentication or disassociation came while
+        /// management frames are protected: maybe a forgery (an SA Query
+        /// tells), so the radio stays.
+        5 => UnprotectedDeauth { reason: u16 },
+    }
+}
+
+enumeration! {
+    /// The keys a managed radio is given.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum KeyKind {
+        /// The pairwise key (CCMP-128), index 0.
+        Pairwise = 1,
+        /// A group key (CCMP-128), index 1 to 3.
+        Group = 2,
+        /// The integrity group key (BIP-CMAC-128), index 4 or 5.
+        Integrity = 3,
+    }
+}
 
 protocol! {
     /// Radio drivers offering a radio to the Wi-Fi service. One radio per
@@ -148,6 +200,46 @@ protocol! {
         /// Switches the transmitter and receiver on or off.
         2 => fn set_power(on: bool) -> Result<(), PhyError>;
         3 => fn stats() -> PhyStats;
+    }
+}
+
+protocol! {
+    /// Commands from the Wi-Fi service to a managed radio
+    /// ([`phy_caps::MANAGED`]), which serves this protocol on its control
+    /// channel instead of [`wlanphy_ctl`].
+    pub mod wlanmlme_ctl = "wlanmlme-ctl" {
+        /// Switches the transmitter and receiver on or off.
+        1 => fn set_power(on: bool) -> Result<(), PhyError>;
+        2 => fn stats() -> PhyStats;
+        /// Scans every channel, probing for `ssids` (and for every network)
+        /// where it may. The access points come as probe responses on the
+        /// link, then [`MlmeEvent::ScanDone`].
+        3 => fn scan(ssids: Vec<Bytes>) -> Result<(), PhyError>;
+        /// Sends `bssid` (`ssid`, on `channel`) an Authentication frame
+        /// with `body` (the algorithm, the transaction, the status, then
+        /// the algorithm's data: SAE's commit or confirm). The answer comes
+        /// as an Authentication frame, or [`MlmeEvent::Timeout`].
+        4 => fn authenticate(bssid: [u8; 6], band: Band, channel: u8, ssid: Bytes, body: Bytes) -> Result<(), PhyError>;
+        /// Associates with `bssid`, authenticated, with `ies` (a protected
+        /// network's RSN and RSNX elements) and management frame
+        /// protection if `pmf`. The answer comes as an Association Response
+        /// frame, or [`MlmeEvent::Timeout`].
+        5 => fn associate(bssid: [u8; 6], band: Band, channel: u8, ssid: Bytes, ies: Bytes, pmf: bool) -> Result<(), PhyError>;
+        /// Leaves `bssid` (a deauthentication, `reason`).
+        6 => fn deauthenticate(bssid: [u8; 6], reason: u16) -> Result<(), PhyError>;
+        /// Sends `peer` an EAPOL frame, encrypted with the pairwise key if
+        /// `encrypt` (in clear before that is in place). A call, so that
+        /// it goes before the key that follows it.
+        7 => fn send_eapol(peer: [u8; 6], frame: Bytes, encrypt: bool) -> Result<(), PhyError>;
+        /// Installs a key of `kind` at `index` for the connection to
+        /// `peer`; frames are accepted with packet numbers above `rsc`.
+        8 => fn install_key(kind: KeyKind, index: u8, key: Bytes, rsc: u64, peer: [u8; 6]) -> Result<(), PhyError>;
+        /// Lets data other than EAPOL through to and from `peer` (the
+        /// handshake succeeded).
+        9 => fn authorize(peer: [u8; 6]) -> Result<(), PhyError>;
+        /// Sends a management frame (an SA Query action) as built; the
+        /// radio protects it when it must.
+        10 => fn send_management(frame: Bytes) -> Result<(), PhyError>;
     }
 }
 

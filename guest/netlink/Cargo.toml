@@ -1,0 +1,15 @@
+[package]
+name = "guest-netlink"
+description = "Netlink for the driver VM's programs: sockets, messages and generic netlink families"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+bench = false
+
+[dependencies]
+guest-sys = { workspace = true }
+
+[lints]
+workspace = true

@@ -100,6 +100,12 @@ members = [
     "guest/pcitest",
     "guest/sys",
     "guest/alsa",
+    "guest/net",
+    "guest/netlink",
+    "guest/wifi",
+    "guest/airlink",
+    "guest/kms",
+    "guest/usb",
 ]
 # Vendored third-party crates are path dependencies, not members (their own
 # tests and dev-dependencies stay out of this workspace). See third_party/.
@@ -162,6 +168,7 @@ vgl = { path = "lib/gl" }
 vhv = { path = "lib/hv" }
 viommu = { path = "lib/iommu" }
 guest-sys = { path = "guest/sys" }
+guest-netlink = { path = "guest/netlink" }
 # Cryptography for Wi-Fi security (RustCrypto, all no_std, pure Rust).
 sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }

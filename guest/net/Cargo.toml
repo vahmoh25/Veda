@@ -1,0 +1,21 @@
+[package]
+name = "guest-net"
+description = "Veda's network driver for Linux: Linux's Ethernet cards as Veda's network devices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "net"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+vproto = { workspace = true }
+guest-sys = { workspace = true }
+
+[lints]
+workspace = true

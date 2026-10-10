@@ -1,0 +1,23 @@
+[package]
+name = "guest-wifi"
+description = "Veda's Wi-Fi driver for Linux: Linux's Wi-Fi radios as Veda's managed radios"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wifi"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+vipc = { workspace = true }
+vproto = { workspace = true }
+guest-sys = { workspace = true }
+guest-netlink = { workspace = true }
+
+[lints]
+workspace = true

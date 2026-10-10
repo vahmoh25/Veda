@@ -9,7 +9,9 @@
 //! The radio medium is simple: a frame sent by the guest on channel *c*
 //! reaches every access point that is switched on, tuned to *c* and in range;
 //! a frame sent by such an access point reaches the guest if its radio is on
-//! and tuned to *c*. Each access point has a signal level and a frame loss
+//! and tuned to *c*, or listens to every channel (a radio that filters by
+//! channel itself, as Linux's simulated one does: each frame comes with its
+//! channel). Each access point has a signal level and a frame loss
 //! rate that tests can change at run time, as can the state of the wired
 //! network (see [`crate::control`]).
 
@@ -127,6 +129,8 @@ pub struct Radio {
     pub channel: u8,
     /// Transmitter and receiver switched on.
     pub on: bool,
+    /// The receiver hears every channel, not only its own.
+    pub listen_all: bool,
 }
 
 /// What the caller must do.
@@ -220,7 +224,7 @@ impl World {
     pub fn new(networks: Vec<Network>, rng: SimRandom) -> World {
         World {
             networks,
-            radio: Radio { connected: false, mac: [0; 6], channel: CHANNELS[0], on: false },
+            radio: Radio { connected: false, mac: [0; 6], channel: CHANNELS[0], on: false, listen_all: false },
             wired: Wired::default(),
             guest_mac: DEFAULT_GUEST_MAC,
             rng,
@@ -270,7 +274,7 @@ fn describe(e: &ApEvent) -> String {
 impl World {
     /// The guest's end of the link is open (its driver can talk to us).
     pub fn guest_connected(&mut self) {
-        self.radio = Radio { connected: true, mac: [0; 6], channel: CHANNELS[0], on: false };
+        self.radio = Radio { connected: true, mac: [0; 6], channel: CHANNELS[0], on: false, listen_all: false };
         self.log("guest radio connected".into());
     }
 
@@ -302,7 +306,7 @@ impl World {
                 }
                 // A missing or group address gets the default one.
                 let mac = if mac == [0; 6] || mac[0] & 1 != 0 { self.guest_mac } else { mac };
-                self.radio = Radio { connected: true, mac, channel: CHANNELS[0], on: false };
+                self.radio = Radio { connected: true, mac, channel: CHANNELS[0], on: false, listen_all: false };
                 self.log(format!("guest radio {} ready", mac_str(&mac)));
                 self.out.push(Output::Guest(Message::HelloAck { version: VERSION, mac, channels: CHANNELS.to_vec() }));
             }
@@ -318,6 +322,12 @@ impl World {
                     self.log(format!("guest radio switched {}", if on { "on" } else { "off" }));
                 }
                 self.radio.on = on;
+            }
+            Message::Listen { all } => {
+                if self.radio.listen_all != all {
+                    self.log(format!("guest radio hears {}", if all { "every channel" } else { "its channel" }));
+                }
+                self.radio.listen_all = all;
             }
             Message::Tx { id, no_ack, frame } => {
                 let acked = self.transmit_from_guest(&frame, now);
@@ -370,7 +380,8 @@ impl World {
     }
 
     fn deliver_to_guest(&mut self, i: usize, frame: Vec<u8>) {
-        if !self.radio.connected || !self.radio.on || !self.networks[i].reachable(self.radio.channel) {
+        let channel = if self.radio.listen_all { self.networks[i].ap.cfg.channel } else { self.radio.channel };
+        if !self.radio.connected || !self.radio.on || !self.networks[i].reachable(channel) {
             return;
         }
         let n = &self.networks[i];

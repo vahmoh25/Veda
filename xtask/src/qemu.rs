@@ -194,6 +194,9 @@ pub struct VmConfig {
     pub sound: String,
     /// Record guest audio to this WAV file instead of playing it.
     pub audio_wav: Option<PathBuf>,
+    /// QEMU's silent sound system instead (`none`): nothing records the
+    /// output; the input records silence, at the card's pace.
+    pub audio_silent: bool,
     /// Serial output destination: `None` = this terminal.
     pub serial_file: Option<PathBuf>,
     /// QMP control socket (TCP port on localhost), used by automated tests.
@@ -231,6 +234,9 @@ pub struct VmConfig {
     /// An IOMMU (QEMU's intel-iommu, remapping interrupts), for the
     /// driver VM's devices.
     pub iommu: bool,
+    /// QEMU's USB network adapter (`usb-net`: CDC Ethernet, which Veda has
+    /// no driver for) on the xHCI controller, on a NAT of its own.
+    pub usb_net: bool,
     /// Extra raw QEMU arguments.
     pub extra: Vec<String>,
 }
@@ -244,6 +250,7 @@ impl Default for VmConfig {
             audio: true,
             sound: "virtio".into(),
             audio_wav: None,
+            audio_silent: false,
             serial_file: None,
             qmp_port: None,
             gdb: false,
@@ -259,6 +266,7 @@ impl Default for VmConfig {
             wifi: None,
             gpu: None,
             iommu: false,
+            usb_net: false,
             extra: Vec::new(),
         }
     }
@@ -340,14 +348,19 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     // reset (from a vCPU thread, which waits for QEMU's main loop) now and
     // then deadlocks QEMU when the device has OpenGL.
     let gpu = cfg.gpu.unwrap_or_else(|| install.has_gl_gpu());
-    let display = if gpu { "virtio-vga-gl" } else { "VGA" };
-    cmd.args(["-vga", "none", "-device", &format!("{display},id={DISPLAY_ID},addr=0x1")]);
+    let display = format!("id={DISPLAY_ID},addr=0x1");
+    let display = if gpu { virtio(cfg, &format!("virtio-vga-gl,{display}")) } else { format!("VGA,{display}") };
+    cmd.args(["-vga", "none", "-device", &display]);
     // In a window, the tablet is bound to the display: the window's pointer
     // is then absolute from power-on, not only once the guest's driver has
     // started (see `-display` below).
     let bound = if cfg.display { format!(",display={DISPLAY_ID}") } else { String::new() };
-    if cfg.usb_stick || cfg.input == InputDevices::Usb {
+    if cfg.usb_stick || cfg.input == InputDevices::Usb || cfg.usb_net {
         cmd.args(["-device", "qemu-xhci,id=xhci"]);
+    }
+    if cfg.usb_net {
+        cmd.args(["-netdev", "user,id=usbnet0,net=10.0.4.0/24"]);
+        cmd.args(["-device", "usb-net,netdev=usbnet0,bus=xhci.0,mac=52:54:00:12:34:58"]);
     }
     if cfg.usb_stick {
         // As a PC sees a stick the ISO was written to.
@@ -357,20 +370,22 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         cmd.args(["-drive", &format!("id=disk0,if=none,format=raw,file={}", disk.display())]);
         // q35's built-in AHCI controller has six ports, ide.0 to ide.5.
         match cfg.disk_bus {
-            DiskBus::Virtio => cmd.args(["-device", "virtio-blk-pci,drive=disk0,bootindex=0,serial=veda-boot"]),
+            DiskBus::Virtio => {
+                cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=disk0,bootindex=0,serial=veda-boot")])
+            }
             DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.0,drive=disk0,bootindex=0,serial=veda-boot"]),
         };
     }
     if let Some(home) = &cfg.home_disk {
         cmd.args(["-drive", &format!("id=home,if=none,format=raw,file={}", home.display())]);
         match cfg.disk_bus {
-            DiskBus::Virtio => cmd.args(["-device", "virtio-blk-pci,drive=home,serial=veda-home"]),
+            DiskBus::Virtio => cmd.args(["-device", &virtio(cfg, "virtio-blk-pci,drive=home,serial=veda-home")]),
             DiskBus::Ahci => cmd.args(["-device", "ide-hd,bus=ide.1,drive=home,serial=veda-home"]),
         };
     }
     match cfg.input {
         InputDevices::Standard => {
-            cmd.args(["-device", &format!("virtio-tablet-pci{bound}")]);
+            cmd.args(["-device", &virtio(cfg, &format!("virtio-tablet-pci{bound}"))]);
         }
         InputDevices::Usb => {
             // A keyboard and a tablet behind a hub, and a mouse on a root
@@ -384,15 +399,16 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     }
     // Host entropy for the firmware's EFI_RNG_PROTOCOL, which seeds the
     // kernel's random number generator.
-    cmd.args(["-device", "virtio-rng-pci"]);
+    cmd.args(["-device", &virtio(cfg, "virtio-rng-pci")]);
     if cfg.audio {
         match &cfg.audio_wav {
+            _ if cfg.audio_silent => cmd.args(["-audiodev", "none,id=audio0"]),
             Some(wav) => cmd.args(["-audiodev", &format!("wav,id=audio0,path={}", wav.display())]),
             None => cmd.args(["-audiodev", if cfg!(windows) { "dsound,id=audio0" } else { "sdl,id=audio0" }]),
         };
         // With the host's sound system the card also has an input stream:
-        // the host's microphone. Recorded runs (WAV) have none, so a test
-        // microphone can take its place.
+        // the host's microphone (with the silent one, silence). Recorded
+        // runs (WAV) have none, so a test microphone can take its place.
         let streams = if cfg.audio_wav.is_some() { 1 } else { 2 };
         match cfg.sound.as_str() {
             "ac97" => cmd.args(["-device", "AC97,audiodev=audio0"]),
@@ -403,19 +419,20 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
                 cmd.args(["-device", "ich9-intel-hda,id=hda"]);
                 cmd.args(["-device", &format!("{codec},bus=hda.0,audiodev=audio0")])
             }
-            _ => cmd.args(["-device", &format!("virtio-sound-pci,audiodev=audio0,streams={streams}")]),
+            _ => cmd.args(["-device", &virtio(cfg, &format!("virtio-sound-pci,audiodev=audio0,streams={streams}"))]),
         };
     }
     if cfg.net.wired() {
         let model = cfg.nic_model.as_deref().unwrap_or("virtio-net-pci");
+        let nic = format!("{model},id={WIRED_NIC_ID},netdev=net0,mac=52:54:00:12:34:56");
         cmd.args(["-netdev", "user,id=net0"]);
-        cmd.args(["-device", &format!("{model},id={WIRED_NIC_ID},netdev=net0,mac=52:54:00:12:34:56")]);
+        cmd.args(["-device", &if model.starts_with("virtio") { virtio(cfg, &nic) } else { nic }]);
     } else {
         // Without this QEMU adds a default card.
         cmd.args(["-nic", "none"]);
     }
     if let (true, Some(p)) = (cfg.net.wireless(), cfg.wifi) {
-        cmd.args(wifi_args(&p));
+        cmd.args(wifi_args(cfg, &p));
     }
     if cfg.display {
         // When the guest's tablet driver starts, QEMU tells its window the
@@ -460,14 +477,23 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     cmd
 }
 
+/// A virtio device of `spec`'s (`virtio-blk-pci,drive=...`): behind the
+/// machine's IOMMU when it has one, as devices are on a PC that has one, so
+/// that a device can go to a virtual machine of Veda's (whose addresses
+/// only the IOMMU turns into the machine's). Translated devices are modern
+/// ones only.
+fn virtio(cfg: &VmConfig, spec: &str) -> String {
+    if cfg.iommu { format!("{spec},disable-legacy=on,iommu_platform=on") } else { spec.to_string() }
+}
+
 /// QEMU arguments for the virtual Wi-Fi radio: a virtio-serial port named
 /// `org.veda.wlan.0` that `airsim` connects to, and a NAT (`user`
 /// network) joined through a hub to a UDP link with `airsim`, whose access
 /// points bridge their stations onto it.
-pub fn wifi_args(p: &WifiPorts) -> Vec<String> {
+pub fn wifi_args(cfg: &VmConfig, p: &WifiPorts) -> Vec<String> {
     [
         "-device",
-        "virtio-serial-pci,id=vser0,max_ports=2",
+        &virtio(cfg, "virtio-serial-pci,id=vser0,max_ports=2"),
         "-chardev",
         &format!("socket,id=wlanradio,host=127.0.0.1,port={},server=on,wait=off", p.radio),
         "-device",

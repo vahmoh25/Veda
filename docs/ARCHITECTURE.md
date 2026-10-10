@@ -220,6 +220,9 @@ has ended and left its stack, which is how thread libraries join threads.
   virtual machine instead of a driver of Veda's ([the driver VM](DRIVERVM.md)):
   `devmgr` hands their `pcidev` channels to `drivervm`, which gives them to
   its guest whole, their DMA confined to the guest's memory by the IOMMU.
+  USB devices are lent by `xhci`, which keeps the controller. When the
+  driver VM ends without Linux having powered it off, `devmgr` resets its
+  devices and starts it again.
 * A driver asks for the devices the firmware describes below its PCI
   function (its ACPI companion, found by `_ADR` under the PCI root bridge):
   their ids (`_HID`, `_UID`, `_SUB`), status and resources (`_CRS`:
@@ -295,6 +298,10 @@ has ended and left its stack, which is how thread libraries join threads.
   system's `input` service, as from the PS/2 and virtio drivers; keys and
   buttons still held when a device is unplugged are released. Caps Lock
   lights up the keyboard's LED.
+* Devices the boot options name (`lend=VID:PID`, from `drivervm.usb=`)
+  are lent to [the driver VM](DRIVERVM.md), whose Linux drives them: their
+  transfers come over a channel (`vproto::usb`) and are carried out on the
+  controller.
 * Every other device (storage, audio, cameras, the stick the live system
   started from) gets an address, and its descriptors are read for the log,
   but it is never configured, so it is not touched.
@@ -902,7 +909,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/igpu` | Intel's integrated graphics for the display driver: registers, device ids, takeover, address table, flips, interrupts, the flip loop |
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `lib/hv`, `lib/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the virtual APIC, `cpuid`, the guests' platform and boot protocol, the bridge's ABI; VT-d's tables and structures |
-| `guest/` | the driver VM's Linux programs: its `init`, and its tests |
+| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`alsa`, `net`, `wifi`, `kms`, `usbip`), `airlink` (QEMU's virtual radio as Linux's), and its tests |
 | `lib/boardsim` | simulated machines for host tests: firmware descriptions and models of chips no emulator has |
 | `lib/splash` | the boot splash's picture, which the boot loader and the window system draw alike |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |

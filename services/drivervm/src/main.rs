@@ -23,7 +23,10 @@
 //! Arguments: `memory=MIB` (default 256), `cpus=N` (default 2),
 //! `cmdline=...` (added to the kernel's command line, commas for spaces),
 //! and for tests `run=PROGRAM,...` (programs of the guest's `/bin` its
-//! `init` runs) and `poweroff` (once they are done).
+//! `init` runs), `poweroff` (once they are done) and `crash=SECONDS`
+//! (Linux crashes that long after it starts: devmgr passes it to the first
+//! run only). With `usb=...` (the USB devices lent to the guest), the
+//! guest's USB/IP host takes them.
 
 #![no_std]
 #![no_main]
@@ -69,6 +72,8 @@ fn config() -> Config {
             Some(("cpus", v)) => c.cpus = v.parse().unwrap_or(c.cpus),
             Some(("cmdline", v)) => c.cmdline.push_str(&alloc::format!(" {}", v.replace(',', " "))),
             Some(("run", v)) => c.cmdline.push_str(&alloc::format!(" veda.run={v}")),
+            Some(("crash", v)) => c.cmdline.push_str(&alloc::format!(" veda.crash={v}")),
+            Some(("usb", _)) => c.cmdline.push_str(" veda.usb"),
             None if arg == "poweroff" => c.cmdline.push_str(" veda.poweroff"),
             _ => {}
         }

@@ -176,7 +176,7 @@ impl AccessPoint {
 
     fn elements(&self, hide: bool) -> Vec<u8> {
         let ssid: &[u8] = if hide { &[] } else { &self.cfg.ssid };
-        let mut b = ie::Builder::new().ssid(ssid).rates(&ie::RATES_G).ds_channel(self.cfg.channel);
+        let mut b = ie::Builder::new().ssid(ssid).rates(ie::rates_for(self.cfg.channel)).ds_channel(self.cfg.channel);
         if let Some(r) = &self.rsne {
             b = b.raw(&r.element());
         }
@@ -443,7 +443,8 @@ impl AccessPoint {
         let Some(req) = AssocReqBody::parse(body, reassoc) else { return Vec::new() };
         let subtype = if reassoc { mgmt::REASSOC_RESP } else { mgmt::ASSOC_RESP };
         let reply = |ap: &mut AccessPoint, st: u16, aid: u16| {
-            let body = AssocRespBody::build(ap.capability(), st, aid, &ie::Builder::new().rates(&ie::RATES_G).build());
+            let rates = ie::Builder::new().rates(ie::rates_for(ap.cfg.channel)).build();
+            let body = AssocRespBody::build(ap.capability(), st, aid, &rates);
             let f = ap.mgmt_to(subtype, sta, &body);
             Self::tx(f, false)
         };

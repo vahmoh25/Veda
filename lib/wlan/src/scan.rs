@@ -85,9 +85,9 @@ pub fn parse_bss(f: &[u8], channel: u8, signal_dbm: i8, now_ms: u64) -> Option<B
     })
 }
 
-/// A probe request (broadcast, for one SSID or any).
-pub fn probe_request(own: &Mac, ssid: Option<&[u8]>, seq: u16) -> Vec<u8> {
-    let ies = ie::Builder::new().ssid(ssid.unwrap_or(&[])).rates(&ie::RATES_G).build();
+/// A probe request on `channel` (broadcast, for one SSID or any).
+pub fn probe_request(own: &Mac, ssid: Option<&[u8]>, channel: u8, seq: u16) -> Vec<u8> {
+    let ies = ie::Builder::new().ssid(ssid.unwrap_or(&[])).rates(ie::rates_for(channel)).build();
     frame::management(mgmt::PROBE_REQ, &frame::BROADCAST, own, &frame::BROADCAST, seq, &ies)
 }
 
@@ -122,6 +122,6 @@ mod tests {
         // An unparsable RSN element is not mistaken for an open network.
         let weird = parse_bss(&beacon(b"Odd", 1, Some(alloc::vec![48, 2, 9, 9])), 1, -60, 0).unwrap();
         assert!(!weird.security.supported());
-        assert!(parse_bss(&probe_request(&[2; 6], None, 1), 1, -40, 0).is_none());
+        assert!(parse_bss(&probe_request(&[2; 6], None, 1, 1), 1, -40, 0).is_none());
     }
 }

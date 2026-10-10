@@ -61,6 +61,10 @@ struct Iommu {
     domain_ids: SpinLock<DomainIds>,
     /// Faults reported so far (only the first ones are logged).
     faults: SpinLock<u32>,
+    /// Devices that left a guest's domain (they reach nothing until one
+    /// takes them again), and whether they were refused since: a device
+    /// whose guest ended may go on with what it was doing.
+    left: SpinLock<Vec<(u16, bool)>>,
 }
 
 /// Faults past this many go unlogged, but for every 1024th.
@@ -167,6 +171,7 @@ fn setup(dmar: Dmar, acpi: &crate::acpi::AcpiInfo) -> Result<Iommu, &'static str
         address_width,
         domain_ids: SpinLock::new(DomainIds { next: 2, limit, free: Vec::new() }),
         faults: SpinLock::new(0),
+        left: SpinLock::new(Vec::new()),
     };
     publish(&iommu, table, 4096);
     let fault_destination = percpu::get(0).apic_id;
@@ -256,7 +261,38 @@ pub fn fault_interrupt() {
     }
 }
 
+/// Device `sid` left a guest's domain.
+fn left_guest(iommu: &Iommu, sid: u16) {
+    let mut left = iommu.left.lock();
+    if !left.iter().any(|&(s, _)| s == sid) {
+        left.push((sid, false));
+    }
+}
+
+/// Device `sid` is in a guest's domain again.
+fn joined_guest(iommu: &Iommu, sid: u16) {
+    iommu.left.lock().retain(|&(s, _)| s != sid);
+}
+
 fn log_fault(iommu: &Iommu, unit: &Unit, f: Fault) {
+    let (bus, dev, func) = (f.source >> 8, (f.source >> 3) & 0x1F, f.source & 7);
+    // What a device does after its guest ended reaches nothing, as it
+    // should: said once.
+    if f.reason == vtd::NO_CONTEXT_ENTRY {
+        let mut left = iommu.left.lock();
+        if let Some(entry) = left.iter_mut().find(|(s, _)| *s == f.source) {
+            if !entry.1 {
+                entry.1 = true;
+                crate::kinfo!(
+                    "iommu: {:02x}:{:02x}.{} left its guest and goes on with its DMA; it reaches nothing",
+                    bus,
+                    dev,
+                    func
+                );
+            }
+            return;
+        }
+    }
     let n = {
         let mut count = iommu.faults.lock();
         *count = count.wrapping_add(1);
@@ -265,7 +301,6 @@ fn log_fault(iommu: &Iommu, unit: &Unit, f: Fault) {
     if n > FAULTS_LOGGED && !n.is_multiple_of(1024) {
         return;
     }
-    let (bus, dev, func) = (f.source >> 8, (f.source >> 3) & 0x1F, f.source & 7);
     let what = if f.is_interrupt() {
         alloc::format!("an interrupt through entry {:#x}", f.address)
     } else {

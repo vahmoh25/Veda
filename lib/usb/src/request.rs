@@ -41,6 +41,17 @@ pub struct Setup {
 }
 
 impl Setup {
+    /// A packet as sent on the bus.
+    pub fn from_bytes(b: [u8; 8]) -> Setup {
+        Setup {
+            request_type: b[0],
+            request: b[1],
+            value: u16::from_le_bytes([b[2], b[3]]),
+            index: u16::from_le_bytes([b[4], b[5]]),
+            length: u16::from_le_bytes([b[6], b[7]]),
+        }
+    }
+
     /// The packet as sent on the bus.
     pub fn to_bytes(&self) -> [u8; 8] {
         let [v0, v1] = self.value.to_le_bytes();

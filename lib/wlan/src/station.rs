@@ -14,6 +14,15 @@
 //! (when management frames are protected only if they are protected, with
 //! an SA Query to check on the AP otherwise); and a connection whose AP
 //! stops being heard is dropped.
+//!
+//! A station of a *managed* radio ([`Station::managed`]) decides and
+//! authenticates the same, but the radio is the MLME: it sends the
+//! authentication and association frames ([`Action::Authenticate`],
+//! [`Action::Associate`]), protects and checks frames, retries, and
+//! watches the link. The station still does SAE and the key handshakes:
+//! the radio gets the session keys only ([`Action::InstallKey`]). Data is
+//! Ethernet both ways; EAPOL goes through the radio's control
+//! ([`Action::SendEapol`]), in order with the keys.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -39,6 +48,9 @@ const RESPONSE_TIMEOUT_MS: u64 = 400;
 const SAE_TIMEOUT_MS: u64 = 1500;
 /// Wait for the 4-way handshake to finish after association.
 const HANDSHAKE_TIMEOUT_MS: u64 = 6000;
+/// A managed radio retries and times out itself; this is in case it never
+/// says.
+const MLME_TIMEOUT_MS: u64 = 8000;
 /// Without any frame from the AP for this long, probe it...
 const LINK_IDLE_MS: u64 = 3000;
 /// ...and give up if it still does not answer.
@@ -120,6 +132,17 @@ pub enum StaEvent {
     Disconnected(Failure),
 }
 
+/// The keys a managed radio is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyKind {
+    /// The pairwise key (CCMP-128), index 0.
+    Pairwise,
+    /// A group key (CCMP-128), index 1 to 3.
+    Group,
+    /// The integrity group key (BIP-CMAC-128), index 4 or 5.
+    Integrity,
+}
+
 /// What the caller must do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -133,6 +156,50 @@ pub enum Action {
     /// A received Ethernet frame for the network stack.
     Deliver(Vec<u8>),
     Event(StaEvent),
+    /// Managed radios: authenticate with `body` (an Authentication frame's:
+    /// algorithm, transaction, status, the algorithm's data).
+    Authenticate {
+        bssid: Mac,
+        channel: u8,
+        ssid: Vec<u8>,
+        body: Vec<u8>,
+    },
+    /// Managed radios: associate, with `ies` (the RSN and RSNX elements).
+    Associate {
+        bssid: Mac,
+        channel: u8,
+        ssid: Vec<u8>,
+        ies: Vec<u8>,
+        pmf: bool,
+    },
+    /// Managed radios: leave the access point.
+    Deauthenticate {
+        bssid: Mac,
+        reason: u16,
+    },
+    /// Managed radios: send an EAPOL frame (encrypted with the pairwise
+    /// key if `encrypt`).
+    SendEapol {
+        peer: Mac,
+        frame: Vec<u8>,
+        encrypt: bool,
+    },
+    /// Managed radios: install a key for the connection to `peer`.
+    InstallKey {
+        kind: KeyKind,
+        index: u8,
+        key: Vec<u8>,
+        rsc: u64,
+        peer: Mac,
+    },
+    /// Managed radios: data other than EAPOL may pass.
+    Authorize {
+        peer: Mac,
+    },
+    /// Managed radios: send a management frame (protected by the radio).
+    SendManagement(Vec<u8>),
+    /// Managed radios: send an Ethernet frame.
+    SendEthernet(Vec<u8>),
 }
 
 /// Counters for diagnostics.
@@ -184,6 +251,10 @@ enum Phase {
 /// The station state machine.
 pub struct Station {
     mac: Mac,
+    /// The radio is the MLME ([`Station::managed`]).
+    managed: bool,
+    /// Managed: the pairwise key is the radio's (EAPOL goes encrypted).
+    ptk_installed: bool,
     phase: Phase,
     target: Option<Target>,
     /// PMK of the connection (PSK or SAE).
@@ -211,9 +282,12 @@ impl Drop for Station {
 }
 
 impl Station {
+    /// A station of a radio that moves frames (soft MAC).
     pub fn new(mac: Mac) -> Station {
         Station {
             mac,
+            managed: false,
+            ptk_installed: false,
             phase: Phase::Idle,
             target: None,
             pmk: None,
@@ -233,8 +307,19 @@ impl Station {
         }
     }
 
+    /// A station of a managed radio (the MLME).
+    pub fn managed(mac: Mac) -> Station {
+        let mut s = Station::new(mac);
+        s.managed = true;
+        s
+    }
+
     pub fn mac(&self) -> Mac {
         self.mac
+    }
+
+    pub fn is_managed(&self) -> bool {
+        self.managed
     }
 
     pub fn is_connected(&self) -> bool {
@@ -271,6 +356,7 @@ impl Station {
 
     fn reset(&mut self) {
         self.phase = Phase::Idle;
+        self.ptk_installed = false;
         self.forget_pmk();
         self.akm = None;
         self.pmf = false;
@@ -303,13 +389,18 @@ impl Station {
         let mut out = self.disconnect(now);
         out.retain(|a| matches!(a, Action::Transmit { .. }));
         self.reset();
+        // As the scan heard it, until the access point's frames (or a
+        // managed radio) tell.
+        self.signal_dbm = target.bss.signal_dbm;
         let sec = target.bss.security;
         if !sec.supported() {
             self.target = Some(target);
             out.extend(self.fail(Failure::Unsupported));
             return out;
         }
-        out.push(Action::SetChannel(target.bss.channel));
+        if !self.managed {
+            out.push(Action::SetChannel(target.bss.channel));
+        }
         self.last_heard = now;
         if sec == Security::Open {
             self.target = Some(target);
@@ -352,7 +443,7 @@ impl Station {
             let sae = Sae::new(pwe, h2e, rng);
             out.push(Action::Event(StaEvent::Authenticating));
             out.push(self.sae_commit_frame(&sae, None));
-            self.phase = Phase::SaeCommit { sae, tries: 1, deadline: now + SAE_TIMEOUT_MS, token: None };
+            self.phase = Phase::SaeCommit { sae, tries: 1, deadline: now + self.sae_timeout(), token: None };
         } else {
             let psk = psk_from_hex(&pass).unwrap_or_else(|| pbkdf2_psk(pass.as_bytes(), &ssid));
             self.pmk = Some(psk);
@@ -361,23 +452,44 @@ impl Station {
         out
     }
 
+    /// How long to wait for an answer to an authentication or an
+    /// association (a managed radio retries itself).
+    fn response_timeout(&self) -> u64 {
+        if self.managed { MLME_TIMEOUT_MS } else { RESPONSE_TIMEOUT_MS }
+    }
+
+    fn sae_timeout(&self) -> u64 {
+        if self.managed { MLME_TIMEOUT_MS } else { SAE_TIMEOUT_MS }
+    }
+
+    /// An Authentication frame with `body`: transmitted, or (managed) the
+    /// radio's to send.
+    fn auth(&mut self, body: Vec<u8>) -> Action {
+        if self.managed {
+            let t = self.target.as_ref().expect("target");
+            Action::Authenticate { bssid: t.bss.bssid, channel: t.bss.channel, ssid: t.ssid.clone(), body }
+        } else {
+            Self::tx(self.mgmt_frame(mgmt::AUTH, &body))
+        }
+    }
+
     fn start_open_auth(&mut self, now: u64) -> Vec<Action> {
         let body = AuthBody::build(auth_alg::OPEN, 1, status::SUCCESS, &[]);
-        let f = self.mgmt_frame(mgmt::AUTH, &body);
-        self.phase = Phase::OpenAuth { tries: 1, deadline: now + RESPONSE_TIMEOUT_MS };
-        alloc::vec![Action::Event(StaEvent::Authenticating), Self::tx(f)]
+        let a = self.auth(body);
+        self.phase = Phase::OpenAuth { tries: 1, deadline: now + self.response_timeout() };
+        alloc::vec![Action::Event(StaEvent::Authenticating), a]
     }
 
     fn sae_commit_frame(&mut self, sae: &Sae, token: Option<&[u8]>) -> Action {
         let st = if sae.h2e { status::SAE_HASH_TO_ELEMENT } else { status::SUCCESS };
         let body = AuthBody::build(auth_alg::SAE, 1, st, &sae.commit(token));
-        Self::tx(self.mgmt_frame(mgmt::AUTH, &body))
+        self.auth(body)
     }
 
     fn sae_confirm_frame(&mut self, sae: &mut Sae) -> Option<Action> {
         let confirm = sae.confirm().ok()?;
         let body = AuthBody::build(auth_alg::SAE, 2, status::SUCCESS, &confirm);
-        Some(Self::tx(self.mgmt_frame(mgmt::AUTH, &body)))
+        Some(self.auth(body))
     }
 
     fn assoc_frame(&mut self) -> Vec<u8> {
@@ -386,7 +498,7 @@ impl Station {
         if t.bss.security != Security::Open {
             cap |= capab::PRIVACY;
         }
-        let rates = if t.bss.rates.is_empty() { ie::RATES_G.to_vec() } else { t.bss.rates.clone() };
+        let rates = if t.bss.rates.is_empty() { ie::rates_for(t.bss.channel).to_vec() } else { t.bss.rates.clone() };
         let mut b = ie::Builder::new().ssid(&t.ssid).rates(&rates);
         if let Some(r) = &self.own_rsne {
             b = b.raw(r);
@@ -398,10 +510,24 @@ impl Station {
         self.mgmt_frame(mgmt::ASSOC_REQ, &body)
     }
 
+    /// The association: a frame, or (managed) the radio's to make, with
+    /// the elements that are the station's.
+    fn assoc(&mut self) -> Action {
+        if !self.managed {
+            return Self::tx(self.assoc_frame());
+        }
+        let t = self.target.as_ref().expect("target");
+        let mut ies = self.own_rsne.clone().unwrap_or_default();
+        if self.akm == Some(Akm::Sae) && t.bss.h2e {
+            ies.extend_from_slice(&[ie::id::RSNX, 1, ie::rsnx::SAE_H2E]);
+        }
+        Action::Associate { bssid: t.bss.bssid, channel: t.bss.channel, ssid: t.ssid.clone(), ies, pmf: self.pmf }
+    }
+
     fn start_assoc(&mut self, now: u64) -> Vec<Action> {
-        let f = self.assoc_frame();
-        self.phase = Phase::Assoc { tries: 1, deadline: now + RESPONSE_TIMEOUT_MS };
-        alloc::vec![Action::Event(StaEvent::Associating), Self::tx(f)]
+        let a = self.assoc();
+        self.phase = Phase::Assoc { tries: 1, deadline: now + self.response_timeout() };
+        alloc::vec![Action::Event(StaEvent::Associating), a]
     }
 
     /// Leaves the network (sends a deauthentication when connected).
@@ -410,7 +536,10 @@ impl Station {
         if matches!(self.phase, Phase::Idle) {
             return out;
         }
-        if matches!(self.phase, Phase::Assoc { .. } | Phase::Handshake { .. } | Phase::Connected) {
+        if self.managed {
+            // The radio forgets whatever it had with the access point.
+            out.push(Action::Deauthenticate { bssid: self.bssid(), reason: reason::DEAUTH_LEAVING });
+        } else if matches!(self.phase, Phase::Assoc { .. } | Phase::Handshake { .. } | Phase::Connected) {
             let body = reason::DEAUTH_LEAVING.to_le_bytes();
             let f = self.mgmt_frame(mgmt::DEAUTH, &body);
             if let Some(p) = self.protect_mgmt(f) {
@@ -437,6 +566,10 @@ impl Station {
     pub fn send_ethernet(&mut self, eth: &[u8]) -> Vec<Action> {
         if !self.is_connected() || eth.len() < 14 {
             return Vec::new();
+        }
+        if self.managed {
+            self.counters.data_tx += 1;
+            return alloc::vec![Action::SendEthernet(eth.to_vec())];
         }
         let dst: Mac = eth[0..6].try_into().unwrap();
         let ethertype = u16::from_be_bytes([eth[12], eth[13]]);
@@ -473,6 +606,8 @@ impl Station {
             | Phase::SaeConfirm { deadline, .. }
             | Phase::Assoc { deadline, .. }
             | Phase::Handshake { deadline } => Some(*deadline),
+            // A managed radio watches the link itself.
+            Phase::Connected if self.managed => None,
             Phase::Connected => Some(match self.probing_since {
                 Some(t) => t + LINK_PROBE_MS,
                 None => self.last_heard + LINK_IDLE_MS,
@@ -493,6 +628,20 @@ impl Station {
             // that started it was genuine.
             self.sa_query = None;
             return self.fail(Failure::Deauthenticated(reason::PREV_AUTH_NOT_VALID));
+        }
+        if self.managed {
+            return match &self.phase {
+                Phase::OpenAuth { deadline, .. }
+                | Phase::SaeCommit { deadline, .. }
+                | Phase::SaeConfirm { deadline, .. }
+                | Phase::Assoc { deadline, .. }
+                    if now >= *deadline =>
+                {
+                    self.mlme_timeout(now)
+                }
+                Phase::Handshake { deadline } if now >= *deadline => self.handshake_timed_out(),
+                _ => Vec::new(),
+            };
         }
         match &mut self.phase {
             Phase::Idle => Vec::new(),
@@ -541,12 +690,7 @@ impl Station {
                 *deadline = now + RESPONSE_TIMEOUT_MS;
                 alloc::vec![Self::tx(self.assoc_frame())]
             }
-            Phase::Handshake { deadline } if now >= *deadline => {
-                // Message 1 kept coming but message 3 never did: the AP
-                // could not verify our message 2, i.e. the passphrase.
-                let wrong = self.supplicant.as_ref().is_some_and(|s| s.awaiting_msg3()) && self.msg1_seen >= 2;
-                self.fail(if wrong { Failure::WrongPassword } else { Failure::HandshakeFailed })
-            }
+            Phase::Handshake { deadline } if now >= *deadline => self.handshake_timed_out(),
             Phase::Connected => {
                 if let Some(since) = self.probing_since {
                     if now >= since + LINK_PROBE_MS {
@@ -560,8 +704,9 @@ impl Station {
                     let seq = self.next_seq();
                     let f = frame::null_to_ds(&bssid, &self.mac, seq, false);
                     let mut out = alloc::vec![Self::tx(f)];
-                    let ssid = self.target.as_ref().map(|t| t.ssid.clone()).unwrap_or_default();
-                    let ies = ie::Builder::new().ssid(&ssid).rates(&ie::RATES_G).build();
+                    let (ssid, channel) =
+                        self.target.as_ref().map(|t| (t.ssid.clone(), t.bss.channel)).unwrap_or_default();
+                    let ies = ie::Builder::new().ssid(&ssid).rates(ie::rates_for(channel)).build();
                     let seq = self.next_seq();
                     out.push(Self::tx(frame::management(mgmt::PROBE_REQ, &bssid, &self.mac, &bssid, seq, &ies)));
                     out
@@ -571,6 +716,66 @@ impl Station {
             }
             _ => Vec::new(),
         }
+    }
+
+    fn handshake_timed_out(&mut self) -> Vec<Action> {
+        // Message 1 kept coming but message 3 never did: the AP could not
+        // verify our message 2, i.e. the passphrase.
+        let wrong = self.supplicant.as_ref().is_some_and(|s| s.awaiting_msg3()) && self.msg1_seen >= 2;
+        self.fail(if wrong { Failure::WrongPassword } else { Failure::HandshakeFailed })
+    }
+
+    /// Managed radios: the access point did not answer an authentication
+    /// or an association.
+    pub fn mlme_timeout(&mut self, _now: u64) -> Vec<Action> {
+        match self.phase {
+            // It answered our commit but never confirmed: the passwords
+            // differ.
+            Phase::SaeConfirm { .. } => self.fail(Failure::WrongPassword),
+            Phase::OpenAuth { .. } | Phase::SaeCommit { .. } | Phase::Assoc { .. } => self.fail(Failure::NoResponse),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Managed radios: the radio lost the access point.
+    pub fn link_lost(&mut self, _now: u64) -> Vec<Action> {
+        if matches!(self.phase, Phase::Idle) {
+            return Vec::new();
+        }
+        self.fail(Failure::SignalLost)
+    }
+
+    /// Managed radios: an unprotected deauthentication or disassociation
+    /// came while management frames are protected: ask the access point
+    /// (SA Query) whether it really ended the association.
+    pub fn unprotected_deauth(&mut self, now: u64) -> Vec<Action> {
+        self.counters.unprotected_dropped += 1;
+        self.start_sa_query(now)
+    }
+
+    /// Managed radios: the signal of the access point joined.
+    pub fn set_signal(&mut self, dbm: i8) {
+        self.signal_dbm = dbm;
+    }
+
+    /// Managed radios: an Ethernet frame the radio received (checked and
+    /// decrypted by it): EAPOL for the handshake, data for the network.
+    pub fn receive_ethernet(&mut self, eth: &[u8], now: u64, rng: &mut dyn Random) -> Vec<Action> {
+        if !self.managed || eth.len() < 14 || self.target.is_none() {
+            return Vec::new();
+        }
+        let ethertype = u16::from_be_bytes([eth[12], eth[13]]);
+        if ethertype == eapol::ETHERTYPE {
+            if eth[6..12] != self.bssid() {
+                return Vec::new();
+            }
+            return self.receive_eapol(&eth[14..], now, rng);
+        }
+        if !self.is_connected() {
+            return Vec::new();
+        }
+        self.counters.data_rx += 1;
+        alloc::vec![Action::Deliver(eth.to_vec())]
     }
 
     /// Handles a received frame.
@@ -584,10 +789,12 @@ impl Station {
         }
         self.last_heard = now;
         self.probing_since = None;
-        self.signal_dbm = signal_dbm;
+        if !self.managed {
+            self.signal_dbm = signal_dbm;
+        }
         if h.fc.is_management() {
             self.receive_mgmt(&h, f, now, rng)
-        } else if h.fc.is_data() {
+        } else if h.fc.is_data() && !self.managed {
             self.receive_data(&h, f, now, rng)
         } else {
             Vec::new()
@@ -737,7 +944,11 @@ impl Station {
             return Vec::new();
         }
         let keys_ready = self.keys.is_some();
-        let body: Vec<u8> = if self.pmf && keys_ready {
+        let body: Vec<u8> = if self.managed {
+            // The radio checked it (and reports an unprotected one where
+            // it must be protected apart).
+            f[h.len..].to_vec()
+        } else if self.pmf && keys_ready {
             if is_group(&h.addr1) {
                 // Group addressed: must carry a valid BIP MIC.
                 let Some(k) = &mut self.keys else { return Vec::new() };
@@ -799,6 +1010,9 @@ impl Station {
         let mut body = alloc::vec![action::SA_QUERY, action::SA_QUERY_REQUEST];
         body.extend_from_slice(&id.to_le_bytes());
         let f = self.mgmt_frame(mgmt::ACTION, &body);
+        if self.managed {
+            return alloc::vec![Action::SendManagement(f)];
+        }
         self.protect_mgmt(f).map(Self::tx).into_iter().collect()
     }
 
@@ -825,7 +1039,10 @@ impl Station {
         if is_group(&h.addr1) || !self.is_connected() {
             return Vec::new();
         }
-        let plain = if self.pmf {
+        let plain = if self.managed {
+            // Checked and decrypted by the radio.
+            f.to_vec()
+        } else if self.pmf {
             if !h.fc.protected() {
                 self.counters.unprotected_dropped += 1;
                 return Vec::new();
@@ -843,6 +1060,8 @@ impl Station {
         }
         let id = u16::from_le_bytes([body[2], body[3]]);
         match body[1] {
+            // A managed radio answers the AP's queries itself.
+            action::SA_QUERY_REQUEST if self.managed => Vec::new(),
             action::SA_QUERY_REQUEST => {
                 let mut resp = alloc::vec![action::SA_QUERY, action::SA_QUERY_RESPONSE];
                 resp.extend_from_slice(&id.to_le_bytes());
@@ -971,6 +1190,10 @@ impl Station {
         let mut completed = false;
         let bssid = self.bssid();
         for ev in events {
+            if self.managed {
+                out.extend(self.handshake_managed(ev, &mut completed));
+                continue;
+            }
             match ev {
                 HsEvent::Send(frame) => out.extend(self.send_data(&bssid, eapol::ETHERTYPE, &frame)),
                 HsEvent::InstallPtk { tk } => {
@@ -997,8 +1220,42 @@ impl Station {
         }
         let _ = now;
         if completed && matches!(self.phase, Phase::Handshake { .. }) {
+            if self.managed {
+                out.push(Action::Authorize { peer: bssid });
+            }
             out.extend(self.connected());
         }
         out
+    }
+
+    /// What a handshake event is for a managed radio: frames and keys for
+    /// it.
+    fn handshake_managed(&mut self, ev: HsEvent, completed: &mut bool) -> Vec<Action> {
+        let peer = self.bssid();
+        let key = |kind, index: u8, key: &[u8], rsc| Action::InstallKey { kind, index, key: key.to_vec(), rsc, peer };
+        match ev {
+            // Message 4 goes in clear before the pairwise key is the
+            // radio's: the action that installs it comes after.
+            HsEvent::Send(frame) => {
+                alloc::vec![Action::SendEapol { peer, frame, encrypt: self.ptk_installed }]
+            }
+            HsEvent::InstallPtk { tk } => {
+                self.ptk_installed = true;
+                alloc::vec![key(KeyKind::Pairwise, 0, &tk, 0)]
+            }
+            HsEvent::InstallGtk { key_id, key: gtk, rsc } => {
+                if self.is_connected() {
+                    self.counters.group_rekeys += 1;
+                }
+                alloc::vec![key(KeyKind::Group, key_id, &gtk, rsc)]
+            }
+            HsEvent::InstallIgtk { key_id, key: igtk, ipn } => {
+                alloc::vec![key(KeyKind::Integrity, key_id as u8, &igtk, ipn)]
+            }
+            HsEvent::Completed => {
+                *completed = true;
+                Vec::new()
+            }
+        }
     }
 }

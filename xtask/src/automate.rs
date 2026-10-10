@@ -32,9 +32,11 @@
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
 //! qmp device_del '{"id":"kbd2"}'   # a QMP command, such as plugging USB devices in and out (QEMU)
 //! audio host                       # the host's loudspeakers and microphone instead of a WAV file (echo on real hardware)
+//! audio silent                     # QEMU's silent sound system: the output is not recorded, the input records silence
 //! expect-audio                     # fail unless the recorded sound output holds more than silence
 //! expect-audio-gapless [20]        # fail if it drops out (digital silence over 20 ms between its first and last sound)
 //! iommu                            # QEMU's IOMMU (interrupt remapping too), applied before boot
+//! usb net                          # QEMU's USB network adapter (CDC Ethernet) on the xHCI controller
 //! requires qemu                    # only for QEMU (or `virtualbox`); `test` skips it elsewhere
 //! requires c-toolchain             # only with the C test programs (`cargo xtask toolchain`); `test` skips it otherwise
 //! requires native-toolchain        # only with GCC in the image (the same)
@@ -443,11 +445,13 @@ pub fn needs_qemu(script: &str) -> Option<&'static str> {
         match w.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
             ["net", "wifi" | "both", ..] => return Some("simulated Wi-Fi"),
             ["nic", "e1000e", ..] => return Some("the 82574L card"),
+            ["nic", "igb", ..] => return Some("the 82576 card"),
             ["air" | "air-expect" | "air-wait", ..] => return Some("the Wi-Fi simulator"),
             ["live", ..] => return Some("the live system's USB stick"),
             ["qmp", ..] => return Some("QMP commands"),
             ["gpu", ..] => return Some("the choice of QEMU's display"),
             ["iommu", ..] => return Some("QEMU's IOMMU"),
+            ["usb", "net", ..] => return Some("QEMU's USB network adapter"),
             ["requires", "qemu", ..] => return Some("marked as QEMU only"),
             ["requires", "drivervm", ..] => return Some("the driver VM (nested virtualization)"),
             // VirtualBox's mouse is moved through its COM API, from
@@ -523,6 +527,18 @@ pub fn sound_card(script: &str) -> Option<String> {
 /// microphone (`audio host`) instead of recording the output to a file.
 pub fn host_audio(script: &str) -> bool {
     script.lines().map(words).any(|w| w.len() == 2 && w[0] == "audio" && w[1] == "host")
+}
+
+/// Whether a script's sound card has QEMU's silent sound system (`audio
+/// silent`): an input that records silence at the card's pace, and an
+/// output nothing records.
+pub fn silent_audio(script: &str) -> bool {
+    script.lines().map(words).any(|w| w.len() == 2 && w[0] == "audio" && w[1] == "silent")
+}
+
+/// Whether a script asks for QEMU's USB network adapter (`usb net`).
+pub fn usb_net(script: &str) -> bool {
+    script.lines().map(words).any(|w| w.len() == 2 && w[0] == "usb" && w[1] == "net")
 }
 
 /// The wired card model a script asks for with `nic`.
@@ -626,7 +642,7 @@ pub fn run_script(
                     s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "sound" | "audio" | "requires" | "live" | "input" | "gpu"
+                "boot-cmdline" | "net" | "nic" | "usb" | "sound" | "audio" | "requires" | "live" | "input" | "gpu"
                 | "iommu" => {}
                 "qmp" => {
                     let command = w.get(1).ok_or("missing command")?;

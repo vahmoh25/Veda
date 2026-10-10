@@ -157,6 +157,7 @@ impl Wlan {
                     }
                 }
                 Action::Event(e) => self.station_event(e, now),
+                managed => self.radio_command(managed, now),
             }
         }
         self.counters.data_tx = self.sta.counters.data_tx;
@@ -164,6 +165,36 @@ impl Wlan {
         self.counters.replays = self.sta.counters.replays;
         self.counters.unprotected_dropped = self.sta.counters.unprotected_dropped;
         self.counters.group_rekeys = self.sta.counters.group_rekeys;
+    }
+
+    /// Gives a managed radio a command of the station's. An attempt the
+    /// radio refuses fails as if the access point had not answered.
+    fn radio_command(&mut self, a: Action, now: u64) {
+        let Some(r) = self.radio.as_mut() else { return };
+        let (done, joining) = match a {
+            Action::Authenticate { bssid, channel, ssid, body } => (r.authenticate(bssid, channel, &ssid, &body), true),
+            Action::Associate { bssid, channel, ssid, ies, pmf } => {
+                (r.associate(bssid, channel, &ssid, &ies, pmf), true)
+            }
+            Action::Deauthenticate { bssid, reason } => (r.deauthenticate(bssid, reason), false),
+            Action::SendEapol { peer, frame, encrypt } => (r.send_eapol(peer, &frame, encrypt), false),
+            Action::InstallKey { kind, index, key, rsc, peer } => (r.install_key(kind, index, &key, rsc, peer), false),
+            Action::Authorize { peer } => (r.authorize(peer), false),
+            Action::SendManagement(f) => (r.send_management(&f), false),
+            // A frame the link has no room for is dropped, as a card drops.
+            Action::SendEthernet(eth) => {
+                r.send_ethernet(&eth);
+                (true, false)
+            }
+            _ => (true, false),
+        };
+        if !done {
+            self.log("the Wi-Fi adapter refused a command".into());
+            if joining {
+                let actions = self.sta.mlme_timeout(now);
+                self.station_actions(actions, now);
+            }
+        }
     }
 
     fn station_event(&mut self, e: StaEvent, now: u64) {
@@ -542,13 +573,13 @@ impl Wlan {
         }
     }
 
-    fn finish_scan(&mut self, now: u64) {
+    pub fn finish_scan(&mut self, now: u64) {
         let Some(scan) = self.scan.take() else { return };
         self.counters.scans += 1;
         self.rescan_first = false;
-        // Back to the network's channel.
+        // Back to the network's channel (a managed radio goes back itself).
         if let Some(c) = self.current.as_ref().map(|c| c.bss.channel)
-            && let Some(r) = self.radio.as_mut()
+            && let Some(r) = self.radio.as_mut().filter(|r| !r.managed())
         {
             r.tune(c);
         }

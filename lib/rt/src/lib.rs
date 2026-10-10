@@ -31,7 +31,7 @@ pub use vabi;
 mod crt;
 pub mod env;
 #[cfg(veda_guest)]
-mod guest;
+pub mod guest;
 pub mod heap;
 pub mod io;
 pub mod object;

@@ -6,9 +6,12 @@
 //! enumerates the devices on the root hub's ports and behind USB 2.0 hubs.
 //! Keyboards, mice and tablets (the HID class) are configured, and their
 //! reports go to the window system's `input` service, like those of the
-//! PS/2 and virtio drivers. Other devices get an address and their
-//! descriptors are read, to log what they are, but nothing more: a USB
-//! stick, for instance, is never configured, so its data is never touched.
+//! PS/2 and virtio drivers. Devices the boot options name
+//! (`lend=VID:PID,...`, from devmgr's `drivervm.usb=`) are lent to the
+//! driver VM, whose Linux drives them (`lend`). Other devices get an
+//! address and their descriptors are read, to log what they are, but
+//! nothing more: a USB stick, for instance, is never configured, so its
+//! data is never touched.
 //!
 //! One thread does everything. Commands and control transfers are issued
 //! one at a time and waited for; while waiting, the event ring is still
@@ -24,10 +27,12 @@ mod controller;
 mod device;
 mod hid;
 mod hub;
+mod lend;
 mod ring;
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use vproto::input::{InputEvent, InputSink, keys};
@@ -94,6 +99,11 @@ pub enum Work {
     Recover(u8, u8),
     /// The keyboard lights changed.
     Leds,
+    /// A device to lend is offered to the driver VM (`lend`).
+    Offer(u8),
+    /// The device at a place is found again (after the driver VM let go
+    /// of it).
+    Reattach(device::Location),
 }
 
 /// Queues work unless the same is already waiting.
@@ -127,6 +137,13 @@ pub struct Xhci {
     input: InputSink,
     /// The keyboard lights: Num Lock is on, as the keypad types digits.
     leds: Leds,
+    /// The devices to lend to the driver VM (vendor, product), the lent
+    /// devices to offer again (slot, when), and where the controller is.
+    lend: Vec<(u16, u16)>,
+    offer_again: Vec<(u8, u64)>,
+    location: String,
+    /// Buffers of lent devices' transfers that ended, for the next ones.
+    buffers: Vec<vvirtio::DmaBuffer>,
 }
 
 impl Xhci {
@@ -151,13 +168,31 @@ impl Xhci {
                             self.set_leds(slot);
                         }
                     }
+                    Work::Offer(slot) => self.offer(slot),
+                    Work::Reattach(at) => self.reattach(at),
                 }
             }
             if !self.hc.healthy() {
                 println!("the controller stopped with an error");
                 return 1;
             }
-            self.pump(vabi::DEADLINE_INFINITE);
+            self.serve_lent();
+            let now = now_ns();
+            let due: Vec<u8> = self.offer_again.iter().filter(|&&(_, at)| at <= now).map(|&(s, _)| s).collect();
+            self.offer_again.retain(|&(_, at)| at > now);
+            for slot in due {
+                queue(&mut self.work, Work::Offer(slot));
+            }
+            if !self.work.is_empty() {
+                continue;
+            }
+            // Events, and the requests of the lent devices' consumers.
+            let late = self.late_offers();
+            let deadline =
+                self.offer_again.iter().map(|&(_, at)| at).min().unwrap_or(vabi::DEADLINE_INFINITE).min(late);
+            let mut channels = self.lent_channels();
+            self.hc.wait_also(&mut channels, deadline);
+            self.drain();
         }
     }
 
@@ -201,6 +236,7 @@ impl Xhci {
                     queue(&mut self.work, Work::HubPorts(slot, report));
                 }
             }
+            Function::Lent(_) => self.lent_event(slot, ev),
             Function::Hid(interfaces) => {
                 let Some(h) = interfaces.iter_mut().find(|h| h.pipe.index == index) else { return };
                 let Some(report) = h.pipe.complete(&ev, &self.hc, &mut self.work) else { return };
@@ -405,6 +441,14 @@ fn main() -> i32 {
         hc.interrupts
     );
     let ports = hc.ports.len();
+    // The devices to lend: `lend=VID:PID,...`.
+    let id = |s: &str| u16::from_str_radix(s, 16).ok();
+    let lend = vrt::env::args()
+        .iter()
+        .filter_map(|a| a.strip_prefix("lend="))
+        .flat_map(|l| l.split(','))
+        .filter_map(|d| d.split_once(':').and_then(|(v, p)| Some((id(v)?, id(p)?))))
+        .collect();
     Xhci {
         hc,
         _pci: pci,
@@ -415,6 +459,10 @@ fn main() -> i32 {
         control_events: Vec::new(),
         input,
         leds: Leds { num_lock: true, ..Leds::default() },
+        lend,
+        offer_again: Vec::new(),
+        location: format!("xhci {location}"),
+        buffers: Vec::new(),
     }
     .run()
 }

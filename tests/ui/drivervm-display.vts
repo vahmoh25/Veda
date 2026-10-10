@@ -1,0 +1,56 @@
+# The display through Linux's KMS: QEMU's standard VGA (whose memory holds
+# the firmware's framebuffer) goes to the driver VM, where Linux's bochs
+# driver drives it and Veda's display driver for Linux attaches it to the
+# compositor (1280x800). The compositor draws into pictures of Veda's
+# memory, which Linux shows as they are (imported as dma-bufs) and flips
+# at its vertical blank. Then as flips.vts: what changes while one picture
+# is on the screen reaches the other before it is shown.
+requires drivervm
+iommu
+gpu off
+boot-cmdline "drivervm drivervm.devices=1234:1111"
+boot-cmdline "run=editor"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+wait-serial "goes to the driver VM" 60
+wait-serial "kms: bochs-drm (Linux): attached to the compositor" 90
+expect-serial "the compositor's pictures shown as they are"
+wait-serial "compositor: bochs-drm (Linux) attached" 30
+wait-serial "kms: bochs-drm (Linux): showing the compositor's frames, 1280x800" 60
+wait-serial "started editor" 60
+wait 6
+# The desktop alone (Super+D), the pointer where the taskbar (below 0.94)
+# has no button.
+move 0.1 0.98
+key meta_l-d
+wait 3
+shot target/veda/drivervm-display-1-desktop.png
+# The editor back, dragged by its title bar (y = 36), maximised, restored.
+key meta_l-d
+wait 2
+drag 0.3125 0.045 0.6 0.5
+wait 1
+key meta_l-up
+wait 2
+key meta_l-down
+wait 2
+shot target/veda/drivervm-display-2-window.png
+# The desktop alone again: the picture on the screen, then the other one
+# and the first again (each move of the pointer is a frame).
+move 0.1 0.98
+key meta_l-d
+wait 3
+shot target/veda/drivervm-display-3-desktop.png
+move 0.15 0.98
+wait 1
+shot target/veda/drivervm-display-4-desktop.png
+move 0.2 0.98
+wait 1
+shot target/veda/drivervm-display-5-desktop.png
+expect-same target/veda/drivervm-display-1-desktop.png target/veda/drivervm-display-3-desktop.png 0 0 1 0.93
+expect-same target/veda/drivervm-display-1-desktop.png target/veda/drivervm-display-4-desktop.png 0 0 1 0.93
+expect-same target/veda/drivervm-display-1-desktop.png target/veda/drivervm-display-5-desktop.png 0 0 1 0.93
+reject-serial "stopped answering"
+reject-serial "cannot have the screen"
+reject-serial "iommu: unit at"
+reject-serial "Linux touched I/O port"

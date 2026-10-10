@@ -29,7 +29,10 @@ talk over kernel channels; the kernel knows nothing about networks.
 * **Drivers** move frames and nothing else. A network card driver
   (`virtio-net`, `e1000`) offers Ethernet frames to `netd`; a radio driver
   (`vwifi`) offers raw 802.11 frames to `wlan` ("soft MAC"). Neither sees
-  keys, passwords or addresses.
+  keys, passwords or addresses. A *managed* radio — Linux's Wi-Fi stack in
+  [the driver VM](DRIVERVM.md), whose cards' firmware keeps the MAC —
+  joins access points itself on `wlan`'s commands and moves Ethernet
+  frames (see below); it gets the session keys, never a password.
 * **`wlan`** is the Wi-Fi service. Everything above the radio happens here:
   scanning, authentication, association, the key handshakes, encryption,
   saved networks and the decisions of when and where to connect. Each
@@ -62,7 +65,8 @@ out, and a system call only when the other side is asleep.
 | `drivers/virtio-net` | virtio network card driver |
 | `drivers/e1000` | Intel PRO/1000 driver: 82540EM (QEMU `e1000`, VirtualBox), 82545EM (VMware), 82574L (QEMU `e1000e`) |
 | `drivers/vwifi` | the virtual Wi-Fi radio (virtio-console port) |
-| `lib/radiolink` | `vradiolink`: the message format between `vwifi` and `airsim` |
+| `lib/radiolink` | `vradiolink`: the message format between `vwifi` (or `airlink`) and `airsim` |
+| `guest/net`, `guest/wifi`, `guest/airlink` | in the driver VM: Linux's Ethernet cards as `netdev` devices; Linux's Wi-Fi radios as managed radios; QEMU's virtual radio as one of Linux's (mac80211_hwsim) |
 | `lib/net` | `vnet`: the application API, including `vnet::wifi` |
 | `lib/tls` | `vtls`: TLS 1.3 and 1.2 client (rustls with a pure-Rust cryptography provider) |
 | `lib/proto/src/{net,wlan,netring}.rs` | the service protocols and frame rings |
@@ -189,6 +193,44 @@ radio drop [SECONDS]                cut the guest's radio link for a while
 A driver for real hardware would implement the same `wlanphy` protocol as
 `vwifi`: report its channels, move frames through the link and tune the
 radio. The service needs no change.
+
+### Managed radios: Linux's Wi-Fi
+
+The cards of PCs (Intel's, MediaTek's, Realtek's, Qualcomm's) keep their
+MAC in firmware: their drivers do not move raw frames, and Linux's 802.11
+stack (cfg80211 and mac80211) builds on that. Veda uses them through
+[the driver VM](DRIVERVM.md), where `wifi` (`guest/wifi`) offers each of
+Linux's radios to `wlan` as a *managed* radio (`phy_caps::MANAGED`): its
+control channel speaks `wlanmlme_ctl` instead of `wlanphy_ctl`, and the
+station of `vwlan` drives it with commands rather than frames:
+
+| The station | `wlanmlme_ctl` | Linux (nl80211) |
+|-------------|----------------|-----------------|
+| scans | `scan(ssids)`; results as beacons and probe responses on the link, then `ScanDone` | `TRIGGER_SCAN`, `GET_SCAN` |
+| authenticates (open; SAE's commit and confirm, computed by the station) | `authenticate(bssid, channel, ssid, body)` | `AUTHENTICATE` with `AUTH_DATA`; the answer as a frame |
+| associates (its RSN and RSNX elements, PMF) | `associate(...)` | `ASSOCIATE`, the control port over nl80211, owned by `wifi`'s socket |
+| runs the 4-way and group handshakes | `send_eapol(peer, frame, encrypt)`; EAPOL from the AP as Ethernet frames | `CONTROL_PORT_FRAME` (message 4 in clear, whatever key follows it) |
+| installs the session keys only | `install_key(kind, index, key, rsc, peer)` | `NEW_KEY` (CCMP-128, BIP-CMAC-128) |
+| opens the port | `authorize(peer)` | `SET_STATION` (authorized) |
+| checks an unprotected deauthentication (SA Query) | `send_management(frame)`; `UnprotectedDeauth` | `FRAME`; `UNPROT_DEAUTHENTICATE` |
+| leaves | `deauthenticate(bssid, reason)` | `DEAUTHENTICATE` |
+
+Linux retries, times out (`Timeout`), encrypts and decrypts, answers the
+access point's SA Queries, and watches the link (`LinkLost` when it gives
+up on the access point; `Signal` as it changes); the station decides, and
+authenticates, as with a soft-MAC radio. Linux joins only access points it
+heard lately: `wifi` listens on the access point's channel first when it
+must. The Wi-Fi service is the same for both kinds of radio, and so are
+the user's networks and the connection policy.
+
+Under QEMU, `airlink` (`guest/airlink`) makes the virtual radio's port one
+of Linux's simulated radios (`mac80211_hwsim`), whose medium it is, so the
+whole path runs against airsim's networks: `tests/ui/drivervm-wifi.vts`
+joins every kind of network through it, and
+`tests/ui/drivervm-wifi-recovery.vts` breaks them as `wifi-recovery.vts`
+does. airsim's radio then hears every channel (radio link version 2's
+`LISTEN`), each frame with its own, and Linux keeps what is on its
+channel.
 
 The simulated environment needs QEMU (VirtualBox has no virtio-serial
 port).
@@ -408,8 +450,11 @@ and RSA signatures made by OpenSSL.
 
 ## Limitations and next steps
 
-* Drivers for real Wi-Fi hardware (the `wlanphy` protocol is ready for
-  soft-MAC drivers; full-MAC adapters would need a variant of it).
+* Wi-Fi hardware is Linux's, through the driver VM: Intel's AX211 has its
+  firmware so far (`ports/linux/firmware.txt`); other cards need their
+  driver and firmware added. 6 GHz channels, and telling Linux the
+  country (it keeps to the world's rules, listening first on channels
+  that need it), are next.
 * WPA2/WPA3-Enterprise (802.1X/EAP), Enhanced Open (OWE), fast roaming
   (802.11r), power saving, 802.11n/ac rate control.
 * TLS: no session resumption (each connection is a full handshake), no

@@ -13,6 +13,7 @@ bench = false
 [dependencies]
 vrt = { workspace = true }
 vabi = { workspace = true }
+vipc = { workspace = true }
 vproto = { workspace = true }
 vusb = { workspace = true }
 vvirtio = { workspace = true }

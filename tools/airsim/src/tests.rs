@@ -24,6 +24,8 @@ struct Harness {
     rng: SimRandom,
     mac: Mac,
     channel: u8,
+    /// The guest's radio hears every channel.
+    listen_all: bool,
     next_id: u32,
     /// Messages from the guest not yet given to the world.
     to_world: VecDeque<Message>,
@@ -52,6 +54,7 @@ impl Harness {
             rng: SimRandom::from_seed(3),
             mac: [0; 6],
             channel: CHANNELS[0],
+            listen_all: false,
             next_id: 1,
             to_world: VecDeque::new(),
             heard: BTreeMap::new(),
@@ -103,9 +106,12 @@ impl Harness {
                 self.mac = mac;
             }
             Output::Guest(Message::Rx { channel, signal_dbm, frame }) => {
-                assert_eq!(channel, self.channel, "a frame from another channel was delivered");
+                if !self.listen_all {
+                    assert_eq!(channel, self.channel, "a frame from another channel was delivered");
+                }
                 self.rx_count += 1;
                 if let Some(b) = parse_bss(&frame, channel, signal_dbm, self.now) {
+                    assert_eq!(b.channel, channel, "a beacon came with another channel than its own");
                     self.heard.insert(b.bssid, b);
                 }
                 let actions = self.sta.receive(&frame, signal_dbm, self.now, &mut self.rng);
@@ -129,6 +135,7 @@ impl Harness {
                 Action::SetChannel(c) => self.tune(c),
                 Action::Deliver(eth) => self.delivered.push(eth),
                 Action::Event(e) => self.events.push(e),
+                managed => panic!("a station of a radio that moves frames asked for {managed:?}"),
             }
         }
     }
@@ -174,7 +181,7 @@ impl Harness {
         self.heard.clear();
         for c in CHANNELS {
             self.tune(c);
-            let probe = probe_request(&self.mac, None, 1);
+            let probe = probe_request(&self.mac, None, c, 1);
             let id = self.next_id;
             self.next_id += 1;
             self.send(Message::Tx { id, no_ack: true, frame: probe });
@@ -320,6 +327,21 @@ fn guest_gets_an_address_and_hears_only_its_channel() {
 }
 
 #[test]
+fn a_guest_listening_to_every_channel_hears_each_frame_with_its_channel() {
+    let mut h = Harness::new();
+    h.listen_all = true;
+    h.send(Message::Listen { all: true });
+    h.run(500);
+    // Every access point in range, on every channel.
+    let channels: std::collections::BTreeSet<u8> = h.heard.values().map(|b| b.channel).collect();
+    assert_eq!(channels, CHANNELS.into_iter().collect());
+    assert_eq!(h.heard.len(), 7);
+    // A hello starts over: the radio hears its own channel only.
+    h.send(Message::Hello { version: VERSION, mac: [0; 6] });
+    assert!(!h.world.radio.listen_all);
+}
+
+#[test]
 fn a_guest_provided_address_is_kept_and_group_addresses_are_replaced() {
     let mut h = Harness::new();
     h.send(Message::Hello { version: VERSION, mac: [0x02, 1, 2, 3, 4, 5] });
@@ -410,7 +432,7 @@ fn transmit_status_reports_acknowledgements() {
     h.send(Message::Tx { id: 901, no_ack: false, frame: nowhere });
     assert!(h.tx_status.contains(&(901, false)));
     // ...and group frames get no status.
-    h.send(Message::Tx { id: 902, no_ack: true, frame: probe_request(&h.mac, None, 3) });
+    h.send(Message::Tx { id: 902, no_ack: true, frame: probe_request(&h.mac, None, 1, 3) });
     assert!(!h.tx_status.iter().any(|(id, _)| *id == 902));
     // With the radio off nothing is acknowledged.
     h.send(Message::SetPower { on: false });

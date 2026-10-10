@@ -203,6 +203,14 @@ impl Builder {
 /// The rates of 802.11g (ERP-OFDM and DSSS/CCK) in 500 kbit/s units, with
 /// the 802.11b rates marked basic.
 pub const RATES_G: [u8; 12] = [0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6C];
+/// The rates of 802.11a (OFDM), with its mandatory ones (6, 12 and 24
+/// Mbit/s) marked basic: 5 GHz has no DSSS/CCK.
+pub const RATES_A: [u8; 8] = [0x8C, 0x12, 0x98, 0x24, 0xB0, 0x48, 0x60, 0x6C];
+
+/// The rates of the band of `channel`.
+pub fn rates_for(channel: u8) -> &'static [u8] {
+    if channel <= 14 { &RATES_G } else { &RATES_A }
+}
 
 #[cfg(test)]
 mod tests {
@@ -226,6 +234,18 @@ mod tests {
         assert_eq!(e.rsn, Some(&[1, 0, 0, 0x0F, 0xAC, 4][..]));
         assert!(e.sae_h2e() && e.wmm && !e.wpa1);
         assert_eq!(e.anti_clogging_token, Some(&b"token"[..]));
+    }
+
+    #[test]
+    fn each_band_has_its_rates() {
+        // 2.4 GHz: 802.11b's rates basic; 5 GHz: OFDM only, 6, 12 and 24
+        // Mbit/s basic (what a station there must support).
+        let basic = |r: &[u8]| r.iter().filter(|&&b| b & 0x80 != 0).map(|&b| b & 0x7F).collect::<Vec<u8>>();
+        assert_eq!(basic(rates_for(11)), [2, 4, 11, 22]);
+        assert_eq!(basic(rates_for(36)), [12, 24, 48]);
+        assert!(rates_for(165).iter().all(|&b| b & 0x7F >= 12));
+        let e = Elements::parse(&Builder::new().rates(rates_for(44)).build()).unwrap().rates;
+        assert_eq!(e, RATES_A.to_vec());
     }
 
     #[test]

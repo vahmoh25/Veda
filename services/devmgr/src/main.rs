@@ -9,10 +9,16 @@
 //! they describe below its PCI function (and only those), and devmgr drives
 //! the GPIO pins those devices are wired to on the driver's behalf.
 //!
+//! USB devices can be lent to it too (`drivervm.usb=VID:PID,...`): the USB
+//! controllers' drivers lend them (`lend=`), keeping the controllers.
+//!
 //! Devices can go to the driver VM instead (`drivervm.devices=VID:DID,...`):
 //! then no driver of Veda's starts for them, and the driver VM gets their
 //! `pcidev` channels, through which it also gets the resource that lets it
-//! give them to its guest.
+//! give them to its guest. When the driver VM ends without Linux having
+//! powered it off (Linux crashed, or the monitor did), devmgr resets its
+//! devices and starts it again, waiting longer each time it fails soon
+//! after starting, and giving up after a few such failures.
 
 #![no_std]
 #![no_main]
@@ -33,7 +39,7 @@ use vacpi::name::Path;
 use vacpi::resource::Resource as FirmwareResource;
 use vipc::WaitSet;
 use vproto::pci::{AcpiDevice, AcpiResource, DeviceInfo, MsiAddress, PciError, pcidev};
-use vrt::object::{Channel, Interrupt, IoPorts, Resource, Vmo};
+use vrt::object::{Channel, Interrupt, IoPorts, Process, Resource, Vmo};
 use vrt::println;
 
 use acpi::Acpi;
@@ -344,35 +350,32 @@ impl DeviceSession<'_> {
 /// system, which may itself be waiting for a disk driver).
 fn start_driver(boot: &initrd::Archive<'static>, driver: &str, args: &[String], info: &DeviceInfo) -> Option<Channel> {
     let (ours, theirs) = Channel::create().ok()?;
-    let started = start_program(boot, driver, args, alloc::vec![(PCIDEV_ROLE, theirs.into_handle())])?;
-    started.then(|| {
-        println!(
-            "started {} for {:04x}:{:04x} at {:02x}:{:02x}.{}",
-            driver, info.vendor, info.device, info.bus, info.slot, info.function
-        );
-        ours
-    })
+    start_program(boot, driver, args, alloc::vec![(PCIDEV_ROLE, theirs.into_handle())])?;
+    println!(
+        "started {} for {:04x}:{:04x} at {:02x}:{:02x}.{}",
+        driver, info.vendor, info.device, info.bus, info.slot, info.function
+    );
+    Some(ours)
 }
 
 /// Starts the programs that go with `driver` ([`COMPANIONS`]).
 fn start_companions(boot: &initrd::Archive<'static>, driver: &str) {
     for &(_, program, args) in COMPANIONS.iter().filter(|(d, ..)| *d == driver) {
         let args: Vec<String> = args.iter().map(|&a| a.into()).collect();
-        if start_program(boot, program, &args, Vec::new()) == Some(true) {
+        if start_program(boot, program, &args, Vec::new()).is_some() {
             println!("started {} {} beside {}", program, args.join(" "), driver);
         }
     }
 }
 
 /// Starts `bin/NAME.exe` from the system image with the registry and
-/// `handles` (by role): whether it started (`None` if it could not be
-/// tried).
+/// `handles` (by role): the process, if it started.
 fn start_program(
     boot: &initrd::Archive<'static>,
     name: &str,
     args: &[String],
     handles: Vec<(u32, vrt::object::Handle)>,
-) -> Option<bool> {
+) -> Option<Process> {
     let path = alloc::format!("bin/{name}.exe");
     let Some(image) = boot.find(&path).map(|f| f.data) else {
         println!("{} is not installed", name);
@@ -387,10 +390,10 @@ fn start_program(
         spawn = spawn.arg(a);
     }
     match spawn.start(image) {
-        Ok(_) => Some(true),
+        Ok(process) => Some(process),
         Err(e) => {
             println!("failed to start {}: {}", name, e);
-            Some(false)
+            None
         }
     }
 }
@@ -430,29 +433,129 @@ fn boot_image() -> Option<(initrd::Archive<'static>, Vmo)> {
     Some((initrd::Archive::open(bytes).ok()?, vmo))
 }
 
-/// Starts the driver VM (`drivervm`), with what it runs on: the hypervisor
-/// resource, the system image, which holds its Linux, and the channels of
-/// the devices it gets. Its options come as `drivervm.NAME=VALUE`
-/// (`drivervm.memory=512`); `drivervm.devices` is devmgr's.
-fn start_driver_vm(
-    boot: &initrd::Archive<'static>,
-    image: &Vmo,
-    hypervisor: &Resource,
-    options: &[String],
-    devices: Vec<Channel>,
-) {
-    let args: Vec<String> = options
-        .iter()
-        .filter_map(|a| a.strip_prefix("drivervm."))
-        .filter(|a| !a.starts_with("devices="))
-        .map(Into::into)
-        .collect();
-    let (Ok(h), Ok(i)) = (hypervisor.duplicate(), image.0.duplicate(None)) else { return };
-    let mut handles = alloc::vec![(DRIVERVM_HYPERVISOR_ROLE, h.into_handle()), (vabi::startup::role::INITRD, i)];
-    let count = devices.len();
-    handles.extend(devices.into_iter().map(|c| (DRIVERVM_DEVICE_ROLE, c.into_handle())));
-    if start_program(boot, "drivervm", &args, handles) == Some(true) {
-        println!("started drivervm {} with {} device(s)", args.join(" "), count);
+/// A run of the driver VM that ends sooner than this after it started is
+/// a failure; the next start waits longer after each in a row, and stops
+/// after a few.
+const DRIVERVM_STABLE_NS: u64 = 60_000_000_000;
+const DRIVERVM_MAX_FAILURES: u32 = 5;
+/// drivervm's exit code when Linux powered the machine off.
+const DRIVERVM_POWERED_OFF: i64 = 0;
+
+/// The driver VM: the devices it gets, and its process, which is started
+/// again when it ends without Linux having powered the machine off.
+struct DriverVm {
+    /// Its options: `drivervm.NAME=VALUE` (`drivervm.memory=512`) but
+    /// `devices`, which is devmgr's.
+    args: Vec<String>,
+    devices: Vec<(Address, DeviceInfo)>,
+    hypervisor: Resource,
+    process: Option<Process>,
+    /// How many times it started, when it last did, the failures in a row
+    /// (runs that ended soon), and when to start it next.
+    starts: u32,
+    started_ns: u64,
+    failures: u32,
+    next_start_ns: Option<u64>,
+}
+
+impl DriverVm {
+    fn new(options: &[String], devices: Vec<(Address, DeviceInfo)>, hypervisor: Resource) -> DriverVm {
+        let args = options
+            .iter()
+            .filter_map(|a| a.strip_prefix("drivervm."))
+            .filter(|a| !a.starts_with("devices="))
+            .map(Into::into)
+            .collect();
+        DriverVm {
+            args,
+            devices,
+            hypervisor,
+            process: None,
+            starts: 0,
+            started_ns: 0,
+            failures: 0,
+            next_start_ns: Some(0),
+        }
+    }
+
+    /// Starts it, with what it runs on: the hypervisor resource, the system
+    /// image, which holds its Linux, and new channels of its devices (which
+    /// devmgr serves as `bound`'s).
+    fn start(
+        &mut self,
+        boot: &initrd::Archive<'static>,
+        image: &Vmo,
+        bound: &mut BTreeMap<u64, Bound>,
+        next: &mut u64,
+    ) {
+        self.next_start_ns = None;
+        let (Ok(h), Ok(i)) = (self.hypervisor.duplicate(), image.0.duplicate(None)) else { return };
+        let mut handles = alloc::vec![(DRIVERVM_HYPERVISOR_ROLE, h.into_handle()), (vabi::startup::role::INITRD, i)];
+        for (address, info) in &self.devices {
+            let Ok((ours, theirs)) = Channel::create() else { continue };
+            handles.push((DRIVERVM_DEVICE_ROLE, theirs.into_handle()));
+            let device = Bound { address: *address, info: info.clone(), channel: ours, acpi: Vec::new(), guest: true };
+            bound.insert(*next, device);
+            *next += 1;
+        }
+        // A crash the tests ask for (`drivervm.crash=SECONDS`) is the first
+        // run's.
+        let args: Vec<String> =
+            self.args.iter().filter(|a| self.starts == 0 || !a.starts_with("crash=")).cloned().collect();
+        self.process = start_program(boot, "drivervm", &args, handles);
+        if self.process.is_some() {
+            self.starts += 1;
+            self.started_ns = vrt::time::now_ns();
+            let mut what = String::from(if self.starts > 1 { "started drivervm again" } else { "started drivervm" });
+            for a in &args {
+                what.push(' ');
+                what.push_str(a);
+            }
+            match self.devices.len() {
+                0 => println!("{}", what),
+                n => println!("{} with {} device(s)", what, n),
+            }
+        }
+    }
+
+    /// Its process ended: unless Linux powered it off, its devices are
+    /// reset and it starts again (later, the sooner it failed).
+    fn ended(&mut self, config: &ConfigSpace) {
+        let Some(process) = self.process.take() else { return };
+        let info = process.info().ok();
+        let why = match info.map(|i| (i.state, i.exit_code)) {
+            Some((vabi::process_state::EXITED, DRIVERVM_POWERED_OFF)) => {
+                println!("Linux powered the driver VM off");
+                return;
+            }
+            Some((vabi::process_state::EXITED, 2)) => String::from("Linux restarted it"),
+            Some((vabi::process_state::EXITED, 3)) => String::from("Linux crashed"),
+            Some((vabi::process_state::EXITED, code)) => alloc::format!("the monitor stopped it ({code})"),
+            Some((vabi::process_state::KILLED, _)) => String::from("the monitor was killed"),
+            _ => String::from("the monitor crashed"),
+        };
+        let ran_ns = vrt::time::now_ns().saturating_sub(self.started_ns);
+        self.failures = if ran_ns < DRIVERVM_STABLE_NS { self.failures + 1 } else { 0 };
+        let mut resets = Vec::new();
+        for (address, info) in &self.devices {
+            let how = config.reset(*address).unwrap_or("no reset");
+            resets.push(alloc::format!("{:04x}:{:04x} {}", info.vendor, info.device, how));
+        }
+        if resets.is_empty() {
+            println!("the driver VM ended: {}", why);
+        } else {
+            println!("the driver VM ended: {}; its devices: {}", why, resets.join(", "));
+        }
+        if self.failures > DRIVERVM_MAX_FAILURES {
+            println!("the driver VM keeps failing: its devices stay off");
+            return;
+        }
+        // At once the first time, then 1, 2, 4... seconds.
+        let wait_ns = match self.failures {
+            0 | 1 => 0,
+            n => 1_000_000_000u64 << (n - 2).min(5),
+        };
+        self.next_start_ns = Some(vrt::time::now_ns() + wait_ns);
     }
 }
 
@@ -495,7 +598,13 @@ fn main() -> i32 {
     let drivervm: Vec<String> =
         args.iter().filter(|a| *a == "drivervm" || a.starts_with("drivervm.")).cloned().collect();
     let for_guest = guest_devices(&drivervm);
-    let mut guest_channels = Vec::new();
+    let mut guest = Vec::new();
+    // USB devices the driver VM gets: their controllers' drivers lend them.
+    let lend: Vec<String> = drivervm
+        .iter()
+        .filter_map(|a| a.strip_prefix("drivervm.usb="))
+        .map(|list| alloc::format!("lend={list}"))
+        .collect();
 
     let mut bound: BTreeMap<u64, Bound> = BTreeMap::new();
     let mut next = 1u64;
@@ -511,26 +620,23 @@ fn main() -> i32 {
             class_name(&info)
         );
         if for_guest.contains(&(info.vendor, info.device)) {
-            if info.bars.iter().any(|b| b.io) || mgr.config.read(a, 0x0E, 1) & 0x7F != 0 {
-                println!(
-                    "{:04x}:{:04x} cannot go to the driver VM: not an endpoint with memory BARs only",
-                    info.vendor, info.device
-                );
+            // An endpoint only: a bridge would give the guest what is
+            // behind it. (Its I/O BARs the guest does not get.)
+            if mgr.config.read(a, 0x0E, 1) & 0x7F != 0 {
+                println!("{:04x}:{:04x} cannot go to the driver VM: not an endpoint", info.vendor, info.device);
                 continue;
             }
-            let Ok((ours, theirs)) = Channel::create() else { continue };
             println!(
                 "{:04x}:{:04x} at {:02x}:{:02x}.{} goes to the driver VM",
                 info.vendor, info.device, a.bus, a.slot, a.function
             );
-            guest_channels.push(theirs);
-            bound.insert(next, Bound { address: a, info, channel: ours, acpi: Vec::new(), guest: true });
-            next += 1;
+            guest.push((a, info));
             continue;
         }
         let (driver, driver_args) = match flipsim {
             Some(option) if (info.vendor, info.device) == FLIPSIM_DEVICE => ("flipsim", alloc::vec![option.clone()]),
             _ => match driver_for(&info) {
+                Some("xhci") => ("xhci", lend.clone()),
                 Some(driver) => (driver, Vec::new()),
                 None => continue,
             },
@@ -550,25 +656,48 @@ fn main() -> i32 {
         }
     }
 
+    let mut vm = None;
     if !drivervm.is_empty() {
         match take(HYPERVISOR_RESOURCE) {
-            Some(hypervisor) => start_driver_vm(&boot, &image, &hypervisor, &drivervm, guest_channels),
+            Some(hypervisor) => vm = Some(DriverVm::new(&drivervm, guest, hypervisor)),
             None => println!("no hypervisor resource for the driver VM"),
         }
     }
 
+    /// The driver VM's process, among the channels.
+    const DRIVERVM: u64 = u64::MAX;
     loop {
+        if let Some(vm) = vm.as_mut()
+            && vm.next_start_ns.is_some_and(|at| vrt::time::now_ns() >= at)
+        {
+            vm.start(&boot, &image, &mut bound, &mut next);
+        }
         let mut ws = WaitSet::new();
         for (&k, b) in &bound {
             ws.add(b.channel.raw(), signals::READABLE | signals::PEER_CLOSED, k);
         }
-        if ws.is_empty() {
+        let mut deadline = vabi::DEADLINE_INFINITE;
+        if let Some(vm) = &vm {
+            if let Some(p) = &vm.process {
+                ws.add(p.raw(), signals::TERMINATED, DRIVERVM);
+            }
+            if let Some(at) = vm.next_start_ns {
+                deadline = at;
+            }
+        }
+        if ws.is_empty() && deadline == vabi::DEADLINE_INFINITE {
             vrt::time::sleep(vrt::time::Duration::from_secs(3600));
             continue;
         }
-        let Ok(ready) = ws.wait(vabi::DEADLINE_INFINITE) else { continue };
+        let Ok(ready) = ws.wait(deadline) else { continue };
         let mut closed: Vec<u64> = Vec::new();
         for (k, observed) in ready {
+            if k == DRIVERVM {
+                if let Some(vm) = vm.as_mut() {
+                    vm.ended(&mgr.config);
+                }
+                continue;
+            }
             let Some(dev) = bound.get(&k) else { continue };
             if observed & signals::READABLE != 0 {
                 while let Ok(msg) = dev.channel.read() {

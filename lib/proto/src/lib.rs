@@ -24,6 +24,7 @@ pub mod pci;
 pub mod shell;
 pub mod speakers;
 pub mod tty;
+pub mod usb;
 pub mod wlan;
 
 pub use fs::vfs;

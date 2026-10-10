@@ -1,15 +1,15 @@
-//! A playback device of Linux's sound system through the kernel's own
-//! interface (`/dev/snd/pcmC*D*p` and the ioctls of
+//! A PCM device of Linux's sound system through the kernel's own interface
+//! (`/dev/snd/pcmC*D*p` and `...c`, and the ioctls of
 //! `include/uapi/sound/asound.h`): configured for interleaved 16-bit
-//! writes, written without blocking, and asked how much is still to be
-//! heard.
+//! frames, written (playback) or read (capture) without blocking, and
+//! asked how much is in its buffer.
 
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 
-use guest_sys::{POLLOUT, ioc, ioctl, poll};
+use guest_sys::{POLLIN, POLLOUT, ioc, ioctl, poll};
 
 const O_NONBLOCK: i32 = 0o4000;
 
@@ -78,8 +78,17 @@ struct Transfer {
 const HW_PARAMS: u32 = ioc(3, b'A', 0x11, size_of::<HwParams>());
 const DELAY: u32 = ioc(2, b'A', 0x21, size_of::<i64>());
 const PREPARE: u32 = ioc(0, b'A', 0x40, 0);
+const START: u32 = ioc(0, b'A', 0x42, 0);
 const DROP: u32 = ioc(0, b'A', 0x43, 0);
 const WRITEI_FRAMES: u32 = ioc(1, b'A', 0x50, size_of::<Transfer>());
+const READI_FRAMES: u32 = ioc(2, b'A', 0x51, size_of::<Transfer>());
+
+/// Which way a device's frames go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    Playback,
+    Capture,
+}
 
 impl HwParams {
     /// Everything allowed, every parameter asked for.
@@ -118,9 +127,10 @@ impl HwParams {
     }
 }
 
-/// An open playback device.
+/// An open device.
 pub struct Pcm {
     file: File,
+    stream: Stream,
     pub rate: u32,
     pub channels: u32,
     /// Frames per period (between the card's interrupts), and of the
@@ -130,12 +140,17 @@ pub struct Pcm {
 }
 
 impl Pcm {
-    /// Opens the playback device at `path` for `channels` interleaved
-    /// 16-bit channels at `rate`, with periods of `period` frames and a
-    /// buffer of `periods` of them; failing that, the periods and buffer
-    /// nearest that the card can do.
-    pub fn open(path: &str, rate: u32, channels: u32, period: u32, periods: u32) -> io::Result<Pcm> {
-        let file = OpenOptions::new().write(true).custom_flags(O_NONBLOCK).open(path)?;
+    /// Opens the device at `path` for `channels` interleaved 16-bit
+    /// channels at `rate`, with periods of `period` frames and a buffer of
+    /// `periods` of them; failing that, the periods and buffer nearest that
+    /// the card can do.
+    pub fn open(path: &str, stream: Stream, rate: u32, channels: u32, period: u32, periods: u32) -> io::Result<Pcm> {
+        let mut options = OpenOptions::new();
+        match stream {
+            Stream::Playback => options.write(true),
+            Stream::Capture => options.read(true),
+        };
+        let file = options.custom_flags(O_NONBLOCK).open(path)?;
         let fd = file.as_raw_fd();
         let configure = |exact: bool| -> io::Result<HwParams> {
             let mut p = HwParams::any();
@@ -156,7 +171,7 @@ impl Pcm {
             Ok(p)
         };
         let p = configure(true).or_else(|_| configure(false))?;
-        Ok(Pcm { file, rate, channels, period: p.get(param::PERIOD_SIZE), buffer: p.get(param::BUFFER_SIZE) })
+        Ok(Pcm { file, stream, rate, channels, period: p.get(param::PERIOD_SIZE), buffer: p.get(param::BUFFER_SIZE) })
     }
 
     fn fd(&self) -> RawFd {
@@ -168,10 +183,16 @@ impl Pcm {
         unsafe { ioctl(self.fd(), request, 0).map(|_| ()) }
     }
 
-    /// Makes the device ready to play what is written next (after it was
-    /// configured, ran dry or was stopped).
+    /// Makes the device ready to play what is written next, or to record
+    /// (after it was configured, ran dry or over, or was stopped).
     pub fn prepare(&self) -> io::Result<()> {
         self.request(PREPARE)
+    }
+
+    /// Starts a prepared device (a recording; playback starts with the
+    /// first frames written).
+    pub fn start(&self) -> io::Result<()> {
+        self.request(START)
     }
 
     /// Stops at once, dropping what is queued.
@@ -195,7 +216,24 @@ impl Pcm {
         }
     }
 
-    /// Frames between the last one written and the one heard now.
+    /// Reads the interleaved frames recorded, without waiting: how many
+    /// came (0 if none). `EPIPE` if they ran over and recording stopped.
+    pub fn read(&self, samples: &mut [i16]) -> io::Result<usize> {
+        let mut t = Transfer {
+            result: 0,
+            buf: samples.as_mut_ptr() as usize,
+            frames: (samples.len() / self.channels as usize) as u64,
+        };
+        // SAFETY: the transfer names the buffer, which the kernel writes.
+        match unsafe { ioctl(self.fd(), READI_FRAMES, &mut t as *mut Transfer as usize) } {
+            Ok(_) => Ok(t.result as usize),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(0),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Playback: frames between the last one written and the one heard
+    /// now. Capture: frames recorded and not read yet.
     pub fn delay(&self) -> io::Result<u64> {
         let mut d = 0i64;
         // SAFETY: the kernel writes one snd_pcm_sframes_t.
@@ -203,8 +241,13 @@ impl Pcm {
         Ok(d.max(0) as u64)
     }
 
-    /// Waits up to `ms` until the device has room for a period.
+    /// Waits up to `ms` until the device has room for a period (playback),
+    /// or has recorded one (capture).
     pub fn wait(&self, ms: i32) -> io::Result<bool> {
-        poll(self.fd(), POLLOUT, ms).map(|e| e & POLLOUT != 0)
+        let events = match self.stream {
+            Stream::Playback => POLLOUT,
+            Stream::Capture => POLLIN,
+        };
+        poll(self.fd(), events, ms).map(|e| e & events != 0)
     }
 }

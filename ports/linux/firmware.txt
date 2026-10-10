@@ -1,0 +1,26 @@
+# The firmware the driver VM's Linux loads, which the guest's initial RAM
+# file system carries (/lib/firmware). Each file by the name the kernel
+# asks for, where it comes from (a source below, and the file's path in
+# it), and its SHA-256: from a release of linux-firmware, whose WHENCE says
+# whose each file is and that anyone may redistribute it, or of
+# wireless-regdb. `cargo xtask linux` fetches them (into
+# target/linux/firmware); image builds check and pack them.
+#
+# A device of Linux's whose firmware is not here does not work in the
+# driver VM: its driver (veda.config) and its firmware go in together.
+
+source linux-firmware https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/{}?h=20260916
+source wireless-regdb https://git.kernel.org/pub/scm/linux/kernel/git/wens/wireless-regdb.git/plain/{}?h=master-2026-09-03
+
+# cfg80211's regulatory database: what radios may do in each country.
+regulatory.db  wireless-regdb  regulatory.db  7e236caecd939c8ec98be4870bf30422f28ffef2565a38aaaa2d9ddabd0c2641
+
+# Intel Wi-Fi 6E AX211 (iwlwifi, iwlmvm): the CNVi of Alder Lake and
+# Raptor Lake, with its radio's calibration (PNVM).
+iwlwifi-so-a0-gf-a0-89.ucode  linux-firmware  intel/iwlwifi/iwlwifi-so-a0-gf-a0-89.ucode  698c913f938d9a8adce7ab9c049b1cd37daaa7473d8185f93e98f22733092f6b
+iwlwifi-so-a0-gf-a0.pnvm  linux-firmware  intel/iwlwifi/iwlwifi-so-a0-gf-a0.pnvm  776606c7b5d0f582b5ec78a591fb1e5e621a6efa670e8261f29114bbf1b0f8d1
+
+# Intel AX211 Bluetooth (btusb, btintel): the AX211's USB side, which Veda
+# lends to the driver VM.
+intel/ibt-0040-0041.sfi  linux-firmware  intel/ibt-0040-0041.sfi  8dcfb3a7c1592c11c3e80505d21ee78dbde3de0c830d8e3e856371c37717b62c
+intel/ibt-0040-0041.ddc  linux-firmware  intel/ibt-0040-0041.ddc  fe272982577efdc289cfe3e8bedafca607c0b7d6c9df1aab1880e22ef930d077

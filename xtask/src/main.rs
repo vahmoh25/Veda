@@ -587,6 +587,10 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     };
     let mut vm = o.vm.clone();
     vm.audio_wav = (!automate::host_audio(script)).then(|| util::out_dir().join("audio.wav"));
+    if automate::silent_audio(script) {
+        vm.audio_wav = None;
+        vm.audio_silent = true;
+    }
     // Scripts that reboot the machine need QEMU to stay up across it.
     vm.allow_reboot = script.lines().any(|l| l.trim() == "reset");
     if let Some(net) = automate::net_mode(script)? {
@@ -615,6 +619,9 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     }
     if automate::iommu(script) {
         vm.iommu = true;
+    }
+    if automate::usb_net(script) {
+        vm.usb_net = true;
     }
     if live {
         // A stick with the ISO on it, and no home disk.

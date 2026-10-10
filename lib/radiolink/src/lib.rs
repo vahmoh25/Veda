@@ -24,8 +24,8 @@ extern crate std;
 
 use alloc::vec::Vec;
 
-/// Version of this protocol.
-pub const VERSION: u16 = 1;
+/// Version of this protocol (2: [`msg::LISTEN`]).
+pub const VERSION: u16 = 2;
 /// Largest message (type and body), enough for any 802.11 MPDU we send.
 pub const MAX_MESSAGE: usize = 8192;
 
@@ -39,6 +39,10 @@ pub mod msg {
     pub const SET_CHANNEL: u8 = 3;
     /// Guest: transmitter and receiver { on: u8 }.
     pub const SET_POWER: u8 = 4;
+    /// Guest: what the receiver hears { all: u8 }: the channel it is tuned
+    /// to (0, the start), or every channel (1), each frame with its own,
+    /// for a radio that filters itself (Linux's simulated one).
+    pub const LISTEN: u8 = 5;
     /// Host: welcome { version: u16, mac: [u8; 6], channels: [u8] }.
     pub const HELLO_ACK: u8 = 0x81;
     /// Host: received { channel: u8, signal_dbm: i8, frame }.
@@ -54,6 +58,7 @@ pub enum Message {
     Tx { id: u32, no_ack: bool, frame: Vec<u8> },
     SetChannel { channel: u8 },
     SetPower { on: bool },
+    Listen { all: bool },
     HelloAck { version: u16, mac: [u8; 6], channels: Vec<u8> },
     Rx { channel: u8, signal_dbm: i8, frame: Vec<u8> },
     TxStatus { id: u32, acked: bool },
@@ -91,6 +96,10 @@ impl Message {
             Message::SetPower { on } => {
                 body.push(*on as u8);
                 msg::SET_POWER
+            }
+            Message::Listen { all } => {
+                body.push(*all as u8);
+                msg::LISTEN
             }
             Message::HelloAck { version, mac, channels } => {
                 body.extend_from_slice(&version.to_le_bytes());
@@ -131,6 +140,7 @@ impl Message {
             },
             msg::SET_CHANNEL if b.len() == 1 => Message::SetChannel { channel: b[0] },
             msg::SET_POWER if b.len() == 1 => Message::SetPower { on: b[0] != 0 },
+            msg::LISTEN if b.len() == 1 => Message::Listen { all: b[0] != 0 },
             msg::HELLO_ACK if b.len() >= 8 => Message::HelloAck {
                 version: u16::from_le_bytes([b[0], b[1]]),
                 mac: mac(&b[2..8]),
@@ -267,6 +277,7 @@ mod tests {
             Message::Tx { id: 7, no_ack: true, frame: vec![0x80, 0, 1, 2, 3] },
             Message::SetChannel { channel: 11 },
             Message::SetPower { on: false },
+            Message::Listen { all: true },
             Message::HelloAck { version: VERSION, mac: [2; 6], channels: vec![1, 6, 11] },
             Message::Rx { channel: 6, signal_dbm: -67, frame: vec![9; 300] },
             Message::TxStatus { id: 7, acked: true },

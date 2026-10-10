@@ -376,7 +376,7 @@ fn ports() -> Result<Vec<Port>> {
     ["binutils", "gcc", "gmp", "mpfr", "mpc", "musl", "mesa"].iter().map(|p| Port::named(p)).collect()
 }
 
-fn sha256_of(path: &Path) -> Result<String> {
+pub fn sha256_of(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
     let data = util::read(path)?;
     Ok(Sha256::digest(&data).iter().map(|b| format!("{b:02x}")).collect())

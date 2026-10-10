@@ -55,6 +55,12 @@ pub mod op {
     pub const VMO_UNMAP: u32 = 17;
     pub const BOOTSTRAP: u32 = 18;
     pub const CLOCK: u32 = 19;
+    /// [`super::Watch`]: the guest kernel's own, made of [`WAIT`] and
+    /// [`CANCEL`]; the monitor never sees it.
+    pub const WATCH: u32 = 20;
+    /// [`super::VmoDmabuf`]: the guest kernel's own, made of [`VMO_MAP`]
+    /// and [`VMO_UNMAP`].
+    pub const VMO_DMABUF: u32 = 21;
 }
 
 /// The operation was carried out.
@@ -135,6 +141,35 @@ pub struct Wait {
     /// How many items have an active signal (output).
     pub satisfied: u32,
     pub _reserved: u32,
+}
+
+/// [`op::WATCH`]: a Linux file descriptor (`fd`, out) that is readable
+/// while one of `signals` of `handle` is active, so that a program polls
+/// Veda's objects with its other files. Reading it gives the signals active
+/// then (a `u32`); a handle that is gone makes it an error.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Watch {
+    pub status: u32,
+    pub handle: u32,
+    pub signals: u32,
+    pub fd: i32,
+}
+
+/// [`op::VMO_DMABUF`]: a Linux dma-buf (`fd`, out) of `len` bytes of the
+/// VMO `handle` from `offset`, which the monitor maps as for
+/// [`op::VMO_MAP`] (`flags` too): Linux's drivers reach Veda's memory
+/// through it (a display scans a picture out, a GPU renders into it). The
+/// pages stay mapped while the dma-buf lives.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VmoDmabuf {
+    pub status: u32,
+    pub handle: u32,
+    pub offset: u64,
+    pub len: u64,
+    pub flags: u32,
+    pub fd: i32,
 }
 
 /// [`op::CANCEL`].

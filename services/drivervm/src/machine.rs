@@ -134,6 +134,7 @@ impl Machine {
             return Err(format!("{} MiB is too little memory for the guest", config.memory_mib));
         }
         let mut cmdline = String::from(CMDLINE);
+        cmdline.push_str(&devices.host_options());
         cmdline.push_str(config.cmdline.trim_end());
         if cmdline.len() > image.cmdline_size as usize || cmdline.len() >= 4096 {
             return Err(String::from("the kernel's command line is too long"));

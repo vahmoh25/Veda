@@ -1,0 +1,21 @@
+[package]
+name = "guest-kms"
+description = "Veda's display driver for Linux: a display Linux drives (KMS) as the screen Veda's compositor flips"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kms"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+vrt = { workspace = true, default-features = false }
+vabi = { workspace = true }
+vproto = { workspace = true }
+guest-sys = { workspace = true }
+
+[lints]
+workspace = true

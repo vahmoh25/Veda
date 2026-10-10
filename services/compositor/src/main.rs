@@ -89,6 +89,14 @@ impl driver_protocol::Server for DriverLink<'_> {
         }
         result
     }
+
+    fn screen(&mut self) -> Result<displaydev::ScreenMode, DisplayDevError> {
+        if !self.trusted {
+            return Err(DisplayDevError::Denied);
+        }
+        let r = self.screen.rect();
+        Ok(displaydev::ScreenMode { width: r.w as u32, height: r.h as u32, rgbx: self.screen.rgb() })
+    }
 }
 
 fn main() -> i32 {

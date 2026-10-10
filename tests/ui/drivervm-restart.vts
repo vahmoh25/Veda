@@ -1,0 +1,56 @@
+# The driver VM starts again when it fails. The wired card (QEMU's 82576,
+# which has a function-level reset) and Wi-Fi (the virtual radio's port,
+# which has none; see drivervm-wifi.vts) go through it; nettest watches the
+# default route, the wired card's. Linux crashes once, as the script asks
+# (`drivervm.crash`): devmgr resets the driver VM's devices and starts a
+# new one, whose drivers attach again: the network service gets the card
+# back, and the Wi-Fi service the radio, with which it joins the saved
+# network again. Then the monitor itself is killed, with the same outcome.
+requires drivervm
+iommu
+net both
+nic igb
+boot-cmdline "drivervm drivervm.devices=1af4:1043,8086:10c9 drivervm.crash=20"
+boot-cmdline "run=nettest:route-watch"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+fail-on "nettest: FAIL"
+wait-serial "wlan: connected to Veda Home" 120
+wait-serial "watch: route=eth0 ping=ok dns=ok" 120
+
+# 1. Linux crashes.
+checkpoint
+wait-serial "veda: crashing, as asked" 60
+wait-serial "drivervm: Linux crashed" 30
+wait-serial "devmgr: the driver VM ended: Linux crashed; its devices: " 30
+expect-serial "8086:10c9 function-level reset"
+expect-serial "1af4:1043 no reset"
+wait-serial "devmgr: started drivervm again" 30
+checkpoint
+wait-serial "net: eth0: attached as eth0" 60
+wait-serial "wifi: wlan0: offered to the Wi-Fi service" 60
+wait-serial "watch: route=eth0 ping=ok dns=ok" 120
+wait-serial "wlan: connected to Veda Home" 120
+# The crash was the first run's: the new one lives past the time.
+wait 18
+reject-serial "veda: crashing, as asked"
+
+# 2. The monitor is killed.
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 60
+wait 4
+checkpoint
+type "kill -f drivervm"
+key ret
+wait-serial "devmgr: the driver VM ended: the monitor was killed; its devices: " 30
+expect-serial "8086:10c9 function-level reset"
+wait-serial "devmgr: started drivervm again" 30
+wait-serial "net: eth0: attached as eth0" 60
+wait-serial "watch: route=eth0 ping=ok dns=ok" 120
+wait-serial "wlan: connected to Veda Home" 120
+reject-serial "keeps failing"
+reject-serial "panicked"
+reject-serial "iommu: unit at"

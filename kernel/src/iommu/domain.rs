@@ -142,6 +142,7 @@ impl Domain {
         })?;
         self.devices.push((u, sid));
         self.devices.sort_unstable();
+        super::joined_guest(iommu, sid);
         crate::kinfo!("iommu: {:02x}:{:02x}.{} is in domain {} now", bus, dev, func, self.id);
         Ok(())
     }
@@ -159,6 +160,7 @@ impl Drop for Domain {
             let (bus, dev, func) = (sid >> 8, (sid >> 3) & 0x1F, sid & 7);
             match unit.set_context(sid, None) {
                 Ok(()) => {
+                    super::left_guest(iommu, sid);
                     crate::kinfo!("iommu: {:02x}:{:02x}.{} left domain {}: it reaches nothing", bus, dev, func, self.id)
                 }
                 Err(e) => {

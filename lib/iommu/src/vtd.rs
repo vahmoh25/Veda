@@ -278,6 +278,10 @@ impl Fault {
 }
 
 /// What a fault reason means (chapter 7 of the specification).
+/// The fault reason of a request from a device with no context entry (one
+/// that is in no domain, as one is once its guest has ended).
+pub const NO_CONTEXT_ENTRY: u8 = 0x2;
+
 pub fn fault_reason(reason: u8) -> &'static str {
     match reason {
         0x1 => "the bus has no root entry",

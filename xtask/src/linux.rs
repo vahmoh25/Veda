@@ -7,11 +7,12 @@
 //!   file system and Linux's own tools.
 //! * Once it is built, every image build also builds the guest's programs
 //!   (`guest/`: Rust for Linux on musl, static) and packs them into the
-//!   initial RAM file system the kernel starts with. Both go into the
-//!   system image (`linux/bzImage`, `linux/initramfs.cpio`), where
-//!   `drivervm` finds them.
+//!   initial RAM file system the kernel starts with, with the firmware its
+//!   drivers load (`ports/linux/firmware.txt`). Both go into the system
+//!   image (`linux/bzImage`, `linux/initramfs.cpio`), where `drivervm`
+//!   finds them.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::toolchain::{self, Port};
@@ -28,6 +29,11 @@ const GUEST_PROGRAMS: &[(&str, &str, &str)] = &[
     ("guest-bridgetest", "bridgetest", "bin/bridgetest"),
     ("guest-pcitest", "pcitest", "bin/pcitest"),
     ("guest-alsa", "alsa", "bin/alsa"),
+    ("guest-net", "net", "bin/net"),
+    ("guest-wifi", "wifi", "bin/wifi"),
+    ("guest-airlink", "airlink", "bin/airlink"),
+    ("guest-kms", "kms", "bin/kms"),
+    ("guest-usb", "usbip", "bin/usbip"),
 ];
 
 /// Tools the kernel's build runs, beyond a C compiler.
@@ -106,6 +112,7 @@ pub fn command(args: &[String]) -> Result {
     for name in ["zlib", "elfutils", "linux"] {
         toolchain::fetch(&Port::named(name)?, &downloads)?;
     }
+    firmware()?;
     let ports = util::workspace_root().join("ports");
     util::run(
         Command::new("bash")
@@ -141,7 +148,65 @@ pub fn guest() -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     for (_, binary, path) in GUEST_PROGRAMS {
         archive.file(path, 0o755, &util::read(&bin.join(binary))?);
     }
+    let mut directories = std::collections::BTreeSet::new();
+    for (name, file) in firmware()? {
+        let path = format!("lib/firmware/{name}");
+        // Its directories first, each once.
+        for (at, _) in path.match_indices('/') {
+            if directories.insert(path[..at].to_string()) {
+                archive.directory(&path[..at]);
+            }
+        }
+        archive.file(&path, 0o644, &util::read(&file)?);
+    }
     Ok(Some((util::read(&root().join("bzImage"))?, archive.finish())))
+}
+
+/// The firmware of `ports/linux/firmware.txt`: each file's name, and where
+/// it is (fetched now if it is not, or is not the file pinned).
+fn firmware() -> Result<Vec<(String, PathBuf)>> {
+    let list = util::workspace_root().join("ports").join("linux").join("firmware.txt");
+    let text = std::fs::read_to_string(&list).map_err(|e| format!("{}: {e}", list.display()))?;
+    let mut sources = std::collections::BTreeMap::new();
+    let mut files = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let bad = || format!("{}:{}: not a source or a file: {line}", list.display(), n + 1);
+        let words: Vec<&str> = line.split_whitespace().collect();
+        match words.as_slice() {
+            [] => {}
+            [first, ..] if first.starts_with('#') => {}
+            ["source", name, url] if url.contains("{}") => {
+                sources.insert(name.to_string(), url.to_string());
+            }
+            [name, source, path, sha256] if sha256.len() == 64 && !name.contains("..") => {
+                let url = sources.get(*source).ok_or_else(bad)?.replace("{}", path);
+                let file = root().join("firmware").join(name);
+                fetch_firmware(&file, &url, sha256)?;
+                files.push((name.to_string(), file));
+            }
+            _ => return Err(bad()),
+        }
+    }
+    Ok(files)
+}
+
+/// Makes `file` the one of `url` whose SHA-256 is `sha256`.
+fn fetch_firmware(file: &Path, url: &str, sha256: &str) -> Result {
+    if file.is_file() && toolchain::sha256_of(file)? == sha256 {
+        return Ok(());
+    }
+    util::status("Downloading", url);
+    std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| format!("{e}"))?;
+    let partial = file.with_extension("part");
+    util::run(
+        Command::new("curl").args(["-fL", "--retry", "3", "--silent", "--show-error", "-o"]).arg(&partial).arg(url),
+    )?;
+    let got = toolchain::sha256_of(&partial)?;
+    if got != sha256 {
+        let _ = std::fs::remove_file(&partial);
+        return Err(format!("{url}: SHA-256 {got}, expected {sha256} (ports/linux/firmware.txt)"));
+    }
+    std::fs::rename(&partial, file).map_err(|e| format!("{e}"))
 }
 
 /// Archives in the `newc` format of cpio, as Linux unpacks its initial RAM

@@ -1,0 +1,20 @@
+[package]
+name = "guest-airlink"
+description = "The driver VM's radio medium for the tests of Wi-Fi: QEMU's virtual radio port as a mac80211_hwsim radio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "airlink"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+vradiolink = { workspace = true }
+guest-sys = { workspace = true }
+guest-netlink = { workspace = true }
+
+[lints]
+workspace = true

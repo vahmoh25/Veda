@@ -13,9 +13,10 @@
 //!
 //! The driver keeps the mode the firmware set and takes over the very
 //! picture the compositor draws into: [`Screen::firmware`] says where that
-//! is, and the compositor checks it against its framebuffer. The
-//! compositor accepts drivers only (connections from `devmgr`, which
-//! starts them).
+//! is, and the compositor checks it against its framebuffer. A driver that
+//! sets the mode itself (Linux's, in the driver VM) sets the compositor's
+//! ([`displaydev::screen`]). The compositor accepts drivers only
+//! (connections from `devmgr`, which starts them).
 //!
 //! # Flips
 //!
@@ -93,6 +94,17 @@ message! {
 }
 
 message! {
+    /// The screen the compositor draws on.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ScreenMode {
+        pub width: u32,
+        pub height: u32,
+        /// Red in the low byte of each pixel (otherwise blue).
+        pub rgbx: bool,
+    }
+}
+
+message! {
     /// A driver's pictures and the means to flip between them.
     #[derive(Debug)]
     pub struct Link {
@@ -115,6 +127,9 @@ protocol! {
         /// from its next frame on, and asks for one as soon as it holds the
         /// whole screen. Attached until the connection closes.
         1 => fn attach(screen: Screen, link: Link) -> Result<(), DisplayDevError>;
+        /// The screen the compositor draws on: what a driver that sets the
+        /// display's mode itself sets before it attaches.
+        2 => fn screen() -> Result<ScreenMode, DisplayDevError>;
     }
 }
 

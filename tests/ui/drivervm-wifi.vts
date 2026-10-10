@@ -1,0 +1,54 @@
+# Wi-Fi through Linux's 802.11 stack: QEMU's virtual radio (the
+# virtio-serial port airsim is on, behind the IOMMU) goes to the driver VM.
+# There airlink makes it a radio of Linux's simulated kind
+# (mac80211_hwsim), which Veda's Wi-Fi driver for Linux offers to Veda's
+# Wi-Fi service as a managed radio: Linux scans, authenticates, associates
+# and encrypts; the service decides, and does SAE and the key handshakes.
+# nettest joins the WPA3 network (SAE, protected management frames) and
+# checks DNS, TCP, HTTP and ping through it; then the Terminal joins the
+# hidden network, the open one and the WPA2/WPA3 one on 5 GHz (where
+# Linux, knowing no country, only listens until it hears an access
+# point), and declines the enterprise one.
+requires drivervm
+iommu
+net wifi
+boot-cmdline "drivervm drivervm.devices=1af4:1043"
+boot-cmdline "run=nettest:wifi,Veda+WPA3"
+fail-on "PANIC"
+fail-on "drivervm: processor"
+fail-on "nettest: FAIL"
+wait-serial "goes to the driver VM" 60
+wait-serial "airlink: radio 02:56:57:aa:00:01" 90
+wait-serial "wifi: wlan0 (mac80211_hwsim" 30
+wait-serial "wifi: wlan0: offered to the Wi-Fi service" 30
+wait-serial "connected to Veda WPA3 (WPA3, protected management frames)" 120
+wait-serial "nettest: PASS" 300
+air-expect "list" "1 joined"
+
+key meta_l
+wait 2
+type "terminal"
+key ret
+wait-serial "started terminal" 60
+wait 4
+type "wifi connect 'Veda Hidden' veda-wifi"
+key ret
+wait-serial "connected to Veda Hidden (WPA2" 120
+type "wifi connect 'Veda Guest'"
+key ret
+wait-serial "connected to Veda Guest (open)" 120
+type "wifi connect 'Veda Mixed' veda-wifi"
+key ret
+wait-serial "connected to Veda Mixed (WPA3 (transition mode)" 120
+type "wifi connect 'Veda Corp' some-password"
+key ret
+wait 3
+type "ping -c 2 10.0.3.2"
+key ret
+wait 4
+air-expect "list" "1 joined"
+reject-serial "joining Veda Corp"
+reject-serial "panicked"
+reject-serial "iommu: unit at"
+reject-serial "Linux touched I/O port"
+reject-serial "the Wi-Fi adapter refused a command"

@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{Ordering, fence};
 
-use vabi::map_flags;
+use vabi::{WaitItem, map_flags, signals};
 use vproto::pci::{self, DeviceInfo, pcidev};
 use vrt::object::{Interrupt, Resource};
 use vrt::println;
@@ -409,6 +409,13 @@ impl Controller {
         write_dwords(&self.input, 0, &vusb::xhci::input_control(add));
     }
 
+    /// As [`Controller::input_reset`], for a Configure Endpoint that also
+    /// drops the endpoint contexts of `drop`.
+    pub fn input_change(&self, drop: u32, add: u32) {
+        self.input.write(0, &[0; 33 * 64]);
+        write_dwords(&self.input, 0, &vusb::xhci::input_control_change(drop, add));
+    }
+
     pub fn input_slot(&self, slot: &SlotContext) {
         write_dwords(&self.input, self.context_size, &slot.to_dwords());
     }
@@ -437,6 +444,12 @@ impl Controller {
     /// The state of an endpoint, from a device context.
     pub fn endpoint_state(&self, device: &DmaBuffer, index: u8) -> u8 {
         (read_dword(device, index as usize * self.context_size) & 7) as u8
+    }
+
+    /// Where a stopped endpoint stands on its ring, from a device context.
+    pub fn endpoint_dequeue(&self, device: &DmaBuffer, index: u8) -> u64 {
+        let at = index as usize * self.context_size;
+        (read_dword(device, at + 8) as u64 | (read_dword(device, at + 12) as u64) << 32) & !0xF
     }
 
     // Commands, doorbells and events.
@@ -478,6 +491,35 @@ impl Controller {
             None => vrt::time::sleep_until(deadline.min(now_ns() + POLL_INTERVAL_NS)),
         }
         // Acknowledge, so the controller interrupts for the next events.
+        self.regs.set_op(op::USBSTS, STS_EINT);
+        self.regs.write(self.regs.rt + ir::IMAN, IMAN_IP | if self.irq.is_some() { IMAN_IE } else { 0 });
+    }
+
+    /// Waits as [`Controller::wait`] does, or until one of `extra`'s
+    /// signals (which it then says).
+    pub fn wait_also(&self, extra: &mut [WaitItem], deadline: u64) {
+        if extra.is_empty() {
+            return self.wait(deadline);
+        }
+        let mut items: Vec<WaitItem> = Vec::with_capacity(extra.len() + 1);
+        let deadline = match &self.irq {
+            Some(irq) => {
+                items.push(WaitItem { handle: irq.raw(), signals: signals::SIGNALED, ..Default::default() });
+                deadline
+            }
+            None => deadline.min(now_ns() + POLL_INTERVAL_NS),
+        };
+        let first = items.len();
+        items.extend_from_slice(extra);
+        let _ = vrt::object::wait_many(&mut items, deadline);
+        if let Some(irq) = &self.irq
+            && items[0].observed & signals::SIGNALED != 0
+        {
+            let _ = irq.ack();
+        }
+        for (e, i) in extra.iter_mut().zip(&items[first..]) {
+            e.observed = i.observed;
+        }
         self.regs.set_op(op::USBSTS, STS_EINT);
         self.regs.write(self.regs.rt + ir::IMAN, IMAN_IP | if self.irq.is_some() { IMAN_IE } else { 0 });
     }

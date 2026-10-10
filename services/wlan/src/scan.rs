@@ -21,6 +21,9 @@ const MAX_AGE_MS: u64 = 90_000;
 const FRESH_MS: u64 = 30_000;
 /// Most access points remembered (a crowded place has a few hundred).
 const MAX_ENTRIES: usize = 512;
+/// A managed radio scans every channel in one go, and says when it is
+/// done; this is in case it never says.
+const MANAGED_SCAN_MS: u64 = 15_000;
 
 /// A scan in progress.
 pub struct Scan {
@@ -33,17 +36,36 @@ pub struct Scan {
     /// Asked for by a user (rather than a background scan).
     pub requested: bool,
     seq: u16,
+    /// A managed radio's: asked for in one command.
+    managed: bool,
+    started: bool,
 }
 
 impl Scan {
     pub fn new(radio: &Radio, directed: Vec<Vec<u8>>, requested: bool) -> Scan {
         let channels = radio.channels().iter().map(|c| c.number).collect();
-        Scan { channels, next: 0, dwell_until: 0, directed, requested, seq: 0 }
+        Scan {
+            channels,
+            next: 0,
+            dwell_until: 0,
+            directed,
+            requested,
+            seq: 0,
+            managed: radio.managed(),
+            started: false,
+        }
     }
 
     /// Moves to the next channel (tuning and probing). Returns `false` when
-    /// every channel has been visited.
+    /// every channel has been visited. A managed radio's scan starts on the
+    /// first step and ends when the radio says (or on the next).
     pub fn step(&mut self, radio: &mut Radio, now: u64) -> bool {
+        if self.managed {
+            let start = !self.started;
+            self.started = true;
+            self.dwell_until = now + MANAGED_SCAN_MS;
+            return start && radio.scan(&self.directed);
+        }
         while let Some(&c) = self.channels.get(self.next) {
             self.next += 1;
             if !radio.tune(c) {
@@ -52,10 +74,10 @@ impl Scan {
             if radio.may_probe(c) {
                 let mac = radio.info.mac;
                 self.seq = (self.seq + 1) & 0xFFF;
-                radio.send(&probe_request(&mac, None, self.seq), true);
+                radio.send(&probe_request(&mac, None, c, self.seq), true);
                 for ssid in &self.directed {
                     self.seq = (self.seq + 1) & 0xFFF;
-                    radio.send(&probe_request(&mac, Some(ssid), self.seq), true);
+                    radio.send(&probe_request(&mac, Some(ssid), c, self.seq), true);
                 }
             }
             self.dwell_until = now + DWELL_MS;

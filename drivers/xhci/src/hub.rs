@@ -111,7 +111,7 @@ impl Xhci {
     }
 
     /// A hub port changed: a device came or went.
-    fn hub_port_changed(&mut self, hub: u8, port: u8) {
+    pub(crate) fn hub_port_changed(&mut self, hub: u8, port: u8) {
         let Ok(status) = self.hub_port_status(hub, port) else { return };
         for f in status.change_features() {
             let _ = self.control(hub, Setup::hub_clear_port_feature(port, f), &[]);

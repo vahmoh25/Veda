@@ -70,6 +70,30 @@ impl Ring {
     pub fn contains(&self, address: u64) -> bool {
         (self.base()..self.base() + 4096).contains(&address)
     }
+
+    /// The control word of the TRB at `address` on this ring.
+    fn control_at(&self, address: u64) -> u32 {
+        let index = ((address - self.base()) as usize / size_of::<Trb>()).min(LINK);
+        // SAFETY: index < TRBS, inside the page.
+        unsafe { read_volatile((self.mem.ptr().add(index * size_of::<Trb>()) as *const u32).add(3)) }
+    }
+
+    /// The cycle state the TRB at `address` was handed over with.
+    pub fn cycle_at(&self, address: u64) -> bool {
+        self.control_at(address) & 1 != 0
+    }
+
+    /// Turns the TRB at `address` (of a cancelled transfer, on a stopped
+    /// endpoint) into one that moves nothing, which the controller skips.
+    pub fn cancel(&mut self, address: u64) {
+        if !self.contains(address) {
+            return;
+        }
+        let control = self.control_at(address);
+        let index = (address - self.base()) as usize / size_of::<Trb>();
+        let chain = Trb { control, ..Trb::default() }.chained();
+        write_trb(&self.mem, index, Trb::noop(chain).with_cycle(control & 1 != 0));
+    }
 }
 
 /// The event ring of interrupter 0, a single segment.

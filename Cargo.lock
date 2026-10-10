@@ -630,6 +630,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "guest-airlink"
+version = "0.1.0"
+dependencies = [
+ "guest-netlink",
+ "guest-sys",
+ "vradiolink",
+]
+
+[[package]]
 name = "guest-alsa"
 version = "0.1.0"
 dependencies = [
@@ -658,12 +667,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "guest-kms"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+ "vabi",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
+name = "guest-net"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+ "vabi",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
+name = "guest-netlink"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+]
+
+[[package]]
 name = "guest-pcitest"
 version = "0.1.0"
 
 [[package]]
 name = "guest-sys"
 version = "0.1.0"
+
+[[package]]
+name = "guest-usb"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+ "vabi",
+ "vipc",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
+name = "guest-wifi"
+version = "0.1.0"
+dependencies = [
+ "guest-netlink",
+ "guest-sys",
+ "vabi",
+ "vipc",
+ "vproto",
+ "vrt",
+]
 
 [[package]]
 name = "hash2curve"
@@ -1963,6 +2022,7 @@ version = "0.1.0"
 dependencies = [
  "vabi",
  "vbuild",
+ "vipc",
  "vproto",
  "vrt",
  "vusb",

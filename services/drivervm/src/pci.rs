@@ -12,6 +12,11 @@
 //! and function numbers if its device's function 0 comes too (drivers may
 //! look for siblings where they are on the PC); other functions take a
 //! free device number, as its function 0.
+//!
+//! The kernel's command line says where each function's memory BARs are on
+//! the host ([`Devices::host_options`]): a driver in the guest names the
+//! host's memory it drives so (a display, its firmware's framebuffer), to
+//! services that know the host's addresses.
 
 use alloc::collections::BTreeMap;
 use alloc::format;
@@ -112,6 +117,21 @@ impl Devices {
             list.push(Device { devfn, info, state: Mutex::new(State { pci, config, msis: BTreeMap::new() }) });
         }
         Ok(Devices { list })
+    }
+
+    /// The kernel command line's options that say where the functions'
+    /// memory BARs are on the host: ` veda.device=00:01.0,0:0x80000000,...`
+    /// for each, its place in the guest then each BAR's index and host
+    /// address.
+    pub fn host_options(&self) -> String {
+        let mut options = String::new();
+        for d in &self.list {
+            options.push_str(&format!(" veda.device=00:{:02x}.{}", d.devfn >> 3, d.devfn & 7));
+            for b in d.info.bars.iter().filter(|b| !b.io) {
+                options.push_str(&format!(",{}:{:#x}", b.index, b.address));
+            }
+        }
+        options
     }
 
     fn device(&self, function: u64) -> Option<&Device> {

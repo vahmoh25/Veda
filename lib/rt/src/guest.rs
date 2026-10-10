@@ -144,7 +144,7 @@ fn wait(items: &mut [WaitItem], deadline: u64) -> Result<usize, Error> {
 }
 
 /// Makes Veda system call `n`, as [`crate::sys::call2`] does.
-pub fn call(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
+pub(crate) fn call(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
     let one = |v: usize| Ok((v, 0));
     match n {
         nr::DEBUG_WRITE => {
@@ -337,7 +337,32 @@ pub fn call(n: usize, a: [usize; 6]) -> Result<(usize, usize), Error> {
 }
 
 /// The handle the guest starts with in `role` (a new one each time).
-pub fn bootstrap(role: u32) -> Option<RawHandle> {
+pub(crate) fn bootstrap(role: u32) -> Option<RawHandle> {
     let mut r = b::Bootstrap { role, ..b::Bootstrap::default() };
     bridge(op::BOOTSTRAP, &mut r).ok().map(|_| r.out)
+}
+
+/// A Linux file descriptor that is readable while one of `signals` of
+/// `handle` is active: so that a program waits on Veda's objects and on
+/// Linux's files at once, with `poll`. Reading it (4 bytes) gives the
+/// signals active then; the next `poll` waits for them again.
+pub fn watch(handle: RawHandle, signals: u32) -> Result<std::os::fd::OwnedFd, Error> {
+    use std::os::fd::FromRawFd;
+    let mut r = b::Watch { handle, signals, ..Default::default() };
+    bridge(op::WATCH, &mut r)?;
+    // SAFETY: the bridge made the file for this program; nothing else owns it.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(r.fd) })
+}
+
+/// A Linux dma-buf of `len` bytes of VMO `vmo` from `offset` (pages),
+/// writable by devices if `writable`: so that Linux's drivers use Veda's
+/// memory (a display scans it out, a GPU renders into it) without copies.
+/// The VMO stays mapped into the guest while the dma-buf lives.
+pub fn dmabuf(vmo: RawHandle, offset: u64, len: u64, writable: bool) -> Result<std::os::fd::OwnedFd, Error> {
+    use std::os::fd::FromRawFd;
+    let flags = map_flags::READ | if writable { map_flags::WRITE } else { 0 };
+    let mut r = b::VmoDmabuf { handle: vmo, offset, len, flags: flags as u32, ..Default::default() };
+    bridge(op::VMO_DMABUF, &mut r)?;
+    // SAFETY: the bridge made the file for this program; nothing else owns it.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(r.fd) })
 }

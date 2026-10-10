@@ -31,6 +31,11 @@ pub mod status {
 
 /// Feature bit every virtio 1.x driver negotiates.
 pub const F_VERSION_1: u64 = 1 << 32;
+/// The device's memory accesses go through the platform's IOMMU: taken
+/// whenever offered (a device that offers it may refuse a driver that does
+/// not), since the addresses Veda gives devices are what its IOMMU
+/// translates.
+pub const F_ACCESS_PLATFORM: u64 = 1 << 33;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VirtioError {
@@ -454,7 +459,8 @@ impl Device {
     }
 
     /// Resets the device and performs the feature handshake, accepting the
-    /// intersection of the device's features and `wanted` (plus VERSION_1).
+    /// intersection of the device's features and `wanted` (plus VERSION_1
+    /// and ACCESS_PLATFORM).
     pub fn initialize(&self, wanted: u64) -> Result<u64, VirtioError> {
         // A device whose status reads 0 is in its reset state already (the
         // firmware resets its devices when it hands over). Resetting it
@@ -474,7 +480,7 @@ impl Device {
         self.w32(0, 1);
         let hi = self.r32(4) as u64;
         let offered = lo | hi << 32;
-        let accepted = offered & (wanted | F_VERSION_1);
+        let accepted = offered & (wanted | F_VERSION_1 | F_ACCESS_PLATFORM);
         if accepted & F_VERSION_1 == 0 {
             self.set_status(status::FAILED);
             return Err(VirtioError::FeaturesRejected);
