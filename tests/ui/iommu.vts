@@ -1,9 +1,10 @@
-# The IOMMU (QEMU's intel-iommu, interrupt remapping on): Veda's kernel
-# remaps every device's interrupts, which only that device may raise, and
-# passes the devices' DMA through until one is given to a guest. All works
-# as without an IOMMU: the disks, the USB keyboard and tablet, the sound
-# card, the network.
-iommu
+# The IOMMU (QEMU's intel-iommu, interrupt remapping on), which the tests'
+# machines have, as PCs do: Veda's kernel remaps every device's interrupts,
+# which only that device may raise, and passes the DMA of Veda's own
+# devices through, while the driver VM's reach only its memory. Both work
+# at once, without a fault: the disks and the sound card (HD Audio),
+# Veda's; the USB controller with its keyboard and tablet, and the network
+# card, Linux's.
 sound hda
 input usb
 net ethernet
@@ -12,7 +13,7 @@ fail-on "PANIC"
 fail-on "nettest: FAIL"
 wait-serial "iommu: 1 VT-d unit(s): interrupts remapped" 30
 wait-serial "desktop ready" 120
-wait-serial "xhci: port 6.1: QEMU USB Keyboard" 30
+wait-serial "input: QEMU QEMU USB Keyboard (usb 0627:0001): keyboard" 60
 wait-serial "hda: attached to the audio service" 60
 wait-serial "nettest: PASS" 300
 reject-serial "iommu: unit at"

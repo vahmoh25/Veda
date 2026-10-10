@@ -458,18 +458,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "e1000"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vbuild",
- "vipc",
- "vproto",
- "vrt",
- "vvirtio",
-]
-
-[[package]]
 name = "ecdsa"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -644,6 +632,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "guest-input"
+version = "0.1.0"
+dependencies = [
+ "guest-sys",
+ "vproto",
+ "vrt",
+]
+
+[[package]]
 name = "guest-kms"
 version = "0.1.0"
 dependencies = [
@@ -687,17 +684,6 @@ dependencies = [
 [[package]]
 name = "guest-sys"
 version = "0.1.0"
-
-[[package]]
-name = "guest-usb"
-version = "0.1.0"
-dependencies = [
- "guest-sys",
- "vabi",
- "vipc",
- "vproto",
- "vrt",
-]
 
 [[package]]
 name = "guest-wifi"
@@ -1612,30 +1598,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "virtio-input"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vbuild",
- "vipc",
- "vproto",
- "vrt",
- "vvirtio",
-]
-
-[[package]]
-name = "virtio-net"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vbuild",
- "vipc",
- "vproto",
- "vrt",
- "vvirtio",
-]
-
-[[package]]
 name = "virtio-snd"
 version = "0.1.0"
 dependencies = [
@@ -1781,13 +1743,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vusb"
-version = "0.1.0"
-dependencies = [
- "vproto",
-]
-
-[[package]]
 name = "vvirtio"
 version = "0.1.0"
 dependencies = [
@@ -1806,19 +1761,6 @@ dependencies = [
  "vnet",
  "vrt",
  "vtls",
-]
-
-[[package]]
-name = "vwifi"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vbuild",
- "vipc",
- "vproto",
- "vradiolink",
- "vrt",
- "vvirtio",
 ]
 
 [[package]]
@@ -1961,19 +1903,6 @@ dependencies = [
  "curve25519-dalek",
  "rand_core",
  "zeroize",
-]
-
-[[package]]
-name = "xhci"
-version = "0.1.0"
-dependencies = [
- "vabi",
- "vbuild",
- "vipc",
- "vproto",
- "vrt",
- "vusb",
- "vvirtio",
 ]
 
 [[package]]

@@ -5,10 +5,7 @@
 # and its frames keep coming, and Veda's display driver for Linux shows the
 # compositor's frames on the display, the one whose memory holds the
 # firmware's framebuffer.
-requires drivervm
-iommu
 gpu on
-boot-cmdline "drivervm drivervm.devices=1234:1111,1af4:1050"
 boot-cmdline "run=prism"
 fail-on "PANIC"
 fail-on "drivervm: processor"

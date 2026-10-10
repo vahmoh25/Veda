@@ -1,10 +1,14 @@
 //! `wlan` — the Wi-Fi service.
 //!
-//! * Radio drivers offer their radios through `wlanphy`; the driver only
-//!   moves raw 802.11 frames and tunes the radio ("soft MAC").
-//! * The service does the rest with `vwlan`: scanning, open system and SAE
-//!   authentication, association, the 4-way and group key handshakes,
-//!   CCMP encryption and management frame protection.
+//! * Radio drivers offer their radios through `wlanphy`. Linux's, in the
+//!   driver VM (`guest/wifi`), are *managed* radios: they scan, join
+//!   access points, encrypt and move Ethernet frames on the service's
+//!   commands. A radio that only moves raw 802.11 frames and tunes itself
+//!   ("soft MAC") the service drives too, though no driver offers one now.
+//! * The service decides the rest with `vwlan`: what to join, SAE, the
+//!   4-way and group key handshakes (the radio gets the session keys
+//!   only), management frame protection; for a soft MAC radio, scanning,
+//!   authentication, association and CCMP encryption too.
 //! * Each connected radio appears to `netd` as the Ethernet-like interface
 //!   `wlan0` (`netdev` protocol); the link goes up when a network is joined,
 //!   and `netd` takes care of DHCP, DNS and routing as for any interface.

@@ -1,16 +1,14 @@
-# The driver VM starts again when it fails. The wired card (QEMU's 82576,
-# which has a function-level reset) and Wi-Fi (the virtual radio's port,
-# which has none; see drivervm-wifi.vts) go through it; nettest watches the
-# default route, the wired card's. Linux crashes once, as the script asks
+# The driver VM starts again when it fails. Among its devices are the wired
+# card (QEMU's 82576, which has a function-level reset) and Wi-Fi (the
+# virtual radio's port, which has none; see drivervm-wifi.vts); nettest
+# watches the default route, the wired card's. Linux crashes once, as the script asks
 # (`drivervm.crash`): devmgr resets the driver VM's devices and starts a
 # new one, whose drivers attach again: the network service gets the card
 # back, and the Wi-Fi service the radio, with which it joins the saved
 # network again. Then the monitor itself is killed, with the same outcome.
-requires drivervm
-iommu
 net both
 nic igb
-boot-cmdline "drivervm drivervm.devices=1af4:1043,8086:10c9 drivervm.crash=20"
+boot-cmdline "drivervm.crash=20"
 boot-cmdline "run=nettest:route-watch"
 fail-on "PANIC"
 fail-on "drivervm: processor"

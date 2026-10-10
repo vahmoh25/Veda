@@ -1,6 +1,6 @@
 //! The radio link: messages between the virtual Wi-Fi radio of a Veda
-//! guest (the `vwifi` driver) and the radio medium simulated on the host
-//! (`airsim`).
+//! guest (`airlink`, in the driver VM, which makes it a radio of Linux's)
+//! and the radio medium simulated on the host (`airsim`).
 //!
 //! The transport is a byte stream (a virtio-serial port on the guest side,
 //! a TCP connection on the host side). Every message is

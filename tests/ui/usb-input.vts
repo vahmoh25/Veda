@@ -1,15 +1,18 @@
 # USB input (1280x800): QEMU's xHCI controller with a keyboard and a tablet
 # behind a hub, and a mouse on a port of its own, and no PS/2 controller, so
-# keys and clicks can only come through USB. The keyboard opens the Terminal
-# from the start menu and types a command; the tablet double-clicks a
-# desktop icon; then a keyboard and a mouse are plugged in and out.
+# keys and clicks can only come through USB, which is Linux's: the
+# controller goes to the driver VM, where Linux drives the hub and the
+# devices, and Veda's input driver for Linux takes their events. The
+# keyboard opens the Terminal from the start menu and types a command; the
+# tablet double-clicks a desktop icon; then a keyboard and a mouse are
+# plugged in and out.
 input usb
 fail-on "PANIC"
 wait-serial "desktop ready" 90
-wait-serial "xhci: port 6.1: QEMU USB Keyboard (0627:0001, full speed): keyboard" 30
-wait-serial "xhci: port 6.2: QEMU USB Tablet (0627:0001, full speed): tablet" 30
-expect-serial "xhci: port 6: QEMU USB Hub (0409:55aa, full speed): hub with 8 ports"
-expect-serial "xhci: port 7: QEMU USB Mouse (0627:0001, high speed): mouse"
+wait-serial "input: QEMU QEMU USB Keyboard (usb 0627:0001): keyboard" 30
+wait-serial "input: QEMU QEMU USB Tablet (usb 0627:0001): tablet" 30
+expect-serial "hub 1-2:1.0: 8 ports detected"
+expect-serial "input: QEMU QEMU USB Mouse (usb 0627:0001): mouse"
 wait 2
 # Super opens the start menu, typing searches it and Enter starts the app.
 key meta_l
@@ -30,12 +33,11 @@ shot target/veda/usb-input.png
 # A second keyboard on the hub and a mouse on a root port, plugged in and
 # out while Veda runs.
 qmp device_add '{"driver":"usb-kbd","bus":"xhci.0","port":"2.3","id":"kbd2"}'
-wait-serial "xhci: port 6.3: QEMU USB Keyboard (0627:0001, full speed): keyboard" 30
+wait-serial-count "input: QEMU QEMU USB Keyboard (usb 0627:0001): keyboard" 2 30
 qmp device_add '{"driver":"usb-mouse","bus":"xhci.0","port":"4","id":"mouse2"}'
-wait-serial "xhci: port 8: QEMU USB Mouse (0627:0001, high speed): mouse" 30
+wait-serial-count "input: QEMU QEMU USB Mouse (usb 0627:0001): mouse" 2 30
 qmp device_del '{"id":"kbd2"}'
-wait-serial "xhci: port 6.3: removed" 30
+wait-serial "input: QEMU QEMU USB Keyboard (usb 0627:0001): gone" 30
 qmp device_del '{"id":"mouse2"}'
-wait-serial "xhci: port 8: removed" 30
+wait-serial "input: QEMU QEMU USB Mouse (usb 0627:0001): gone" 30
 reject-serial "attempt"
-reject-serial "no longer polled"

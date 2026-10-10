@@ -3,10 +3,8 @@
 # goes on drawing in place, into its pictures and the firmware's
 # framebuffer, devmgr starts a new driver VM, and its display driver
 # attaches to the compositor again, which shows the desktop through it.
-requires drivervm
-iommu
 gpu off
-boot-cmdline "drivervm drivervm.devices=1234:1111 drivervm.crash=4"
+boot-cmdline "drivervm.crash=4"
 fail-on "PANIC"
 wait-serial "compositor: bochs-drm (Linux) attached" 120
 wait-serial "compositor: desktop shown after" 120

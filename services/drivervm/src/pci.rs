@@ -8,6 +8,10 @@
 //! A function reports no errors to the host, which a PC may make NMIs of:
 //! its error reporting is turned off before the guest runs, and stays off.
 //!
+//! A function the guest cannot be given (one the firmware keeps memory
+//! for, one without room on the bus or for its BARs) is said so and let
+//! go of: its channel closes, which tells devmgr it stays the host's.
+//!
 //! Where a function is: on the host's bus 0, a function keeps its device
 //! and function numbers if its device's function 0 comes too (drivers may
 //! look for siblings where they are on the PC); other functions take a
@@ -81,14 +85,16 @@ impl Devices {
         Devices { list: Vec::new() }
     }
 
-    /// Gives the guest the functions of `channels`: their DMA, their BARs
-    /// (in `windows`), their place on its bus 0.
-    pub fn attach(guest: &Guest, channels: Vec<Channel>, windows: &mut Windows) -> Result<Devices, String> {
+    /// Gives the guest the functions of `channels` it can have: their DMA,
+    /// their BARs (in `windows`), their place on its bus 0.
+    pub fn attach(guest: &Guest, channels: Vec<Channel>, windows: &mut Windows) -> Devices {
         let mut given = Vec::new();
         for channel in channels {
             let pci = pcidev::Client::new(channel);
-            let info = pci.info().map_err(|e| format!("devmgr: {e}"))?;
-            given.push((pci, info));
+            match pci.info() {
+                Ok(info) => given.push((pci, info)),
+                Err(e) => println!("devmgr: {e}"),
+            }
         }
         let places = places(&given.iter().map(|(_, i)| (i.bus, i.slot, i.function)).collect::<Vec<_>>());
         let mut list = Vec::new();
@@ -101,22 +107,20 @@ impl Devices {
                 println!("{name}: the guest's bus is full; it does not get it");
                 continue;
             };
-            // Its DMA reaches the guest's memory from now on, before the
-            // guest can enable it.
-            let resource =
-                pci.device_resource().map_err(|e| format!("devmgr: {e}"))?.map_err(|e| format!("{name}: {e:?}"))?;
-            let sid = (info.bus as u16) << 8 | (info.slot as u16) << 3 | info.function as u16;
-            guest.attach_device(&resource, sid).map_err(|e| format!("{name} cannot be given to the guest: {e}"))?;
-            let pci_express = vproto::pci::find_capability(&pci, vhv::pci::CAP_PCI_EXPRESS);
-            quiet_errors(&pci, pci_express);
-            let bars = map_bars(guest, &pci, &info, windows).map_err(|e| format!("{name}: {e}"))?;
+            let (bars, pci_express) = match give(guest, &pci, &info, windows) {
+                Ok(given) => given,
+                Err(e) => {
+                    println!("{name} cannot be given to the guest: {e}");
+                    continue;
+                }
+            };
             let at: Vec<String> =
                 bars.iter().map(|b| format!("BAR {} at {:#x} ({} KiB)", b.index, b.address, b.size / 1024)).collect();
             println!("{} is the guest's 00:{:02x}.{}: {}", name, devfn >> 3, devfn & 7, at.join(", "));
             let config = ConfigSpace::new(bars, multifunction, pci_express);
             list.push(Device { devfn, info, state: Mutex::new(State { pci, config, msis: BTreeMap::new() }) });
         }
-        Ok(Devices { list })
+        Devices { list }
     }
 
     /// The kernel command line's options that say where the functions'
@@ -192,6 +196,26 @@ impl Devices {
             }
         }
     }
+}
+
+/// Gives the guest function `info` (`pci`'s): its DMA, then its memory
+/// BARs, placed in `windows`. Returns them, and where its PCI Express
+/// capability is.
+fn give(
+    guest: &Guest,
+    pci: &pcidev::Client,
+    info: &DeviceInfo,
+    windows: &mut Windows,
+) -> Result<(Vec<Bar>, Option<u16>), String> {
+    // Its DMA reaches the guest's memory from now on, before the guest can
+    // enable it.
+    let resource = pci.device_resource().map_err(|e| format!("devmgr: {e}"))?.map_err(|e| format!("{e:?}"))?;
+    let sid = (info.bus as u16) << 8 | (info.slot as u16) << 3 | info.function as u16;
+    guest.attach_device(&resource, sid).map_err(|e| format!("{e}"))?;
+    let pci_express = vproto::pci::find_capability(pci, vhv::pci::CAP_PCI_EXPRESS);
+    quiet_errors(pci, pci_express);
+    let bars = map_bars(guest, pci, info, windows)?;
+    Ok((bars, pci_express))
 }
 
 /// Turns off the errors the function reports to the host (its SERR# and

@@ -11,28 +11,28 @@ talk over kernel channels; the kernel knows nothing about networks.
         v                                      v
  +----------------------+    "netdev"    +----------------------------+
  | netd                 |<---------------| wlan  (the Wi-Fi service)  |
- | vnetstack + smoltcp: |  wlan0 frames  | vwlan: scanning, SAE,      |
- | interfaces, DHCP,    |  (Ethernet)    | association, 4-way and     |
- | SLAAC, routes, DNS,  |                | group handshakes, CCMP,    |
- | TCP, UDP, ICMP       |                | management frame           |
- +----------------------+                | protection, saved networks,|
-        ^ "netdev"                       | reconnection, roaming      |
-        | eth0 frames                    +----------------------------+
- +--------------+                               ^ "wlanphy"
- | virtio-net   |                               | raw 802.11 frames
- | (driver)     |                        +--------------+
- +--------------+                        | vwifi        |  virtio-serial port
-                                         | (driver)     |  org.veda.wlan.0
-                                         +--------------+
+ | vnetstack + smoltcp: |  wlan0 frames  | vwlan: choosing networks,  |
+ | interfaces, DHCP,    |  (Ethernet)    | SAE, 4-way and group       |
+ | SLAAC, routes, DNS,  |                | handshakes, saved networks,|
+ | TCP, UDP, ICMP       |                | reconnection, roaming      |
+ +----------------------+                +----------------------------+
+        ^ "netdev"                              ^ "wlanphy" (managed:
+        | eth0 frames                           |  commands, Ethernet frames)
+ ===== the driver VM ==========================================================
+ +--------------+                        +--------------+
+ | net          |  Linux's network       | wifi         |  Linux's Wi-Fi radios
+ | (guest/net)  |  cards                 | (guest/wifi) |  (nl80211; airlink
+ +--------------+                        +--------------+  makes QEMU's virtual
+                                                           radio one)
 ```
 
-* **Drivers** move frames and nothing else. A network card driver
-  (`virtio-net`, `e1000`) offers Ethernet frames to `netd`; a radio driver
-  (`vwifi`) offers raw 802.11 frames to `wlan` ("soft MAC"). Neither sees
-  keys, passwords or addresses. A *managed* radio — Linux's Wi-Fi stack in
-  [the driver VM](DRIVERVM.md), whose cards' firmware keeps the MAC —
-  joins access points itself on `wlan`'s commands and moves Ethernet
-  frames (see below); it gets the session keys, never a password.
+* **Drivers** move frames and nothing else, and they are Linux's, in
+  [the driver VM](DRIVERVM.md): `net` offers each of Linux's network
+  cards to `netd` as an Ethernet device, and `wifi` each of its Wi-Fi
+  radios to `wlan` as a *managed* radio, which joins access points on
+  `wlan`'s commands (the cards of PCs keep the MAC in their firmware) and
+  moves Ethernet frames (see below). Neither sees passwords or addresses;
+  a radio gets the session keys only.
 * **`wlan`** is the Wi-Fi service. Everything above the radio happens here:
   scanning, authentication, association, the key handshakes, encryption,
   saved networks and the decisions of when and where to connect. Each
@@ -62,37 +62,36 @@ out, and a system call only when the other side is asleep.
 | `lib/netstack` | `vnetstack`: interfaces, DHCP, SLAAC, routes, DNS, sockets on smoltcp |
 | `services/wlan` | the Wi-Fi service (`wlan` and `wlanphy` protocols) |
 | `lib/wlan` | `vwlan`: IEEE 802.11 frames, RSN, CCMP/BIP, EAPOL, handshakes, SAE, station and access point state machines, saved-network format, connection policy |
-| `drivers/virtio-net` | virtio network card driver |
-| `drivers/e1000` | Intel PRO/1000 driver: 82540EM (QEMU `e1000`), 82545EM, 82574L (QEMU `e1000e`) |
-| `drivers/vwifi` | the virtual Wi-Fi radio (virtio-console port) |
-| `lib/radiolink` | `vradiolink`: the message format between `vwifi` (or `airlink`) and `airsim` |
 | `guest/net`, `guest/wifi`, `guest/airlink` | in the driver VM: Linux's Ethernet cards as `netdev` devices; Linux's Wi-Fi radios as managed radios; QEMU's virtual radio as one of Linux's (mac80211_hwsim) |
+| `lib/radiolink` | `vradiolink`: the message format between `airlink` and `airsim` |
 | `lib/net` | `vnet`: the application API, including `vnet::wifi` |
 | `lib/tls` | `vtls`: TLS 1.3 and 1.2 client (rustls with a pure-Rust cryptography provider) |
 | `lib/proto/src/{net,wlan,netring}.rs` | the service protocols and frame rings |
 | `lib/entropy`, `kernel/src/random.rs` | the kernel's random number generator |
 | `tools/airsim` | the simulated Wi-Fi environment on the host |
 | `tests/nettest` | in-system network checks |
-| `tests/ui/wifi-*.vts` | Wi-Fi GUI and failure-recovery tests |
+| `tests/ui/wifi-connect.vts`, `drivervm-wifi*.vts` | Wi-Fi GUI and failure-recovery tests |
 
 ## Wi-Fi
 
 ### Joining a network
 
-1. **Scanning.** The service tunes the radio to each channel in turn for
-   130 ms, sends a probe request where transmitting is allowed (and
-   directed probes for hidden networks), and records every beacon and
-   probe response it hears. Networks are grouped by name and security
-   for the network list.
+1. **Scanning.** The service has the radio scan every channel (probe
+   requests where transmitting is allowed, and directed ones for hidden
+   networks) and records every beacon and probe response it reports.
+   Networks are grouped by name and security for the network list.
 2. **Authentication.** Open system authentication for WPA2 and open
-   networks; Simultaneous Authentication of Equals (SAE, WPA3) with both
-   the hunting-and-pecking and the hash-to-element password element.
-3. **Association**, with an RSN element matching the access point's
-   ciphers (CCMP-128) and management frame protection (required for WPA3,
-   used whenever the access point is capable).
-4. **The 4-way handshake** derives the session keys from the PMK (the
-   PBKDF2 pre-shared key for WPA2, the SAE key for WPA3) and installs the
-   pairwise and group keys; the group key handshake renews group keys.
+   networks; Simultaneous Authentication of Equals (SAE, WPA3), whose
+   commit and confirm the service computes, with both the
+   hunting-and-pecking and the hash-to-element password element, and the
+   radio sends.
+3. **Association**, by the radio, with the service's RSN element, matching
+   the access point's ciphers (CCMP-128) and management frame protection
+   (required for WPA3, used whenever the access point is capable).
+4. **The 4-way handshake**, the service's, derives the session keys from
+   the PMK (the PBKDF2 pre-shared key for WPA2, the SAE key for WPA3) and
+   gives the radio the pairwise and group keys; the group key handshake
+   renews group keys.
 5. The link to `netd` goes up; `netd` runs DHCP (and SLAAC) on `wlan0`, and
    the default route moves to it unless a wired connection is up (Ethernet
    has the lower route metric).
@@ -147,7 +146,9 @@ out, and a system call only when the other side is asleep.
 QEMU cannot emulate a Wi-Fi adapter. Under QEMU the radio is therefore a
 virtio-serial port named `org.veda.wlan.0` whose other end is **airsim**
 (`tools/airsim`), a host program that simulates the radio medium and a set
-of access points built on `vwlan`'s access point state machine. airsim
+of access points built on `vwlan`'s access point state machine. The port
+goes to the driver VM, where `airlink` makes it a radio of Linux's (see
+below). airsim
 bridges the access points to a QEMU user-mode network (NAT) through a hub
 and a UDP link, so the guest reaches the real Internet over (simulated)
 Wi-Fi. It talks only to QEMU over the loopback interface; it has nothing to
@@ -189,9 +190,12 @@ dns normal|unanswered|servfail      how DNS queries are treated
 radio drop [SECONDS]                cut the guest's radio link for a while
 ```
 
-A driver for real hardware would implement the same `wlanphy` protocol as
-`vwifi`: report its channels, move frames through the link and tune the
-radio. The service needs no change.
+The service can also drive a radio that moves raw 802.11 frames and does
+nothing else (a *soft MAC* radio, `wlanphy_ctl`), being its MLME itself:
+scanning channel by channel, sending the authentication and association
+frames, encrypting with CCMP. Veda's own driver of the virtual radio was
+one; it went with Veda's other network drivers, and no radio of that kind
+is left.
 
 ### Managed radios: Linux's Wi-Fi
 
@@ -226,8 +230,7 @@ Under QEMU, `airlink` (`guest/airlink`) makes the virtual radio's port one
 of Linux's simulated radios (`mac80211_hwsim`), whose medium it is, so the
 whole path runs against airsim's networks: `tests/ui/drivervm-wifi.vts`
 joins every kind of network through it, and
-`tests/ui/drivervm-wifi-recovery.vts` breaks them as `wifi-recovery.vts`
-does. airsim's radio then hears every channel (radio link version 2's
+`tests/ui/drivervm-wifi-recovery.vts` breaks them. airsim's radio then hears every channel (radio link version 2's
 `LISTEN`), each frame with its own, and Linux keeps what is on its
 channel.
 
@@ -391,14 +394,15 @@ and RSA signatures made by OpenSSL.
   QEMU's NAT, so the host must be online.
 * **GUI and recovery** (`cargo xtask test --ui`): `tests/ui/wifi-connect.vts`
   joins networks through the flyout (a wrong password first), Settings and
-  the Terminal; `tests/ui/wifi-recovery.vts` breaks the network through
-  airsim — access point gone, disconnection, wired side down, DNS failure,
-  out of range, the radio vanishing, rekeying and loss, the Wi-Fi service
-  killed — and checks that Veda recovers by itself each time;
-  `tests/ui/network-failover.vts` unplugs and replugs the wired card's
-  cable (QMP `set_link`) with Wi-Fi connected and checks that traffic moves
-  between the interfaces; `tests/ui/e1000.vts` and `e1000e.vts` run the
-  Intel PRO/1000 driver on QEMU's two models of that card.
+  the Terminal; `tests/ui/drivervm-wifi-recovery.vts` breaks the network
+  through airsim — access point gone, disconnection, wired side down, DNS
+  failure, out of range, the medium going silent, rekeying and loss, the
+  Wi-Fi service killed — and checks that Veda recovers by itself each
+  time; `tests/ui/network-failover.vts` unplugs and replugs the wired
+  card's cable (QMP `set_link`) with Wi-Fi connected and checks that
+  traffic moves between the interfaces; `tests/ui/drivervm-net.vts` and
+  `e1000e.vts` run Linux's drivers of QEMU's Intel 82576 and 82574L, and
+  `drivervm-usb.vts` of its USB network adapter.
 
 ## Limitations and next steps
 

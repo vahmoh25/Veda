@@ -60,8 +60,8 @@ RUN OPTIONS:
     --smp N             Number of virtual CPUs (default 4)
     --memory MiB        Guest RAM in MiB (default 1024)
     --headless          No display window (serial console only)
-    --iommu             Give QEMU's machine an IOMMU (intel-iommu, remapping interrupts), as
-                        the driver VM's devices need
+    --no-iommu          Leave the IOMMU out of QEMU's machine (it has one, intel-iommu
+                        remapping interrupts, as the driver VM's devices need)
     --gpu, --no-gpu     Give QEMU's machine a 3D GPU (virtio-gpu with virgl, rendering on the
                         host's GPU) or not (default: if this QEMU has one)
     --no-audio          Do not attach a sound device
@@ -73,7 +73,7 @@ RUN OPTIONS:
     --fresh-home        Start with a new home directory (deletes target/veda/home.img)
     --net MODE          Network: ethernet (default, QEMU's NAT), wifi (the virtual Wi-Fi radio
                         and the airsim access points), both, or none
-    --nic MODEL         Model of the wired card: virtio-net-pci (default), e1000, e1000e
+    --nic MODEL         Model of the wired card: virtio-net-pci (default), e1000e, igb
     --disk-bus BUS      How QEMU attaches the disks: virtio (default) or ahci (SATA)
     --input DEVICES     Keyboard and pointer: standard (default: PS/2 keyboard and virtio
                         tablet) or usb (on the xHCI controller: a keyboard and a tablet behind
@@ -147,7 +147,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--smp" => o.vm.cpus = value(arg)?.parse().map_err(|_| "--smp expects a number")?,
             "--memory" => o.vm.memory_mib = value(arg)?.parse().map_err(|_| "--memory expects MiB")?,
             "--headless" => o.vm.display = false,
-            "--iommu" => o.vm.iommu = true,
+            "--no-iommu" => o.vm.iommu = false,
             "--gpu" => o.vm.gpu = Some(true),
             "--no-gpu" => o.vm.gpu = Some(false),
             "--no-audio" => o.vm.audio = false,
@@ -288,13 +288,19 @@ fn build_system(o: &Options) -> Result<System> {
     for (path, data) in native {
         initrd.add(&path, data);
     }
-    // The driver VM's Linux (`cargo xtask linux`) and its programs.
+    // The driver VM's Linux (`cargo xtask linux`, or the first time an
+    // image needs it) and its programs.
+    linux::build_once()?;
     match linux::guest()? {
         Some((kernel, initramfs)) => {
             initrd.add("linux/bzImage", kernel);
             initrd.add("linux/initramfs.cpio", initramfs);
         }
-        None => util::status("Note", "no driver VM in the image (build its Linux with `cargo xtask linux`)"),
+        None => util::status(
+            "Note",
+            "no driver VM in the image: nothing but the disks, sound and a PS/2 keyboard is driven \
+             (`cargo xtask linux` builds its Linux)",
+        ),
     }
     initrd.add("etc/version", format!("Veda {}\n", env!("CARGO_PKG_VERSION")).into_bytes());
     // The licence, which About Veda refers to.
@@ -517,9 +523,6 @@ fn script_on(o: &Options, script: &str, system: Option<&System>) -> Result {
     if let Some(gpu) = automate::gpu(script)? {
         vm.gpu = Some(gpu);
     }
-    if automate::iommu(script) {
-        vm.iommu = true;
-    }
     if automate::usb_net(script) {
         vm.usb_net = true;
     }
@@ -573,7 +576,6 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
     ("vagent", &[]),
     ("vwlan", &[]),
     ("vradiolink", &[]),
-    ("vusb", &[]),
     ("vhda", &[]),
     ("vacpi", &[]),
     ("vcs35l41", &[]),
@@ -588,10 +590,18 @@ const HOST_TESTED: &[(&str, &[&str])] = &[
 ];
 
 fn test(o: &Options) -> Result {
+    // The GUI scripts' pointers and networks are the driver VM's.
+    if o.ui
+        && let Err(why) = linux::runnable()
+    {
+        return Err(format!("the GUI scripts need the driver VM: {why}"));
+    }
     util::status("Testing", "library unit tests on the host");
     // Tests of OpenGL ES on the host's GPU drive the system's virglrenderer,
     // which QEMU's 3D GPU is built on, where QEMU has one.
     let virgl = qemu::QemuInstall::locate().is_ok_and(|q| q.has_gl_gpu());
+    // On QEMU's GPU, unless `VGL_TEST_RENDERNODE` names another.
+    let node = std::env::var("VGL_TEST_RENDERNODE").ok().filter(|n| !n.is_empty()).or_else(qemu::render_node);
     for (package, features) in HOST_TESTED {
         let mut cmd = util::cargo();
         cmd.args(["test", "--quiet", "--package", package]);
@@ -621,8 +631,7 @@ fn test(o: &Options) -> Result {
             std::fs::create_dir_all(util::out_dir()).map_err(|e| e.to_string())?;
             let mut run = std::process::Command::new(server);
             run.args(["--multi-clients", "--socket-path"]).arg(&socket);
-            // On the GPU the other tests of the host's GPU take.
-            if let Some(node) = std::env::var_os("VGL_TEST_RENDERNODE") {
+            if let Some(node) = &node {
                 run.arg("--rendernode").arg(node);
             }
             let mut server = run
@@ -654,6 +663,9 @@ fn test(o: &Options) -> Result {
             cmd.args(["test", "--quiet", "--package", "vgl"])
                 .env("VGL_TEST_BACKEND", "virgl")
                 .env("VGL_TEST_HOST", host);
+            if let Some(node) = &node {
+                cmd.env("VGL_TEST_RENDERNODE", node);
+            }
             util::run(&mut cmd)?;
         }
     }
@@ -691,12 +703,6 @@ fn test(o: &Options) -> Result {
                 && !toolchain::built(what)
             {
                 util::status("Skipping", format!("GUI script {name} (needs the {what}: `cargo xtask toolchain`)"));
-                continue;
-            }
-            if automate::needs_drivervm(&text)
-                && let Err(why) = linux::runnable()
-            {
-                util::status("Skipping", format!("GUI script {name} (needs the driver VM: {why})"));
                 continue;
             }
             util::status("Testing", format!("GUI script {name}"));

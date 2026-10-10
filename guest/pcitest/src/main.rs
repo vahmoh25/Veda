@@ -1,8 +1,9 @@
 //! `pcitest` — checks, inside the driver VM's Linux, the PCI functions
-//! Veda gave it: each is on the guest's PCI with a driver of Linux's, and
-//! its MSIs arrive. A sound card's codec has answered (which takes the
-//! controller's DMA both ways, and its interrupts). It says `pcitest: PASS`
-//! when all is well.
+//! Veda gave it: each is on the guest's PCI with a driver of Linux's. A
+//! sound card's codec has answered, which takes the controller's DMA both
+//! ways, and its MSIs, which announce the answers, arrived (other
+//! functions interrupt only when something happens). It says
+//! `pcitest: PASS` when all is well.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -94,15 +95,15 @@ fn main() {
                 .and_then(|t| t.lines().find(|l| l.starts_with("Codec:")).map(str::to_string))
                 .unwrap_or_default();
             c.check(&format!("{name}'s codec answered ({what})"), answered);
+            let irqs: Vec<String> = fs::read_dir(f.join("msi_irqs"))
+                .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                .unwrap_or_default();
+            let counts: Vec<u64> = irqs.iter().map(|i| interrupt_count(i)).collect();
+            c.check(
+                &format!("{name}'s MSIs arrive (interrupts {} came {:?} times)", irqs.join(", "), counts),
+                !irqs.is_empty() && counts.iter().any(|&n| n > 0),
+            );
         }
-        let irqs: Vec<String> = fs::read_dir(f.join("msi_irqs"))
-            .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
-            .unwrap_or_default();
-        let counts: Vec<u64> = irqs.iter().map(|i| interrupt_count(i)).collect();
-        c.check(
-            &format!("{name}'s MSIs arrive (interrupts {} came {:?} times)", irqs.join(", "), counts),
-            !irqs.is_empty() && counts.iter().any(|&n| n > 0),
-        );
     }
     if c.failed == 0 {
         println!("pcitest: PASS");

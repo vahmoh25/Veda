@@ -901,7 +901,19 @@ pub struct KernelBootInfo {
     /// `[start, end)` ranges: RAM, to be mapped cached.
     pub acpi_memory: [[u64; 2]; ACPI_MEMORY_RANGES],
     pub acpi_memory_count: u32,
+    /// What the machine offers beyond what Veda needs ([`platform`]).
+    pub platform: u32,
 }
 
 /// Ranges of [`KernelBootInfo::acpi_memory`].
 pub const ACPI_MEMORY_RANGES: usize = 16;
+
+/// Bits of [`KernelBootInfo::platform`].
+pub mod platform {
+    /// The processors run virtual machines (VMX, with EPT): a hypervisor
+    /// resource makes guests.
+    pub const VIRTUALIZATION: u32 = 1 << 0;
+    /// An IOMMU confines devices' DMA and remaps their interrupts: PCI
+    /// functions can be given to guests.
+    pub const IOMMU: u32 = 1 << 1;
+}

@@ -1,12 +1,13 @@
 //! airsim — the simulated Wi-Fi environment for Veda under QEMU.
 //!
-//! QEMU cannot emulate a Wi-Fi adapter, so Veda's virtual radio (the
-//! `vwifi` driver) exchanges raw 802.11 frames with the host over a
-//! virtio-serial port. `cargo xtask run --net wifi` starts QEMU with that
-//! port as a TCP server on the loopback interface and starts airsim, which
+//! QEMU cannot emulate a Wi-Fi adapter, so Veda's virtual radio (a
+//! virtio-serial port, which `airlink` in the driver VM makes a radio of
+//! Linux's) exchanges raw 802.11 frames with the host over that port.
+//! `cargo xtask run --net wifi` starts QEMU with that port as a TCP server
+//! on the loopback interface and starts airsim, which
 //!
 //! * connects to the port and speaks the radio link protocol
-//!   ([`vradiolink`]) with the guest's driver;
+//!   ([`vradiolink`]) with the guest's `airlink`;
 //! * runs the simulated access points (see [`world`]);
 //! * bridges the access points to a QEMU user-mode network (NAT) through a
 //!   pair of UDP sockets (`-netdev dgram` on a hub with `-netdev user`), so

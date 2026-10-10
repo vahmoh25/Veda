@@ -9,10 +9,7 @@
 # hidden network, the open one and the WPA2/WPA3 one on 5 GHz (where
 # Linux, knowing no country, only listens until it hears an access
 # point), and declines the enterprise one.
-requires drivervm
-iommu
 net wifi
-boot-cmdline "drivervm drivervm.devices=1af4:1043"
 boot-cmdline "run=nettest:wifi,Veda+WPA3"
 fail-on "PANIC"
 fail-on "drivervm: processor"

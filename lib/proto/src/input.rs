@@ -3,7 +3,8 @@
 //! Drivers connect to the `input` service (provided by the compositor) and
 //! send batches of [`InputEvent`]s as one-way messages with ordinal
 //! [`REPORT`]. Key codes are Linux evdev codes (see [`keys`]), which is what
-//! virtio-input reports natively and what PS/2 set-1 scan codes map to.
+//! Linux's input devices report (the driver VM's `input` driver sends
+//! them as they are) and what PS/2 set-1 scan codes map to.
 
 use alloc::vec::Vec;
 use vipc::union;

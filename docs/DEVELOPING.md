@@ -28,24 +28,23 @@ cargo xtask script tests/agent/sim-basics.vts   # the agent, with a stand-in for
 cargo xtask script tests/real/agent-wake.vts    # ... with the real Deepgram ($DEEPGRAM_API_KEY)
 cargo xtask run --net wifi     # boot with the virtual Wi-Fi radio and airsim
 cargo xtask run --net both     # ... plus the wired card (or --net none)
-cargo xtask script tests/ui/wifi-recovery.vts   # Wi-Fi failure-recovery test
+cargo xtask script tests/ui/drivervm-wifi-recovery.vts   # Wi-Fi failure-recovery test
 cargo xtask run --no-gpu       # QEMU without the 3D GPU (OpenGL ES renders in software)
-cargo xtask script tests/ui/flips.vts      # the window system's flips, on a stand-in display that flips
-cargo xtask script tests/ui/flips-gpu.vts  # ... its frames drawn by a GPU (the renderer on softpipe; slow)
-cargo xtask script tests/ui/flips-iris.vts # ... the pictures offered to iris on a stand-in GPU that runs nothing
+cargo xtask script tests/ui/drivervm-display.vts   # the window system's flips, on QEMU's VGA, which Linux drives
+cargo xtask script tests/ui/drivervm-compose.vts   # ... its frames drawn by a GPU (the renderer on softpipe; slow)
+cargo xtask script tests/ui/drivervm-gpu.vts       # Prism on the host's GPU, through Mesa's virgl in the driver VM
 cargo xtask script tests/ui/prism.vts      # OpenGL ES: Prism renders (on the GPU if QEMU has one)
 VGL_TEST_BACKEND=virgl cargo test -p vgl    # the OpenGL ES tests on the host's GPU (desktop OpenGL)
 VGL_TEST_HOST=gles VGL_TEST_BACKEND=virgl cargo test -p vgl      # ... on OpenGL ES
 VGL_TEST_RENDERNODE=/dev/dri/renderD129 VGL_TEST_BACKEND=virgl cargo test -p vgl   # ... on another GPU
 VGL_TEST_BACKEND=gallium cargo test -p vgl  # ... through Veda's renderer on Mesa's softpipe (vgallium.so)
 VR_DEPTH_LOW=1 VGL_TEST_BACKEND=gallium cargo test -p vgl   # ... with depth kept as on iris (lower 24 bits)
-cargo xtask script tests/ui/renderer.vts   # Prism through the renderer service (softpipe) in Veda
-cargo xtask script tests/ui/iris.vts       # ... on iris (Intel's driver), with a stand-in Intel GPU that runs nothing
-cargo xtask toolchain          # build the C toolchain from ports/ (GCC, binutils, musl; Mesa configured) -> target/toolchain
+cargo xtask script tests/ui/drivervm-renderer.vts   # Prism through the renderer in the driver VM, on softpipe
+cargo xtask toolchain          # build the C toolchain from ports/ (GCC, binutils, musl) -> target/toolchain
 cargo xtask script tests/ui/c-compile.vts   # GCC inside Veda: write, compile and run a C program
-cargo xtask linux              # build the driver VM's Linux from ports/linux -> target/linux/bzImage
-cargo xtask run --cmdline "drivervm"        # ... and boot with it (needs KVM's nested virtualization)
-cargo xtask run --iommu        # QEMU with an Intel IOMMU (interrupt remapping too)
+cargo xtask linux              # build the driver VM's Linux, its toolchain and Mesa again -> target/linux
+cargo xtask run --no-iommu     # QEMU without its IOMMU: no device goes to the driver VM
+cargo xtask run --cmdline "drivervm=off"    # ... or no driver VM at all
 cargo xtask script tests/ui/drivervm-pci.vts   # the driver VM's Linux drives QEMU's HD Audio, behind the IOMMU
 cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 stack, against airsim's networks
 ```
@@ -56,18 +55,17 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   (`virtio-gpu-gl-pci`: virtio-gpu with virgl) when its build has one, as
   distributions' do (on Debian and Ubuntu with `qemu-system-modules-opengl`):
   the window then uses `-display gtk,gl=on` (the host's desktop OpenGL),
-  and headless runs `-display egl-headless` (the host's EGL, on the GPU of
-  the first render node, or of the one `VEDA_RENDERNODE` names, such as
-  `/dev/dri/renderD129`). `--no-gpu` leaves the GPU out and `--gpu` insists
-  on it. OpenGL ES programs render on it through Veda's renderer when the
-  driver VM has it (`drivervm.devices=1af4:1050`, as
-  `tests/ui/drivervm-gpu.vts` gives it), and in software otherwise.
+  and headless runs `-display egl-headless` (the host's EGL, on the GPU the
+  firmware showed its screen on, where the host has several, such as a
+  laptop's integrated one, or on the one whose render node
+  `VEDA_RENDERNODE` names, such as `/dev/dri/renderD129`). `--no-gpu`
+  leaves the GPU out and `--gpu` insists on it. OpenGL ES programs render on it through Veda's renderer, in the
+  driver VM, which gets it, and in software without it.
 * Where QEMU has the 3D GPU, `cargo xtask test` also runs the OpenGL ES
   tests on the host's GPU, through the system's virglrenderer
   (`libvirglrenderer1` on Debian and Ubuntu), which QEMU runs: on desktop
-  OpenGL, as QEMU renders, and on OpenGL ES, through EGL on the GPU of the
-  first render node, as headless QEMU takes it (`VGL_TEST_RENDERNODE`
-  names another).
+  OpenGL, as QEMU renders, and on OpenGL ES, through EGL on headless
+  QEMU's GPU (`VGL_TEST_RENDERNODE` names another).
   Once the driver VM's Linux is built (`cargo xtask linux`, which builds
   Mesa for the host too), the tests also run through Veda's renderer: on
   softpipe, and on Mesa's virgl over virglrenderer's test server
@@ -92,8 +90,11 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   and a mouse. Scripts ask for
   it with an `input usb` line, and plug devices in and out with `qmp`
   commands (`qmp device_add '{"driver":"usb-kbd","bus":"xhci.0","port":"2.3","id":"kbd2"}'`
-  and `qmp device_del '{"id":"kbd2"}'`); the driver logs each device it
-  finds as `xhci: port 6.3: ...` (root port, then hub ports).
+  and `qmp device_del '{"id":"kbd2"}'`). Linux, which drives them in the
+  driver VM, logs each device it finds (`usb 1-2.3: new full-speed USB
+  device ...`, then its product's name), and Veda's input driver for Linux
+  each input device (`input: QEMU QEMU USB Keyboard (usb 0627:0001):
+  keyboard`).
 * Headless runs record audio to `target/veda/audio.wav`. A script's
   `expect-audio-gapless` fails if that sound drops out while it plays
   (digital silence over 20 ms between the first sound and the last),
@@ -119,12 +120,13 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   on the kernel command line (`--cmdline`, or the `BOOT.CFG` of an image)
   leaves the sound out; the scripts that check a recording of the sound
   output, or feed it back into the microphone, boot with it.
-* Displays and GPUs are Linux's, in the driver VM: `dmesg drivervm` shows
-  what `kms` and the renderer say (the display it drives, whether it
-  shows the compositor's pictures as they are or copies them; the GPU the
-  renderer serves `gpu` on), and `dmesg compositor` the display attaching.
-  QEMU's VGA is a display that flips once Linux drives it, which the
-  tests give the driver VM (`drivervm.devices=1234:1111`).
+* Displays and GPUs are Linux's, in the driver VM, as are input devices,
+  USB and networks: `dmesg drivervm` shows what Linux and Veda's drivers
+  for Linux say (the display `kms` drives, whether it shows the
+  compositor's pictures as they are or copies them; the GPU the renderer
+  serves `gpu` on; the input devices `input` takes, the cards `net`
+  attaches), and `dmesg compositor` the display attaching. QEMU's VGA is a
+  display that flips once Linux drives it.
   `expect-same A.png B.png [left top right bottom]` fails unless two
   screenshots are alike, pixel for pixel, in a region (fractions of the
   screen): `tests/ui/drivervm-display.vts` checks with it that a window

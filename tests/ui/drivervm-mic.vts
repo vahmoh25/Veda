@@ -3,11 +3,9 @@
 # at the card's pace), goes to the driver VM. Veda's ALSA driver attaches
 # the card's input to the audio service too; a recording gets every second
 # of it, at the card's rate, and loses nothing.
-requires drivervm
-iommu
 sound hda
 audio silent
-boot-cmdline "drivervm drivervm.devices=8086:293e"
+boot-cmdline "drivervm.devices=8086:293e"
 boot-cmdline "run=audiotest:record,3"
 fail-on "PANIC"
 fail-on "drivervm: processor"

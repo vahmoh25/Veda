@@ -3,8 +3,7 @@
 # registry narrowed to the services drivers attach to, sends a VMO and an
 # event over a channel, maps the VMO, and waits on events and channels
 # (with deadlines, and woken by another thread).
-requires drivervm
-boot-cmdline "drivervm drivervm.run=bridgetest drivervm.poweroff"
+boot-cmdline "drivervm.run=bridgetest drivervm.poweroff"
 fail-on "PANIC"
 fail-on "bridgetest: FAIL"
 fail-on "drivervm: processor"

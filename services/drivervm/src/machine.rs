@@ -123,7 +123,7 @@ impl Machine {
         let devices = if devices.is_empty() {
             Devices::none()
         } else {
-            Devices::attach(&guest, devices, &mut Windows { low: PCI_LOW, high: PCI_HIGH })?
+            Devices::attach(&guest, devices, &mut Windows { low: PCI_LOW, high: PCI_HIGH })
         };
 
         // The kernel where it prefers to be, the initial RAM file system at

@@ -494,7 +494,7 @@ message! {
         pub mac: [u8; 6],
         /// Largest IP packet (1500 for Ethernet).
         pub mtu: u32,
-        /// Driver or service name, e.g. `virtio-net`.
+        /// Driver or service name, e.g. `virtio_net (Linux)`.
         pub driver: String,
         /// Where the device is, e.g. `pci 00:03.0`.
         pub location: String,

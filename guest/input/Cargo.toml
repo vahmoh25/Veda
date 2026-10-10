@@ -1,20 +1,18 @@
 [package]
-name = "guest-usb"
-description = "The driver VM's host of the USB devices Veda lends: each on a port of Linux's USB/IP host controller"
+name = "guest-input"
+description = "Veda's input driver for Linux: Linux's keyboards, mice, tablets and touchscreens as Veda's input devices"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "usbip"
+name = "input"
 path = "src/main.rs"
 test = false
 bench = false
 
 [dependencies]
 vrt = { workspace = true, default-features = false }
-vabi = { workspace = true }
-vipc = { workspace = true }
 vproto = { workspace = true }
 guest-sys = { workspace = true }
 

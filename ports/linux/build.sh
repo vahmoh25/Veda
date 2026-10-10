@@ -86,10 +86,23 @@ stage_libelf() {
 }
 stage libelf src_elfutils zlib @DEPS
 
-# Everything off but what the driver VM needs (veda.config).
+# Everything off but what the driver VM needs (veda.config), all of which
+# must take: Kconfig leaves out an option it does not know, or whose
+# dependencies are off, without a word.
 stage_config() {
 	quiet "$BUILD/config.log" make -C "$SRC/linux" O="$BUILD/linux" \
 		KCONFIG_ALLCONFIG="$PORTS/linux/veda.config" allnoconfig
+	local line missing=""
+	while IFS= read -r line; do
+		case $line in
+		CONFIG_*=n) if grep -q "^${line%=n}=" "$BUILD/linux/.config"; then missing="$missing $line"; fi ;;
+		CONFIG_*=*) if ! grep -qxF "$line" "$BUILD/linux/.config"; then missing="$missing $line"; fi ;;
+		esac
+	done < "$PORTS/linux/veda.config"
+	if [ -n "$missing" ]; then
+		echo "veda.config: options that did not take (unknown, or their dependencies off):$missing" >&2
+		exit 1
+	fi
 }
 stage config src_linux "$PORTS/linux/veda.config"
 

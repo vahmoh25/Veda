@@ -3,12 +3,10 @@
 # driver drives it and Veda's display driver for Linux attaches it to the
 # compositor (1280x800). The compositor draws into pictures of Veda's
 # memory, which Linux shows as they are (imported as dma-bufs) and flips
-# at its vertical blank. Then as flips.vts: what changes while one picture
-# is on the screen reaches the other before it is shown.
-requires drivervm
-iommu
+# at its vertical blank. Then what changes while one picture is on the
+# screen reaches the other before that is shown: a window that came and
+# went leaves nothing behind in either.
 gpu off
-boot-cmdline "drivervm drivervm.devices=1234:1111"
 boot-cmdline "run=editor"
 fail-on "PANIC"
 fail-on "drivervm: processor"

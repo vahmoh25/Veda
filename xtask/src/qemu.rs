@@ -200,8 +200,8 @@ pub struct VmConfig {
     /// A display that is also a 3D GPU (virtio-gpu with virgl): `None` uses
     /// one if QEMU has it.
     pub gpu: Option<bool>,
-    /// An IOMMU (QEMU's intel-iommu, remapping interrupts), for the
-    /// driver VM's devices.
+    /// An IOMMU (QEMU's intel-iommu, remapping interrupts), as PCs have:
+    /// the driver VM's devices need it.
     pub iommu: bool,
     /// QEMU's USB network adapter (`usb-net`: CDC Ethernet, which Veda has
     /// no driver for) on the xHCI controller, on a NAT of its own.
@@ -233,7 +233,7 @@ impl Default for VmConfig {
             nic_model: None,
             wifi: None,
             gpu: None,
-            iommu: false,
+            iommu: true,
             usb_net: false,
             extra: Vec::new(),
         }
@@ -403,11 +403,10 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
         // runs grabs nothing.
         cmd.args(["-display", if gpu { "gtk,gl=on" } else { "gtk" }]);
     } else if gpu {
-        // Headless, on the GPU of the first render node, or of the one
-        // `VEDA_RENDERNODE` names (`/dev/dri/renderD129`).
-        let display = match std::env::var("VEDA_RENDERNODE") {
-            Ok(node) if !node.is_empty() => format!("egl-headless,rendernode={node}"),
-            _ => String::from("egl-headless"),
+        // Headless, on the host's GPU of `render_node`.
+        let display = match render_node() {
+            Some(node) => format!("egl-headless,rendernode={node}"),
+            None => String::from("egl-headless"),
         };
         cmd.args(["-display", &display]);
     } else {
@@ -438,6 +437,27 @@ pub fn command(install: &QemuInstall, disk: &Path, vars: &Path, cfg: &VmConfig) 
     }
     cmd.args(&cfg.extra);
     cmd
+}
+
+/// The host's render node QEMU's 3D GPU renders on, headless: the one
+/// `VEDA_RENDERNODE` names (`/dev/dri/renderD129`), or else, where the host
+/// has several GPUs, the one the firmware showed its screen on (a laptop's
+/// integrated GPU, whose OpenGL its desktop runs on); `None` leaves it to
+/// QEMU, which takes the first.
+pub fn render_node() -> Option<String> {
+    if let Ok(node) = std::env::var("VEDA_RENDERNODE")
+        && !node.is_empty()
+    {
+        return Some(node);
+    }
+    let boot_vga =
+        |n: &str| std::fs::read_to_string(format!("/sys/class/drm/{n}/device/boot_vga")).is_ok_and(|v| v.trim() == "1");
+    std::fs::read_dir("/sys/class/drm")
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with("renderD") && boot_vga(n))
+        .map(|n| format!("/dev/dri/{n}"))
 }
 
 /// A virtio device of `spec`'s (`virtio-blk-pci,drive=...`): behind the

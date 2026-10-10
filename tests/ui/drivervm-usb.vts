@@ -1,35 +1,26 @@
-# A USB device lent to the driver VM: QEMU's USB network adapter (CDC
-# Ethernet, which Veda has no driver for) on the xHCI controller, whose
-# driver keeps the controller and lends the adapter (`drivervm.usb`). In the
-# driver VM it is plugged into a port of Linux's USB/IP host controller;
-# Linux's cdc_ether drives it, and Veda's network driver for Linux attaches
-# its interface to Veda's network service, which gets an address by DHCP;
-# nettest checks DNS, TCP, HTTP and ping through it. Then Linux crashes:
-# the device, let go of, is reset and lent to the next driver VM, and the
+# A USB device through Linux: QEMU's USB network adapter (CDC Ethernet) on
+# the xHCI controller, which goes to the driver VM whole, as USB
+# controllers do. Linux's xhci_hcd finds the adapter, cdc_ether drives it,
+# and Veda's network driver for Linux attaches its interface to Veda's
+# network service, which gets an address by DHCP; nettest checks DNS, TCP,
+# HTTP and ping through it. Then Linux crashes: the controller is reset and
+# given to the next driver VM, which finds the adapter again, and the
 # network service gets its interface back.
-requires drivervm
-iommu
 net none
 usb net
-boot-cmdline "drivervm drivervm.usb=0525:a4a2 drivervm.crash=10"
+boot-cmdline "drivervm.crash=10"
 boot-cmdline "run=nettest"
 fail-on "PANIC"
 fail-on "drivervm: processor"
 fail-on "nettest: FAIL"
-wait-serial "xhci: port " 60
-wait-serial "lent to the driver VM" 30
-wait-serial "usbip: ready for Veda's USB devices" 90
-wait-serial "taken by the driver VM" 30
-wait-serial "usbip: " 30
-wait-serial "net: usb0 (cdc_ether" 60
+wait-serial "1b36:000d at 00:" 60
+wait-serial "net: usb0 (cdc_ether" 90
 wait-serial "attached as" 30
 wait-serial "nettest: PASS" 300
 reject-serial "iommu: unit at"
 checkpoint
 wait-serial "drivervm: Linux crashed" 60
-wait-serial "the driver VM let go of it; it is reset and lent again" 30
-wait-serial "lent to the driver VM" 30
+wait-serial "devmgr: the driver VM ended: Linux crashed; its devices: " 30
 wait-serial "devmgr: started drivervm again" 30
-wait-serial "taken by the driver VM" 60
 wait-serial "net: usb0: attached as eth0" 60
 wait-serial "netd: status: Routable via eth0 (gateway 10.0.4.2)" 60

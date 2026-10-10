@@ -1,14 +1,11 @@
-# Wi-Fi failure recovery through Linux's 802.11 stack (see
-# drivervm-wifi.vts): the failures of wifi-recovery.vts, with the radio a
-# managed one in the driver VM. Linux notices the access point gone (its
-# beacons, its acknowledgements) and leaves it; the access point's own
-# deauthentications come through Linux to Veda's station; Veda decides
-# what to join again. `checkpoint` makes the following waits look only at
-# what is logged after it.
-requires drivervm
-iommu
+# Wi-Fi failure recovery, the radio a managed one of Linux's 802.11 stack
+# in the driver VM (see drivervm-wifi.vts): what fails, from the access
+# points to the Wi-Fi service, and how Veda gets back. Linux notices the
+# access point gone (its beacons, its acknowledgements) and leaves it; the
+# access point's own deauthentications come through Linux to Veda's
+# station; Veda decides what to join again. `checkpoint` makes the
+# following waits look only at what is logged after it.
 net wifi
-boot-cmdline "drivervm drivervm.devices=1af4:1043"
 boot-cmdline "run=nettest:wifi-watch"
 fail-on "PANIC"
 fail-on "drivervm: processor"
@@ -41,7 +38,15 @@ checkpoint
 air "wired up"
 wait-serial "watch: wifi=connected ap=02:56:57:00:00:01 ping=ok dns=ok" 60
 
-# 4. Out of range of every access point of the network, then back in range.
+# 4. The DNS server cannot resolve for a while.
+checkpoint
+air "dns servfail"
+wait-serial "watch: wifi=connected ap=02:56:57:00:00:01 ping=ok dns=servfail" 60
+checkpoint
+air "dns normal"
+wait-serial "watch: wifi=connected ap=02:56:57:00:00:01 ping=ok dns=ok" 60
+
+# 5. Out of range of every access point of the network, then back in range.
 checkpoint
 air "ap home2 off"
 air "ap home signal -95"
@@ -51,14 +56,14 @@ air "ap home signal -50"
 wait-serial "watch: wifi=connected ap=02:56:57:00:00:01 ping=ok dns=ok" 120
 air "ap home2 on"
 
-# 5. The medium goes silent for a few seconds (airsim's side of the radio
+# 6. The medium goes silent for a few seconds (airsim's side of the radio
 #    disconnects): Linux loses the access point, and Veda joins it again.
 checkpoint
 air "radio drop 5"
 wait-serial "lost the connection to Veda Home" 30
 wait-serial "watch: wifi=connected ap=02:56:57:00:00:01 ping=ok dns=ok" 120
 
-# 6. New group keys and a lossy link: the connection survives both.
+# 7. New group keys and a lossy link: the connection survives both.
 checkpoint
 air "ap home rekey"
 air "ap home loss 10"
@@ -68,7 +73,7 @@ wait 3
 reject-serial "lost the connection"
 air-expect "list" "1 joined"
 
-# 7. The Wi-Fi service itself is ended: init restarts it, Linux's radio is
+# 8. The Wi-Fi service itself is ended: init restarts it, Linux's radio is
 #    offered again, and the saved network is rejoined.
 key meta_l
 wait 2

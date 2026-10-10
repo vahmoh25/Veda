@@ -36,7 +36,7 @@ const GUEST_PROGRAMS: &[(&str, &str, &str)] = &[
     ("guest-wifi", "wifi", "bin/wifi"),
     ("guest-airlink", "airlink", "bin/airlink"),
     ("guest-kms", "kms", "bin/kms"),
-    ("guest-usb", "usbip", "bin/usbip"),
+    ("guest-input", "input", "bin/input"),
 ];
 
 /// Tools the build runs: the kernel's, beyond a C compiler; GCC's (m4, and
@@ -104,8 +104,8 @@ pub fn runnable() -> Result {
     Ok(())
 }
 
-/// For `cargo xtask doctor`: whether the guest, which is optional, has been
-/// built (`Ok`), and if not, whether it can be (`Err`).
+/// For `cargo xtask doctor`: whether the guest has been built (`Ok`), and if
+/// not, whether it can be (`Err`).
 pub fn status() -> std::result::Result<String, String> {
     if built() {
         return Ok(format!("built ({})", root().join("bzImage").display()));
@@ -114,7 +114,7 @@ pub fn status() -> std::result::Result<String, String> {
         Ok(()) => "`cargo xtask linux` builds it".to_string(),
         Err(e) => format!("`cargo xtask linux` builds it, but {e}"),
     };
-    Err(format!("not built (optional: the driver VM); {how}"))
+    Err(format!("not built (the driver VM drives every device but the disks and sound); {how}"))
 }
 
 fn tools() -> Result {
@@ -157,6 +157,22 @@ pub fn command(args: &[String]) -> Result {
     )?;
     util::status("Finished", format!("the driver VM's Linux in {:.0} s", started.elapsed().as_secs_f32()));
     Ok(())
+}
+
+/// Builds the guest the first time an image needs it, where this machine
+/// has the tools for it (afterwards `cargo xtask linux` builds it again,
+/// once its port changes).
+pub fn build_once() -> Result {
+    if built() {
+        return Ok(());
+    }
+    match tools() {
+        Ok(()) => command(&[]),
+        Err(e) => {
+            util::status("Note", format!("the driver VM's Linux cannot be built here: {e}"));
+            Ok(())
+        }
+    }
 }
 
 /// The guest's kernel and initial RAM file system, for the system image,

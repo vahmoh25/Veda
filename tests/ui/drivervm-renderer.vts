@@ -2,10 +2,8 @@
 # through Veda's renderer, which runs in Linux, on Mesa's softpipe here (for
 # want of a GPU; on a PC, on the GPU's own driver). The renderer serves the
 # `gpu` protocol, so Prism takes it for a GPU, and its frames keep coming.
-requires drivervm
-iommu
 gpu off
-boot-cmdline "drivervm drivervm.renderer=softpipe"
+boot-cmdline "drivervm.renderer=softpipe"
 boot-cmdline "run=prism"
 fail-on "PANIC"
 fail-on "renderer: commands refused"

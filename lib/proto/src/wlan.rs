@@ -92,9 +92,9 @@ message! {
     /// A radio offered to the Wi-Fi service.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct PhyInfo {
-        /// Driver name, e.g. `vwifi`.
+        /// Driver name, e.g. `iwlwifi (Linux)`.
         pub driver: String,
-        /// Where the radio is, e.g. `virtio-serial port org.veda.wlan.0`.
+        /// Where the radio is, e.g. `pci 00:14.3`.
         pub location: String,
         /// The radio's permanent MAC address.
         pub mac: [u8; 6],

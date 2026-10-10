@@ -95,6 +95,12 @@ fn iommu() -> Option<&'static Iommu> {
     IOMMU.get()
 }
 
+/// Whether the IOMMU is in use: devices' DMA and interrupts are remapped,
+/// and functions can be given to guests.
+pub fn active() -> bool {
+    IOMMU.get().is_some()
+}
+
 /// Writes back what the processor wrote to `[phys, phys + len)` if a unit
 /// reads memory around the caches.
 fn publish(iommu: &Iommu, phys: u64, len: u64) {

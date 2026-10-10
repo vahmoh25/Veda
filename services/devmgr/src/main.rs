@@ -9,16 +9,19 @@
 //! they describe below its PCI function (and only those), and devmgr drives
 //! the GPIO pins those devices are wired to on the driver's behalf.
 //!
-//! USB devices can be lent to it too (`drivervm.usb=VID:PID,...`): the USB
-//! controllers' drivers lend them (`lend=`), keeping the controllers.
-//!
-//! Devices can go to the driver VM instead (`drivervm.devices=VID:DID,...`):
-//! then no driver of Veda's starts for them, and the driver VM gets their
-//! `pcidev` channels, through which it also gets the resource that lets it
-//! give them to its guest. When the driver VM ends without Linux having
-//! powered it off (Linux crashed, or the monitor did), devmgr resets its
-//! devices and starts it again, waiting longer each time it fails soon
-//! after starting, and giving up after a few such failures.
+//! Every other device goes to the driver VM, whose Linux drives it: all
+//! but the disks Veda starts from, the platform's own functions, and the
+//! devices Veda still has drivers for (see [`veda_keeps`]). The driver VM
+//! gets their `pcidev` channels, through which it also gets the resource
+//! that lets it give them to its guest. It starts when the machine can
+//! give it devices: its processors run virtual machines, an IOMMU confines
+//! the devices to the guest's memory, and the system image has its Linux.
+//! `drivervm.devices=VID:DID,...` gives it devices Veda has drivers for
+//! (a sound card), `drivervm` starts it even without devices (tests), and
+//! `drivervm=off` keeps it off. When it ends without Linux having powered
+//! it off (Linux crashed, or the monitor did), devmgr resets its devices
+//! and starts it again, waiting longer each time it fails soon after
+//! starting, and giving up after a few such failures.
 
 #![no_std]
 #![no_main]
@@ -71,8 +74,6 @@ struct DriverMatch {
 }
 
 const DRIVERS: &[DriverMatch] = &[
-    // virtio 1.0 input (tablet, keyboard, mouse)
-    DriverMatch { vendor: 0x1AF4, devices: &[0x1052], driver: "virtio-input" },
     // virtio 1.0 sound
     DriverMatch { vendor: 0x1AF4, devices: &[0x1059], driver: "virtio-snd" },
     // Intel 82801AA AC'97 audio (QEMU's AC97).
@@ -92,13 +93,6 @@ const DRIVERS: &[DriverMatch] = &[
     },
     // virtio block (transitional and modern)
     DriverMatch { vendor: 0x1AF4, devices: &[0x1001, 0x1042], driver: "virtio-blk" },
-    // virtio network card (transitional and modern)
-    DriverMatch { vendor: 0x1AF4, devices: &[0x1000, 0x1041], driver: "virtio-net" },
-    // virtio console (transitional and modern): under QEMU, the virtual
-    // Wi-Fi radio is a named port of it
-    DriverMatch { vendor: 0x1AF4, devices: &[0x1003, 0x1043], driver: "vwifi" },
-    // Intel PRO/1000: 82540EM (QEMU e1000), 82545EM, 82574L (QEMU e1000e)
-    DriverMatch { vendor: 0x8086, devices: &[0x100E, 0x100F, 0x10D3], driver: "e1000" },
     // The SPI controllers of Intel's chipsets since Cannon Lake (LPSS), for
     // the devices the firmware places on them: a laptop's speaker
     // amplifiers. The driver's own table has the same list.
@@ -121,8 +115,6 @@ const DRIVERS: &[DriverMatch] = &[
 const CLASS_DRIVERS: &[(u8, u8, u8, &str)] = &[
     // SATA controllers in AHCI mode (QEMU q35, most PCs)
     (0x01, 0x06, 0x01, "ahci"),
-    // USB 3 (xHCI) controllers: USB keyboards, mice and hubs
-    (0x0C, 0x03, 0x30, "xhci"),
     // High Definition Audio controllers (most PCs' sound), also the ones
     // with an audio DSP beside them
     (0x04, 0x03, 0x00, "hda"),
@@ -143,6 +135,21 @@ fn driver_for(info: &DeviceInfo) -> Option<&'static str> {
                 .map(|(_, _, _, d)| *d)
         },
     )
+}
+
+/// Whether Veda keeps a function rather than give it to the driver VM: the
+/// disks it starts from (storage controllers, whether it drives them yet
+/// or not: they are none of Linux's business), the platform's own (memory
+/// controllers, bridges, system peripherals, processors, encryption and
+/// signal processing controllers, the SMBus, and the serial bus
+/// controllers, one of which holds the firmware's flash), and the devices
+/// it has drivers of its own for (sound cards, and the speaker amplifiers'
+/// SPI controller, until the firmware's descriptions of what is wired to
+/// them reach the guest).
+fn veda_keeps(info: &DeviceInfo) -> bool {
+    matches!(info.class, 0x01 | 0x05 | 0x06 | 0x08 | 0x0B | 0x10 | 0x11)
+        || (info.class == 0x0C && matches!(info.subclass, 0x05 | 0x80))
+        || driver_for(info).is_some()
 }
 
 fn class_name(info: &DeviceInfo) -> &'static str {
@@ -330,9 +337,9 @@ impl DeviceSession<'_> {
 /// Starts `driver` for a device, returning the server end of its channel.
 /// Driver images come straight from the system image (not through the file
 /// system, which may itself be waiting for a disk driver).
-fn start_driver(boot: &initrd::Archive<'static>, driver: &str, args: &[String], info: &DeviceInfo) -> Option<Channel> {
+fn start_driver(boot: &initrd::Archive<'static>, driver: &str, info: &DeviceInfo) -> Option<Channel> {
     let (ours, theirs) = Channel::create().ok()?;
-    start_program(boot, driver, args, alloc::vec![(PCIDEV_ROLE, theirs.into_handle())])?;
+    start_program(boot, driver, &[], alloc::vec![(PCIDEV_ROLE, theirs.into_handle())])?;
     println!(
         "started {} for {:04x}:{:04x} at {:02x}:{:02x}.{}",
         driver, info.vendor, info.device, info.bus, info.slot, info.function
@@ -490,6 +497,20 @@ impl DriverVm {
         }
     }
 
+    /// Whether its monitor runs: the kernel says a process has ended
+    /// before it closes its handles, the channels of its devices among
+    /// them.
+    fn running(&self) -> bool {
+        self.process.as_ref().and_then(|p| p.info().ok()).is_some_and(|i| i.state == vabi::process_state::RUNNING)
+    }
+
+    /// Its monitor did not take the device at `address` (and said why): it
+    /// stays the host's, neither reset when the driver VM ends nor given to
+    /// the next.
+    fn turned_down(&mut self, address: Address) {
+        self.devices.retain(|(a, _)| *a != address);
+    }
+
     /// Its process ended: unless Linux powered it off, its devices are
     /// reset and it starts again (later, the sooner it failed).
     fn ended(&mut self, config: &ConfigSpace) {
@@ -558,22 +579,39 @@ fn main() -> i32 {
         println!("no system image to load drivers from");
         return 1;
     };
-    let acpi = boot_info().and_then(|boot| Acpi::load(&mmio, &boot));
+    let machine = boot_info();
+    let acpi = machine.as_ref().and_then(|m| Acpi::load(&mmio, m));
+    let platform = machine.map_or(0, |m| m.platform);
     let mgr =
         Manager { config: ConfigSpace::new(ports), io, mmio, dma, pci, acpi, gpio: RefCell::new(Gpio::default()) };
     let args = vrt::env::args();
     let live = args.iter().any(|a| a == "live");
-    // Tests: the driver VM (`drivervm`, `drivervm.NAME=VALUE`).
-    let drivervm: Vec<String> =
-        args.iter().filter(|a| *a == "drivervm" || a.starts_with("drivervm.")).cloned().collect();
-    let for_guest = guest_devices(&drivervm);
-    let mut guest = Vec::new();
-    // USB devices the driver VM gets: their controllers' drivers lend them.
-    let lend: Vec<String> = drivervm
+    // The driver VM's options: `drivervm`, `drivervm=off`, and its own as
+    // `drivervm.NAME=VALUE`.
+    let drivervm: Vec<String> = args
         .iter()
-        .filter_map(|a| a.strip_prefix("drivervm.usb="))
-        .map(|list| alloc::format!("lend={list}"))
+        .filter(|a| *a == "drivervm" || a.starts_with("drivervm.") || a.starts_with("drivervm="))
+        .cloned()
         .collect();
+    let linux = boot.find("linux/bzImage").is_some() && boot.find("linux/initramfs.cpio").is_some();
+    let runs = if drivervm.iter().any(|a| a == "drivervm=off") {
+        Err("drivervm=off")
+    } else if platform & vabi::platform::VIRTUALIZATION == 0 {
+        Err("the processors cannot run virtual machines")
+    } else if !linux {
+        Err("the system image has no Linux for it")
+    } else {
+        Ok(())
+    };
+    // Devices go to it only where an IOMMU confines them to its memory.
+    let gives = runs.is_ok() && platform & vabi::platform::IOMMU != 0;
+    match runs {
+        Err(why) => println!("no driver VM ({}): the devices Veda has no driver for stay off", why),
+        Ok(()) if !gives => println!("no IOMMU: no device can go to the driver VM"),
+        Ok(()) => {}
+    }
+    let listed = guest_devices(&drivervm);
+    let mut guest = Vec::new();
 
     let mut bound: BTreeMap<u64, Bound> = BTreeMap::new();
     let mut next = 1u64;
@@ -588,7 +626,7 @@ fn main() -> i32 {
             info.device,
             class_name(&info)
         );
-        if for_guest.contains(&(info.vendor, info.device)) {
+        if gives && (!veda_keeps(&info) || listed.contains(&(info.vendor, info.device))) {
             // An endpoint only: a bridge would give the guest what is
             // behind it. (Its I/O BARs the guest does not get.)
             if mgr.config.read(a, 0x0E, 1) & 0x7F != 0 {
@@ -602,11 +640,7 @@ fn main() -> i32 {
             guest.push((a, info));
             continue;
         }
-        let (driver, driver_args) = match driver_for(&info) {
-            Some("xhci") => ("xhci", lend.clone()),
-            Some(driver) => (driver, Vec::new()),
-            None => continue,
-        };
+        let Some(driver) = driver_for(&info) else { continue };
         if live && DISK_DRIVERS.contains(&driver) {
             println!(
                 "live system: {} not started for {:04x}:{:04x} at {:02x}:{:02x}.{}",
@@ -615,14 +649,15 @@ fn main() -> i32 {
             continue;
         }
         let below = described_below(mgr.acpi.as_ref(), a);
-        if let Some(ch) = start_driver(&boot, driver, &driver_args, &info) {
+        if let Some(ch) = start_driver(&boot, driver, &info) {
             bound.insert(next, Bound { address: a, info, channel: ch, acpi: below, guest: false });
             next += 1;
         }
     }
 
+    // It starts for its devices, or because the boot options ask for it.
     let mut vm = None;
-    if !drivervm.is_empty() {
+    if runs.is_ok() && (!guest.is_empty() || drivervm.iter().any(|a| a == "drivervm")) {
         match take(HYPERVISOR_RESOURCE) {
             Some(hypervisor) => vm = Some(DriverVm::new(&drivervm, guest, hypervisor)),
             None => println!("no hypervisor resource for the driver VM"),
@@ -678,7 +713,19 @@ fn main() -> i32 {
         for k in closed {
             if let Some(b) = bound.remove(&k) {
                 if b.guest {
-                    println!("the driver VM let go of {:04x}:{:04x}; it reaches nothing", b.info.vendor, b.info.device);
+                    match vm.as_mut() {
+                        Some(vm) if vm.running() => {
+                            vm.turned_down(b.address);
+                            println!(
+                                "the driver VM did not take {:04x}:{:04x}; it stays the host's",
+                                b.info.vendor, b.info.device
+                            );
+                        }
+                        _ => println!(
+                            "the driver VM let go of {:04x}:{:04x}; it reaches nothing",
+                            b.info.vendor, b.info.device
+                        ),
+                    }
                 } else {
                     println!("driver for {:04x}:{:04x} exited", b.info.vendor, b.info.device);
                 }

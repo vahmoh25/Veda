@@ -4,13 +4,11 @@
 # theirs. The Music player's track plays through it: its position moves on
 # as the card plays, and it reaches the recording of the sound output
 # without dropping out.
-requires drivervm
-iommu
 sound hda
 # The recording holds the music alone (no startup sound before it).
 boot-cmdline "startup-sound=off"
 boot-cmdline "run=music"
-boot-cmdline "drivervm drivervm.devices=8086:293e"
+boot-cmdline "drivervm.devices=8086:293e"
 fail-on "PANIC"
 fail-on "drivervm: processor"
 wait-serial "alsa: attached to the audio service" 90

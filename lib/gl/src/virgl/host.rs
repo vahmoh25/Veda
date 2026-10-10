@@ -3,8 +3,9 @@
 //! called directly, on OpenGL contexts made as QEMU makes them.
 //!
 //! QEMU runs the system's virglrenderer on desktop OpenGL, through EGL;
-//! headless, on the GPU of the first render node, through GBM. So do the
-//! tests (`VGL_TEST_RENDERNODE` names another node, such as
+//! headless, on the GPU of a render node, through GBM: xtask gives it the
+//! one the firmware showed its screen on, where the host has several. So
+//! do the tests (`VGL_TEST_RENDERNODE` names another node, such as
 //! `/dev/dri/renderD129`), and on OpenGL ES with `VGL_TEST_HOST=gles`, as
 //! QEMU renders with `gl=es`.
 //!
@@ -290,8 +291,9 @@ unsafe fn start_egl_on(lib: Module, dpy: Dpy, es: bool) -> Option<Egl> {
     }
 }
 
-/// Opens the render node of the GPU to render on: `VGL_TEST_RENDERNODE`,
-/// or the first that opens, as QEMU's headless display chooses.
+/// Opens the render node of the GPU to render on: `VGL_TEST_RENDERNODE`;
+/// else, where the host has several, the one the firmware showed its
+/// screen on, as xtask gives QEMU; else the first that opens.
 fn render_node() -> Option<std::fs::File> {
     let open = |path: &std::path::Path| std::fs::File::options().read(true).write(true).open(path);
     if let Some(path) = std::env::var_os("VGL_TEST_RENDERNODE") {
@@ -305,6 +307,11 @@ fn render_node() -> Option<std::fs::File> {
         .filter(|p| p.file_name().is_some_and(|n| n.as_encoded_bytes().starts_with(b"renderD")))
         .collect();
     nodes.sort();
+    let boot_vga = |p: &std::path::PathBuf| {
+        let name = p.file_name().unwrap_or_default().to_string_lossy();
+        std::fs::read_to_string(std::format!("/sys/class/drm/{name}/device/boot_vga")).is_ok_and(|v| v.trim() == "1")
+    };
+    nodes.sort_by_key(|p| !boot_vga(p));
     let node = nodes.iter().find_map(|p| open(p).ok());
     if node.is_none() {
         println!("no GPU: no render node in /dev/dri can be opened");

@@ -128,24 +128,24 @@ the voice pipeline, consent, memory and how the agent is tested.
 * **Networking and Wi-Fi.** A user-space network service (IPv4 and IPv6,
   DHCP, DNS, routing, TCP, UDP, ICMP) and a Wi-Fi service that scans,
   joins WPA2, WPA3 and open networks with management frame protection,
-  remembers networks, reconnects and roams on its own. Drivers only move
-  frames. Applications, the agent among them, get TLS 1.3 and 1.2 (HTTPS,
+  remembers networks, reconnects and roams on its own. The drivers,
+  Linux's in the driver VM, only move frames and join the networks the
+  Wi-Fi service chooses. Applications, the agent among them, get TLS 1.3 and 1.2 (HTTPS,
   secure WebSockets) from `vtls`, with certificates checked against the
   Mozilla roots. Under QEMU a simulated Wi-Fi environment provides access
   points bridged to the Internet. See [Networking](docs/NETWORKING.md).
 * **Audio.** A mixing audio service with echo-cancelled capture and
   ducking, built for the agent's conversations as much as for music.
-* **Linux's drivers, in a virtual machine.** For the devices Veda has no
-  driver of its own for, Veda runs a minimal Linux in a virtual machine,
-  the *driver VM*, on a hypervisor of its own (VMX with EPT, a
-  paravirtual platform with no emulated hardware). Devices go to it whole,
-  their DMA confined to its memory and their interrupts remapped by
-  Veda's IOMMU driver, and its programs reach Veda's services through
+* **Linux's drivers, in a virtual machine.** Veda drives its disks itself
+  (and sound, for now), and takes the rest from Linux, which it runs in a
+  virtual machine, the *driver VM*, on a hypervisor of its own (VMX with
+  EPT, a paravirtual platform with no emulated hardware). Devices go to it
+  whole, their DMA confined to its memory and their interrupts remapped
+  by Veda's IOMMU driver, and its programs reach Veda's services through
   Veda's own system calls, carried across. Linux's drivers there serve
-  Veda's sound (playback and recording), wired and Wi-Fi networks and
-  displays, and drive the USB devices Veda lends them; when the VM fails,
-  Veda resets its devices and starts it again. See
-  [the driver VM](docs/DRIVERVM.md).
+  Veda's keyboards, mice and tablets, USB, wired and Wi-Fi networks,
+  displays and GPUs; when the VM fails, Veda resets its devices and starts
+  it again. See [the driver VM](docs/DRIVERVM.md).
 * **Storage.** virtio-blk and AHCI (SATA) drivers and a file system
   service that keeps the home directory on its own disk with crash-safe
   snapshots, so your files survive restarts. The agent's memory and key
@@ -208,8 +208,10 @@ Veda is built on an x64 PC with Linux.
 * For C and GCC in the image (optional): the distribution's build tools,
   for the toolchain `cargo xtask toolchain` builds once (see
   [C on Veda](docs/C.md#the-toolchain)).
-* For the driver VM (optional): the Linux kernel's build tools,
-  for `cargo xtask linux`, and KVM's nested virtualization
+* For the driver VM, whose Linux drives every device but the disks, sound
+  and PS/2 keyboards: the Linux kernel's build tools, and the
+  distribution's build tools for a cross compiler and Mesa, for
+  `cargo xtask linux`, and KVM's nested virtualization
   (`kvm_intel nested=1`), on which QEMU gives Veda the processor's VMX (see
   [the driver VM](docs/DRIVERVM.md#testing)).
 
@@ -227,8 +229,10 @@ cargo xtask run
 
 This builds every component, writes the disk image
 `target/veda/veda.img` and boots it in a QEMU window. The first build
-takes one to two minutes on a recent PC (it also renders the sample pictures
-and music); later builds are incremental. Useful options:
+also builds the driver VM's Linux (its kernel, a cross compiler for its
+programs, and Mesa), which takes a while, and renders the sample pictures
+and music; later builds are incremental, and `cargo xtask linux` builds
+Linux again after its port changes. Useful options:
 
 ```bash
 cargo xtask run --resolution 1920x1080 --smp 4 --memory 2048
@@ -271,17 +275,21 @@ On real hardware the desktop appears in the screen mode the firmware
 provides (1920x1080, or the largest below it), drawn into the firmware's
 framebuffer; with the driver VM, Linux's display driver shows every frame
 whole, flipped at the screen's vertical blank, so animations run as
-smoothly as in a virtual machine. USB keyboards, mice and
-hubs work on the USB 3 (xHCI) controllers that PCs have had since about
-2012, as do PS/2 keyboards and mice; other USB devices, the stick
+smoothly as in a virtual machine. The driver VM needs the processor's
+virtualization (VT-x) and IOMMU (VT-d), which PCs of the last decade
+have, turned on in the firmware's settings: without them, Veda drives
+only the disks, sound and PS/2 keyboards and mice. Through it, USB
+keyboards, mice and hubs work on the USB 3 (xHCI) controllers that PCs
+have had since about 2012, with USB network adapters, and Intel's and
+Realtek's Ethernet cards and Intel's Wi-Fi cards; USB disks, the stick
 included, are left alone. Sound plays on HD Audio, the sound hardware of
 nearly every PC since 2005: through the speakers, or the headphones when
 they are plugged in, and the line outputs, with the microphone (built in,
 or on a jack when one is plugged in) for the agent. Built-in microphones
 wired to an audio DSP rather than to the codec, as in many recent
-laptops, stay silent; HDMI and DisplayPort audio need more of a graphics
-driver than Veda has yet (it keeps the firmware's screen mode); and few
-PCs have network hardware Veda supports. To try USB input or HD Audio in QEMU:
+laptops, stay silent; HDMI and DisplayPort audio need the graphics
+driver's part, which Veda's sound driver does not reach. To try USB input
+or HD Audio in QEMU:
 
 ```bash
 cargo xtask run --input usb
@@ -473,12 +481,12 @@ The serial console (kernel log plus every program's output) is saved to
 | `lib/agent/` | the agent's logic: Deepgram protocol, functions, instructions, wake word, echo gate, memory, configuration |
 | `boot/` | `vboot`, the UEFI bootloader |
 | `kernel/` | `vkernel`, the microkernel |
-| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `posix` (the POSIX layer under the C library), `elf` (ELF executables), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `usb` (descriptors, HID reports, xHCI structures), `hda` (HD Audio codecs and their routes), `hv` and `iommu` (the hypervisor's and the IOMMU's logic), `text`, `math`, ... |
+| `lib/` | shared libraries: `abi` (system call ABI), `rt` (runtime), `posix` (the POSIX layer under the C library), `elf` (ELF executables), `ipc` (message codec and protocol macros), `proto` (service protocols, the agent's included), `gfx`/`raster`/`font`/`image` (2D graphics), `ui` (toolkit and its agent support), `v3d` (3D engine), `glsl` and `gl` (the GLSL ES compiler and OpenGL ES 3.0), `net` and `tls` (networking and TLS for applications), `web` (HTTP and WebSocket), `json`, `audio` (mixing, echo cancellation, voice detection, synthesis), `hda` (HD Audio codecs and their routes), `hv` and `iommu` (the hypervisor's and the IOMMU's logic), `text`, `math`, ... |
 | `services/` | `init` (service registry, launcher, process identity), `vfs`, `devmgr` (PCI), `compositor`, `audio`, `agent`, `netd` (network), `wlan` (Wi-Fi), `drivervm` (the driver VM's monitor) |
-| `drivers/` | `ps2`, `virtio-input`, `xhci` (USB 3 controllers: hubs, keyboards, mice; devices lent to the driver VM), `virtio-blk`, `ahci` (SATA), `hda` (Intel HD Audio), `virtio-snd`, `ac97` (AC'97 sound), `virtio-net`, `e1000` (Intel PRO/1000), `vwifi` (the virtual Wi-Fi radio) |
+| `drivers/` | Veda's own drivers: `virtio-blk`, `ahci` (SATA), `hda` (Intel HD Audio), `virtio-snd`, `ac97` (AC'97 sound), `lpss-spi` (a laptop's speaker amplifiers), `ps2` (PS/2 keyboards and mice) |
 | `apps/` | the desktop `shell` (the agent's ring, window and consent requests) and the applications, including `racer` (*Velocity*) and `starfall` |
 | `ports/` | the C toolchain built from source: GCC, binutils, GMP, MPFR, MPC and musl, each an upstream release and Veda's patch; and Linux for the driver VM |
-| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`alsa`, `net`, `wifi`, `kms`, `usbip`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests |
+| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests |
 | `tests/` | the agent's scripts (`agent/`, and `real/` for the real services), `systest` and `nettest` (in-system tests), C and C++ test programs (`c/`), GUI automation scripts |
 | `tools/` | host programs generating wallpapers, sample pictures and music at build time, and `airsim` (the simulated Wi-Fi environment) |
 | `third_party/` | vendored crates with Veda patches (smoltcp) |

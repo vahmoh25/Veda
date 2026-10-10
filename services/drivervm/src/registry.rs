@@ -20,7 +20,7 @@ use vrt::sync::Mutex;
 /// The services the guest may connect to.
 const CONNECT: &[&str] = &["audiodev", "displaydev", "netdev", "wlanphy", "input", "speakers"];
 /// The services it may provide.
-const REGISTER: &[&str] = &["gpu", "usbip"];
+const REGISTER: &[&str] = &["gpu"];
 
 pub struct Registry {
     /// Our ends of the guest's registry channels.

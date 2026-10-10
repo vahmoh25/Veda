@@ -2,10 +2,7 @@
 # (QEMU's VGA in the driver VM, as in drivervm-display.vts; systest
 # restarts the compositor among its tests, 1280x800): `kms` attaches again
 # to the new compositor, and the desktop comes back through its pictures.
-requires drivervm
-iommu
 gpu off
-boot-cmdline "drivervm drivervm.devices=1234:1111"
 boot-cmdline "systest"
 fail-on "PANIC"
 fail-on "systest: FAIL"

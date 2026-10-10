@@ -15,9 +15,9 @@ that communicate over kernel channels.
  ├──────────────────────────────────────────────────────────────────────────┤
  │ Services       init (registry, launcher) · vfs · compositor · audio ·    │
  │                agent (the voice agent) · netd · wlan                     │
- │ Drivers        ps2 · xhci (USB) · hda (sound) · virtio-snd · ac97 ·      │
- │                virtio-input · virtio-blk · ahci · virtio-net · e1000 ·   │
- │                pci · the driver VM (Linux's: GPUs, displays, Wi-Fi …)    │
+ │ Drivers        virtio-blk · ahci (disks) · hda · virtio-snd · ac97       │
+ │                (sound) · ps2 · pci · the driver VM (Linux's: GPUs,       │
+ │                displays, input, USB, networks, Wi-Fi …)                  │
  ├──────────────── channels · VMOs · events · interrupts ───────────────────┤
  │ vkernel        scheduler · address spaces · handles · IPC · interrupts   │
  ├──────────────────────────────────────────────────────────────────────────┤
@@ -216,13 +216,15 @@ has ended and left its stack, which is how thread libraries join threads.
   one is given to a guest. MSIs are therefore made for a PCI function
   (`msi_create` takes a resource naming it, `resource_kind::PCI`), which
   `devmgr` holds for all of them.
-* **The driver VM.** Devices that the boot options name go to Linux in a
-  virtual machine instead of a driver of Veda's ([the driver VM](DRIVERVM.md)):
-  `devmgr` hands their `pcidev` channels to `drivervm`, which gives them to
-  its guest whole, their DMA confined to the guest's memory by the IOMMU.
-  USB devices are lent by `xhci`, which keeps the controller. When the
-  driver VM ends without Linux having powered it off, `devmgr` resets its
-  devices and starts it again.
+* **The driver VM.** Every other device goes to Linux in a virtual machine
+  ([the driver VM](DRIVERVM.md)): all but the disks, the platform's own
+  functions and the devices Veda still drives itself (sound). `devmgr`
+  hands their `pcidev` channels to `drivervm`, which gives them to its
+  guest whole, their DMA confined to the guest's memory by the IOMMU. It
+  starts when the processors run virtual machines and an IOMMU confines
+  devices (the kernel says both in the boot information, `vabi::platform`),
+  and the system image has its Linux. When it ends without Linux having
+  powered it off, `devmgr` resets its devices and starts it again.
 * A driver asks for the devices the firmware describes below its PCI
   function (its ACPI companion, found by `_ADR` under the PCI root bridge):
   their ids (`_HID`, `_UID`, `_SUB`), status and resources (`_CRS`:
@@ -283,55 +285,34 @@ has ended and left its stack, which is how thread libraries join threads.
 
 ## USB
 
-* `xhci` drives USB 3 (xHCI) host controllers, which PCs have had since
-  about 2012 (and QEMU's `qemu-xhci`).
-  `devmgr` starts it for the PCI class of such controllers. It takes the
-  controller over from the firmware (which stops the firmware's emulation
-  of a PS/2 keyboard), moves the ports that Intel 7 to 9 series chipsets
-  share with their EHCI controllers over to it, resets it, and finds the
-  devices on the root hub's ports and behind USB 2.0 hubs, chained to the
-  depth USB allows, as they come and go.
-* Keyboards, mice and tablets (the HID class) are configured from their
-  report descriptors, or with the boot protocol when a descriptor cannot
-  be used, and polled through their interrupt endpoints. Their reports
-  become key, motion, position, button and wheel events for the window
-  system's `input` service, as from the PS/2 and virtio drivers; keys and
-  buttons still held when a device is unplugged are released. Caps Lock
-  lights up the keyboard's LED.
-* Devices the boot options name (`lend=VID:PID`, from `drivervm.usb=`)
-  are lent to [the driver VM](DRIVERVM.md), whose Linux drives them: their
-  transfers come over a channel (`vproto::usb`) and are carried out on the
-  controller.
-* Every other device (storage, audio, cameras, the stick the live system
-  started from) gets an address, and its descriptors are read for the log,
-  but it is never configured, so it is not touched.
-* One thread does everything: commands and control transfers go one at a
-  time and are waited for while the event ring keeps being drained, so
-  input flows during enumeration. Interrupts come by MSI-X or MSI; without
-  either the driver polls. Controllers that only address 32 bits get
-  their DMA memory below 4 GiB (`dma_flags::BELOW_4G`).
-* Descriptors, requests, the hub class, HID report descriptors and the
-  xHCI data structures are in `vusb` (`lib/usb`), which touches no
-  hardware and is unit-tested on the host.
-* Not yet supported: USB 2.0 (EHCI) controllers of older PCs, USB 3 devices
-  behind SuperSpeed hubs, and USB devices other than keyboards, mice,
-  tablets and hubs.
+USB is Linux's: the controllers go to [the driver VM](DRIVERVM.md) whole,
+and Linux drives them, their hubs and the devices on them. Keyboards,
+mice, tablets and touchscreens reach the window system's `input` service
+through `input` (`guest/input`), which reads Linux's event devices;
+network adapters reach the network service through `net`; Bluetooth
+adapters get Linux's Bluetooth stack, which no service of Veda's uses
+yet. Disks on USB are left alone: disks are Veda's, which has no driver
+for them yet.
 
 ## Networking
 
 Networking is three layers of processes (details in
 [NETWORKING.md](NETWORKING.md)):
 
-* **Drivers** only move frames: `virtio-net` and `e1000` (Intel PRO/1000)
-  offer Ethernet frames to the network service, `vwifi` (the virtual radio under QEMU, a virtio-serial
-  port connected to the `airsim` simulator on the host) offers raw 802.11
-  frames to the Wi-Fi service. Frames travel through shared-memory rings
-  (`vproto::netring`) with wake-up events; neither side trusts the other's
-  indices or lengths.
-* **`wlan`** (the Wi-Fi service, built on `vwlan`) scans, authenticates
-  (open system, SAE), associates, runs the key handshakes, encrypts with
-  CCMP, protects management frames, keeps the saved networks and decides
-  when to reconnect or roam. It presents each radio to `netd` as `wlan0`.
+* **Drivers** only move frames, and they are Linux's, in [the driver
+  VM](DRIVERVM.md): `net` (`guest/net`) offers its network cards' Ethernet
+  frames to the network service; `wifi` (`guest/wifi`) offers its Wi-Fi
+  radios to the Wi-Fi service as *managed* radios, which scan, join access
+  points, encrypt and move Ethernet frames on the service's commands
+  (under QEMU, the virtual radio: a virtio-serial port connected to the
+  `airsim` simulator on the host, which `airlink` makes a radio of
+  Linux's). Frames travel through shared-memory rings (`vproto::netring`)
+  with wake-up events; neither side trusts the other's indices or lengths.
+* **`wlan`** (the Wi-Fi service, built on `vwlan`) decides what to join,
+  authenticates (open system; SAE, which it computes), runs the key
+  handshakes and gives the radio only the session keys, keeps the saved
+  networks and decides when to reconnect or roam. It presents each radio
+  to `netd` as `wlan0`.
 * **`netd`** (on `vnetstack` and smoltcp) runs interfaces, DHCP, IPv6
   autoconfiguration, routes, a caching DNS resolver and the sockets that
   applications use through `vnet`, one channel per socket with
@@ -789,6 +770,8 @@ policy, the wake word) are in `vagent`, tested on the host. See
   anything sounds: the real machine stays the final check.
 * GUI automation scripts (`tests/ui/*.vts`) that drive QEMU through QMP —
   mouse, keyboard, waits on log lines, screenshots — and fail on panics.
+  QEMU's machine has an IOMMU, as PCs do, so the driver VM runs in every
+  script, with the pointer, USB, the networks and the display.
   The sound cards' scripts also check QEMU's recording of the output for
   dropouts, and `hda-speakers.vts` gives the HD Audio driver a stand-in
   for a laptop's amplifier driver (`speakertest`) that answers slowly.
@@ -824,10 +807,10 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/glsl`, `lib/gl` | the GLSL ES compiler (with its TGSI back end), and OpenGL ES 3.0 with its software and GPU (virgl) renderers |
 | `lib/audio` | audio formats, resampling, mixing, FFT, the synthesiser, echo cancellation, voice activity detection and level metering |
 | `lib/virtio` | virtio device access shared by the drivers |
-| `lib/hda`, `lib/usb`, `lib/cs35l41`, `lib/spi` | what the HD Audio, USB, speaker amplifier and SPI drivers know that touches no hardware |
+| `lib/hda`, `lib/cs35l41`, `lib/spi` | what the HD Audio, speaker amplifier and SPI drivers know that touches no hardware |
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `lib/hv`, `lib/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the virtual APIC, `cpuid`, the guests' platform and boot protocol, the bridge's ABI; VT-d's tables and structures |
-| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`alsa`, `net`, `wifi`, `kms`, `usbip`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests |
+| `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `airlink` (QEMU's virtual radio as Linux's), and its tests |
 | `lib/boardsim` | simulated machines for host tests: firmware descriptions and models of chips no emulator has (a laptop's speaker amplifiers) |
 | `lib/splash` | the boot splash's picture, which the boot loader and the window system draw alike |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |

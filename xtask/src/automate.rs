@@ -26,7 +26,7 @@
 //! boot-cmdline "run=about"        # extra kernel command line, applied before boot
 //! double-click 0.05 0.44           # two quick clicks
 //! net wifi                         # network for this run (wifi, both, ethernet, none), applied before boot
-//! nic e1000                        # QEMU model of the wired card for this run, applied before boot
+//! nic e1000e                       # QEMU model of the wired card for this run, applied before boot
 //! sound ac97                       # the sound card for this run (virtio, ac97 or hda), applied before boot
 //! live                             # boot the live system (`xtask iso`) from a USB stick, applied before boot
 //! input usb                        # USB keyboard and pointer (see `--input`), applied before boot
@@ -35,12 +35,9 @@
 //! audio silent                     # QEMU's silent sound system: the output is not recorded, the input records silence
 //! expect-audio                     # fail unless the recorded sound output holds more than silence
 //! expect-audio-gapless [20]        # fail if it drops out (digital silence over 20 ms between its first and last sound)
-//! iommu                            # QEMU's IOMMU (interrupt remapping too), applied before boot
 //! usb net                          # QEMU's USB network adapter (CDC Ethernet) on the xHCI controller
 //! requires c-toolchain             # only with the C test programs (`cargo xtask toolchain`); `test` skips it otherwise
 //! requires native-toolchain        # only with GCC in the image (the same)
-//! requires drivervm                # only with the driver VM's Linux in the image (`cargo xtask linux`), with
-//!                                  # KVM's nested virtualization (kvm_intel nested=1)
 //! air "ap home off"                # send a command to the Wi-Fi simulator (fails on an error)
 //! air-expect "list" "1 joined"     # fail unless the simulator's answer contains the text
 //! air-wait "list" "1 joined" 60    # wait until it does (timeout in s)
@@ -70,7 +67,9 @@
 //! ```
 //!
 //! Scripts that use the microphone commands boot with `testmic`, which
-//! connects back to the host (see `mic.rs`).
+//! connects back to the host (see `mic.rs`). The pointer's commands wait,
+//! the first time in a boot, until the guest's tablet is Veda's (Linux
+//! drives it in the driver VM, which may come after the desktop).
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
@@ -154,6 +153,9 @@ pub struct Session {
     /// Byte offset in the serial log where `wait-serial` and `expect-serial`
     /// start looking (moved past the output of earlier boots by `reset`).
     since: usize,
+    /// Where this boot's output starts, and whether its pointer is up.
+    boot: usize,
+    pointer: bool,
     /// The Wi-Fi simulator, when the machine has the virtual radio.
     pub sim: Option<AirSim>,
 }
@@ -185,7 +187,7 @@ impl Session {
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::inherit());
         let child = cmd.spawn().map_err(|e| format!("starting QEMU: {e}"))?;
         let qmp = Qmp::connect(port, Duration::from_secs(20))?;
-        Ok(Session { m: Machine { child, qmp }, serial_log, fail_patterns, since: 0, sim })
+        Ok(Session { m: Machine { child, qmp }, serial_log, fail_patterns, since: 0, boot: 0, pointer: false, sim })
     }
 
     fn serial_bytes(&self) -> Vec<u8> {
@@ -211,14 +213,33 @@ impl Session {
     /// Resets the machine (a reboot that keeps the disks).
     pub fn reset(&mut self) -> Result {
         self.since = self.serial_bytes().len();
+        self.boot = self.since;
+        self.pointer = false;
         self.m.reset()
     }
 
     /// Waits until the serial log contains `needle`.
     pub fn wait_serial(&mut self, needle: &str, timeout: Duration) -> Result {
+        self.wait_from(self.since, needle, timeout)
+    }
+
+    /// The first pointer action of a boot waits until the guest's tablet is
+    /// Veda's: Linux drives it, in the driver VM, which may not have done so
+    /// yet when the desktop is ready.
+    fn pointer(&mut self) -> Result {
+        if !self.pointer {
+            self.wait_from(self.boot, "): tablet", Duration::from_secs(60))?;
+            self.pointer = true;
+        }
+        Ok(())
+    }
+
+    /// Waits until the serial log from byte `from` on contains `needle`.
+    fn wait_from(&mut self, from: usize, needle: &str, timeout: Duration) -> Result {
         let start = Instant::now();
         loop {
-            if self.recent().contains(needle) {
+            let b = self.serial_bytes();
+            if String::from_utf8_lossy(&b[from.min(b.len())..]).contains(needle) {
                 return Ok(());
             }
             let log = self.serial();
@@ -413,16 +434,6 @@ pub fn needs_toolchain(script: &str) -> Option<&'static str> {
     })
 }
 
-/// Whether a script asks for an IOMMU (`iommu`).
-pub fn iommu(script: &str) -> bool {
-    script.lines().map(words).any(|w| w.first().is_some_and(|c| c == "iommu"))
-}
-
-/// Whether a script runs the driver VM (`requires drivervm`).
-pub fn needs_drivervm(script: &str) -> bool {
-    script.lines().map(words).any(|w| w.len() >= 2 && w[0] == "requires" && w[1] == "drivervm")
-}
-
 /// The sound card a script asks for with `sound` (`virtio` or `ac97`).
 pub fn sound_card(script: &str) -> Option<String> {
     script.lines().map(words).filter(|w| w.first().is_some_and(|c| c == "sound")).find_map(|w| w.get(1).cloned())
@@ -524,8 +535,12 @@ pub fn run_script(
                     };
                     same_pictures(&shot_path(&w, 1)?, &shot_path(&w, 2)?, region).map_err(ctx)?;
                 }
-                "move" => s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?,
+                "move" => {
+                    s.pointer().map_err(ctx)?;
+                    s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?
+                }
                 "click" => {
+                    s.pointer().map_err(ctx)?;
                     let button = w.get(3).map(String::as_str).unwrap_or("left");
                     s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
                     std::thread::sleep(Duration::from_millis(80));
@@ -534,6 +549,7 @@ pub fn run_script(
                     s.m.mouse_button(button, false).map_err(ctx)?;
                 }
                 "drag" => {
+                    s.pointer().map_err(ctx)?;
                     s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
                     std::thread::sleep(Duration::from_millis(80));
                     s.m.mouse_button("left", true).map_err(ctx)?;
@@ -547,8 +563,7 @@ pub fn run_script(
                     s.m.mouse_button("left", false).map_err(ctx)?;
                 }
                 "fail-on" => s.fail_patterns.push(w.get(1).ok_or("missing text")?.clone()),
-                "boot-cmdline" | "net" | "nic" | "usb" | "sound" | "audio" | "requires" | "live" | "input" | "gpu"
-                | "iommu" => {}
+                "boot-cmdline" | "net" | "nic" | "usb" | "sound" | "audio" | "requires" | "live" | "input" | "gpu" => {}
                 "qmp" => {
                     let command = w.get(1).ok_or("missing command")?;
                     let arguments = w.get(2).map_or("{}", String::as_str);
@@ -602,12 +617,14 @@ pub fn run_script(
                     s.m.set_wired_link(up).map_err(ctx)?;
                 }
                 "mouse-down" => {
+                    s.pointer().map_err(ctx)?;
                     s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
                     std::thread::sleep(Duration::from_millis(80));
                     s.m.mouse_button("left", true).map_err(ctx)?;
                 }
                 "mouse-up" => s.m.mouse_button("left", false).map_err(ctx)?,
                 "double-click" => {
+                    s.pointer().map_err(ctx)?;
                     s.m.move_mouse(num(&w, 1)?, num(&w, 2)?).map_err(ctx)?;
                     for _ in 0..2 {
                         std::thread::sleep(Duration::from_millis(60));

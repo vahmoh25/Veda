@@ -3,8 +3,7 @@
 # platform, starts its second processor on it, runs its first program, and
 # powers the machine off when asked to; no I/O port, MSR or warning on the
 # way.
-requires drivervm
-boot-cmdline "drivervm drivervm.poweroff"
+boot-cmdline "drivervm.poweroff"
 fail-on "PANIC"
 fail-on "drivervm: processor"
 wait-serial "drivervm: starting Linux" 60

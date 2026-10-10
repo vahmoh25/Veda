@@ -104,6 +104,7 @@ pub fn spawn_init(boot: &BootInfo) {
         acpi_rsdp: boot.rsdp_phys,
         acpi_memory,
         acpi_memory_count: acpi_memory_count as u32,
+        platform: platform(),
     };
     let info_vmo = Vmo::new_anonymous(4096).unwrap();
     // SAFETY: viewing a plain #[repr(C)] struct as bytes.
@@ -167,4 +168,16 @@ static INIT: crate::sync::SpinLock<Option<Arc<Process>>> = crate::sync::SpinLock
 
 fn keep_alive(p: Arc<Process>) {
     *INIT.lock() = Some(p);
+}
+
+/// What the machine offers beyond what Veda needs (`vabi::platform`).
+fn platform() -> u32 {
+    let mut bits = 0;
+    if crate::hv::vmx::caps().is_ok() {
+        bits |= vabi::platform::VIRTUALIZATION;
+    }
+    if crate::iommu::active() {
+        bits |= vabi::platform::IOMMU;
+    }
+    bits
 }

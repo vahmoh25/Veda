@@ -35,7 +35,6 @@ members = [
     "lib/json",
     "lib/web",
     "lib/agent",
-    "lib/usb",
     "lib/hda",
     "lib/acpi",
     "lib/cs35l41",
@@ -74,14 +73,9 @@ members = [
     "tools/assetgen",
     "tools/musicgen",
     "tools/airsim",
-    "drivers/virtio-input",
     "drivers/ps2",
     "drivers/virtio-blk",
-    "drivers/virtio-net",
-    "drivers/vwifi",
-    "drivers/e1000",
     "drivers/ahci",
-    "drivers/xhci",
     "drivers/hda",
     "drivers/lpss-spi",
     "tests/systest",
@@ -99,7 +93,7 @@ members = [
     "guest/wifi",
     "guest/airlink",
     "guest/kms",
-    "guest/usb",
+    "guest/input",
     "guest/renderer",
 ]
 # Vendored third-party crates are path dependencies, not members (their own
@@ -149,7 +143,6 @@ vradiolink = { path = "lib/radiolink" }
 vjson = { path = "lib/json" }
 vweb = { path = "lib/web" }
 vagent = { path = "lib/agent" }
-vusb = { path = "lib/usb" }
 vhda = { path = "lib/hda" }
 vacpi = { path = "lib/acpi" }
 vcs35l41 = { path = "lib/cs35l41" }
