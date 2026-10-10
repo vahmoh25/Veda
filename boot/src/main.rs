@@ -5,7 +5,8 @@
 //! 1. read `\VEDA\BOOT.CFG`, `VKERNEL.EXE`, `INITRD.IMG` (and the optional
 //!    `VKERNEL.SYM`) from the boot volume,
 //! 2. pick and set a graphics mode (of the display's own shape, where the
-//!    firmware gives its EDID) and paint the boot splash,
+//!    firmware gives its EDID) and clear the screen: it stays blank until
+//!    the window system's splash fades in,
 //! 3. load the kernel's PE sections into fresh physical pages,
 //! 4. build the initial page tables (identity map, direct map, kernel image),
 //! 5. read the firmware's variables that an operating system may read
@@ -17,11 +18,11 @@
 #![no_std]
 #![no_main]
 
+mod blank;
 mod config;
 mod memtype;
 mod paging;
 mod serial;
-mod splash;
 mod uefi;
 
 use core::ffi::c_void;
@@ -29,7 +30,7 @@ use core::ptr;
 
 use bootinfo::{
     BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, BootTime, Framebuffer, HHDM_BASE, KernelImage, MemoryKind, MemoryMap,
-    MemoryRegion, PhysRegion, PixelFormat, SCREEN_MODES, ScreenReport, SplashReport, made_wc, memory_type, variables,
+    MemoryRegion, PaintReport, PhysRegion, PixelFormat, SCREEN_MODES, ScreenReport, made_wc, memory_type, variables,
 };
 use uefi::{memory_type as mt, *};
 
@@ -510,37 +511,26 @@ fn rdtsc() -> u64 {
     (hi as u64) << 32 | lo as u64
 }
 
-/// Paints the boot splash write-combining if the framebuffer is not (see
-/// `splash`); how it went, for the kernel's log.
-fn paint_splash(fw: &Firmware, fb: &Framebuffer) -> SplashReport {
-    let mut report = SplashReport::default();
-    let width = fb.stride.max(fb.width) as usize;
-    // A row of pixels to make each row in (scratch the kernel reuses).
-    let Ok(row) = fw.alloc_zeroed(width as u64 * 4, None) else { return report };
+/// Clears the screen write-combining if the framebuffer is not (see
+/// `blank`); how it went, for the kernel's log.
+fn clear_screen(fw: &Firmware, fb: &Framebuffer) -> PaintReport {
+    let mut report = PaintReport::default();
     if fb.phys_base == 0 {
         return report;
     }
-    // SAFETY: freshly allocated pages, a row's worth of pixels.
-    let row = unsafe { core::slice::from_raw_parts_mut(row as *mut u32, width) };
-    let surface = splash::Surface {
-        base: fb.phys_base as *mut u32,
-        width: fb.width,
-        height: fb.height,
-        stride: fb.stride,
-        rgb: fb.format == PixelFormat::Rgbx,
-    };
+    let surface =
+        blank::Surface { base: fb.phys_base as *mut u32, width: fb.width, height: fb.height, stride: fb.stride };
     let start = rdtsc();
     report.found = memtype::memory_type(fb.phys_base);
     if report.found == memory_type::WRITE_COMBINING {
-        splash::draw(&surface, row);
+        blank::clear(&surface);
         report.painted = report.found;
         report.made_wc = made_wc::ALREADY;
         report.paint_ticks = (rdtsc() - start).max(1);
         return report;
     }
-    let painted = ram_limit(fw).and_then(|limit| {
-        splash::draw_write_combining(&mut ScratchFrames(fw), &surface, limit, supports_1g_pages(), row)
-    });
+    let painted = ram_limit(fw)
+        .and_then(|limit| blank::clear_write_combining(&mut ScratchFrames(fw), &surface, limit, supports_1g_pages()));
     match painted {
         Ok(ticks) => {
             report.painted = memory_type::WRITE_COMBINING;
@@ -549,16 +539,16 @@ fn paint_splash(fw: &Firmware, fb: &Framebuffer) -> SplashReport {
             report.setup_ticks = (rdtsc() - start).saturating_sub(ticks);
         }
         Err(e) => {
-            log!("cannot paint the splash write-combining: {e}");
+            log!("cannot clear the screen write-combining: {e}");
             let painting = rdtsc();
-            splash::draw(&surface, row);
+            blank::clear(&surface);
             report.painted = report.found;
             report.made_wc = made_wc::NOT;
             report.paint_ticks = (rdtsc() - painting).max(1);
         }
     }
     log!(
-        "splash painted in {} ticks: the framebuffer is {}, painted {}",
+        "screen cleared in {} ticks: the framebuffer is {}, painted {}",
         report.paint_ticks,
         memory_type::name(report.found),
         memory_type::name(report.painted)
@@ -566,7 +556,8 @@ fn paint_splash(fw: &Firmware, fb: &Framebuffer) -> SplashReport {
     report
 }
 
-/// Page allocator for the splash's page tables (scratch the kernel reuses).
+/// Page allocator for the page tables the screen is cleared through
+/// (scratch the kernel reuses).
 struct ScratchFrames<'a>(&'a Firmware);
 
 impl paging::FrameSource for ScratchFrames<'_> {
@@ -731,7 +722,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
         framebuffer.stride,
         framebuffer.phys_base
     );
-    let splash = paint_splash(fw, &framebuffer);
+    let paint = clear_screen(fw, &framebuffer);
 
     let kernel_file = fw.read_file(root, "\\VEDA\\VKERNEL.EXE", None)?.ok_or("\\VEDA\\VKERNEL.EXE not found")?;
     // SAFETY: the kernel file was read into kernel_file.base.
@@ -888,7 +879,7 @@ fn boot(fw: &Firmware) -> Result<core::convert::Infallible> {
             cmdline_len: cfg.cmdline_len as u32,
             entropy_len: entropy_len as u32,
             entropy,
-            splash,
+            paint,
             screen,
             firmware_variables,
         });

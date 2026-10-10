@@ -1,32 +1,32 @@
 //! The startup sequence.
 //!
-//! The boot loader's splash (the gradient and the ring, `vsplash`) is on
-//! the screen when the window system starts, and stays as it is while the
-//! system starts its drivers: nothing is drawn until the screen frames go
-//! to from then on has it (`Screen::settled`). Where a driver is coming for
-//! the display (the driver VM's Linux's), that is once the driver shows its
-//! first picture, the splash as the loader painted it; otherwise the
-//! firmware's framebuffer, at once. So the splash never moves on a screen a
-//! driver is about to take over (which would freeze it), and a display
-//! that has to be set up anew is set up under a still picture.
+//! The screen is black when the window system starts (the boot loader
+//! clears it), and stays black while the system starts its drivers:
+//! nothing is drawn until the screen frames go to from then on has the
+//! first of them (`Screen::settled`). Where a driver is coming for the
+//! display (the driver VM's Linux's), that is once the driver shows its
+//! first picture, black too; otherwise the firmware's framebuffer, at
+//! once. So nothing moves on a screen a driver is about to take over
+//! (which would freeze it), a display that is set up anew is set up while
+//! it is black, and the splash is first seen on the screen the desktop
+//! will be.
 //!
-//! Then the window system brings the splash to life, without a seam (its
-//! first frame is the loader's, pixel for pixel): a soft light gathers
-//! around the ring and breathes, a brighter glint going round it while the
-//! system works, and the name and the tagline rise into view below. Once
-//! the desktop has drawn itself, the splash has been seen long enough not
-//! to be a flash, and the shell has what comes with the desktop's first
-//! appearance (its startup sound, `display::desktop_ready`), the ring
-//! swells and fades, the words lift away and the desktop dissolves in, the
-//! shell told as it does (`WindowEvent::Appearing`): the sound starts with
-//! it.
+//! Then the splash (the gradient and the ring, `vsplash`) fades in from
+//! black, and comes to life: a soft light gathers around the ring and
+//! breathes, a brighter glint going round it while the system works, and
+//! the name and the tagline rise into view below. Once the desktop has
+//! drawn itself, the splash has been seen long enough not to be a flash,
+//! and the shell has what comes with the desktop's first appearance (its
+//! startup sound, `display::desktop_ready`), the ring swells and fades,
+//! the words lift away and the desktop dissolves in, the shell told as it
+//! does (`WindowEvent::Appearing`): the sound starts with it.
 //!
 //! Until then windows are composed as usual into the back buffer, but the
-//! screen shows the splash layer, redrawn where it moves. During the
-//! dissolve every frame mixes the splash layer with the composed screen.
-//! Where the GPU composes (`gpu`), it draws the splash itself, from the
-//! same look: the gradient, the light and the ring in a shader, the words
-//! as textures, over the desktop as it comes in.
+//! screen shows the splash layer: all of it while it fades in, then where
+//! it moves. During the dissolve every frame mixes the splash layer with
+//! the composed screen. Where the GPU composes (`gpu`), it draws the
+//! splash itself, from the same look: the gradient, the light and the ring
+//! in a shader, the words as textures, over the desktop as it comes in.
 //! A compositor restarted after a crash shows the desktop straight away:
 //! init asks for the sequence (`splash`) only when the system starts.
 
@@ -44,20 +44,21 @@ use crate::gpu::{Gpu, Slot, Splash};
 use crate::screen::Screen;
 
 const MS: u64 = 1_000_000;
-/// The loader's splash waits this long at most for the screen frames go
-/// to (a driver that is coming but does not show its first picture): then
+/// The screen stays black this long at most for the screen frames go to
+/// (a driver that is coming but does not show its first picture): then
 /// the sequence goes on, on whatever screen there is.
 const HOLD: u64 = 20_000 * MS;
-/// The light gathers around the ring; then the name, then the tagline,
-/// rise into view.
-const GLOW_IN: (u64, u64) = (0, 600 * MS);
-const NAME_IN: (u64, u64) = (150 * MS, 750 * MS);
-const TAGLINE_IN: (u64, u64) = (350 * MS, 950 * MS);
+/// The splash fades in from black; the light gathers around the ring; then
+/// the name, then the tagline, rise into view.
+const FADE_IN: (u64, u64) = (0, 600 * MS);
+const GLOW_IN: (u64, u64) = (300 * MS, 900 * MS);
+const NAME_IN: (u64, u64) = (450 * MS, 1050 * MS);
+const TAGLINE_IN: (u64, u64) = (650 * MS, 1250 * MS);
 /// How far the words rise.
 const RISE: f32 = 12.0;
 /// The splash is seen at least this long, so that it never flashes by and
 /// the tagline can be read.
-const MIN_SPLASH: u64 = 1800 * MS;
+const MIN_SPLASH: u64 = 2100 * MS;
 /// Without a desktop after this long, the screen is shown as it is.
 const MAX_SPLASH: u64 = 20_000 * MS;
 /// Once the desktop has drawn itself and the splash has been seen long
@@ -146,6 +147,8 @@ fn cycle(t: u64, period: u64) -> f32 {
 
 /// How the splash looks at one moment.
 struct Look {
+    /// How far it has faded in from black (1: all the way).
+    fade: f32,
     /// The light's strength (1: as it settles).
     glow: f32,
     /// Where its glint is, in turns clockwise from the top.
@@ -194,7 +197,7 @@ fn draw_line(t: &mut Text, (font, size): (usize, f32), line: &str, color: Color,
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
-    /// The loader's splash is on the screen as it is: nothing is drawn.
+    /// The screen is black, as the loader left it: nothing is drawn.
     Hold,
     /// Coming to life (since `started`).
     Splash,
@@ -216,7 +219,7 @@ pub(crate) struct Progress {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Moved {
     No,
-    /// It came to life.
+    /// The splash began to fade in.
     Started,
     /// The desktop began to appear.
     Appearing,
@@ -226,7 +229,7 @@ pub(crate) enum Moved {
 }
 
 pub(crate) struct Startup {
-    /// When the sequence was made, and when it came to life.
+    /// When the sequence was made, and when the splash began to fade in.
     created: u64,
     started: u64,
     phase: Phase,
@@ -247,8 +250,10 @@ pub(crate) struct Startup {
     rest: Vec<u16>,
     name: Option<Words>,
     tagline: Option<Words>,
-    /// What the animation redraws.
+    /// What the animation redraws, once a frame has shown all of the
+    /// splash, faded in (`lit`): until then, frames show all of it.
     region: Rect,
+    lit: bool,
     frames: u32,
 }
 
@@ -258,11 +263,9 @@ impl Startup {
     pub(crate) fn new(width: i32, height: i32, text: &mut Text, fonts: (usize, usize), now: u64) -> Startup {
         let (w, h) = (width as u32, height as u32);
         let screen = Rect::new(0, 0, width, height);
+        // Black, as the screen is, until the splash fades in.
         let mut layer = Bitmap::new(width, height);
-        for (y, line) in layer.pixels.chunks_exact_mut(w as usize).enumerate() {
-            vsplash::row(w, h, y as u32, line);
-            opaque(line);
-        }
+        layer.pixels.fill(0xFF00_0000);
         let ring = Ring::place(w, h);
         let (cx, cy, radius) = (ring.cx as f32 / 16.0, ring.cy as f32 / 16.0, ring.outer as f32 / 16.0);
 
@@ -313,12 +316,13 @@ impl Startup {
             name,
             tagline,
             region: region.intersect(&screen),
+            lit: false,
             frames: 0,
         }
     }
 
-    /// The splash as the screen shows it (during the dissolve, under the
-    /// desktop).
+    /// The splash as the screen shows it (black until it fades in; during
+    /// the dissolve, under the desktop).
     pub(crate) fn layer(&self) -> &Bitmap {
         &self.layer
     }
@@ -347,7 +351,7 @@ impl Startup {
                 } else if !self.cleared {
                     println!("the shell did not say the desktop may appear; it appears all the same");
                 }
-                println!("the desktop appears ({} ms after the splash came to life)", t / MS);
+                println!("the desktop appears ({} ms after the splash faded in)", t / MS);
                 self.phase = Phase::Reveal(now);
                 Moved::Appearing
             }
@@ -357,7 +361,7 @@ impl Startup {
                 }
                 let t = now.saturating_sub(self.started);
                 println!(
-                    "desktop shown after {} ms ({} ms held; {} frames, {} a second; {})",
+                    "desktop shown after {} ms ({} ms black; {} frames, {} a second; {})",
                     now.saturating_sub(self.created) / MS,
                     self.started.saturating_sub(self.created) / MS,
                     self.frames,
@@ -369,9 +373,9 @@ impl Startup {
         }
     }
 
-    /// Brings the held splash to life once the screen frames go to from
-    /// now on has it (`settled`), or after [`HOLD`] all the same: whether
-    /// it did.
+    /// Fades the splash in once the screen frames go to from now on has
+    /// the black screen (`settled`), or after [`HOLD`] all the same:
+    /// whether it did.
     pub(crate) fn release(&mut self, now: u64, settled: bool) -> bool {
         if self.phase != Phase::Hold {
             return false;
@@ -379,22 +383,35 @@ impl Startup {
         if !settled && now < self.created + HOLD {
             return false;
         }
+        let blank = now.saturating_sub(self.created) / MS;
         if settled {
-            println!("the splash comes to life (held {} ms)", now.saturating_sub(self.created) / MS);
+            println!("the splash fades in (the screen black for {} ms)", blank);
         } else {
             println!(
-                "the display's driver did not show its first picture in {} s; the splash comes to life",
+                "the display's driver did not show its first picture in {} s; the splash fades in",
                 HOLD / 1_000_000_000
             );
+        }
+        let (w, h) = (self.layer.width as u32, self.layer.height as u32);
+        for (y, line) in self.layer.pixels.chunks_exact_mut(w as usize).enumerate() {
+            vsplash::row(w, h, y as u32, line);
+            opaque(line);
         }
         self.phase = Phase::Splash;
         self.started = now;
         true
     }
 
-    /// Whether the loader's splash is held, as it is.
+    /// Whether the screen is held black.
     pub(crate) fn holding(&self) -> bool {
         self.phase == Phase::Hold
+    }
+
+    /// Whether frames show all of the screen anew: while the splash fades
+    /// in (and its first frame at full brightness), and as the desktop
+    /// comes in.
+    pub(crate) fn whole_screen(&self) -> bool {
+        !self.lit || self.revealing()
     }
 
     /// When the hold ends without the screen, while it holds.
@@ -412,7 +429,7 @@ impl Startup {
     fn look(&self, now: u64) -> (Look, f32) {
         let t = now.saturating_sub(self.started);
         match self.phase {
-            Phase::Hold => (self.splash(0), 0.0),
+            Phase::Hold => (Look { fade: 0.0, ..self.splash(0) }, 0.0),
             Phase::Splash => (self.splash(t), 0.0),
             Phase::Reveal(start) => {
                 let r = now.saturating_sub(start);
@@ -433,20 +450,24 @@ impl Startup {
     }
 
     /// Draws the sequence's frame at `now` on the screen: nothing while the
-    /// loader's splash is held (a driver's first picture is the layer, as
-    /// it is, where it is stale).
+    /// screen is held black (a driver's first picture is the layer, black,
+    /// where it is stale).
     pub(crate) fn frame(&mut self, screen: &mut Screen, now: u64) {
         if self.holding() {
             return;
         }
         let (look, desktop) = self.look(now);
         self.paint(&look);
+        let all = screen.rect();
         let alpha = (desktop * 256.0) as u32;
-        if alpha == 0 {
-            screen.flush_from(&self.layer, self.region);
-        } else {
-            let all = screen.rect();
+        if alpha > 0 {
             screen.flush_mixed(&self.layer, alpha, all);
+        } else if !self.lit {
+            let fade = (look.fade * 256.0) as u32;
+            screen.flush_dimmed(&self.layer, fade, all);
+            self.lit = fade >= 256;
+        } else {
+            screen.flush_from(&self.layer, self.region);
         }
         self.frames += 1;
     }
@@ -467,17 +488,18 @@ impl Startup {
             strength: look.glow * GLOW_PEAK,
             glow: GLOW,
             glint: look.glint,
+            fade: look.fade,
             opacity: above,
         };
         // Where the light reaches, the gradient, the light and the ring; the
         // gradient alone everywhere else (each pixel drawn once: as the
         // splash dissolves, it is mixed with the desktop once).
         let screen = Rect::new(0, 0, self.layer.width, self.layer.height).intersect(&clip);
-        let lit = self.around.intersect(&screen);
-        for r in outside(screen, lit) {
+        let around = self.around.intersect(&screen);
+        for r in outside(screen, around) {
             g.splash_rows(r, &splash);
         }
-        g.splash(lit, &splash);
+        g.splash(around, &splash);
         for (i, (words, (opacity, dy))) in
             [(&self.name, look.name), (&self.tagline, look.tagline)].into_iter().enumerate()
         {
@@ -488,8 +510,9 @@ impl Startup {
                 None => g.upload(slot, 1, &words.bitmap),
             };
             let at = words.rect().translate(0, dy.round() as i32);
-            g.image(t, Rect::new(0, 0, t.w, t.h), at, opacity * above, false, None);
+            g.image(t, Rect::new(0, 0, t.w, t.h), at, opacity * look.fade * above, false, None);
         }
+        self.lit |= !self.holding() && look.fade >= 1.0;
         self.frames += 1;
     }
 
@@ -501,6 +524,7 @@ impl Startup {
             (p, RISE * (1.0 - p))
         };
         Look {
+            fade: ease_in_out(progress(t, FADE_IN)),
             glow: ease_out(progress(t, GLOW_IN)) * breath,
             glint: cycle(t, ORBIT),
             scale: 1.0,
@@ -517,6 +541,7 @@ impl Startup {
         let away = |(opacity, dy): (f32, f32)| (opacity * (1.0 - words), dy - LIFT * words);
         let swell = 1.0 + 0.35 * (PI * progress(r, GLOW_SWELL)).sin();
         Look {
+            fade: 1.0,
             glow: at_rest.glow * swell * (1.0 - ease_in(progress(r, GLOW_OUT))),
             glint: at_rest.glint,
             scale: 1.0 + RING_SWELL * ease_in_out(progress(r, RING_GROW)),

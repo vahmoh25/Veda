@@ -86,10 +86,10 @@ fn log_screen(s: &bootinfo::ScreenReport) {
     }
 }
 
-/// Logs how the loader painted its splash: a real PC's framebuffer is often
-/// uncached, which shows as the picture being painted from the top down,
+/// Logs how the loader cleared the screen: a real PC's framebuffer is often
+/// uncached, which shows as the screen being painted from the top down,
 /// until something makes it write-combining.
-fn log_splash(s: &bootinfo::SplashReport) {
+fn log_paint(s: &bootinfo::PaintReport) {
     use bootinfo::{made_wc, memory_type};
     if s.paint_ticks == 0 {
         return;
@@ -108,7 +108,7 @@ fn log_splash(s: &bootinfo::SplashReport) {
         ),
         _ => alloc::format!("the framebuffer is {}, and could not be painted write-combining", found),
     };
-    kinfo!("boot: the loader painted its splash in {}; {}", ms(s.paint_ticks), how);
+    kinfo!("boot: the loader cleared the screen in {}; {}", ms(s.paint_ticks), how);
 }
 
 /// Kernel entry point, called by `vboot` (see the `bootinfo` crate for the
@@ -179,7 +179,7 @@ pub extern "sysv64" fn kernel_entry(boot: &'static BootInfo) -> ! {
         kinfo!("time: the firmware's adjustment of CPU 0's TSC ({} ns) set to 0", time::ticks_to_ns(adjust));
     }
     log_screen(&boot.screen);
-    log_splash(&boot.splash);
+    log_paint(&boot.paint);
     time::set_boot_time(&boot.boot_time, opts.tz);
     if features.tsc_deadline {
         apic::use_tsc_deadline(true);

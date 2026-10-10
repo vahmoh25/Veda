@@ -34,19 +34,19 @@ that communicate over kernel channels.
    shape where the firmware gives the display's EDID: 1920x1200 rather
    than 1920x1080 on a 16:10 panel, which the firmware and later the
    display's driver then scale evenly, without bars; the kernel logs the
-   modes there were, `boot: the firmware's screen modes: ...`), paints the
-   splash screen (`vsplash`), loads the
+   modes there were, `boot: the firmware's screen modes: ...`), clears the
+   screen to black, whatever the firmware left there, loads the
    kernel's PE sections, builds page tables (identity map, direct map at
    `0xFFFF800000000000`, kernel at `0xFFFFFFFF80000000`), reads the
    firmware's variables that an operating system may read (for the driver
    VM's Linux: `bootinfo::variables`), exits boot services
    and jumps to the kernel with a `bootinfo::BootInfo`. Firmware usually
    leaves its framebuffer uncached, where every write is a bus transaction
-   of its own and a PC's screen shows the picture being painted from the
-   top down; so the loader paints through page tables of its own that map
-   the framebuffer write-combining by its page attributes (which the
-   firmware's MTRRs cannot overrule), and the picture is there at once.
-   The kernel logs how it went (`boot: the loader painted its splash in
+   of its own and a PC's screen shows it being painted from the top down;
+   so the loader paints through page tables of its own that map the
+   framebuffer write-combining by its page attributes (which the
+   firmware's MTRRs cannot overrule), and the screen is black at once.
+   The kernel logs how it went (`boot: the loader cleared the screen in
    ...`).
 3. The kernel initialises memory, ACPI, APICs, timers and the other CPUs, then
    starts `bin/init.exe` from the initrd (the only program it loads itself).
@@ -57,23 +57,24 @@ that communicate over kernel channels.
    restarted compositor through the registry, which queues connections
    until a service registers again.
 
-**The startup sequence.** The loader's splash stays on the screen, as it
-is, while the kernel, the services and the drivers start: the window
-system draws nothing until the screen its frames go to from then on has
-the splash. Where the display is the driver VM's (devmgr gave the display
-controller whose memory holds the firmware's framebuffer to Linux, and
-tells the window system so: `displaydev::expect`), that is once Linux's
-driver shows its first picture, the splash as the loader painted it, set
-up under the still picture (on a PC's panel the driver keeps the link
-the firmware set, so the panel does not even blink); without a driver
-coming, at once, on the firmware's framebuffer. Then the window system
-brings it to life, without a seam (it draws the same picture through
-`vsplash`, `lib/splash`, pixel for pixel, and the GPU's shaders from the
-same arithmetic; `services/compositor/src/startup.rs`): a soft light
-gathers around the ring and breathes, with a glint going round while the
-system works, and the name and the tagline ("The agentic-native operating
-system") rise into view. Once the shell's desktop and taskbar have each
-presented a frame, the splash has been alive for at least 1.8 s, and the
+**The startup sequence.** The screen stays black while the kernel, the
+services and the drivers start: the window system draws nothing until
+the screen its frames go to from then on is up. Where the display is
+the driver VM's (devmgr gave the display controller whose memory holds
+the firmware's framebuffer to Linux, and tells the window system so:
+`displaydev::expect`), that is once Linux's driver shows its first
+picture, black too (on a PC's panel Linux keeps the link the firmware
+set, so the panel stays on: Veda's patch to i915 keeps the firmware's
+bits a colour at the first commit); without a driver coming, at once,
+on the firmware's framebuffer. Then the window system fades the splash
+in from black (the gradient and the ring: `vsplash`, `lib/splash`,
+drawn by the processor or by the GPU's shaders from the same
+arithmetic; `services/compositor/src/startup.rs`), and brings it to
+life: a soft light gathers around the ring and breathes, with a glint
+going round while the system works, and the name and the tagline ("The
+agentic-native operating system") rise into view. Once the shell's
+desktop and taskbar have each presented a frame, the splash has been up
+for at least 2.1 s, and the
 shell has the startup sound ready (`display::desktop_ready`: the sound
 card is attached, or none is coming, as devmgr tells the audio service;
 the window system waits for that 3 s at most), the ring swells and fades,
@@ -791,7 +792,7 @@ policy, the wake word) are in `vagent`, tested on the host. See
 | `lib/acpi`, `lib/gpio` | the ACPI tables, the AML interpreter and resource templates, and Intel's GPIO pads (for `devmgr`) |
 | `lib/hv`, `lib/iommu` | what the hypervisor and the IOMMU driver know that touches no hardware: the virtual APIC, `cpuid`, the guests' platform and boot protocol, the bridge's ABI; VT-d's tables and structures |
 | `guest/` | the driver VM's Linux programs: its `init`, Veda's drivers for Linux (`input`, `alsa`, `net`, `wifi`, `kms`), the renderer (OpenGL ES on Mesa's drivers), `logkeeper` (the system's log on the live system's stick), `airlink` (QEMU's virtual radio as Linux's), and its tests (`bridgetest`, `pcitest`, `gpiotest`, `efivartest`, `kmspause`) |
-| `lib/splash` | the boot splash's picture, which the boot loader and the window system draw alike |
+| `lib/splash` | the startup splash's picture, which the window system's processor and GPU paths draw alike |
 | `lib/entropy` | the ChaCha20 random number generator and BLAKE2s entropy pool |
 | `lib/netstack`, `lib/net` | the TCP/IP stack around smoltcp, and the networking API for applications |
 | `lib/tls` | the TLS client for applications: rustls and its pure-Rust cryptography provider |

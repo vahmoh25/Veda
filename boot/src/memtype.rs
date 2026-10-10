@@ -5,7 +5,7 @@
 //! page tables say nothing else. Every write is then a bus transaction of
 //! its own, and on a real PC a picture is seen being painted from the top
 //! down (under QEMU the framebuffer is ordinary memory, and it is not). The
-//! splash is painted write-combining all the same (see `splash`); this
+//! screen is cleared write-combining all the same (see `blank`); this
 //! finds what the firmware gave, for the kernel's log.
 
 use bootinfo::memory_type as mt;

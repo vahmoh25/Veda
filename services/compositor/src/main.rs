@@ -194,9 +194,9 @@ fn main() -> i32 {
         gpu_setup: None,
         gpu_tried: None,
     };
-    // At system start (not after a restart), the boot splash stays as it
-    // is until the screen has it, then comes to life and dissolves into the
-    // desktop once it has drawn itself.
+    // At system start (not after a restart), the screen stays black until
+    // the display is up, then the splash fades in, comes to life and
+    // dissolves into the desktop once it has drawn itself.
     if vrt::env::args().iter().any(|a| a == "splash") {
         let fonts = (title_font, regular_font);
         comp.startup = Some(Startup::new(width, height, &mut comp.decor.text, fonts, vrt::time::now_ns()));
@@ -232,7 +232,7 @@ fn main() -> i32 {
             comp.drop_gpu("another display driver attached");
             comp.gpu_setup = comp.screen.pictures().and_then(gpu::Pending::start);
         }
-        // The held splash comes to life once the screen has it.
+        // The splash fades in once the screen is up.
         if let Some(s) = &mut comp.startup {
             s.release(now, comp.screen.settled());
         }

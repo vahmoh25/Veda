@@ -201,7 +201,8 @@ impl Compositor {
     /// Composes a frame with the GPU into the picture the display shows
     /// next: what changed, what that picture lacks (it was not on the
     /// screen while frames went into the others), and during the startup
-    /// sequence what of it moves, or (as the desktop comes in) everything.
+    /// sequence what of it moves, or (as the splash fades in and as the
+    /// desktop comes in) everything.
     /// The picture is asked for once the GPU has drawn it.
     fn composite_gpu(&mut self, now: u64, real: u64) {
         let screen = self.screen_rect();
@@ -217,14 +218,14 @@ impl Compositor {
                 region.add(r.intersect(&screen));
             }
         }
-        let startup = self.startup.as_ref().map(|s| (s.revealing(), s.region()));
+        let startup = self.startup.as_ref().map(|s| (s.revealing(), s.whole_screen(), s.region()));
         match startup {
-            Some((true, _)) => region.add(screen),
-            Some((false, moving)) => region.add(moving),
+            Some((_, true, _)) => region.add(screen),
+            Some((_, false, moving)) => region.add(moving),
             None => {}
         }
         let clip = region.rects().iter().fold(Rect::default(), |a, r| if a.is_empty() { *r } else { a.union(r) });
-        let desktop = startup.is_none_or(|(revealing, _)| revealing);
+        let desktop = startup.is_none_or(|(revealing, _, _)| revealing);
         let started = vrt::time::now_ns();
         let mut g = self.gpu.take().expect("composing with the GPU");
         if let Some(from) = shown

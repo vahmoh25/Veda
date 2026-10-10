@@ -9,6 +9,7 @@
 //! wait-serial-count "joined" 3 60  # wait until the text has appeared 3 times
 //! wait 2                           # sleep
 //! shot target/veda/desktop.png     # save a screenshot
+//! expect-black target/veda/a.png   # fail unless a screenshot is black (in a region, as expect-same)
 //! move 0.5 0.5                     # move the pointer (fractions of screen)
 //! click 0.1 0.97 [left|right]      # move + press + release
 //! drag 0.3 0.3 0.6 0.6             # press at A, move to B, release
@@ -371,6 +372,26 @@ fn same_pictures(a: &Path, b: &Path, region: [f64; 4]) -> Result {
     }
 }
 
+/// Fails unless the screenshot `p` is black in `region` (fractions of the
+/// screen: left, top, right, bottom).
+fn black_picture(p: &Path, region: [f64; 4]) -> Result {
+    let data = std::fs::read(p).map_err(|e| format!("reading {}: {e}", p.display()))?;
+    let picture = vimage::decode(&data).map_err(|e| format!("decoding {}: {e:?}", p.display()))?;
+    let (w, h) = (picture.width as f64, picture.height as f64);
+    let x = (region[0] * w) as u32..((region[2] * w) as u32).min(picture.width);
+    let y = (region[1] * h) as u32..((region[3] * h) as u32).min(picture.height);
+    let mut lit = y
+        .flat_map(|y| x.clone().map(move |x| (x, y)))
+        .filter(|&(x, y)| picture.pixels[(y * picture.width + x) as usize] & 0xFF_FFFF != 0)
+        .peekable();
+    match lit.peek().copied() {
+        None => Ok(()),
+        Some((x, y)) => {
+            Err(format!("{} is not black: {} pixels are lit, the first at ({x}, {y})", p.display(), lit.count()))
+        }
+    }
+}
+
 fn num(w: &[String], i: usize) -> Result<f64> {
     w.get(i).ok_or("missing argument")?.parse::<f64>().map_err(|_| format!("'{}' is not a number", w[i]))
 }
@@ -628,6 +649,16 @@ pub fn run_script(
                         [0.0, 0.0, 1.0, 1.0]
                     };
                     same_pictures(&shot_path(&w, 1)?, &shot_path(&w, 2)?, region).map_err(ctx)?;
+                }
+                // A screenshot is black in a region (fractions of the screen;
+                // all of it if none is given): nothing is shown there yet.
+                "expect-black" => {
+                    let region = if w.len() >= 6 {
+                        [num(&w, 2)?, num(&w, 3)?, num(&w, 4)?, num(&w, 5)?]
+                    } else {
+                        [0.0, 0.0, 1.0, 1.0]
+                    };
+                    black_picture(&shot_path(&w, 1)?, region).map_err(ctx)?;
                 }
                 "move" => {
                     s.pointer().map_err(ctx)?;

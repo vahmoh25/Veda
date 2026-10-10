@@ -1,12 +1,11 @@
-//! `vsplash` — the boot splash's picture: a dark gradient with the Veda
-//! logo (OS1's white ring from "Her").
+//! `vsplash` — the startup splash's picture: a dark gradient with the
+//! Veda logo (OS1's white ring from "Her").
 //!
-//! The boot loader paints it the moment it has a screen, and the window
-//! system takes it over when it starts: it draws the same picture, pixel
-//! for pixel, before it brings it to life and dissolves it into the
-//! desktop. Both draw through this crate, so the handover never shows.
-//! Everything is integer arithmetic on `0xRRGGBB` colours (the loader has
-//! no floating point).
+//! The window system fades it in from black once the system has its
+//! screen, brings it to life and dissolves it into the desktop. The
+//! processor draws it through this crate, and the GPU from the same
+//! integer arithmetic on `0xRRGGBB` colours (the window system's shaders),
+//! so that frames of either are the same, pixel for pixel.
 //!
 //! The gradient is dark, and each channel steps only a dozen to a few
 //! dozen times from the top to the bottom: drawn in whole steps, it would

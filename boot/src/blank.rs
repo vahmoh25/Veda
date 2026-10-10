@@ -1,20 +1,21 @@
-//! The boot splash: a dark gradient with the Veda logo (OS1's white ring
-//! from "Her"), drawn directly into the GOP framebuffer while the system
-//! loads. The picture is `vsplash`'s, which the window system draws the
-//! same way when it takes the screen over and animates it.
+//! The screen while the system starts: blank. The loader clears the GOP
+//! framebuffer to black the moment it has set its mode, whatever the
+//! firmware left there (its logo, its boot menu), and the screen stays
+//! black until the window system's splash fades in, once the display is
+//! the one the desktop will be shown on.
 //!
 //! Firmware usually leaves the framebuffer uncached (see `memtype`), where
 //! every store is a bus transaction of its own: a real PC's screen then
-//! shows the picture being painted from the top down. So the loader paints
-//! through page tables of its own, in which the framebuffer is
-//! write-combining by its page attributes (the PAT), which the MTRRs cannot
-//! overrule: the stores go out in bursts, and the picture is there at once.
-//! Interrupts are off meanwhile, and the firmware's page tables and PAT come
-//! back after.
+//! shows it being painted from the top down. So the loader paints through
+//! page tables of its own, in which the framebuffer is write-combining by
+//! its page attributes (the PAT), which the MTRRs cannot overrule: the
+//! stores go out in bursts, and the screen is black at once. Interrupts
+//! are off meanwhile, and the firmware's page tables and PAT come back
+//! after.
 //!
-//! Each row is made in memory first and then written out in 8-byte stores.
-//! No string instruction is used: on uncached memory (where the loader
-//! cannot help it) `rep movs` moves a byte at a time.
+//! Each row is written out of memory in 8-byte stores. No string
+//! instruction is used: on uncached memory (where the loader cannot help
+//! it) `rep stos` stores a byte at a time.
 
 use crate::memtype;
 use crate::paging::{FrameSource, PageTables, WRITABLE};
@@ -34,51 +35,40 @@ pub struct Surface {
     pub width: u32,
     pub height: u32,
     pub stride: u32,
-    /// `true` if the framebuffer stores R in the low byte.
-    pub rgb: bool,
 }
 
-/// Paints the splash over the whole screen; `row` holds at least a row of
-/// pixels.
-pub fn draw(s: &Surface, row: &mut [u32]) {
-    let (w, h) = (s.width, s.height);
-    let row = &mut row[..w as usize];
-    for y in 0..h {
-        vsplash::row(w, h, y, row);
-        if s.rgb {
-            for c in row.iter_mut() {
-                *c = (*c & 0xFF00FF00) | ((*c >> 16) & 0xFF) | ((*c & 0xFF) << 16);
-            }
-        }
+/// Paints the whole screen black.
+pub fn clear(s: &Surface) {
+    let w = s.width as usize;
+    for y in 0..s.height {
         // SAFETY: row `y` of the framebuffer, `stride` pixels from the last.
         let line = unsafe { s.base.add((y * s.stride) as usize) };
         let mut at = 0;
         if (line as usize).is_multiple_of(8) {
-            for p in row.as_chunks::<2>().0 {
+            while at + 2 <= w {
                 // SAFETY: two pixels inside row `y`, 8-byte aligned.
-                unsafe { (line.add(at) as *mut u64).write_volatile(p[0] as u64 | (p[1] as u64) << 32) };
+                unsafe { (line.add(at) as *mut u64).write_volatile(0) };
                 at += 2;
             }
         }
-        for &c in &row[at..] {
+        while at < w {
             // SAFETY: a pixel inside row `y`.
-            unsafe { line.add(at).write_volatile(c) };
+            unsafe { line.add(at).write_volatile(0) };
             at += 1;
         }
     }
 }
 
-/// Paints the splash write-combining, through page tables of the loader's
+/// Clears the screen write-combining, through page tables of the loader's
 /// own: an identity map of `[0, limit)` (all memory, as the firmware's),
 /// and the framebuffer at [`FRAMEBUFFER_VIRT`] through PAT entry 1, made
 /// write-combining for the while. Returns the timestamp-counter ticks the
 /// painting took, once the tables were made.
-pub fn draw_write_combining<F: FrameSource>(
+pub fn clear_write_combining<F: FrameSource>(
     frames: &mut F,
     s: &Surface,
     limit: u64,
     huge_1g: bool,
-    row: &mut [u32],
 ) -> Result<u64, &'static str> {
     if !memtype::has_pat() {
         return Err("the processor has no page attribute table");
@@ -97,8 +87,8 @@ pub fn draw_write_combining<F: FrameSource>(
     let tables = pt.pml4;
     let start = rdtsc();
     // SAFETY: the loader's tables map everything the painting touches as
-    // the firmware's do (code, stack, the row, the descriptor tables: all
-    // memory below `limit`), and the framebuffer at its alias. Interrupts
+    // the firmware's do (code, stack, the descriptor tables: all memory
+    // below `limit`), and the framebuffer at its alias. Interrupts
     // are off while they are in use; the caches are flushed around the
     // change of the PAT, and every translation (global ones too, by
     // toggling CR4.PGE) around each switch, as the processor's manual asks
@@ -114,7 +104,7 @@ pub fn draw_write_combining<F: FrameSource>(
         core::arch::asm!("mov cr4, {}", in(reg) cr4 & !(1 << 7), options(nostack));
         core::arch::asm!("mov cr3, {}", in(reg) tables, options(nostack));
         core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nostack));
-        draw(&wc, row);
+        clear(&wc);
         // What sits in the write-combining buffers goes out.
         core::arch::asm!("sfence", options(nostack));
         core::arch::asm!("mov cr4, {}", in(reg) cr4 & !(1 << 7), options(nostack));

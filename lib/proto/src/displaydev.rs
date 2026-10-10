@@ -46,13 +46,14 @@
 //!
 //! # What is coming
 //!
-//! At the system's start the screen shows the boot loader's splash, and
-//! the compositor leaves it as it is until the screen its frames go to
-//! from then on has it: the driver's first picture, if a driver is coming
-//! for the display, which only `devmgr` knows ([`displaydev::expect`]: the
+//! At the system's start the screen is black (the boot loader clears it),
+//! and the compositor leaves it so until the screen its frames go to from
+//! then on is up: the driver's first picture, if a driver is coming for
+//! the display, which only `devmgr` knows ([`displaydev::expect`]: the
 //! display controller whose memory holds the firmware's framebuffer went to
-//! a driver, the driver VM's Linux's). So the splash never moves on a
-//! screen a driver is about to take over, nor goes dark meanwhile.
+//! a driver, the driver VM's Linux's). So nothing moves on a screen a
+//! driver is about to take over, and the startup splash is first seen on
+//! the screen the desktop will be.
 
 use alloc::string::String;
 use alloc::vec::Vec;

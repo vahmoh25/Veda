@@ -31,8 +31,8 @@
 //!
 //! Whether a driver is coming at all, devmgr says (`displaydev::expect`):
 //! until the screen is settled (the driver's first picture is on it, or
-//! none is coming), the startup sequence leaves the loader's splash as it
-//! is (`startup`).
+//! none is coming), the startup sequence leaves the screen black
+//! (`startup`).
 
 use alloc::format;
 use alloc::string::String;
@@ -268,6 +268,31 @@ impl Screen {
         let Screen { rgb, firmware, flips, written, .. } = self;
         for t in targets(firmware, flips) {
             t.copy(layer, r, *rgb);
+        }
+        written.add(r);
+    }
+
+    /// Copies a region of `layer` (as large as the screen) to the screen,
+    /// in place of the back buffer, darkened: `fade` parts of 256 of each
+    /// pixel's colour (as it fades in from black).
+    pub(crate) fn flush_dimmed(&mut self, layer: &Bitmap, fade: u32, r: Rect) {
+        let r = r.intersect(&self.rect());
+        if r.is_empty() {
+            return;
+        }
+        let Screen { rgb, firmware, flips, written, .. } = self;
+        let (w, t) = (layer.width, fade.min(256));
+        for target in targets(firmware, flips) {
+            for y in r.y..r.bottom() {
+                let span = (y * w + r.x) as usize..(y * w + r.right()) as usize;
+                for (d, &a) in target.row(y, r).iter_mut().zip(&layer.pixels[span]) {
+                    // Red and blue together, then green.
+                    let rb = (((a & 0xFF_00FF) * t) >> 8) & 0xFF_00FF;
+                    let g = (((a & 0x00_FF00) * t) >> 8) & 0x00_FF00;
+                    let s = 0xFF00_0000 | rb | g;
+                    *d = if *rgb { swap_red_blue(s) } else { s };
+                }
+            }
         }
         written.add(r);
     }

@@ -77,8 +77,8 @@ pub struct BootInfo {
     /// Random bytes from the firmware's `EFI_RNG_PROTOCOL` (if it has one),
     /// which seed the kernel's random number generator.
     pub entropy: [u8; ENTROPY_MAX],
-    /// How the loader painted the boot splash, for the kernel's log.
-    pub splash: SplashReport,
+    /// How the loader cleared the screen, for the kernel's log.
+    pub paint: PaintReport,
     /// The screen's modes and the display's own size, for the kernel's log.
     pub screen: ScreenReport,
     /// The firmware's variables that an operating system may read, as the
@@ -86,13 +86,13 @@ pub struct BootInfo {
     pub firmware_variables: PhysRegion,
 }
 
-/// How the loader painted the boot splash: how long it took, and the
-/// framebuffer's memory type. Firmware often leaves the framebuffer
-/// uncached, where every write is a bus transaction of its own and the
-/// picture is seen being painted; write-combining makes it a burst.
+/// How the loader cleared the screen (it paints it black): how long it
+/// took, and the framebuffer's memory type. Firmware often leaves the
+/// framebuffer uncached, where every write is a bus transaction of its own
+/// and the screen is seen being painted; write-combining makes it a burst.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct SplashReport {
+pub struct PaintReport {
     /// Timestamp-counter ticks the painting took (0: nothing was painted).
     pub paint_ticks: u64,
     /// Ticks spent making the framebuffer write-combining.
@@ -152,7 +152,7 @@ pub mod memory_type {
     }
 }
 
-/// How the framebuffer was made write-combining for the splash.
+/// How the framebuffer was made write-combining for painting.
 pub mod made_wc {
     /// It was not: it was already, or there is no framebuffer.
     pub const ALREADY: u8 = 0;
@@ -339,5 +339,5 @@ const _: () = {
     assert!(core::mem::size_of::<MemoryRegion>() == 24);
     assert!(core::mem::size_of::<Framebuffer>() == 32);
     assert!(core::mem::size_of::<BootTime>() == 16);
-    assert!(core::mem::size_of::<SplashReport>() == 24);
+    assert!(core::mem::size_of::<PaintReport>() == 24);
 };

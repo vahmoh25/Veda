@@ -29,10 +29,10 @@
 //!
 //! At the system's start the window system and the audio service wait for
 //! what the driver VM brings: the display the firmware's framebuffer is on
-//! (the boot splash stays still until its driver shows it), and sound (the
-//! startup sound plays as the desktop appears). Only devmgr knows whether
-//! those are coming, so it tells them ([`Coming`]), and tells them again
-//! should the driver VM give up.
+//! (the screen stays black until its driver shows its first picture), and
+//! sound (the startup sound plays as the desktop appears). Only devmgr
+//! knows whether those are coming, so it tells them ([`Coming`]), and
+//! tells them again should the driver VM give up.
 
 #![no_std]
 #![no_main]

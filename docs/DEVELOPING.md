@@ -118,25 +118,29 @@ cargo xtask script tests/ui/drivervm-wifi.vts  # Wi-Fi through Linux's 802.11 st
   which is what a driver that falls behind sounds like.
 * At the start, `devmgr: coming: the display's driver: ...; sound: ...`
   says what the window system and the audio service wait for (the devices
-  given to the driver VM, or `none`), and `compositor: the splash comes to
-  life (held N ms)` when the display's driver showed its first picture
-  (or `... did not show its first picture in 20 s` if it never did). The
-  sequence then logs `compositor: the desktop appears (N ms after the
-  splash came to life)` (with `the shell did not say the desktop may
-  appear` first if the startup sound was not ready in time), and ends with
-  `compositor: desktop shown after N ms (H ms held; F frames, R a second;
-  ...)`, counted from the window system's start: how long the splash
-  stayed (held still, then alive at least 1.8 s and until the desktop has
-  drawn itself), how smoothly it ran, and where its frames went: into the
+  given to the driver VM, or `none`), and `compositor: the splash fades
+  in (the screen black for N ms)` when the display's driver showed its
+  first picture (or `... did not show its first picture in 20 s` if it
+  never did; Linux's own log says whether its first commit kept the
+  firmware's setup: `keeping the firmware's pipe bpp 24`, and no `PPS 0
+  turn panel power off`). The sequence then logs `compositor: the desktop
+  appears (N ms after the splash faded in)` (with `the shell did not say
+  the desktop may appear` first if the startup sound was not ready in
+  time), and ends with `compositor: desktop shown after N ms (B ms black;
+  F frames, R a second; ...)`, counted from the window system's start:
+  how long the screen stayed black, then the splash (at least 2.1 s, and
+  until the desktop has drawn itself), how smoothly it ran, and where its
+  frames went: into the
   firmware's framebuffer, or flipped by a display driver, with how many
   flips over how many vertical blanks (as many as there were blanks: not
   a frame missed), and whether the GPU or the processor drew them. Where
   a driver flips, `compositor: frames are drawn by the GPU (...) from now
   on` says when the GPU took over, or `frames stay with the processor:`
   why it did not; a frame the GPU took long over is logged too. The boot
-  loader's splash is reported by the kernel (`boot: the loader painted its
-  splash in N ms; ...`, with the framebuffer's memory type: firmware
-  leaves it uncached, and the loader paints it write-combining), and so
+  loader's clearing of the screen is reported by the kernel (`boot: the
+  loader cleared the screen in N ms; ...`, with the framebuffer's memory
+  type: firmware leaves it uncached, and the loader paints it
+  write-combining), and so
   is its mode (`boot: the firmware's screen modes: ..., 1920x1200
   (chosen), ...; the display's own: 3840x2400`: a mode of the display's
   shape, where the firmware gives the display's EDID and has one).

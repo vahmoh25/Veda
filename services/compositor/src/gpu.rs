@@ -166,26 +166,27 @@ vec3 background() {
     };
 }
 
-/// The startup sequence's gradient alone, at `u_opacity` (as it dissolves
-/// into the desktop).
+/// The startup sequence's gradient alone, `u_fade` of the way in from
+/// black, at `u_opacity` (as it dissolves into the desktop).
 const ROWS: &str = concat!(
     "#version 300 es
 precision highp float;
 precision highp int;
 uniform vec2 u_screen;
+uniform float u_fade;
 uniform float u_opacity;
 out vec4 o;
 ",
     splash_background!(),
     "void main() {
-    o = vec4(background(), 1.0) * u_opacity;
+    o = vec4(background() * u_fade, 1.0) * u_opacity;
 }
 "
 );
 
 /// The startup sequence's picture (`startup`, `vsplash`) where the light
 /// reaches: the gradient as [`ROWS`] has it; the light around the ring,
-/// with its glint; the ring. At `u_opacity`.
+/// with its glint; the ring. Faded in and at `u_opacity` as [`ROWS`].
 const SPLASH: &str = concat!(
     "#version 300 es
 precision highp float;
@@ -198,6 +199,7 @@ uniform float u_ring;
 uniform float u_strength;
 uniform float u_glint;
 uniform vec3 u_glow;
+uniform float u_fade;
 uniform float u_opacity;
 out vec4 o;
 ",
@@ -218,7 +220,7 @@ out vec4 o;
     c = mix(c, u_glow, min(f * f * u_strength * glint, 1.0));
     float cover = clamp(u_outer + 0.5 - d, 0.0, 1.0) * clamp(d - u_inner + 0.5, 0.0, 1.0);
     c = mix(c, vec3(1.0), cover * u_ring);
-    o = vec4(c, 1.0) * u_opacity;
+    o = vec4(c * u_fade, 1.0) * u_opacity;
 }
 "
 );
@@ -279,6 +281,7 @@ struct RowsProgram {
     dest: i32,
     top: i32,
     bottom: i32,
+    fade: i32,
     opacity: i32,
 }
 
@@ -294,6 +297,7 @@ struct SplashProgram {
     strength: i32,
     glint: i32,
     glow: i32,
+    fade: i32,
     opacity: i32,
 }
 
@@ -313,6 +317,8 @@ pub(crate) struct Splash {
     pub(crate) strength: f32,
     pub(crate) glow: u32,
     pub(crate) glint: f32,
+    /// How far it has faded in from black (1: all the way).
+    pub(crate) fade: f32,
     /// Over what is under it (as it dissolves).
     pub(crate) opacity: f32,
 }
@@ -519,6 +525,7 @@ fn setup(p: Pictures) -> Result<Gpu, String> {
         dest: gl.get_uniform_location(r, "u_dest"),
         top: gl.get_uniform_location(r, "u_top"),
         bottom: gl.get_uniform_location(r, "u_bottom"),
+        fade: gl.get_uniform_location(r, "u_fade"),
         opacity: gl.get_uniform_location(r, "u_opacity"),
     };
     let sp = program(&mut gl, SPLASH, size)?;
@@ -534,6 +541,7 @@ fn setup(p: Pictures) -> Result<Gpu, String> {
         strength: gl.get_uniform_location(sp, "u_strength"),
         glint: gl.get_uniform_location(sp, "u_glint"),
         glow: gl.get_uniform_location(sp, "u_glow"),
+        fade: gl.get_uniform_location(sp, "u_fade"),
         opacity: gl.get_uniform_location(sp, "u_opacity"),
     };
     // The quad every draw is: two triangles, corner to corner.
@@ -596,6 +604,7 @@ impl Gpu {
             strength: 0.3,
             glow: 0,
             glint: 0.0,
+            fade: 1.0,
             opacity: 1.0,
         };
         self.splash_rows(r, &splash);
@@ -812,13 +821,14 @@ impl Gpu {
         }
         self.use_program(self.rows.id);
         let p = &self.rows;
-        let (d, top, bottom, opacity) = (p.dest, p.top, p.bottom, p.opacity);
+        let (d, top, bottom, fade, opacity) = (p.dest, p.top, p.bottom, p.fade, p.opacity);
         self.dest(d, r);
         let gl = &mut self.gl;
         let channels = |c: u32| (((c >> 16) & 0xFF) as i32, ((c >> 8) & 0xFF) as i32, (c & 0xFF) as i32);
         let (t, b) = (channels(s.top), channels(s.bottom));
         gl.uniform3i(top, t.0, t.1, t.2);
         gl.uniform3i(bottom, b.0, b.1, b.2);
+        gl.uniform1f(fade, s.fade.clamp(0.0, 1.0));
         gl.uniform1f(opacity, s.opacity.min(1.0));
         self.draw();
     }
@@ -831,7 +841,9 @@ impl Gpu {
         }
         self.use_program(self.splash.id);
         let p = &self.splash;
-        let at = [p.dest, p.top, p.bottom, p.centre, p.outer, p.inner, p.ring, p.strength, p.glint, p.glow, p.opacity];
+        let at = [
+            p.dest, p.top, p.bottom, p.centre, p.outer, p.inner, p.ring, p.strength, p.glint, p.glow, p.fade, p.opacity,
+        ];
         self.dest(at[0], r);
         let gl = &mut self.gl;
         let channels = |c: u32| (((c >> 16) & 0xFF) as i32, ((c >> 8) & 0xFF) as i32, (c & 0xFF) as i32);
@@ -846,7 +858,8 @@ impl Gpu {
         gl.uniform1f(at[8], s.glint);
         let glow = rgba(0xFF00_0000 | s.glow);
         gl.uniform3f(at[9], glow[0], glow[1], glow[2]);
-        gl.uniform1f(at[10], s.opacity.min(1.0));
+        gl.uniform1f(at[10], s.fade.clamp(0.0, 1.0));
+        gl.uniform1f(at[11], s.opacity.min(1.0));
         self.draw();
     }
 

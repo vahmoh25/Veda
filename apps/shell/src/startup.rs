@@ -1,5 +1,5 @@
 //! The startup sound (`/system/sounds/startup.wav`), played once as the
-//! desktop first appears, while the window system's boot splash dissolves
+//! desktop first appears, while the window system's startup splash dissolves
 //! into it. Only when the shell starts with the system (init passes
 //! `startup`): a shell restarted after a crash stays quiet.
 //!

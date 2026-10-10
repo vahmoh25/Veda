@@ -1,17 +1,20 @@
-# The startup sequence (1280x800). The boot loader's splash stays as it is
-# while the display's driver comes (QEMU's VGA is the driver VM's: Linux's
-# bochs driver, with Veda's for Linux): the compositor draws nothing until
-# its first picture, the splash as the loader painted it, is on the
-# screen. Then the splash comes to life (the light around the ring, the
-# name and the tagline), and once the desktop has drawn itself and the
-# startup sound is ready (the sound card is the driver VM's too), it
-# dissolves into the desktop as the sound starts.
+# The startup sequence (1280x800). The screen is black while the display's
+# driver comes (QEMU's VGA is the driver VM's: Linux's bochs driver, with
+# Veda's for Linux): the boot loader clears it, and the compositor draws
+# nothing until the driver's first picture, black too, is on the screen.
+# Then the splash fades in from black and comes to life (the light around
+# the ring, the name and the tagline), and once the desktop has drawn
+# itself and the startup sound is ready (the sound card is the driver
+# VM's too), it dissolves into the desktop as the sound starts.
 sound hda
 fail-on "PANIC"
+wait-serial "compositor: display" 120
+shot target/veda/startup-0-black.png
+expect-black target/veda/startup-0-black.png
 wait-serial "compositor: the display's driver is coming" 120
-wait-serial "compositor: the splash comes to life" 120
+wait-serial "compositor: the splash fades in" 120
 expect-serial "showing the compositor's frames"
-wait 0.8
+wait 1.3
 shot target/veda/startup-1-splash.png
 wait-serial "compositor: the desktop appears" 60
 wait-serial "shell: startup sound: playing" 10
